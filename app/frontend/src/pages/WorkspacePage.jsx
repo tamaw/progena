@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -11,7 +11,6 @@ import {
 
 import '../styles/workspace.css';
 import '../styles/nodes.css';
-import Header from '../components/layout/Header';
 import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
 import WorkspaceDock from '../components/workspace/WorkspaceDock';
 import NodeContextMenu from '../components/workspace/NodeContextMenu';
@@ -30,7 +29,6 @@ import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import UserNode from '../components/workspace/nodes/UserNode';
-import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
 
 const nodeTypes = {
@@ -138,18 +136,11 @@ function WorkspaceInner() {
   const [sidebarWidth, setSidebarWidth] = useState(getDefaultSidebarWidth);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const [selectedNodeId, setSelectedNodeId] = useState(null);
   const resizeStateRef = useRef({
     active: false,
     startX: 0,
     startWidth: 0,
   });
-  const selectedNode = useMemo(
-    () => nodes.find((node) => node.id === selectedNodeId)
-      || nodes.find((node) => node.selected)
-      || null,
-    [nodes, selectedNodeId]
-  );
 
   useOnViewportChange({
     onChange: workspaceReady
@@ -324,18 +315,6 @@ function WorkspaceInner() {
   // Close context menu on click
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
-    setSelectedNodeId(null);
-  }, []);
-
-  const onSelectionChange = useCallback(({ nodes: selectedNodes, edges: selectedEdges }) => {
-    if (selectedNodes?.length > 0) {
-      setSelectedNodeId(selectedNodes[0].id);
-      return;
-    }
-
-    if (selectedEdges?.length > 0) {
-      setSelectedNodeId(null);
-    }
   }, []);
 
   const onSidebarResizeStart = useCallback((event) => {
@@ -393,8 +372,6 @@ function WorkspaceInner() {
       <WorkspaceSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        disabled={!workspaceReady}
-        selectedNode={selectedNode}
         width={sidebarWidth}
       />
       {!sidebarCollapsed && (
@@ -429,7 +406,6 @@ function WorkspaceInner() {
           onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
           onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
           onPaneClick={workspaceReady ? onPaneClick : undefined}
-          onSelectionChange={workspaceReady ? onSelectionChange : undefined}
           nodeTypes={nodeTypes}
           fitView={false}
           deleteKeyCode={null}
@@ -478,16 +454,11 @@ function WorkspaceInner() {
 }
 
 export default function WorkspacePage() {
-  const { connectionState } = useApi();
-
   return (
-    <>
-      <Header connectionState={connectionState} />
-      <ReactFlowProvider>
-        <WorkspaceProvider>
-          <WorkspaceInner />
-        </WorkspaceProvider>
-      </ReactFlowProvider>
-    </>
+    <ReactFlowProvider>
+      <WorkspaceProvider>
+        <WorkspaceInner />
+      </WorkspaceProvider>
+    </ReactFlowProvider>
   );
 }

@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import Header from '../components/layout/Header';
 import { useConfig } from '../context/ConfigContext';
 import { useApi } from '../hooks/useApi';
 import { useStatusSSE } from '../hooks/useSSE';
@@ -148,6 +147,17 @@ function formatFileLabel(groupId, file) {
   return path.startsWith(prefix) ? path.slice(prefix.length) : path;
 }
 
+function formatSourceMeta(file) {
+  const pieces = [];
+  if (file.size) {
+    pieces.push(file.size);
+  }
+  if (file.updated) {
+    pieces.push(file.updated);
+  }
+  return pieces.join(' / ') || 'Log file';
+}
+
 function mergeEntries(currentEntries, incomingEntries) {
   if (!incomingEntries.length) {
     return currentEntries;
@@ -180,7 +190,7 @@ function findVisibleRange(items, scrollTop, viewportHeight) {
 }
 
 function LogsPage() {
-  const { connectionState, getLogs } = useApi();
+  const { getLogs } = useApi();
   const { getApiUrl } = useConfig();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultRange = useMemo(() => defaultDateRange(), []);
@@ -283,6 +293,39 @@ function LogsPage() {
     }
     return sourceGroups.find((group) => group.id === selectedGroup)?.options || [];
   }, [selectedGroup, sourceGroups]);
+  const sourceOptions = useMemo(() => {
+    const options = [{
+      value: 'all',
+      group: '',
+      file: '',
+      label: 'All log streams',
+      detail: 'Every runtime file',
+    }];
+
+    sourceGroups.forEach((group) => {
+      const groupLabel = formatGroupLabel(group.label || group.id);
+      const files = group.options || [];
+      options.push({
+        value: `group:${group.id}`,
+        group: group.id,
+        file: '',
+        label: groupLabel,
+        detail: `${files.length} file${files.length === 1 ? '' : 's'}`,
+      });
+      files.forEach((file) => {
+        const fileLabel = formatFileLabel(group.id, file);
+        options.push({
+          value: `file:${group.id}:${file.id}`,
+          group: group.id,
+          file: file.id,
+          label: `${groupLabel} / ${fileLabel}`,
+          detail: file.path || formatSourceMeta(file),
+        });
+      });
+    });
+
+    return options;
+  }, [sourceGroups]);
 
   useEffect(() => {
     if (selectedGroup && !sourceGroups.some((group) => group.id === selectedGroup)) {
@@ -631,153 +674,143 @@ function LogsPage() {
     </div>
   ), [activeEndDate, activeStartDate, handleDaySelect]);
 
-  const selectedGroupLabel = selectedGroup ? formatGroupLabel(selectedGroup) : 'All Agents';
-  const selectedFileLabel = selectedFile || 'All Files';
+  const selectedGroupLabel = selectedGroup ? formatGroupLabel(selectedGroup) : 'All sources';
+  const selectedFileLabel = selectedFile || 'All files';
+  const selectedSourceOption = sourceOptions.find((option) => (
+    option.group === selectedGroup && option.file === selectedFile
+  )) || sourceOptions.find((option) => option.group === selectedGroup && !option.file) || sourceOptions[0];
+  const selectedSourceValue = selectedSourceOption?.value || 'all';
+  const logFileCount = sourceGroups.reduce((total, group) => total + (group.options || []).length, 0);
+  const levelFilterOptions = [
+    { value: '', label: 'All', count: entries.length },
+    { value: 'info', label: 'Info', count: levelCounts.info, color: '#79c0ff' },
+    { value: 'warn', label: 'Warn', count: levelCounts.warn, color: '#f2c94c' },
+    { value: 'error', label: 'Errors', count: levelCounts.error, color: 'var(--color-error)', tone: 'err' },
+    { value: 'debug', label: 'Debug', count: levelCounts.debug, color: '#b1bac4' },
+  ];
 
   return (
     <div className="dashboard-container">
-      <Header connectionState={connectionState} />
       <main className="logs-main">
-        <section className="logs-toolbar-minimal">
-          <div className="logs-toolbar-left">
-            <div className="logs-toolbar-search">
-              <span className="logs-toolbar-icon">⌕</span>
-              <input
-                type="text"
-                placeholder="Search logs..."
-                className="logs-search-input"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-              />
-            </div>
-            <div className="logs-date-range" ref={datePickerRef}>
-              <button
-                type="button"
-                className="logs-date-range-button"
-                onClick={() => {
-                  setDraftRange({
-                    start: startDate || defaultRange.start,
-                    end: endDate || defaultRange.end,
-                  });
-                  setCalendarMonth(monthStart(parseDateInput(startDate || defaultRange.start) || new Date()));
-                  setDatePickerOpen((current) => !current);
-                }}
-              >
-                <span className="logs-toolbar-icon">◫</span>
-                <span>{dateRangeLabel}</span>
-              </button>
-              {datePickerOpen ? (
-                <div className="logs-date-range-popover">
-                  <div className="logs-range-header">
-                    <button type="button" className="logs-range-nav" onClick={() => setCalendarMonth((current) => addMonths(current, -1))}>
-                      ←
-                    </button>
-                    <span>Select Date Range</span>
-                    <button type="button" className="logs-range-nav" onClick={() => setCalendarMonth((current) => addMonths(current, 1))}>
-                      →
-                    </button>
-                  </div>
-                  <div className="logs-range-months">
-                    {renderCalendarMonth(calendarMonth, leftMonthDays)}
-                    {renderCalendarMonth(rightMonth, rightMonthDays)}
-                  </div>
-                  <div className="logs-range-footer">
-                    <span>{draftRange.start} to {draftRange.end}</span>
-                    <button
-                      type="button"
-                      className="logs-range-clear"
-                      onClick={() => {
-                        const nextDefault = defaultDateRange();
-                        setDraftRange(nextDefault);
-                        setStartDate(nextDefault.start);
-                        setEndDate(nextDefault.end);
-                        setRangeAnchor(null);
-                        setDatePickerOpen(false);
-                      }}
-                    >
-                      Last 7 Days
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="logs-toolbar-center">
-            <select
-              className="logs-select"
-              value={selectedGroup}
-              onChange={(event) => {
-                setSelectedGroup(event.target.value);
-                setSelectedFile('');
-                setLevel('');
-              }}
-            >
-              <option value="">All Agents</option>
-              {sourceGroups.map((group) => (
-                <option key={group.id} value={group.id}>
-                  {formatGroupLabel(group.label)} ({(group.options || []).length})
-                </option>
-              ))}
-            </select>
-            <select
-              className="logs-select"
-              value={selectedFile}
-              onChange={(event) => {
-                setSelectedFile(event.target.value);
-                setLevel('');
-              }}
-            >
-              <option value="">{selectedGroup ? 'All Files In Agent' : 'All Files'}</option>
-              {availableFiles.map((file) => (
-                <option key={file.id} value={file.id}>
-                  {formatFileLabel(selectedGroup, file)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div className="logs-toolbar-stats">
-            {[
-              ['', 'all', entries.length],
-              ['info', 'info', levelCounts.info],
-              ['warn', 'warn', levelCounts.warn],
-              ['error', 'error', levelCounts.error],
-              ['debug', 'debug', levelCounts.debug],
-            ].map(([value, label, count]) => (
-              <button
-                key={label}
-                type="button"
-                className={`logs-stat-chip ${value || 'all'} ${level === value ? 'active' : ''}`}
-                onClick={() => setLevel(level === value ? '' : value)}
-              >
-                <span>{label}</span>
-                <strong>{count}</strong>
-              </button>
-            ))}
-          </div>
-          <div className="logs-toolbar-actions">
-            <button type="button" className="logs-action-button" onClick={handleExport}>
-              Export CSV
-            </button>
-          </div>
-        </section>
-
-        <section className="logs-container-full">
-          <div className="detail-header">
-            <div className="logs-header-copy">
-              <h3>Runtime Logs</h3>
-              <span className="badge">{filteredEntries.length}</span>
-              <span className="logs-header-meta">{selectedGroupLabel}</span>
-              <span className="logs-header-meta">{selectedFileLabel}</span>
-            </div>
-            <div className="logs-header-actions">
-              {!tailPinned && hiddenNewCount > 0 ? (
-                <button className="btn btn-primary new-logs-pill" onClick={jumpToNewest}>
-                  {hiddenNewCount} new log{hiddenNewCount === 1 ? '' : 's'}
+        <div className="logs-workspace">
+          <section className="logs-toolbar-minimal">
+            <div className="logs-toolbar-primary">
+              <div className="logs-toolbar-search">
+                <span className="logs-toolbar-icon">⌕</span>
+                <input
+                  type="text"
+                  placeholder="Search logs..."
+                  className="logs-search-input"
+                  aria-label="Search logs"
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                />
+              </div>
+              <label className="logs-source-select">
+                <select
+                  value={selectedSourceValue}
+                  aria-label="Log source"
+                  onChange={(event) => {
+                    const option = sourceOptions.find((item) => item.value === event.target.value) || sourceOptions[0];
+                    setSelectedGroup(option.group);
+                    setSelectedFile(option.file);
+                    setLevel('');
+                  }}
+                >
+                  {sourceOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}{option.detail ? ` - ${option.detail}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="logs-date-range" ref={datePickerRef}>
+                <button
+                  type="button"
+                  className="logs-date-range-button"
+                  onClick={() => {
+                    setDraftRange({
+                      start: startDate || defaultRange.start,
+                      end: endDate || defaultRange.end,
+                    });
+                    setCalendarMonth(monthStart(parseDateInput(startDate || defaultRange.start) || new Date()));
+                    setDatePickerOpen((current) => !current);
+                  }}
+                >
+                  <span className="logs-toolbar-icon">◫</span>
+                  <span>{dateRangeLabel}</span>
                 </button>
-              ) : null}
+                {datePickerOpen ? (
+                  <div className="logs-date-range-popover">
+                    <div className="logs-range-header">
+                      <button type="button" className="logs-range-nav" onClick={() => setCalendarMonth((current) => addMonths(current, -1))}>
+                        ←
+                      </button>
+                      <span>Select Date Range</span>
+                      <button type="button" className="logs-range-nav" onClick={() => setCalendarMonth((current) => addMonths(current, 1))}>
+                        →
+                      </button>
+                    </div>
+                    <div className="logs-range-months">
+                      {renderCalendarMonth(calendarMonth, leftMonthDays)}
+                      {renderCalendarMonth(rightMonth, rightMonthDays)}
+                    </div>
+                    <div className="logs-range-footer">
+                      <span>{draftRange.start} to {draftRange.end}</span>
+                      <button
+                        type="button"
+                        className="logs-range-clear"
+                        onClick={() => {
+                          const nextDefault = defaultDateRange();
+                          setDraftRange(nextDefault);
+                          setStartDate(nextDefault.start);
+                          setEndDate(nextDefault.end);
+                          setRangeAnchor(null);
+                          setDatePickerOpen(false);
+                        }}
+                      >
+                        Last 7 Days
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+              <button type="button" className="logs-action-button" onClick={handleExport}>
+                Export CSV
+              </button>
             </div>
-          </div>
-          <div ref={scrollAreaRef} className="logs-scroll-area" onScroll={handleScroll}>
+            <div className="logs-filter-row" role="group" aria-label="Log filters">
+              <div className="logs-toolbar-stats" role="group" aria-label="Log level">
+                {levelFilterOptions.map((filter) => (
+                  <button
+                    key={filter.label}
+                    type="button"
+                    className={`sess-fchip logs-stat-chip ${level === filter.value ? 'is-active' : ''} ${filter.tone === 'err' ? 'sess-fchip--err' : ''}`}
+                    aria-pressed={level === filter.value}
+                    onClick={() => setLevel(level === filter.value ? '' : filter.value)}
+                  >
+                    {filter.color ? <span className="adot" style={{ background: filter.color }} /> : null}
+                    {filter.label}
+                    <span className="count">{filter.count.toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="logs-toolbar-meta">
+                <span>{filteredEntries.length.toLocaleString()} visible</span>
+                <span>{entries.length.toLocaleString()} loaded</span>
+                <span>{logFileCount.toLocaleString()} files</span>
+                <span>{selectedSourceOption?.label || `${selectedGroupLabel} / ${selectedFileLabel}`}</span>
+                {!tailPinned && hiddenNewCount > 0 ? (
+                  <button className="btn btn-primary new-logs-pill" onClick={jumpToNewest} type="button">
+                    {hiddenNewCount} new log{hiddenNewCount === 1 ? '' : 's'}
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
+          <section className="logs-container-full">
+            <div ref={scrollAreaRef} className="logs-scroll-area" onScroll={handleScroll}>
             {error ? (
               <div className="empty-state">
                 <span>{error}</span>
@@ -827,8 +860,9 @@ function LogsPage() {
                 ))}
               </div>
             ) : null}
-          </div>
-        </section>
+            </div>
+          </section>
+        </div>
       </main>
     </div>
   );

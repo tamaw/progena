@@ -1,24 +1,30 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useApi } from '../hooks/useApi';
 import { useEventsSSE } from '../hooks/useSSE';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
-import Header from '../components/layout/Header';
 import ChatInput from '../components/chat/ChatInput';
-import Message from '../components/chat/Message';
+import { Message } from '../components/chat/Message';
 import TypingIndicator from '../components/chat/TypingIndicator';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import {
+  CHAT_AGENT_NAME,
+  buildSessionItems,
+  deriveChatTitle,
+  formatClockTime,
+} from '../components/chat/conversationModel';
+import {
   PERSISTED_CATEGORIES,
+  STREAM_EVENT_CATEGORIES,
   categoryForEventType,
   isEventVisible,
   loadStreamFilters,
 } from '../components/chat/streamFilters';
 
 const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
-const MAX_TOKEN_DELTAS_PER_MESSAGE = 500;
 const CANCELLED_SUFFIX = ' [Cancelled]';
+const ARCHIVED_CHAT_SESSIONS_KEY = 'progenitor:archived-chat-sessions';
 
 function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
@@ -45,26 +51,6 @@ function hasReasoningContent(event) {
   return typeof event?.content === 'string' && event.content.trim().length > 0;
 }
 
-function shouldSuppressStreamEvent(event, existingEvents = []) {
-  if (!isReasoningEvent(event)) {
-    return false;
-  }
-
-  if (event.eventType === 'reasoning_delta') {
-    return false;
-  }
-
-  if (existingEvents.some(isReasoningEvent)) {
-    return false;
-  }
-
-  if (!hasReasoningContent(event)) {
-    return true;
-  }
-
-  return false;
-}
-
 function extractReasoningTokenCount(event) {
   const tokenCount = event?.metadata?.reasoning_tokens;
   return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
@@ -84,6 +70,29 @@ function appendReasoningText(currentText, event) {
     return event.content;
   }
   return event.content.length >= existingText.length ? event.content : existingText;
+}
+
+function mergeReasoningEvents(existingEvent, nextEvent) {
+  const existingContent = hasReasoningContent(existingEvent) ? existingEvent.content : '';
+  let mergedContent = existingContent;
+
+  if (nextEvent.eventType === 'reasoning_delta') {
+    mergedContent = `${existingContent}${nextEvent.content}`;
+  } else if (hasReasoningContent(nextEvent)) {
+    mergedContent = nextEvent.content;
+  }
+
+  return {
+    ...existingEvent,
+    eventType: nextEvent.eventType === 'reasoning_summary'
+      ? 'reasoning_summary'
+      : existingEvent.eventType,
+    content: mergedContent,
+    metadata: {
+      ...existingEvent.metadata,
+      ...nextEvent.metadata,
+    },
+  };
 }
 
 function normalizeStoredMessage(message, index) {
@@ -130,6 +139,27 @@ function normalizeStoredMessage(message, index) {
   };
 }
 
+function loadQuickChatHandoff(storageKey) {
+  const saved = localStorage.getItem(storageKey);
+  if (!saved) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(saved);
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return {
+      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
+      sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+    };
+  } catch (error) {
+    console.warn('Failed to load quick chat handoff:', error);
+    return null;
+  }
+}
+
 function createStreamEvent(streamEvent) {
   if (!streamEvent || typeof streamEvent !== 'object') {
     return null;
@@ -150,37 +180,20 @@ function createStreamEvent(streamEvent) {
 
 function appendStreamEvent(events, nextEvent) {
   const currentEvents = Array.isArray(events) ? events : [];
+  if (nextEvent.eventType === 'message_delta') {
+    return currentEvents;
+  }
   if (isReasoningEvent(nextEvent)) {
-    const existingReasoningIndex = currentEvents.findIndex(isReasoningEvent);
-    if (existingReasoningIndex !== -1) {
-      const existingReasoningEvent = currentEvents[existingReasoningIndex];
-      const existingContent = hasReasoningContent(existingReasoningEvent)
-        ? existingReasoningEvent.content
-        : '';
-      let mergedContent = existingContent;
-      if (nextEvent.eventType === 'reasoning_delta') {
-        mergedContent = `${existingContent}${nextEvent.content}`;
-      } else if (hasReasoningContent(nextEvent)) {
-        mergedContent = nextEvent.content;
-      }
-      const mergedEvent = {
-        ...existingReasoningEvent,
-        eventType: nextEvent.eventType === 'reasoning_summary'
-          ? 'reasoning_summary'
-          : existingReasoningEvent.eventType,
-        content: mergedContent,
-        metadata: {
-          ...existingReasoningEvent.metadata,
-          ...nextEvent.metadata,
-        },
-      };
+    const lastIndex = currentEvents.length - 1;
+    const lastEvent = currentEvents[lastIndex];
+    if (isReasoningEvent(lastEvent)) {
       return currentEvents.map((event, index) => (
-        index === existingReasoningIndex ? mergedEvent : event
+        index === lastIndex ? mergeReasoningEvents(lastEvent, nextEvent) : event
       ));
     }
-  }
-  if (shouldSuppressStreamEvent(nextEvent, currentEvents)) {
-    return currentEvents;
+    if (!hasReasoningContent(nextEvent)) {
+      return currentEvents;
+    }
   }
   const lastEvent = currentEvents[currentEvents.length - 1];
   if (
@@ -192,27 +205,13 @@ function appendStreamEvent(events, nextEvent) {
     return currentEvents;
   }
   const next = currentEvents.concat(nextEvent);
-  // Token deltas have their own bounded budget so a long answer cannot
-  // evict the tool/step events that motivated this feature.
-  const tokenLimit = MAX_TOKEN_DELTAS_PER_MESSAGE;
-  let tokenCount = 0;
+  // Cap timeline events so a long run cannot overwhelm the chat transcript.
+  const eventLimit = MAX_STREAM_EVENTS_PER_MESSAGE;
+  let eventCount = 0;
   for (let i = next.length - 1; i >= 0; i -= 1) {
-    if (next[i].eventType === 'message_delta') {
-      tokenCount += 1;
-      if (tokenCount > tokenLimit) {
-        next.splice(i, 1);
-      }
-    }
-  }
-  // Cap non-token events independently of token volume.
-  const nonTokenLimit = MAX_STREAM_EVENTS_PER_MESSAGE;
-  let nonTokenCount = 0;
-  for (let i = next.length - 1; i >= 0; i -= 1) {
-    if (next[i].eventType !== 'message_delta') {
-      nonTokenCount += 1;
-      if (nonTokenCount > nonTokenLimit) {
-        next.splice(i, 1);
-      }
+    eventCount += 1;
+    if (eventCount > eventLimit) {
+      next.splice(i, 1);
     }
   }
   return next;
@@ -254,7 +253,7 @@ function finalizeSupersededAssistant(message) {
   };
 }
 
-function ChatPage() {
+function ConversationPage() {
   const { config } = useConfig();
   const {
     connectionState,
@@ -264,8 +263,19 @@ function ChatPage() {
     createSession,
   } = useApi();
   const { show } = useNotifications();
+  const initialQuickChatHandoffRef = useRef(undefined);
+  if (initialQuickChatHandoffRef.current === undefined) {
+    initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
+  }
+  const initialQuickChatHandoff = initialQuickChatHandoffRef.current;
 
   const [messages, setMessages] = useState(() => {
+    if (Array.isArray(initialQuickChatHandoff?.messages) && initialQuickChatHandoff.messages.length > 0) {
+      return initialQuickChatHandoff.messages
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter(Boolean);
+    }
+
     const saved = localStorage.getItem(config.storage.chatHistory);
     if (!saved) {
       return [];
@@ -288,22 +298,70 @@ function ChatPage() {
   const [isClearingSession, setIsClearingSession] = useState(false);
   const [typingState, setTypingState] = useState('thinking');
   const [tokenCount, setTokenCount] = useState(0);
-  const [sessionId, setSessionId] = useState(null);
+  const [sessionId, setSessionId] = useState(() => (
+    typeof initialQuickChatHandoff?.sessionId === 'string' ? initialQuickChatHandoff.sessionId : null
+  ));
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
   const messagesEndRef = useRef(null);
   const activeAssistantIdRef = useRef(null);
+  const chatMenuRef = useRef(null);
 
   const streamEventFilter = useCallback(
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
 
+  const updateStreamFilters = useCallback(
+    (nextFilters) => {
+      setStreamFilters(nextFilters);
+      try {
+        localStorage.setItem(config.storage.streamFilters, JSON.stringify(nextFilters));
+      } catch {
+        // Keep UI responsive if browser storage is unavailable.
+      }
+    },
+    [config.storage.streamFilters],
+  );
+
+  useEffect(() => {
+    if (!chatMenuOpen) return undefined;
+
+    const handlePointerDown = (event) => {
+      if (chatMenuRef.current && !chatMenuRef.current.contains(event.target)) {
+        setChatMenuOpen(false);
+      }
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setChatMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [chatMenuOpen]);
+
   useEffect(() => {
     let cancelled = false;
 
     const ensureSession = async () => {
+      const quickChatHandoff = initialQuickChatHandoffRef.current;
+      if (quickChatHandoff) {
+        localStorage.removeItem(config.storage.quickChatHandoff);
+        initialQuickChatHandoffRef.current = null;
+        if (quickChatHandoff.sessionId) {
+          setSessionId(quickChatHandoff.sessionId);
+          return;
+        }
+      }
+
       try {
         const session = await getSession();
         if (!cancelled) {
@@ -316,7 +374,7 @@ function ChatPage() {
             setSessionId(session.session_id);
           }
         } catch (error) {
-          console.warn('[ChatPage] Failed to initialize session:', error);
+          console.warn('[ConversationPage] Failed to initialize session:', error);
         }
       }
     };
@@ -325,10 +383,43 @@ function ChatPage() {
     return () => {
       cancelled = true;
     };
-  }, [createSession, getSession]);
+  }, [config.storage.quickChatHandoff, createSession, getSession]);
+
+  useEffect(() => {
+    const handlePromotedQuickChat = (event) => {
+      const promotedMessages = Array.isArray(event.detail?.messages)
+        ? event.detail.messages
+        : [];
+      if (promotedMessages.length === 0) {
+        return;
+      }
+
+      const normalizedMessages = promotedMessages
+        .map((message, index) => normalizeStoredMessage(message, index))
+        .filter(Boolean);
+      if (normalizedMessages.length === 0) {
+        return;
+      }
+
+      activeAssistantIdRef.current = null;
+      setMessages(normalizedMessages);
+      setIsGenerating(false);
+      setTypingState('thinking');
+      setTokenCount(0);
+      if (typeof event.detail?.sessionId === 'string') {
+        setSessionId(event.detail.sessionId);
+      }
+      localStorage.removeItem(config.storage.quickChatHandoff);
+    };
+
+    window.addEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
+    return () => {
+      window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
+    };
+  }, [config.storage.quickChatHandoff]);
 
   // Save chat history to localStorage (strip ephemeral stream events to
-  // keep storage bounded; tokens/debug events are session-only).
+  // keep storage bounded; debug events are session-only).
   useEffect(() => {
     if (messages.length > 0) {
       const persistable = messages.slice(-100).map(stripEphemeralStreamEvents);
@@ -338,7 +429,7 @@ function ChatPage() {
 
   // Scroll to bottom on new messages
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [messages, isGenerating]);
 
   // Track recently added scheduled messages to deduplicate
@@ -553,26 +644,49 @@ function ChatPage() {
     handleSend(message);
   }, [handleSend]);
 
-  const handleCommand = useCallback(async (commandName) => {
-    if (commandName !== 'clear') {
-      return;
-    }
-
+  const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     const previousAssistantId = activeAssistantIdRef.current;
+    const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
+    setChatMenuOpen(false);
     activeAssistantIdRef.current = null;
     recentScheduledContent.current.clear();
     cancelStream();
 
     try {
       const session = await createSession();
+      let archiveError = null;
+      if (archive && archivedMessages.length > 0) {
+        try {
+          const archiveEntry = {
+            id: `archived_${Date.now()}`,
+            sessionId,
+            title: deriveChatTitle(archivedMessages),
+            archivedAt: new Date().toISOString(),
+            tokenCount: archivedMessages.reduce(
+              (total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0),
+              0,
+            ),
+            messages: archivedMessages,
+          };
+          const currentArchive = JSON.parse(localStorage.getItem(ARCHIVED_CHAT_SESSIONS_KEY) || '[]');
+          const nextArchive = Array.isArray(currentArchive)
+            ? [archiveEntry, ...currentArchive].slice(0, 25)
+            : [archiveEntry];
+          localStorage.setItem(ARCHIVED_CHAT_SESSIONS_KEY, JSON.stringify(nextArchive));
+        } catch (error) {
+          archiveError = error;
+        }
+      }
       setMessages([]);
       setIsGenerating(false);
       setTypingState('thinking');
       setTokenCount(0);
       setSessionId(session.session_id);
       localStorage.removeItem(config.storage.chatHistory);
-      show('success', 'Conversation cleared', 'Started a fresh chat web session.');
+      if (archiveError) {
+        show('error', 'Archive failed', archiveError.message);
+      }
     } catch (error) {
       if (previousAssistantId) {
         setMessages((prev) => prev
@@ -586,25 +700,172 @@ function ChatPage() {
       setIsGenerating(false);
       setTypingState('thinking');
       setTokenCount(0);
-      show('error', 'Clear failed', error.message);
+      show('error', 'New chat failed', error.message);
     } finally {
       setIsClearingSession(false);
     }
-  }, [cancelStream, config.storage.chatHistory, createSession, show]);
+  }, [cancelStream, config.storage.chatHistory, createSession, messages, sessionId, show]);
+
+  const handleCommand = useCallback(async (commandName) => {
+    if (commandName !== 'new') {
+      return;
+    }
+
+    await startNewChatSession();
+  }, [startNewChatSession]);
+
+  const chatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
+  const totalTokenCount = useMemo(
+    () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
+    [messages],
+  );
+  const firstMessageTime = useMemo(
+    () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
+    [messages],
+  );
+  const visibleEventCount = useMemo(
+    () => messages.reduce((total, message) => (
+      total + (Array.isArray(message.streamEvents) ? message.streamEvents.filter(streamEventFilter).length : 0)
+    ), 0),
+    [messages, streamEventFilter],
+  );
+  const sessionItems = useMemo(
+    () => buildSessionItems(messages, sessionId, chatTitle, totalTokenCount),
+    [chatTitle, messages, sessionId, totalTokenCount],
+  );
+  const activeFilterCount = useMemo(
+    () => STREAM_EVENT_CATEGORIES.filter((category) => streamFilters[category.id]).length,
+    [streamFilters],
+  );
 
   return (
-    <div className="app-container">
-      <Header connectionState={connectionState} />
-      <main className="main-content">
-        <div className="chat-container">
-          <div className="chat-toolbar">
-            <StreamFilterMenu
-              storageKey={config.storage.streamFilters}
-              filters={streamFilters}
-              onChange={setStreamFilters}
-            />
+    <div className="chat-page">
+      <aside className="chat-sessions-pane" aria-label="Conversation sessions">
+        <div className="chat-sessions-pane__head">
+          <div className="chat-sessions-pane__title">
+            Sessions <span className="muted">{sessionItems.length}</span>
           </div>
-          <div className="chat-messages">
+          <button
+            type="button"
+            className="chat-pane-action"
+            onClick={() => startNewChatSession()}
+            disabled={isClearingSession}
+          >
+            + New
+          </button>
+        </div>
+        <div className="chat-pane-tabs" role="tablist" aria-label="Session filters">
+          <button type="button" className="chat-pane-tab is-active">All</button>
+          <button type="button" className="chat-pane-tab">Mine</button>
+          <button type="button" className="chat-pane-tab">Pinned</button>
+          <button type="button" className="chat-pane-tab chat-pane-tab--sort">Recent</button>
+        </div>
+        <div className="chat-sessions-pane__scroll">
+          <div className="chat-pane-group">
+            <div className="chat-pane-group__head">Conversations</div>
+            {sessionItems.map((item) => (
+              <article
+                key={item.id}
+                className={`chat-session-card${item.selected ? ' is-selected' : ''}`}
+              >
+                <div className="chat-session-card__title">{item.title}</div>
+                <div className="chat-session-card__meta">
+                  <span className="chat-session-card__age">{item.age}</span>
+                </div>
+                <div className="chat-session-card__preview">{item.preview}</div>
+                {Number.isFinite(item.tokenCount) && item.tokenCount > 0 && (
+                  <div className="chat-session-card__foot">
+                    <span>{new Intl.NumberFormat().format(item.tokenCount)} tokens</span>
+                  </div>
+                )}
+              </article>
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      <section className="chat-container" aria-label="Chat conversation">
+        <header className="chat-page-header">
+          <div className="chat-page-header__inner">
+            <div className="chat-page-header__title-row">
+              <h1 className="chat-page-header__title">{chatTitle}</h1>
+              <button type="button" className="chat-icon-button" title="Rename conversation">
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                </svg>
+              </button>
+              <span className="chat-page-header__spacer" />
+              <StreamFilterMenu
+                storageKey={config.storage.streamFilters}
+                filters={streamFilters}
+                onChange={updateStreamFilters}
+              />
+              <div className="chat-options-menu" ref={chatMenuRef}>
+                <button
+                  type="button"
+                  className="chat-icon-button"
+                  title="More options"
+                  aria-haspopup="menu"
+                  aria-expanded={chatMenuOpen}
+                  onClick={() => setChatMenuOpen((open) => !open)}
+                >
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
+                    <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+                    <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
+                  </svg>
+                </button>
+                {chatMenuOpen && (
+                  <div className="chat-options-dropdown" role="menu" aria-label="Conversation options">
+                    <button
+                      type="button"
+                      className="chat-options-item"
+                      role="menuitem"
+                      onClick={() => startNewChatSession({
+                        archive: true,
+                      })}
+                      disabled={isClearingSession || messages.length === 0}
+                    >
+                      Archive
+                    </button>
+                    <button
+                      type="button"
+                      className="chat-options-item chat-options-item--danger"
+                      role="menuitem"
+                      onClick={() => startNewChatSession()}
+                      disabled={isClearingSession}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <div className="chat-page-header__meta">
+              <span className="chat-page-header__model">
+                <span className="agent-dot agent-dot--purple" />
+                {CHAT_AGENT_NAME}
+              </span>
+              <span className="chat-separator">|</span>
+              <span className="muted">Started {formatClockTime(firstMessageTime) || 'not started'}</span>
+              <span className="chat-separator">|</span>
+              <span className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>
+              <span className="chat-separator">|</span>
+              <span className="muted">Events {visibleEventCount}</span>
+              <span className="chat-separator">|</span>
+              <span className="muted">Filters {activeFilterCount}/{STREAM_EVENT_CATEGORIES.length}</span>
+              {sessionId && (
+                <>
+                  <span className="chat-separator">|</span>
+                  <span className="chat-session-id">{sessionId}</span>
+                </>
+              )}
+            </div>
+          </div>
+        </header>
+
+        <div className="chat-messages sess-detail__body chat-detail-body">
+          <div className="chat-messages__inner">
             {messages.length === 0 ? (
               <div className="welcome-message">
                 <h2>Welcome to Progenitor Chat</h2>
@@ -628,17 +889,19 @@ function ChatPage() {
             )}
             <div ref={messagesEndRef} />
           </div>
-          <ChatInput
-            onSend={handleSend}
-            onStop={handleStop}
-            onCommand={handleCommand}
-            isGenerating={isGenerating}
-            disabled={connectionState === 'error' || isClearingSession}
-          />
         </div>
-      </main>
+
+        <ChatInput
+          onSend={handleSend}
+          onStop={handleStop}
+          onCommand={handleCommand}
+          isGenerating={isGenerating}
+          disabled={connectionState === 'error' || isClearingSession}
+          keepFocusAfterSend
+        />
+      </section>
     </div>
   );
 }
 
-export default ChatPage;
+export default ConversationPage;
