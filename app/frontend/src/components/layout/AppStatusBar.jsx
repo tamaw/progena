@@ -1,8 +1,3 @@
-function formatTime(value) {
-  if (!value) return '--';
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
 function getPageStatusContext(pathname, runtime, counts) {
   const route = pathname === '/' ? 'chat' : pathname.replace(/^\//, '').split('/')[0];
   const runningCount = counts.runningSessions;
@@ -30,7 +25,7 @@ function getPageStatusContext(pathname, runtime, counts) {
 }
 
 export default function AppStatusBar({ runtime, pathname }) {
-  const { health, isStatusStreamConnected, lastEventAt, widgets } = runtime;
+  const { health, widgets } = runtime;
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent');
   const runningSessions = widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length;
   const onlineAgents = agentWidgets.filter((widget) => !['offline', 'stopped', 'error'].includes(widget.status || widget.data?.agentStatus)).length;
@@ -38,18 +33,11 @@ export default function AppStatusBar({ runtime, pathname }) {
 
   return (
     <footer className="app-shell__statusbar">
-      <div className="statusbar-context" aria-label="Page context">
-        {pageContext.map((item, index) => (
-          <span key={item} className={index === 0 ? 'statusbar-context__primary' : ''}>{item}</span>
-        ))}
-      </div>
+      <div className="statusbar-context" aria-hidden="true" data-page-context={pageContext.join(' · ')} />
       <div className="statusbar-runtime" aria-label="Runtime status">
-        <span className="statusbar-pill"><span className={health.isHealthy ? 'status-dot ok' : 'status-dot'} />{health.isHealthy ? 'Online' : 'Offline'}</span>
         <span className="statusbar-pill">{runningSessions} running sessions</span>
         <span className="statusbar-pill">{onlineAgents} online agents</span>
-        <span className="statusbar-pill statusbar-pill--muted">
-          {isStatusStreamConnected ? 'Live stream' : 'Stream idle'}{lastEventAt ? ` ${formatTime(lastEventAt)}` : ''}
-        </span>
+        <span className="statusbar-pill"><span className={health.isHealthy ? 'status-dot ok' : 'status-dot'} />{health.isHealthy ? 'Online' : 'Offline'}</span>
       </div>
     </footer>
   );
