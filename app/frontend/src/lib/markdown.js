@@ -40,7 +40,7 @@ export function renderMarkdownToHtml(content) {
 
   formatted = formatted.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
-    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+    (match, label, href) => renderMarkdownLink(label, href),
   );
 
   formatted = formatted.replace(/^---$/gm, '<hr class="md-hr">');
@@ -139,6 +139,63 @@ function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
   return div.innerHTML;
+}
+
+function decodeHtmlEntities(text) {
+  const div = document.createElement('div');
+  div.innerHTML = text;
+  return div.textContent || '';
+}
+
+function sanitizeMarkdownHref(href) {
+  const decodedHref = decodeHtmlEntities(href).trim();
+  if (!decodedHref || decodedHref.startsWith('//')) {
+    return null;
+  }
+
+  if (
+    decodedHref.startsWith('#')
+    || decodedHref.startsWith('/')
+    || decodedHref.startsWith('./')
+    || decodedHref.startsWith('../')
+    || decodedHref.startsWith('?')
+  ) {
+    return {
+      href: escapeHtml(decodedHref),
+      external: false,
+    };
+  }
+
+  if (/^[a-zA-Z][a-zA-Z\d+.-]*:/.test(decodedHref)) {
+    try {
+      const parsed = new URL(decodedHref);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return {
+          href: escapeHtml(decodedHref),
+          external: true,
+        };
+      }
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  return {
+    href: escapeHtml(decodedHref),
+    external: false,
+  };
+}
+
+function renderMarkdownLink(label, href) {
+  const sanitizedHref = sanitizeMarkdownHref(href);
+  if (!sanitizedHref) {
+    return label;
+  }
+
+  const externalAttrs = sanitizedHref.external ? ' target="_blank" rel="noopener noreferrer"' : '';
+  return `<a href="${sanitizedHref.href}"${externalAttrs}>${label}</a>`;
 }
 
 function renderCodeBlock(language, code) {

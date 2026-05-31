@@ -32,14 +32,8 @@ function getPageStatusContext(pathname, runtime, counts) {
 export default function AppStatusBar({ runtime, pathname }) {
   const { health, isStatusStreamConnected, lastEventAt, widgets } = runtime;
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent');
-  const runningSessions = Math.max(
-    2,
-    widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length,
-  );
-  const onlineAgents = Math.max(
-    7,
-    agentWidgets.filter((widget) => !['offline', 'stopped', 'error'].includes(widget.status || widget.data?.agentStatus)).length,
-  );
+  const runningSessions = widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length;
+  const onlineAgents = agentWidgets.filter((widget) => !['offline', 'stopped', 'error'].includes(widget.status || widget.data?.agentStatus)).length;
   const pageContext = getPageStatusContext(pathname, runtime, { onlineAgents, runningSessions });
 
   return (
