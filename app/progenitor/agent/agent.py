@@ -128,7 +128,7 @@ def create_progenitor_agent(
     state_manager: Any | None = None,
     store: Any | None = None,
     project_root: str | None = None,
-    log_dir: str | Path | None = None,
+    log_sink: Any | None = None,
     skills_dirs: list[str] | None = None,
     memory_paths: list[str] | None = None,
 ) -> CompiledStateGraph:
@@ -144,7 +144,7 @@ def create_progenitor_agent(
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
         project_root: Root directory for filesystem backend. Defaults to cwd.
-        log_dir: Directory for JSONL audit logs. If None, logs to Python logger only.
+        log_sink: Optional async sink for Postgres audit logs.
         skills_dirs: Paths to skill directories for progressive disclosure.
                      If None, auto-discovers from data/skills/progenitor/.
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
@@ -168,11 +168,6 @@ def create_progenitor_agent(
     state_dir = (
         Path(getattr(config.storage, "state_dir", data_dir / "state")).expanduser().resolve()
     )
-    log_root = (
-        Path(getattr(config.storage, "log_dir", resolved_project_root / "logs"))
-        .expanduser()
-        .resolve()
-    )
     prompts_dir = (
         Path(getattr(config.storage, "prompts_dir", data_dir / "prompts")).expanduser().resolve()
     )
@@ -189,7 +184,6 @@ def create_progenitor_agent(
     backend = create_progenitor_backend(
         project_root=project_root,
         data_dir=data_dir,
-        log_dir=log_root,
         prompts_dir=prompts_dir,
     )
 
@@ -204,7 +198,7 @@ def create_progenitor_agent(
     custom_middleware = [
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
         SecretRedactionMiddleware(),
-        AuditLoggingMiddleware(log_dir=log_dir),
+        AuditLoggingMiddleware(log_sink=log_sink),
         MetricsMiddleware(),
     ]
 

@@ -10,14 +10,17 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.adapters import DynamicMCPToolMiddleware
 from app.progenitor.agent.middleware import (
+    AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
+from app.progenitor.state.models import AsyncSubagentTaskRecord
 
 
 class TestSecretRedactionMiddleware:
@@ -146,91 +149,77 @@ class TestDynamicMCPToolMiddleware:
 class TestAuditLoggingMiddleware:
     """Tests for the audit logging middleware."""
 
-    def test_instantiation_no_dir(self):
-        mw = AuditLoggingMiddleware()
-        assert mw._log_dir is None
+    class FakeSink:
+        def __init__(self):
+            self.entries: list[dict[str, Any]] = []
 
-    def test_instantiation_with_dir(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mw = AuditLoggingMiddleware(log_dir=tmpdir)
-            assert mw._log_dir == Path(tmpdir)
+        async def write_log(self, **kwargs):
+            self.entries.append(kwargs)
 
-    def test_creates_log_dir(self):
-        with tempfile.TemporaryDirectory() as tmpdir:
-            log_dir = Path(tmpdir) / "nested" / "logs"
-            AuditLoggingMiddleware(log_dir=log_dir)
-            assert log_dir.exists()
+    def test_instantiation_with_sink(self):
+        sink = self.FakeSink()
+        mw = AuditLoggingMiddleware(log_sink=sink)
+        assert mw._log_sink is sink
 
     async def test_logs_successful_call(self):
         """Logs a successful tool call with timing."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mw = AuditLoggingMiddleware(log_dir=tmpdir)
-            handler = AsyncMock(return_value="tool_result")
-            request = MagicMock()
-            request.tool_call = {
-                "name": "current_time",
-                "args": {},
-                "id": "tc_1",
-            }
+        sink = self.FakeSink()
+        mw = AuditLoggingMiddleware(log_sink=sink)
+        handler = AsyncMock(return_value="tool_result")
+        request = MagicMock()
+        request.tool_call = {
+            "name": "current_time",
+            "args": {},
+            "id": "tc_1",
+        }
 
-            result = await mw.awrap_tool_call(request, handler)
-            assert result == "tool_result"
+        result = await mw.awrap_tool_call(request, handler)
+        assert result == "tool_result"
 
-            # Check JSONL log
-            log_file = Path(tmpdir) / "tool_calls.jsonl"
-            assert log_file.exists()
-            with open(log_file) as f:
-                entry = json.loads(f.readline())
-            assert entry["tool_name"] == "current_time"
-            assert entry["success"] is True
-            assert entry["error"] is None
-            assert "duration_ms" in entry
-            assert "timestamp" in entry
+        entry = sink.entries[0]["payload"]
+        assert entry["tool_name"] == "current_time"
+        assert entry["success"] is True
+        assert entry["error"] is None
+        assert "duration_ms" in entry
+        assert "timestamp" in entry
 
     async def test_logs_failed_call(self):
         """Logs a failed tool call with error."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mw = AuditLoggingMiddleware(log_dir=tmpdir)
-            handler = AsyncMock(side_effect=RuntimeError("command failed"))
-            request = MagicMock()
-            request.tool_call = {
-                "name": "shell",
-                "args": {"command": "false"},
-                "id": "tc_2",
-            }
+        sink = self.FakeSink()
+        mw = AuditLoggingMiddleware(log_sink=sink)
+        handler = AsyncMock(side_effect=RuntimeError("command failed"))
+        request = MagicMock()
+        request.tool_call = {
+            "name": "shell",
+            "args": {"command": "false"},
+            "id": "tc_2",
+        }
 
-            with pytest.raises(RuntimeError, match="command failed"):
-                await mw.awrap_tool_call(request, handler)
+        with pytest.raises(RuntimeError, match="command failed"):
+            await mw.awrap_tool_call(request, handler)
 
-            log_file = Path(tmpdir) / "tool_calls.jsonl"
-            with open(log_file) as f:
-                entry = json.loads(f.readline())
-            assert entry["tool_name"] == "shell"
-            assert entry["success"] is False
-            assert "command failed" in entry["error"]
+        entry = sink.entries[0]["payload"]
+        assert entry["tool_name"] == "shell"
+        assert entry["success"] is False
+        assert "command failed" in entry["error"]
 
     async def test_redacts_secrets_in_log(self):
         """Secrets in args are redacted in the log."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            mw = AuditLoggingMiddleware(log_dir=tmpdir)
-            handler = AsyncMock(return_value="ok")
-            request = MagicMock()
-            request.tool_call = {
-                "name": "shell",
-                "args": {
-                    "command": "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz12345"
-                },
-                "id": "tc_3",
-            }
+        sink = self.FakeSink()
+        mw = AuditLoggingMiddleware(log_sink=sink)
+        handler = AsyncMock(return_value="ok")
+        request = MagicMock()
+        request.tool_call = {
+            "name": "shell",
+            "args": {"command": "export OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz12345"},
+            "id": "tc_3",
+        }
 
-            await mw.awrap_tool_call(request, handler)
+        await mw.awrap_tool_call(request, handler)
 
-            log_file = Path(tmpdir) / "tool_calls.jsonl"
-            with open(log_file) as f:
-                entry = json.loads(f.readline())
-            # The secret should be redacted in the log
-            assert "sk-proj-" not in entry["args"]["command"]
-            assert "REDACTED" in entry["args"]["command"]
+        entry = sink.entries[0]["payload"]
+        assert "sk-proj-" not in entry["args"]["command"]
+        assert "REDACTED" in entry["args"]["command"]
 
     def test_sync_wrap_passes_through(self):
         mw = AuditLoggingMiddleware()
@@ -239,6 +228,52 @@ class TestAuditLoggingMiddleware:
         result = mw.wrap_tool_call(request, handler)
         handler.assert_called_once_with(request)
         assert result == "result"
+
+
+class TestAsyncSubagentTrackingMiddleware:
+    class FakeStateManager:
+        def __init__(self):
+            self.tasks = [
+                AsyncSubagentTaskRecord(
+                    task_id="thread_completed",
+                    agent_name="hello-world-async",
+                    assistant_id="hello-world-async",
+                    agent_url="http://127.0.0.1:9501/agent-protocol",
+                    run_id="run_completed",
+                    status="success",
+                    summary="HELLO_FROM_ASYNC_SUBAGENT",
+                    latest_message="HELLO_FROM_ASYNC_SUBAGENT",
+                )
+            ]
+
+        async def get_async_subagent_tasks(self):
+            return self.tasks
+
+        async def get_async_subagent_task(self, task_id):
+            return next((task for task in self.tasks if task.task_id == task_id), None)
+
+        async def update_async_subagent_task(self, task_id, updates):
+            return True
+
+    async def test_list_async_tasks_includes_persisted_history(self):
+        mw = AsyncSubagentTrackingMiddleware(state_manager=self.FakeStateManager())
+        request = MagicMock()
+        request.tool_call = {"name": "list_async_tasks", "args": {}, "id": "tc_async"}
+        handler = AsyncMock(
+            return_value=ToolMessage(
+                content='{"tasks":[],"total":0}',
+                tool_call_id="tc_async",
+            )
+        )
+
+        result = await mw.awrap_tool_call(request, handler)
+
+        assert isinstance(result, ToolMessage)
+        payload = json.loads(str(result.content))
+        assert payload["total"] == 1
+        assert payload["success"] == 1
+        assert payload["tasks"][0]["task_id"] == "thread_completed"
+        assert payload["tasks"][0]["summary"] == "HELLO_FROM_ASYNC_SUBAGENT"
 
 
 class TestMetricsMiddleware:
@@ -331,7 +366,7 @@ class TestMiddlewareIntegration:
     """Integration test: middleware wired into factory."""
 
     def test_factory_accepts_middleware_param(self):
-        """create_progenitor_agent accepts log_dir param."""
+        """create_progenitor_agent accepts log_sink param."""
         from types import SimpleNamespace
         from unittest.mock import patch
 
@@ -362,7 +397,7 @@ class TestMiddlewareIntegration:
                             store=MagicMock(),
                             skills_dirs=[],
                             memory_paths=[],
-                            log_dir=tmpdir,
+                            log_sink=MagicMock(),
                         )
 
                 # Verify middleware was passed

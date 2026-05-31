@@ -14,7 +14,6 @@ class HeartbeatContext:
     live_state: dict[str, Any]
     state_manager: Any
     health_state_dir: str | Path
-    audit_logs_dir: str | Path | None
     startup_audit_payload: dict[str, Any] | None
     tool_registry: Any
     project_root: Path | None
@@ -30,5 +29,6 @@ class HeartbeatContext:
     timezone: str
     reasoning_enabled: bool
     input_timeout: float = 1.0
+    audit_log_sink: Any | None = None
     due_maintenance: set[str] = field(default_factory=set)
     startup_flags: set[str] = field(default_factory=set)

@@ -90,10 +90,12 @@ class ProgenitorLoop:
         llm_client=None,
         tool_registry=None,
         project_root: Path | None = None,
+        log_sink=None,
     ):
         self.graph = graph
         self.state_manager = state_manager
         self.config = config
+        self.log_sink = log_sink
         self.running = False
         scheduler_cfg = getattr(self.config, "scheduler", None)
         scheduler_enabled = bool(
@@ -110,8 +112,6 @@ class ProgenitorLoop:
         self._state: dict[str, Any] = {}
         state_dir = getattr(self.state_manager, "state_dir", None)
         self._state_dir = state_dir if isinstance(state_dir, (str, Path)) else Path(".")
-        storage_cfg = getattr(config, "storage", None)
-        audit_logs_dir = getattr(storage_cfg, "log_dir", None)
         audit_payload: dict[str, Any] | None = None
         to_dict = getattr(config, "to_dict", None)
         if callable(to_dict):
@@ -124,7 +124,7 @@ class ProgenitorLoop:
             live_state=self._state,
             state_manager=self.state_manager,
             health_state_dir=self._state_dir,
-            audit_logs_dir=audit_logs_dir,
+            audit_log_sink=self.log_sink,
             startup_audit_payload=audit_payload,
             tool_registry=tool_registry,
             project_root=Path(project_root) if project_root is not None else None,

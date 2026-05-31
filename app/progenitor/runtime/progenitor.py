@@ -14,6 +14,7 @@ from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
 from ..nodes.health import write_health_status
 from ..registry import AgentRegistryRuntime
+from ..state.langgraph_store import LangGraphRuntimeStore
 from ..state.manager import StateManager
 from .heartbeat import ProgenitorLoop
 from .http import ProgenitorHTTPServer
@@ -38,11 +39,12 @@ class Progenitor:
         self.state_dir = self.config.storage.state_dir
         self.config_dir = self.state_dir.parent / "config"
         self.logs_dir = self.config.storage.log_dir
-        self.state_manager = StateManager(
-            self.state_dir,
-            self.logs_dir,
-            lock_timeout=self.config.storage.state_lock_timeout_seconds,
-        )
+        if not self.config.database.enabled:
+            raise ValueError(
+                "PROGENITOR_DATABASE_URL is required; file-backed persistence is removed"
+            )
+        self.log_store: LangGraphRuntimeStore | None = None
+        self.state_manager: StateManager | None = None
         self.llm_client = LLMClient(
             config=self.config.llm,
             mcp_config=self.config.mcp,
@@ -56,12 +58,35 @@ class Progenitor:
         self._http_server: ProgenitorHTTPServer | None = None
         self._ipc_server: IPCServer | None = None
         self._background_tasks: list[asyncio.Task] = []
+        self._persistence_stack = contextlib.AsyncExitStack()
 
     async def initialize(self) -> None:
         """Initialize all components."""
         for dir_path in [self.state_dir, self.config_dir, self.logs_dir]:
             dir_path.mkdir(parents=True, exist_ok=True)
 
+        from ..database import open_langgraph_persistence
+
+        persistence = await self._persistence_stack.enter_async_context(
+            open_langgraph_persistence(
+                self.config.database.url,
+                setup=self.config.database.setup,
+                pool_min_size=self.config.database.pool_min_size,
+                pool_max_size=self.config.database.pool_max_size,
+            )
+        )
+        checkpointer = persistence.checkpointer
+        store = persistence.store
+        if store is None:
+            raise RuntimeError("LangGraph Postgres store is required for runtime persistence")
+        runtime_store = LangGraphRuntimeStore(store)
+        self.log_store = runtime_store
+        self.state_manager = StateManager(
+            self.state_dir,
+            self.logs_dir,
+            lock_timeout=self.config.storage.state_lock_timeout_seconds,
+            runtime_store=runtime_store,
+        )
         await self.state_manager.initialize()
         await self.registry_runtime.load()
 
@@ -77,13 +102,16 @@ class Progenitor:
         logger.info("Creating DeepAgent graph (core-only)")
         from ..agent.adapters import create_deep_agent_for_runtime
 
+        assert self.state_manager is not None
         self.graph = create_deep_agent_for_runtime(
             config=self.config,
+            checkpointer=checkpointer,
+            store=store,
             tool_registry=self.tool_registry,
             llm_client=self.llm_client,
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
-            log_dir=self.logs_dir,
+            log_sink=self.log_store,
         )
 
         self.loop_runner = ProgenitorLoop(
@@ -93,6 +121,7 @@ class Progenitor:
             llm_client=self.llm_client,
             tool_registry=self.tool_registry,
             project_root=PROJECT_ROOT,
+            log_sink=self.log_store,
         )
 
     async def run(self) -> None:
@@ -104,9 +133,13 @@ class Progenitor:
         await self.initialize()
         logger.info("Progenitor initialized. Entering perpetual loop.")
 
+        assert self.loop_runner is not None, "loop_runner must be initialized before run"
         loop_task = asyncio.create_task(self.loop_runner.run_forever())
         self._background_tasks = [loop_task]
 
+        assert self.state_manager is not None, (
+            "state_manager must be initialized before HTTP server"
+        )
         self._http_server = ProgenitorHTTPServer(
             state_manager=self.state_manager,
             loop_runner=self.loop_runner,
@@ -179,7 +212,12 @@ class Progenitor:
                 await task
         self._background_tasks.clear()
 
-        await self.state_manager.commit_state()
+        if self.state_manager is not None:
+            await self.state_manager.commit_state()
+            await self.state_manager.close()
+            self.state_manager = None
+        await self._persistence_stack.aclose()
+        self.log_store = None
         await self.llm_client.close()
         await write_health_status(self.state_dir, "offline")
 

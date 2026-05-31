@@ -14,7 +14,6 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from pathlib import Path
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -303,11 +302,13 @@ def create_deepagent_tools(
 
 def create_deep_agent_for_runtime(
     config: Any | None = None,
+    checkpointer: Any | None = None,
+    store: Any | None = None,
     tool_registry: Any | None = None,
     llm_client: Any | None = None,
     state_manager: Any | None = None,
     project_root: str | None = None,
-    log_dir: str | Path | None = None,
+    log_sink: Any | None = None,
 ) -> Any:
     """Create the runtime conversation graph backed by Progenitor's agent setup."""
     from ..config import get_config
@@ -318,9 +319,11 @@ def create_deep_agent_for_runtime(
 
     return create_conversation_graph(
         config=config,
+        checkpointer=checkpointer,
+        store=store,
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
         project_root=project_root,
-        log_dir=log_dir,
+        log_sink=log_sink,
     )

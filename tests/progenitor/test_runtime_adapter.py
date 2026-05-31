@@ -46,7 +46,7 @@ class TestCreateDeepAgentForLoop:
                     llm_client=mock_llm,
                     state_manager=mock_sm,
                     project_root="/tmp",
-                    log_dir="/tmp/logs",
+                    log_sink=MagicMock(),
                 )
 
                 # Verify the DeepAgent was created (parameters flow through)
