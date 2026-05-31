@@ -9,6 +9,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -229,6 +230,31 @@ class StorageConfig:
 
 
 @dataclass
+class DatabaseConfig:
+    """Postgres datastore configuration."""
+
+    url: str = ""
+    setup: bool = True
+    pool_min_size: int = 1
+    pool_max_size: int = 10
+
+    @property
+    def enabled(self) -> bool:
+        """Return whether Postgres persistence is configured."""
+        return bool(self.url.strip())
+
+    @classmethod
+    def from_env(cls) -> "DatabaseConfig":
+        """Load database config from environment."""
+        return cls(
+            url=os.getenv("PROGENITOR_DATABASE_URL", "").strip(),
+            setup=env_bool("PROGENITOR_DATABASE_SETUP", True),
+            pool_min_size=env_int("PROGENITOR_DATABASE_POOL_MIN_SIZE", 1),
+            pool_max_size=env_int("PROGENITOR_DATABASE_POOL_MAX_SIZE", 10),
+        )
+
+
+@dataclass
 class SchedulerConfig:
     """Scheduler configuration."""
 
@@ -293,6 +319,7 @@ class ProgenitorConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
 
@@ -314,6 +341,7 @@ class ProgenitorConfig:
             llm=LLMConfig.from_env(),
             runtime=RuntimeConfig.from_env(),
             storage=storage_config,
+            database=DatabaseConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
             mcp=MCPConfig.load(),
         )
@@ -353,6 +381,9 @@ class ProgenitorConfig:
 
         if redact_secrets:
             result["llm"]["api_key"] = "***REDACTED***" if self.llm.api_key else None
+            database_url = result.get("database", {}).get("url")
+            if database_url:
+                result["database"]["url"] = _redact_url_password(str(database_url))
             for server in result["mcp"]["servers"]:
                 headers = server.get("headers")
                 if isinstance(headers, dict):
@@ -376,6 +407,18 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, tuple):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _redact_url_password(url: str) -> str:
+    """Redact password components from connection URLs."""
+    parts = urlsplit(url)
+    if parts.password is None:
+        return url
+    username = parts.username or ""
+    hostname = parts.hostname or ""
+    port = f":{parts.port}" if parts.port is not None else ""
+    netloc = f"{username}:***REDACTED***@{hostname}{port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
@@ -473,10 +516,19 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
     for field_name, value in storage_rules:
         if not isinstance(value, Path):
             issues.append(f"Storage Config Error: {field_name} must be a Path")
+
     if not (0 < config.storage.state_lock_timeout_seconds <= 300):
         issues.append(
             "Storage Config Error: invalid "
             f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
+        )
+
+    if config.database.enabled and not (
+        1 <= config.database.pool_min_size <= config.database.pool_max_size <= 100
+    ):
+        issues.append(
+            "Database Config Error: invalid pool bounds "
+            f"min={config.database.pool_min_size!r} max={config.database.pool_max_size!r}"
         )
 
     if not (0 < config.scheduler.poll_seconds <= 3600):

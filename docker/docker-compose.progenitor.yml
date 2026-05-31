@@ -10,7 +10,33 @@ x-progenitor-llm-env: &progenitor-llm-env
   PROGENITOR_REASONING_EFFORT: ${PROGENITOR_REASONING_EFFORT:-low}
   PROGENITOR_REASONING_SUMMARY: ${PROGENITOR_REASONING_SUMMARY:-auto}
 
+x-progenitor-database-env: &progenitor-database-env
+  PROGENITOR_DATABASE_URL: ${PROGENITOR_DATABASE_URL:-postgresql://progenitor:progenitor@postgres:5432/progenitor}
+  PROGENITOR_DATABASE_SETUP: ${PROGENITOR_DATABASE_SETUP:-true}
+  PROGENITOR_DATABASE_POOL_MIN_SIZE: ${PROGENITOR_DATABASE_POOL_MIN_SIZE:-1}
+  PROGENITOR_DATABASE_POOL_MAX_SIZE: ${PROGENITOR_DATABASE_POOL_MAX_SIZE:-10}
+
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: progenitor-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-progenitor}
+      POSTGRES_USER: ${POSTGRES_USER:-progenitor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-progenitor}
+    volumes:
+      - progenitor-postgres-data:/var/lib/postgresql/data
+    networks:
+      - progenitor-net
+      - progenitor_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-progenitor} -d ${POSTGRES_DB:-progenitor}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   # =============================================================================
   # Progenitor Application Stack
   # =============================================================================
@@ -21,8 +47,11 @@ services:
       dockerfile: docker/progenitor/Dockerfile
     container_name: progenitor
     restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
-      <<: *progenitor-llm-env
+      <<: [*progenitor-llm-env, *progenitor-database-env]
       AGENT_NAME: progenitor
       PROGENITOR_TIMEZONE: ${PROGENITOR_TIMEZONE:-UTC}
       TZ: ${PROGENITOR_TIMEZONE:-UTC}
@@ -137,4 +166,9 @@ networks:
     driver: bridge
   # Shared external network for progenitor stack components.
   progenitor_network:
+    external: true
+
+volumes:
+  progenitor-postgres-data:
+    name: progenitor-postgres-data
     external: true
