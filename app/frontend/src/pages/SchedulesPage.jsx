@@ -380,7 +380,6 @@ function SchedulesPage() {
         <DetailHeader
           title={selectedSchedule.name}
           subtitle={`${selectedSchedule.owner} - ${selectedSchedule.timezone}`}
-          avatar={<span className={`schedules-detail__avatar schedules-detail__avatar--${selectedSchedule.status}`}>sc</span>}
           actions={(
             <DetailHeaderActions>
               <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure schedule" ariaLabel="Configure schedule" />
@@ -394,15 +393,6 @@ function SchedulesPage() {
               />
             </DetailHeaderActions>
           )}
-          meta={[
-            <span key="status" className={`agents-status-pill agents-status-pill--${selectedSchedule.status}`}>
-              <span className="adot" />
-              {selectedSchedule.status}
-            </span>,
-            <span key="cadence" className="agents-badge">{selectedSchedule.cadence}</span>,
-            <span key="next">next: <strong>{selectedSchedule.nextRun}</strong></span>,
-            <span key="links"><strong>{selectedSchedule.tools.length}</strong> tools · <strong>{selectedSchedule.repositories.length}</strong> repos</span>,
-          ]}
         />
 
         <div className="agents-detail__body">

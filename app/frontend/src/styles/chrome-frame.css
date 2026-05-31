@@ -4878,7 +4878,6 @@ body,
 }
 
 .agents-status-pill,
-.agents-badge,
 .agents-chip {
   display: inline-flex;
   gap: 6px;
@@ -5262,40 +5261,6 @@ body,
   border: 1px dashed var(--color-border);
   border-radius: 8px;
   font-size: 12px;
-}
-
-.schedules-detail__avatar {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 46px;
-  height: 46px;
-  color: var(--color-success);
-  background:
-    radial-gradient(circle at 28% 20%, rgba(255, 255, 255, 0.22), transparent 28%),
-    color-mix(in oklab, var(--color-success) 14%, var(--color-bg-tertiary));
-  border: 1px solid color-mix(in oklab, var(--color-success) 34%, var(--color-border));
-  border-radius: 14px;
-  box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-success) 9%, transparent);
-  font-family: var(--font-family-mono);
-  font-size: 15px;
-  font-weight: 850;
-  letter-spacing: -0.05em;
-}
-
-.schedules-detail__avatar--paused {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, var(--color-bg-tertiary));
-  border-color: color-mix(in oklab, var(--color-warning) 34%, var(--color-border));
-  box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-warning) 9%, transparent);
-}
-
-.schedules-detail__avatar--failed {
-  color: var(--color-error);
-  background: color-mix(in oklab, var(--color-error) 13%, var(--color-bg-tertiary));
-  border-color: color-mix(in oklab, var(--color-error) 34%, var(--color-border));
-  box-shadow: 0 0 0 5px color-mix(in oklab, var(--color-error) 9%, transparent);
 }
 
 .schedules-summary p {
