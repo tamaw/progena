@@ -1,6 +1,8 @@
 """High-level state manager façade for Progenitor persistence."""
 
+import asyncio
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -79,6 +81,7 @@ class StateManager:
         )
         self._state_cache: dict[str, Any] = {}
         self._runtime_store = runtime_store
+        self._runtime_current_state_lock = asyncio.Lock()
         self._initialized = False
 
     def _core_file_path(self, name: str) -> Path:
@@ -207,6 +210,18 @@ class StateManager:
         self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
 
+    async def _mutate_runtime_current_state(
+        self,
+        mutate: Callable[[dict[str, Any]], None],
+    ) -> dict[str, Any]:
+        """Serialize native-store read/modify/write updates to current_state."""
+        async with self._runtime_current_state_lock:
+            state = await self._get_runtime_document("current_state")
+            current = dict(state) if isinstance(state, dict) else {}
+            mutate(current)
+            await self._save_runtime_document("current_state", current)
+            return current
+
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""
         if log_name not in self.LOG_FILES:
@@ -321,9 +336,7 @@ class StateManager:
 
     async def update_current_state(self, updates: dict[str, Any]) -> None:
         if self._runtime_store is not None:
-            current = await self.get_current_state()
-            current.update(updates)
-            await self.save_current_state(current)
+            await self._mutate_runtime_current_state(lambda current: current.update(updates))
             return
         await session_store.update_current_state(
             updates=updates,
@@ -493,9 +506,10 @@ class StateManager:
 
     async def save_messages(self, messages: list[ConversationMessage]) -> None:
         if self._runtime_store is not None:
-            state = await self.get_current_state()
-            state["messages"] = [message.model_dump(mode="json") for message in messages]
-            await self.save_current_state(state)
+            payload = [message.model_dump(mode="json") for message in messages]
+            await self._mutate_runtime_current_state(
+                lambda current: current.__setitem__("messages", payload)
+            )
             return
         await session_store.save_messages(
             messages=messages,
@@ -508,9 +522,16 @@ class StateManager:
 
     async def add_message(self, message: ConversationMessage) -> None:
         if self._runtime_store is not None:
-            messages = await self.get_messages()
-            messages.append(message)
-            await self.save_messages(messages)
+            payload = message.model_dump(mode="json")
+
+            def mutate(current: dict[str, Any]) -> None:
+                messages = current.get("messages", [])
+                if not isinstance(messages, list):
+                    messages = []
+                messages.append(payload)
+                current["messages"] = messages
+
+            await self._mutate_runtime_current_state(mutate)
             return
         await session_store.add_message(
             message=message,
@@ -569,13 +590,15 @@ class StateManager:
 
     async def add_tool_call(self, tool_call: dict[str, Any]) -> None:
         if self._runtime_store is not None:
-            state = await self.get_current_state()
-            tool_calls = state.get("tool_calls", [])
-            if not isinstance(tool_calls, list):
-                tool_calls = []
-            tool_calls.append(tool_call)
-            state["tool_calls"] = tool_calls
-            await self.save_current_state(state)
+
+            def mutate(current: dict[str, Any]) -> None:
+                tool_calls = current.get("tool_calls", [])
+                if not isinstance(tool_calls, list):
+                    tool_calls = []
+                tool_calls.append(tool_call)
+                current["tool_calls"] = tool_calls
+
+            await self._mutate_runtime_current_state(mutate)
             return
         await session_store.add_tool_call(
             tool_call=tool_call,
@@ -604,13 +627,15 @@ class StateManager:
 
     async def add_attachment(self, attachment: dict[str, Any]) -> None:
         if self._runtime_store is not None:
-            state = await self.get_current_state()
-            attachments = state.get("attachments", [])
-            if not isinstance(attachments, list):
-                attachments = []
-            attachments.append(attachment)
-            state["attachments"] = attachments
-            await self.save_current_state(state)
+
+            def mutate(current: dict[str, Any]) -> None:
+                attachments = current.get("attachments", [])
+                if not isinstance(attachments, list):
+                    attachments = []
+                attachments.append(attachment)
+                current["attachments"] = attachments
+
+            await self._mutate_runtime_current_state(mutate)
             return
         await session_store.add_attachment(
             attachment=attachment,
