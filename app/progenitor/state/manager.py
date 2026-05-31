@@ -1,8 +1,9 @@
 """High-level state manager façade for Progenitor persistence."""
 
+import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from ..utils import utcnow_isoformat
 from . import (
@@ -20,11 +21,52 @@ from .models import (
     BackgroundTaskEntry,
     ConversationMessage,
     ScheduleEntry,
+    redact_secrets,
 )
 from .persistence import StatePersistence
 from .postgres_store import PostgresStateStore
 
 logger = logging.getLogger(__name__)
+
+
+class PostgresJSONLLogStore(Protocol):
+    """Minimal log sink API needed by Postgres-backed JSONL helpers."""
+
+    async def write_log(
+        self,
+        *,
+        source: str,
+        message: str,
+        level: str = "info",
+        payload: dict[str, Any] | None = None,
+        timestamp: Any = None,
+        relative_path: str | None = None,
+    ) -> None: ...
+
+    async def query_logs(
+        self,
+        *,
+        level: str | None = None,
+        source: str | None = None,
+        search: str | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]: ...
+
+
+def _redacted_log_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    """Match JSONL secret redaction before writing structured log rows."""
+    redacted = redact_secrets(json.dumps(entry, default=str))
+    payload = json.loads(redacted)
+    return payload if isinstance(payload, dict) else {"message": redacted}
+
+
+def _postgres_log_message(log_name: str, payload: dict[str, Any]) -> str:
+    """Extract a concise searchable message from one structured log payload."""
+    for field in ("content", "message", "event", "id"):
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return f"{log_name} event"
 
 
 class StateManager:
@@ -57,6 +99,7 @@ class StateManager:
         logs_dir: Path,
         lock_timeout: int = 10,
         postgres_store: PostgresStateStore | None = None,
+        postgres_log_store: PostgresJSONLLogStore | None = None,
     ) -> None:
         self.state_dir = Path(state_dir)
         self.config_dir = self.state_dir.parent / "config"
@@ -70,6 +113,7 @@ class StateManager:
         )
         self._state_cache: dict[str, Any] = {}
         self._postgres_store = postgres_store
+        self._postgres_log_store = postgres_log_store
         self._initialized = False
 
     def _core_file_path(self, name: str) -> Path:
@@ -200,12 +244,22 @@ class StateManager:
 
     async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
         """Append a single entry to a JSONL log file with secret redaction."""
+        if log_name not in self.LOG_FILES:
+            raise ValueError(f"Unknown log: {log_name}")
         if self._postgres_store is not None:
-            doc_name = f"log_{log_name}"
-            log_doc = await self._get_postgres_document(doc_name)
-            entries = log_doc.get("entries", []) if isinstance(log_doc, dict) else []
-            entries.append({"timestamp": utcnow_isoformat(), **entry})
-            await self._save_postgres_document(doc_name, {"entries": entries})
+            if self._postgres_log_store is None:
+                raise RuntimeError(
+                    "postgres_log_store is required when Postgres logging is enabled"
+                )
+            payload = _redacted_log_payload(entry)
+            timestamp = payload.pop("timestamp", None)
+            await self._postgres_log_store.write_log(
+                source=log_name,
+                message=_postgres_log_message(log_name, payload),
+                payload=payload,
+                timestamp=timestamp,
+                relative_path=self.LOG_FILES[log_name],
+            )
             return
         await log_store.append_jsonl(
             persistence=self._persistence,
@@ -220,6 +274,7 @@ class StateManager:
         """Log a conversation message."""
         if self._postgres_store is not None:
             await self.add_message(message)
+            await self.append_jsonl("conversation", message.model_dump(mode="json"))
             return
         await log_store.log_conversation(message=message, append_jsonl_fn=self.append_jsonl)
 
@@ -618,6 +673,23 @@ class StateManager:
                 await self._atomic_write_json(self._core_file_path(name), data)
 
     async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
+        if self._postgres_store is not None:
+            if self._postgres_log_store is None:
+                raise RuntimeError(
+                    "postgres_log_store is required when Postgres logging is enabled"
+                )
+            rows = await self._postgres_log_store.query_logs(source="conversation", limit=limit)
+            history: list[dict[str, Any]] = []
+            for row in rows:
+                payload = row.get("payload")
+                entry = dict(payload) if isinstance(payload, dict) else {"payload": payload}
+                timestamp = row.get("timestamp")
+                if timestamp is not None and "timestamp" not in entry:
+                    entry["timestamp"] = (
+                        timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
+                    )
+                history.append(entry)
+            return history
         return await log_store.read_conversation_log(
             logs_dir=self.logs_dir,
             log_files=self.LOG_FILES,

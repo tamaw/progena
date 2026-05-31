@@ -12,8 +12,19 @@ from psycopg_pool import AsyncConnectionPool
 class PostgresStateStore:
     """JSONB document store for StateManager state surfaces."""
 
-    def __init__(self, database_url: str):
-        self._pool = AsyncConnectionPool(database_url, open=False)
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_min_size: int = 1,
+        pool_max_size: int = 10,
+    ):
+        self._pool = AsyncConnectionPool(
+            database_url,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+            open=False,
+        )
 
     async def open(self) -> None:
         """Open the underlying connection pool."""

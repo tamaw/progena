@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ProgenitorConfig, get_config
+from ..database import PostgresLogStore
 from ..ipc.server import IPCServer
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
@@ -43,11 +44,21 @@ class Progenitor:
             raise ValueError(
                 "PROGENITOR_DATABASE_URL is required; file-backed persistence is removed"
             )
+        self.log_store: PostgresLogStore | None = PostgresLogStore(
+            self.config.database.url,
+            pool_min_size=self.config.database.pool_min_size,
+            pool_max_size=self.config.database.pool_max_size,
+        )
         self.state_manager = StateManager(
             self.state_dir,
             self.logs_dir,
             lock_timeout=self.config.storage.state_lock_timeout_seconds,
-            postgres_store=PostgresStateStore(self.config.database.url),
+            postgres_store=PostgresStateStore(
+                self.config.database.url,
+                pool_min_size=self.config.database.pool_min_size,
+                pool_max_size=self.config.database.pool_max_size,
+            ),
+            postgres_log_store=self.log_store,
         )
         self.llm_client = LLMClient(
             config=self.config.llm,
@@ -59,7 +70,6 @@ class Progenitor:
         self.tool_registry = self.registry_runtime.agent_registry
         self.graph: Any = None
         self.loop_runner: Any = None
-        self.log_store: Any | None = None
         self._http_server: ProgenitorHTTPServer | None = None
         self._ipc_server: IPCServer | None = None
         self._background_tasks: list[asyncio.Task] = []
@@ -73,11 +83,11 @@ class Progenitor:
         checkpointer: Any | None = None
         store: Any | None = None
         if self.config.database.enabled:
-            from ..database import PostgresLogStore, setup_application_schema
+            from ..database import setup_application_schema
 
             if self.config.database.setup:
                 await setup_application_schema(self.config.database.url)
-            self.log_store = PostgresLogStore(self.config.database.url)
+            assert self.log_store is not None
             await self.log_store.open()
         await self.state_manager.initialize()
         await self.registry_runtime.load()

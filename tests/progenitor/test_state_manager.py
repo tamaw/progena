@@ -3,10 +3,12 @@
 import asyncio
 import json
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from app.progenitor.database.logs import PostgresLogStore
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import (
     A2ATaskRecord,
@@ -15,6 +17,7 @@ from app.progenitor.state.models import (
     ConversationMessage,
     ScheduleEntry,
 )
+from app.progenitor.state.postgres_store import PostgresStateStore
 
 
 class FakePostgresStateStore:
@@ -35,6 +38,47 @@ class FakePostgresStateStore:
 
     async def save_document(self, name, payload):
         self.documents[name] = payload
+
+
+class FakePostgresLogStore:
+    def __init__(self):
+        self.entries = []
+
+    async def write_log(
+        self,
+        *,
+        source,
+        message,
+        level="info",
+        payload=None,
+        timestamp=None,
+        relative_path=None,
+    ):
+        self.entries.append(
+            {
+                "timestamp": timestamp or datetime.now(UTC),
+                "level": level,
+                "source": source,
+                "message": message,
+                "payload": payload or {},
+                "relative_path": relative_path,
+            }
+        )
+
+    async def query_logs(self, *, level=None, source=None, search=None, limit=200):
+        rows = list(self.entries)
+        if level is not None:
+            rows = [row for row in rows if row["level"] == level]
+        if source is not None:
+            rows = [row for row in rows if row["source"] == source]
+        if search is not None:
+            rows = [
+                row
+                for row in rows
+                if search.lower() in row["message"].lower()
+                or search.lower() in json.dumps(row["payload"]).lower()
+            ]
+        return rows[-limit:] if limit > 0 else rows
 
 
 class TestStateManager:
@@ -198,6 +242,26 @@ class TestStateManager:
         assert refreshed.status == "success"
         assert refreshed.summary == "HELLO_FROM_ASYNC_SUBAGENT"
 
+    def test_postgres_state_store_honors_pool_bounds(self):
+        store = PostgresStateStore(
+            "postgresql://user:pass@localhost/testdb",
+            pool_min_size=2,
+            pool_max_size=7,
+        )
+
+        assert store._pool.min_size == 2
+        assert store._pool.max_size == 7
+
+    def test_postgres_log_store_honors_pool_bounds(self):
+        store = PostgresLogStore(
+            "postgresql://user:pass@localhost/testdb",
+            pool_min_size=3,
+            pool_max_size=8,
+        )
+
+        assert store._pool.min_size == 3
+        assert store._pool.max_size == 8
+
     async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
         state_dir = tmp_path / "data" / "state"
         logs_dir = tmp_path / "logs"
@@ -257,6 +321,57 @@ class TestStateManager:
         history = await manager.read_conversation_log()
         assert len(history) == 1
         assert history[0]["content"] == "Test message"
+
+    @pytest.mark.asyncio
+    async def test_postgres_logs_write_rows_instead_of_log_documents(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        store = FakePostgresStateStore()
+        log_store = FakePostgresLogStore()
+        manager = StateManager(
+            state_dir,
+            logs_dir,
+            postgres_store=store,
+            postgres_log_store=log_store,
+        )
+        await manager.initialize()
+
+        await manager.append_jsonl(
+            "schedule", {"event": "schedule_created", "schedule_id": "sched-1"}
+        )
+
+        assert "log_schedule" not in store.documents
+        assert log_store.entries == [
+            {
+                "timestamp": log_store.entries[0]["timestamp"],
+                "level": "info",
+                "source": "schedule",
+                "message": "schedule_created",
+                "payload": {"event": "schedule_created", "schedule_id": "sched-1"},
+                "relative_path": "schedule.jsonl",
+            }
+        ]
+
+    @pytest.mark.asyncio
+    async def test_postgres_conversation_logs_round_trip_through_log_store(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        store = FakePostgresStateStore()
+        log_store = FakePostgresLogStore()
+        manager = StateManager(
+            state_dir,
+            logs_dir,
+            postgres_store=store,
+            postgres_log_store=log_store,
+        )
+        await manager.initialize()
+
+        message = ConversationMessage(id="msg-pg-log", role="user", content="Log this to Postgres")
+
+        await manager.log_conversation(message)
+
+        history = await manager.read_conversation_log()
+        assert len(history) == 1
+        assert history[0]["content"] == "Log this to Postgres"
+        assert store.documents["current_state"]["messages"][0]["id"] == "msg-pg-log"
 
     @pytest.mark.asyncio
     async def test_atomic_write_recreates_missing_parent_dir(self, temp_dirs):

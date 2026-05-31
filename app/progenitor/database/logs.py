@@ -27,8 +27,19 @@ def _coerce_timestamp(value: Any) -> datetime:
 class PostgresLogStore:
     """Append/query operational logs in Postgres."""
 
-    def __init__(self, database_url: str):
-        self._pool = AsyncConnectionPool(database_url, open=False)
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        pool_min_size: int = 1,
+        pool_max_size: int = 10,
+    ):
+        self._pool = AsyncConnectionPool(
+            database_url,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+            open=False,
+        )
 
     async def open(self) -> None:
         await self._pool.open()
