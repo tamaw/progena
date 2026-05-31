@@ -23,7 +23,14 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.progenitor.config import resolve_mcp_config_path, resolve_schedule_config_path
-from app.progenitor.mcp.loader import load_mcp_servers
+from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
+
+from .document_store import (
+    BACKEND_STATE_PREFIX,
+    PROGENITOR_STATE_PREFIX,
+    BackendDocumentStore,
+    get_default_document_store,
+)
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -393,6 +400,7 @@ class StateReader:
         config_dir: Path | None = None,
         sessions_dir: Path | None = None,
         logs_dir: Path | None = None,
+        document_store: BackendDocumentStore | None = None,
     ):
         data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
         self.state_dir = state_dir or Path(
@@ -406,6 +414,14 @@ class StateReader:
         self._watchers: list[Callable[[StateSnapshot], None]] = []
         self._watch_task: asyncio.Task | None = None
         self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
+        self.document_store = document_store or (
+            get_default_document_store()
+            if state_dir is None
+            and config_dir is None
+            and sessions_dir is None
+            and logs_dir is None
+            else None
+        )
 
     @property
     def mcp_config_path(self) -> Path:
@@ -431,6 +447,13 @@ class StateReader:
 
     def _read_json_from_path(self, filepath: Path) -> Any:
         filepath = Path(filepath)
+        if self.document_store is not None:
+            prefix_key_default = self._document_for_path(filepath)
+            if prefix_key_default is None:
+                return None
+            prefix, key, default = prefix_key_default
+            document = self.document_store.get_document(prefix, key, default)
+            return document.payload if document is not None else default
         try:
             if not filepath.exists():
                 return None
@@ -453,6 +476,39 @@ class StateReader:
             logger.debug("Failed to read %s: %s", filepath, e)
             return None
 
+    def _write_json_to_path(self, filepath: Path, data: Any) -> bool:
+        """Persist a legacy path-shaped write into the configured document store."""
+        if self.document_store is None:
+            return False
+        prefix_key_default = self._document_for_path(Path(filepath))
+        if prefix_key_default is None:
+            return False
+        prefix, key, _default = prefix_key_default
+        self.document_store.save_document(prefix, key, data)
+        return True
+
+    def _document_for_path(self, filepath: Path) -> tuple[str, str, Any] | None:
+        name = Path(filepath).name
+        if name == "current_state.json":
+            return PROGENITOR_STATE_PREFIX, "current_state", {}
+        if name == "build_state.json":
+            return PROGENITOR_STATE_PREFIX, "build_state", {}
+        if name == "schedule.json":
+            return PROGENITOR_STATE_PREFIX, "schedule", []
+        if name == "health.json":
+            return PROGENITOR_STATE_PREFIX, "health", {}
+        if name == "agents.json":
+            return PROGENITOR_STATE_PREFIX, "registry", {}
+        if name == "mcp.json":
+            return PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": {}}
+        if name == "event_widgets.json":
+            return BACKEND_STATE_PREFIX, "event_widgets", []
+        if name == "kanban.json":
+            return BACKEND_STATE_PREFIX, "kanban", {}
+        if name == "sessions.json":
+            return BACKEND_STATE_PREFIX, "sessions", []
+        return None
+
     def _read_text_lines(self, filepath: Path, limit: int | None = 200) -> list[str]:
         try:
             if not filepath.exists():
@@ -470,6 +526,28 @@ class StateReader:
         data = self._read_json("health.json")
         if data:
             return HealthInfo.from_dict(data)
+        if self.document_store is not None:
+            current_doc = self.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "current_state", {}
+            )
+            current = current_doc.payload if current_doc is not None else {}
+            if isinstance(current, dict):
+                last_active = (
+                    current.get("updated_at")
+                    or current.get("last_active")
+                    or (
+                        current_doc.updated_at.isoformat()
+                        if current_doc and current_doc.updated_at
+                        else None
+                    )
+                )
+                return HealthInfo(
+                    status="running" if last_active else "unknown",
+                    last_active=str(last_active) if last_active else None,
+                    thread_id=current.get("thread_id"),
+                    cycle_count=_coerce_int(current.get("cycle_count"), 0),
+                    pid=None,
+                )
         return HealthInfo(
             status="unknown", last_active=None, thread_id=None, cycle_count=0, pid=None
         )
@@ -500,21 +578,64 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
-        tools = [
-            ToolInfo.from_dict(
-                {
-                    "name": server.name,
-                    "description": server.description or f"Remote MCP server at {server.url}",
-                    "enabled": server.enabled,
-                    "kind": "mcp_server",
-                    "status": "stopped" if server.enabled else "disabled",
-                    "transport": server.transport,
-                    "url": server.url,
-                }
-            )
-            for server in load_mcp_servers(self.mcp_config_path)
-        ]
+        tools = (
+            self._mcp_tools_from_store()
+            if self.document_store is not None
+            else [
+                ToolInfo.from_dict(
+                    {
+                        "name": server.name,
+                        "description": server.description or f"Remote MCP server at {server.url}",
+                        "enabled": server.enabled,
+                        "kind": "mcp_server",
+                        "status": "stopped" if server.enabled else "disabled",
+                        "transport": server.transport,
+                        "url": server.url,
+                    }
+                )
+                for server in load_mcp_servers(self.mcp_config_path)
+            ]
+        )
         return agents, tools
+
+    def _mcp_tools_from_store(self) -> list[ToolInfo]:
+        data = self._read_json_from_path(self.mcp_config_path) or {}
+        raw_servers = data.get("mcpServers") if isinstance(data, dict) else None
+        if not isinstance(raw_servers, dict):
+            return []
+
+        tools: list[ToolInfo] = []
+        for name, raw_server in raw_servers.items():
+            if not isinstance(name, str) or not isinstance(raw_server, dict):
+                continue
+            url = str(raw_server.get("url") or raw_server.get("endpoint") or "").strip()
+            if not url:
+                continue
+            resolved_url, missing_vars = resolve_required_env_template(url)
+            if resolved_url is None:
+                logger.warning(
+                    "Skipping MCP server '%s': unresolved env vars in url: %s",
+                    name,
+                    ", ".join(sorted(set(missing_vars))),
+                )
+                continue
+            enabled = bool(raw_server.get("enabled", True))
+            transport = str(raw_server.get("transport") or "http").strip().lower()
+            tools.append(
+                ToolInfo.from_dict(
+                    {
+                        "name": name,
+                        "description": raw_server.get("description")
+                        or f"Remote MCP server at {resolved_url}",
+                        "enabled": enabled,
+                        "kind": "mcp_server",
+                        "status": "stopped" if enabled else "disabled",
+                        "transport": transport,
+                        "url": resolved_url,
+                    }
+                )
+            )
+        return tools
 
     def get_backlog(self) -> list[BacklogItem]:
         data = self._read_json("build_state.json")
@@ -525,7 +646,7 @@ class StateReader:
 
     def get_schedule(self) -> list[ScheduleItem]:
         data = self._read_json_from_path(self.schedule_config_path)
-        if data is None and not self.schedule_config_path.exists():
+        if self.document_store is None and data is None and not self.schedule_config_path.exists():
             data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
@@ -705,6 +826,24 @@ class StateReader:
         )
 
     def get_log_sources(self) -> list[dict[str, Any]]:
+        if self.document_store is not None:
+            options = []
+            for item in self.document_store.get_log_sources():
+                source = str(item.get("source") or "system")
+                options.append(
+                    {
+                        "id": f"{source}.jsonl",
+                        "label": source,
+                        "path": f"{source}.jsonl",
+                        "group": "postgres",
+                        "source": source,
+                        "updated_at": item.get("updated_at"),
+                        "count": item.get("count", 0),
+                    }
+                )
+            options.sort(key=lambda item: str(item["label"]).lower())
+            return [{"id": "postgres", "label": "postgres", "options": options}] if options else []
+
         grouped: dict[str, list[dict[str, Any]]] = {}
 
         for path in self._iter_log_files():
@@ -938,17 +1077,13 @@ class StateReader:
         if search and search_mode == "regex":
             regex = re.compile(search, re.IGNORECASE)
 
-        candidate_files = self._candidate_log_files(
-            source=source, folder=folder, file_path=file_path
-        )
-
-        for path in candidate_files:
-            lines = self._read_text_lines(path, limit=None)
-            path_source = self._path_source(path)
-            for line in reversed(lines):
-                entry = self._line_to_entry(line, path_source, path)
-                if not entry:
-                    continue
+        if self.document_store is not None:
+            db_source = source
+            if not db_source and file_path:
+                db_source = Path(file_path).stem
+            raw_entries = self.document_store.query_logs(level=level, source=db_source, limit=0)
+            for raw_entry in raw_entries:
+                entry = self._normalize_db_log_entry(raw_entry)
                 entry_timestamp = _parse_timestamp(entry.get("timestamp"))
                 if start_boundary or end_boundary:
                     if entry_timestamp is None:
@@ -958,11 +1093,9 @@ class StateReader:
                     else:
                         entry_timestamp = entry_timestamp.astimezone(UTC)
                     if start_boundary and entry_timestamp < start_boundary:
-                        break
+                        continue
                     if end_boundary and entry_timestamp > end_boundary:
                         continue
-                if level and entry["level"] != level.lower():
-                    continue
                 if folder_lc and entry["group"].lower() != folder_lc:
                     continue
                 if file_path_lc and entry["relative_path"].lower() != file_path_lc:
@@ -976,11 +1109,73 @@ class StateReader:
                     if not regex and search_lc and search_lc not in searchable:
                         continue
                 entries.append(entry)
+            entries.sort(
+                key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
+            )
+            return entries
+
+        candidate_files = self._candidate_log_files(
+            source=source, folder=folder, file_path=file_path
+        )
+
+        for path in candidate_files:
+            lines = self._read_text_lines(path, limit=None)
+            path_source = self._path_source(path)
+            for line in reversed(lines):
+                file_entry = self._line_to_entry(line, path_source, path)
+                if not file_entry:
+                    continue
+                entry_timestamp = _parse_timestamp(file_entry.get("timestamp"))
+                if start_boundary or end_boundary:
+                    if entry_timestamp is None:
+                        continue
+                    if entry_timestamp.tzinfo is None:
+                        entry_timestamp = entry_timestamp.replace(tzinfo=UTC)
+                    else:
+                        entry_timestamp = entry_timestamp.astimezone(UTC)
+                    if start_boundary and entry_timestamp < start_boundary:
+                        break
+                    if end_boundary and entry_timestamp > end_boundary:
+                        continue
+                if level and file_entry["level"] != level.lower():
+                    continue
+                if folder_lc and file_entry["group"].lower() != folder_lc:
+                    continue
+                if file_path_lc and file_entry["relative_path"].lower() != file_path_lc:
+                    continue
+                if source_lc and not self._entry_matches_source(file_entry, source_lc):
+                    continue
+                if search:
+                    searchable = self._entry_search_text(file_entry)
+                    if regex and not regex.search(searchable):
+                        continue
+                    if not regex and search_lc and search_lc not in searchable:
+                        continue
+                entries.append(file_entry)
 
         entries.sort(
             key=lambda item: self._sort_key_for_timestamp(item.get("timestamp")), reverse=True
         )
         return entries
+
+    def _normalize_db_log_entry(self, entry: dict[str, Any]) -> dict[str, Any]:
+        source = str(entry.get("source") or "system")
+        relative_path = str(entry.get("relative_path") or f"{source}.jsonl")
+        group = str(entry.get("group") or "postgres")
+        timestamp = str(entry.get("timestamp") or entry.get("time") or "")
+        normalized = {
+            "timestamp": timestamp,
+            "time": str(entry.get("time") or timestamp),
+            "level": _normalize_log_level(entry.get("level", "info")),
+            "source": source,
+            "message": str(entry.get("message") or ""),
+            "path": relative_path,
+            "relative_path": relative_path,
+            "group": group,
+            "data": entry.get("payload") if "payload" in entry else entry.get("data"),
+        }
+        normalized["id"] = str(entry.get("id") or _entry_identity(normalized))
+        return normalized
 
     def query_logs(
         self,
@@ -1046,6 +1241,9 @@ class StateReader:
         normalized = _normalize_name(widget_name)
         if not normalized:
             return []
+        if self.document_store is not None:
+            entries = self.query_logs(search=widget_name, limit=limit)["entries"]
+            return cast(list[dict[str, Any]], entries)
 
         matches: list[dict[str, Any]] = []
         for path in self._iter_log_files():
@@ -1308,6 +1506,18 @@ class StateReader:
         while True:
             try:
                 await asyncio.sleep(interval)
+                if self.document_store is not None:
+                    snapshot = self.get_snapshot()
+                    if not self._state_changed(snapshot):
+                        continue
+                    self._last_snapshot = snapshot
+                    for watcher in list(self._watchers):
+                        try:
+                            watcher(snapshot)
+                        except Exception as e:
+                            logger.warning("Watcher error: %s", e)
+                    continue
+
                 versions = self._collect_watch_versions()
                 if self._last_watch_versions is None:
                     self._last_watch_versions = versions

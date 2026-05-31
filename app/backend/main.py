@@ -22,7 +22,6 @@ import uuid
 from collections import defaultdict
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
@@ -41,6 +40,7 @@ from .config import ChatServerConfig
 from .conversation import (
     ConversationHistory,
 )
+from .document_store import configure_default_document_store
 from .ipc_client import IPCProgenitorClient, get_ipc_client, start_ipc_client_with_retry
 from .models import (
     ErrorDetail,
@@ -96,12 +96,12 @@ client: ProgenitorClient | IPCProgenitorClient | None = None
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(
     SessionConfig(
-        persist_dir=Path("data/sessions") if config.host else None,
+        persist_dir=None,
     )
 )
 attachment_manager: AttachmentManager = AttachmentManager(
     AttachmentConfig(
-        cache_dir=Path("data/attachments"),
+        cache_dir=None,
     )
 )
 conversation_history: ConversationHistory = ConversationHistory()
@@ -584,6 +584,10 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting backend with enhanced features...")
+    document_store = configure_default_document_store(config.database_url)
+
+    async def close_document_store() -> None:
+        document_store.close()
 
     # Initialize session manager
     await session_manager.start()
@@ -602,6 +606,12 @@ async def lifespan(app: FastAPI):
     )
 
     # Register shutdown callbacks - these run after draining completes
+    graceful_shutdown.register_callback(
+        "close_document_store",
+        close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
     graceful_shutdown.register_callback(
         "stop_session_manager",
         session_manager.stop,
