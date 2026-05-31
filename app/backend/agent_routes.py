@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -35,16 +33,11 @@ class AgentRegisterResponse(BaseModel):
     total: int
 
 
-def _load_registry_map(registry_path: Path) -> dict[str, dict[str, Any]]:
-    if not registry_path.exists():
-        return {}
-
-    try:
-        loaded = json.loads(registry_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to read existing agent registry at %s: %s", registry_path, exc)
-        return {}
-
+def _load_registry_map() -> dict[str, dict[str, Any]]:
+    state_reader = get_state_reader()
+    loaded = state_reader._read_json_from_path(  # noqa: SLF001 - shared persistence bridge
+        state_reader.config_dir / "agents.json"
+    )
     if not isinstance(loaded, dict):
         return {}
 
@@ -84,11 +77,14 @@ def _load_registry_map(registry_path: Path) -> dict[str, dict[str, Any]]:
     return registry
 
 
-def _write_registry_map(registry_path: Path, registry: dict[str, dict[str, Any]]) -> None:
-    registry_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = registry_path.with_suffix(".tmp")
-    tmp_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
-    tmp_path.replace(registry_path)
+def _write_registry_map(registry: dict[str, dict[str, Any]]) -> None:
+    state_reader = get_state_reader()
+    registry_path = state_reader.config_dir / "agents.json"
+    if not state_reader._write_json_to_path(  # noqa: SLF001 - shared persistence bridge
+        registry_path, registry
+    ):
+        raise RuntimeError("Backend document store is not configured")
+    state_reader.invalidate(registry_path)
 
 
 @router.post("/agents/register", response_model=AgentRegisterResponse)
@@ -102,10 +98,8 @@ async def register_agent(payload: AgentRegisterRequest) -> AgentRegisterResponse
     if not url:
         raise HTTPException(status_code=400, detail="Agent url is required")
 
-    registry_path = get_state_reader().config_dir / "agents.json"
-
     async with _registry_write_lock:
-        registry = _load_registry_map(registry_path)
+        registry = _load_registry_map()
         existing = registry.get(name) if isinstance(registry.get(name), dict) else {}
         entry: dict[str, Any] = {"url": url}
 
@@ -124,7 +118,7 @@ async def register_agent(payload: AgentRegisterRequest) -> AgentRegisterResponse
                 entry["headers"] = clean_headers
 
         registry[name] = entry
-        _write_registry_map(registry_path, registry)
+        _write_registry_map(registry)
 
     logger.info("Registered agent %s -> %s", name, url)
     return AgentRegisterResponse(name=name, url=url, total=len(registry))

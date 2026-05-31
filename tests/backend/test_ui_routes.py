@@ -13,9 +13,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.backend.alerts import clear_alerts, create_alert
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
 from app.backend.models import AgentResponse
-from app.backend.state_reader import StateReader, get_state_reader
+from app.backend.state_reader import StateReader
 from app.backend.threads import clear_threads
 
 
@@ -983,98 +984,110 @@ class TestSplitSSEEndpoints:
 class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
-    def test_patch_schedule_widget_updates_schedule_file(self, client, tmp_path):
+    def test_state_reader_uses_document_store_over_legacy_state_files(self, tmp_path):
         state_dir = tmp_path / "data" / "state"
-        config_dir = tmp_path / "data" / "config"
         state_dir.mkdir(parents=True)
-        config_dir.mkdir(parents=True)
-        schedule_path = config_dir / "schedule.json"
-        schedule_path.write_text(
-            '[{"id":"sched-1","name":"Daily check","message":"Run the daily review","schedule":"0 0 * * *","cron_expression":"0 0 * * *","schedule_type":"cron","enabled":true,"timezone":"UTC"}]',
+        (state_dir / "current_state.json").write_text(
+            json.dumps({"thread_id": "legacy-file", "cycle_count": 1}),
             encoding="utf-8",
         )
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "current_state",
+            {"thread_id": "postgres-store", "cycle_count": 9},
+        )
 
-        state_reader = get_state_reader()
-        original_state_dir = state_reader.state_dir
-        original_config_dir = state_reader.config_dir
-        try:
-            state_reader.state_dir = state_dir
-            state_reader.config_dir = config_dir
-            state_reader.invalidate()
-            response = client.patch(
-                "/api/ui/widgets/schedule:sched-1",
-                json={
-                    "name": "Nightly check",
-                    "instruction": "Run the nightly review",
-                    "enabled": False,
-                    "expression": "0 1 * * *",
-                },
-            )
-            assert response.status_code == 200
-            updated = schedule_path.read_text(encoding="utf-8")
-            assert "Nightly check" in updated
-            assert "Run the nightly review" in updated
-            assert "0 1 * * *" in updated
-            assert "false" in updated.lower()
-        finally:
-            state_reader.state_dir = original_state_dir
-            state_reader.config_dir = original_config_dir
-            state_reader.invalidate()
+        state_reader = StateReader(state_dir=state_dir, document_store=store)
 
-    def test_patch_mcp_widget_updates_mcp_config_file(self, client, tmp_path, monkeypatch):
-        state_dir = tmp_path / "data" / "state"
-        config_dir = tmp_path / "data" / "config"
-        state_dir.mkdir(parents=True)
-        config_dir.mkdir(parents=True)
-        mcp_config_path = config_dir / "mcp.json"
-        mcp_config_path.write_text(
-            json.dumps(
+        assert state_reader.get_progenitor_state() == {
+            "thread_id": "postgres-store",
+            "cycle_count": 9,
+        }
+
+    def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "schedule",
+            [
                 {
-                    "mcpServers": {
-                        "jina": {
-                            "description": "Disabled web search",
-                            "enabled": False,
-                            "transport": "http",
-                            "url": "https://mcp.jina.ai/v1",
-                        }
+                    "id": "sched-1",
+                    "name": "Daily check",
+                    "message": "Run the daily review",
+                    "schedule": "0 0 * * *",
+                    "cron_expression": "0 0 * * *",
+                    "schedule_type": "cron",
+                    "enabled": True,
+                    "timezone": "UTC",
+                }
+            ],
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        response = client.patch(
+            "/api/ui/widgets/schedule:sched-1",
+            json={
+                "name": "Nightly check",
+                "instruction": "Run the nightly review",
+                "enabled": False,
+                "expression": "0 1 * * *",
+            },
+        )
+
+        assert response.status_code == 200
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        assert document is not None
+        updated = document.payload[0]
+        assert updated["name"] == "Nightly check"
+        assert updated["message"] == "Run the nightly review"
+        assert updated["schedule"] == "0 1 * * *"
+        assert updated["enabled"] is False
+
+    def test_patch_mcp_widget_updates_mcp_config_document(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp",
+            {
+                "mcpServers": {
+                    "jina": {
+                        "description": "Disabled web search",
+                        "enabled": False,
+                        "transport": "http",
+                        "url": "https://mcp.jina.ai/v1",
                     }
                 }
-            ),
-            encoding="utf-8",
+            },
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        response = client.patch(
+            "/api/ui/widgets/mcp:jina",
+            json={
+                "enabled": True,
+                "description": "Live web search",
+                "url": "https://mcp.jina.ai/v1?include_tags=search,read",
+            },
         )
 
-        state_reader = get_state_reader()
-        original_state_dir = state_reader.state_dir
-        original_config_dir = state_reader.config_dir
-        try:
-            state_reader.state_dir = state_dir
-            state_reader.config_dir = config_dir
-            state_reader.invalidate()
-            response = client.patch(
-                "/api/ui/widgets/mcp:jina",
-                json={
-                    "enabled": True,
-                    "description": "Live web search",
-                    "url": "https://mcp.jina.ai/v1?include_tags=search,read",
-                },
-            )
-            assert response.status_code == 200
-            payload = response.json()
-            assert payload["type"] == "mcp"
-            assert payload["data"]["enabled"] is True
-            assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "mcp"
+        assert payload["data"]["enabled"] is True
+        assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
 
-            updated = json.loads(mcp_config_path.read_text(encoding="utf-8"))
-            assert updated["mcpServers"]["jina"]["enabled"] is True
-            assert updated["mcpServers"]["jina"]["description"] == "Live web search"
-            assert (
-                updated["mcpServers"]["jina"]["url"]
-                == "https://mcp.jina.ai/v1?include_tags=search,read"
-            )
-        finally:
-            state_reader.state_dir = original_state_dir
-            state_reader.config_dir = original_config_dir
-            state_reader.invalidate()
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "mcp", {})
+        assert document is not None
+        updated = document.payload
+        assert updated["mcpServers"]["jina"]["enabled"] is True
+        assert updated["mcpServers"]["jina"]["description"] == "Live web search"
+        assert (
+            updated["mcpServers"]["jina"]["url"]
+            == "https://mcp.jina.ai/v1?include_tags=search,read"
+        )
 
     def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
         state_dir = tmp_path / "data" / "state"
@@ -1222,47 +1235,35 @@ class TestWorkspaceBridgeActions:
         assert payload["data"]["inspection"]["resources"][0]["uri"] == "resource://docs"
         assert payload["data"]["inspection"]["prompts"][0]["name"] == "summarize"
 
-    def test_create_schedule_writes_schedule_file(self, client, tmp_path):
-        state_dir = tmp_path / "data" / "state"
-        config_dir = tmp_path / "data" / "config"
-        state_dir.mkdir(parents=True)
-        config_dir.mkdir(parents=True)
-        schedule_path = config_dir / "schedule.json"
-        schedule_path.write_text("[]", encoding="utf-8")
+    def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
-        state_reader = get_state_reader()
-        original_state_dir = state_reader.state_dir
-        original_config_dir = state_reader.config_dir
-        try:
-            state_reader.state_dir = state_dir
-            state_reader.config_dir = config_dir
-            state_reader.invalidate()
-            response = client.post(
-                "/api/ui/schedules",
-                json={
-                    "name": "Morning Check-in",
-                    "instruction": "Summarize overnight alerts and prep the inbox.",
-                    "schedule_type": "interval",
-                    "expression": "15m",
-                    "timezone": "UTC",
-                    "enabled": True,
-                },
-            )
-            assert response.status_code == 200
-            payload = response.json()
-            assert payload["type"] == "schedule"
-            assert payload["title"] == "Morning Check-in"
-            assert (
-                payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
-            )
-            updated = schedule_path.read_text(encoding="utf-8")
-            assert "Morning Check-in" in updated
-            assert "Summarize overnight alerts and prep the inbox." in updated
-            assert "*/15 * * * *" in updated
-        finally:
-            state_reader.state_dir = original_state_dir
-            state_reader.config_dir = original_config_dir
-            state_reader.invalidate()
+        response = client.post(
+            "/api/ui/schedules",
+            json={
+                "name": "Morning Check-in",
+                "instruction": "Summarize overnight alerts and prep the inbox.",
+                "schedule_type": "interval",
+                "expression": "15m",
+                "timezone": "UTC",
+                "enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "schedule"
+        assert payload["title"] == "Morning Check-in"
+        assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        assert document is not None
+        updated = document.payload
+        assert updated[0]["name"] == "Morning Check-in"
+        assert updated[0]["message"] == "Summarize overnight alerts and prep the inbox."
+        assert updated[0]["cron_expression"] == "*/15 * * * *"
 
     def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
         response = client.post(

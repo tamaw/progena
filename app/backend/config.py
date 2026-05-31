@@ -37,6 +37,7 @@ class ChatServerConfig:
     # Progenitor IPC settings (socket-based communication)
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
     progenitor_ipc_port: int = 9500  # IPC server port
+    database_url: str = ""  # Postgres URL shared with Progenitor runtime state
 
     # API settings
     api_title: str = "Progenitor Chat API"
@@ -90,6 +91,7 @@ class ChatServerConfig:
             # IPC settings
             progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
             progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
+            database_url=os.getenv("PROGENITOR_DATABASE_URL", ""),
             # API settings
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
