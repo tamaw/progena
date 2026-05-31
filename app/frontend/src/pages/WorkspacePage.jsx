@@ -59,34 +59,6 @@ function getViewportSignature(viewport = {}) {
   return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
 }
 
-const SIDEBAR_WIDTH_STORAGE_KEY = 'workspace.sidebar.width';
-const SIDEBAR_MIN_WIDTH_PERCENT = 18;
-const SIDEBAR_MAX_WIDTH_PERCENT = 42;
-const SIDEBAR_DEFAULT_WIDTH_PERCENT = 24;
-
-function clampSidebarWidth(width) {
-  if (typeof window === 'undefined') {
-    return width;
-  }
-
-  const minWidth = window.innerWidth * (SIDEBAR_MIN_WIDTH_PERCENT / 100);
-  const maxWidth = window.innerWidth * (SIDEBAR_MAX_WIDTH_PERCENT / 100);
-  return Math.min(maxWidth, Math.max(minWidth, width));
-}
-
-function getDefaultSidebarWidth() {
-  if (typeof window === 'undefined') {
-    return 320;
-  }
-
-  const storedWidth = Number(window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
-  if (Number.isFinite(storedWidth) && storedWidth > 0) {
-    return clampSidebarWidth(storedWidth);
-  }
-
-  return clampSidebarWidth(window.innerWidth * (SIDEBAR_DEFAULT_WIDTH_PERCENT / 100));
-}
-
 const minimapNodeColor = (node) => {
   switch (node.type) {
     case 'prompt': return '#58a6ff';
@@ -133,14 +105,8 @@ function WorkspaceInner() {
   const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
   const lastAppliedViewportVersionRef = useRef(-1);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(getDefaultSidebarWidth);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
-  const resizeStateRef = useRef({
-    active: false,
-    startX: 0,
-    startWidth: 0,
-  });
 
   useOnViewportChange({
     onChange: workspaceReady
@@ -165,49 +131,6 @@ function WorkspaceInner() {
     viewportSignatureRef.current = nextSignature;
     reactFlowInstance.setViewport(viewport);
   }, [reactFlowInstance, viewport, viewportVersion, workspaceReady]);
-
-  useEffect(() => {
-    const handleResize = () => {
-      setSidebarWidth((current) => clampSidebarWidth(current));
-    };
-
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined' && !sidebarCollapsed) {
-      window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(Math.round(sidebarWidth)));
-    }
-  }, [sidebarCollapsed, sidebarWidth]);
-
-  useEffect(() => {
-    const handleMouseMove = (event) => {
-      if (!resizeStateRef.current.active || sidebarCollapsed) {
-        return;
-      }
-
-      const delta = event.clientX - resizeStateRef.current.startX;
-      setSidebarWidth(clampSidebarWidth(resizeStateRef.current.startWidth + delta));
-    };
-
-    const handleMouseUp = () => {
-      if (!resizeStateRef.current.active) {
-        return;
-      }
-
-      resizeStateRef.current.active = false;
-      document.body.classList.remove('workspace-resizing');
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [sidebarCollapsed]);
 
   const handleStatusEvent = useCallback((event) => {
     if (event?.type !== 'widgets' || !event?.data) {
@@ -317,20 +240,6 @@ function WorkspaceInner() {
     setContextMenu(null);
   }, []);
 
-  const onSidebarResizeStart = useCallback((event) => {
-    if (sidebarCollapsed) {
-      return;
-    }
-
-    resizeStateRef.current = {
-      active: true,
-      startX: event.clientX,
-      startWidth: sidebarWidth,
-    };
-    document.body.classList.add('workspace-resizing');
-    event.preventDefault();
-  }, [sidebarCollapsed, sidebarWidth]);
-
   const handleKeyboardShortcut = useCallback(
     (event) => {
       if (!workspaceReady) {
@@ -368,21 +277,11 @@ function WorkspaceInner() {
   }, [handleKeyboardShortcut]);
 
   return (
-    <div className="workspace-container" tabIndex={-1}>
+    <div className={`workspace-container ${sidebarCollapsed ? 'is-collapsed' : ''}`} tabIndex={-1}>
       <WorkspaceSidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-        width={sidebarWidth}
       />
-      {!sidebarCollapsed && (
-        <div
-          className="workspace-sidebar-resizer"
-          onMouseDown={onSidebarResizeStart}
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="Resize details pane"
-        />
-      )}
       <div
         className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
         ref={reactFlowWrapper}

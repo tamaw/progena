@@ -45,7 +45,7 @@ function SearchIcon() {
   );
 }
 
-function WorkspaceSidebar({ collapsed, onToggle, width = null }) {
+function WorkspaceSidebar({ collapsed, onToggle }) {
   const [workspaces, setWorkspaces] = useState(INITIAL_WORKSPACES);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
   const [activeType, setActiveType] = useState('All');
@@ -112,7 +112,6 @@ function WorkspaceSidebar({ collapsed, onToggle, width = null }) {
   return (
     <aside
       className={`workspace-sidebar sess-list ${collapsed ? 'collapsed' : ''}`}
-      style={!collapsed && width ? { width: `${width}px`, minWidth: `${width}px` } : undefined}
     >
       <div className="chat-sessions-pane__head sess-list__head">
         <div className="chat-sessions-pane__title sess-list__title">Workspaces <span className="muted">{workspaces.length}</span></div>
