@@ -1583,7 +1583,7 @@ def _write_event_widget_records(state_reader: StateReader, records: list[dict]) 
     normalized = [
         _normalize_event_widget_record(entry) for entry in records if isinstance(entry, dict)
     ]
-    _atomic_write_json(event_path, normalized)
+    _atomic_write_json(event_path, normalized, state_reader)
     state_reader.invalidate(event_path)
     return normalized
 
@@ -1627,13 +1627,19 @@ def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
     board_path = _kanban_board_path(state_reader)
     normalized = _normalize_kanban_board(board)
     normalized["updated_at"] = utcnow().isoformat()
-    _atomic_write_json(board_path, normalized)
+    _atomic_write_json(board_path, normalized, state_reader)
     state_reader.invalidate(board_path)
     return normalized
 
 
-def _atomic_write_json(filepath: Path, data: object) -> None:
+def _atomic_write_json(
+    filepath: Path, data: object, state_reader: StateReader | None = None
+) -> None:
     """Atomically write JSON for backend-backed state updates."""
+    reader = state_reader or get_state_reader()
+    if reader._write_json_to_path(filepath, data):  # noqa: SLF001 - shared persistence bridge
+        reader.invalidate(filepath)
+        return
     filepath.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp")
     try:
@@ -1660,10 +1666,10 @@ def _read_mcp_config(state_reader: StateReader) -> tuple[Path, dict]:
 
 
 def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
-    """Read the live schedule config, falling back to the legacy state path while migrating."""
+    """Read the live schedule config."""
     schedule_path = state_reader.schedule_config_path
     raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    if raw is None and not schedule_path.exists():
+    if state_reader.document_store is None and raw is None and not schedule_path.exists():
         raw = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
     if raw is None:
         return schedule_path, []
@@ -1686,7 +1692,7 @@ def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     if not deleted:
         return False
 
-    _atomic_write_json(schedule_path, remaining_entries)
+    _atomic_write_json(schedule_path, remaining_entries, state_reader)
     state_reader.invalidate(schedule_path)
     return True
 
@@ -2211,7 +2217,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         if updated is None:
             raise HTTPException(status_code=404, detail="Widget not found")
 
-        _atomic_write_json(schedule_path, schedule_data)
+        _atomic_write_json(schedule_path, schedule_data, state_reader)
         state_reader.invalidate(schedule_path)
 
         refreshed = next(
@@ -2315,7 +2321,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             raise HTTPException(status_code=400, detail="MCP server URL is required")
         server["url"] = url
 
-    _atomic_write_json(mcp_config_path, mcp_data)
+    _atomic_write_json(mcp_config_path, mcp_data, state_reader)
     state_reader.invalidate(mcp_config_path)
 
     refreshed = next(
@@ -2377,7 +2383,7 @@ async def get_schedules():
 
 @router.post("/schedules", response_model=WidgetResponse)
 async def create_schedule(body: ScheduleCreateRequest):
-    """Create a new schedule entry by writing directly to data/config/schedule.json."""
+    """Create a new schedule entry in backend state."""
     name = body.name.strip()
     instruction = body.instruction.strip()
     if not name:
@@ -2402,7 +2408,7 @@ async def create_schedule(body: ScheduleCreateRequest):
     )
     schedule_data.append(entry)
 
-    _atomic_write_json(schedule_path, schedule_data)
+    _atomic_write_json(schedule_path, schedule_data, state_reader)
     state_reader.invalidate(schedule_path)
 
     refreshed = next(
