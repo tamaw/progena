@@ -54,6 +54,28 @@ pytest tests/backend/ -v
 - Streaming responses via SSE
 - Health checks return JSON status
 
+### React UI Event Stream
+
+The canonical frontend event feed is `GET /api/ui/stream`. It emits named SSE frames as `event: ui.event`, where each `data` payload is a `UiEventEnvelope`:
+
+```json
+{
+  "id": "ui-42",
+  "seq": 42,
+  "type": "chat.sessions.snapshot",
+  "scope": "chat",
+  "session_id": null,
+  "payload": {},
+  "timestamp": "2026-01-01T00:00:00Z"
+}
+```
+
+Use `broadcast_ui_event()` for new backend-owned UI changes after persistence succeeds. The stream keeps a bounded in-memory replay buffer and honors `Last-Event-ID`; replayed events are sent before the fresh `connection.ready` event so reconnects apply in order.
+
+Frontend React code consumes this through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`. That listener owns the single `EventSource`, deduplicates events by id in `realtimeSlice.js`, then reducers in `uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
+
+Chat session loading follows a request-then-stream pattern. `GET /api/ui/chats` returns HTTP 200 for request acknowledgement and also emits `chat.sessions.snapshot` on `/api/ui/stream`; the frontend left pane is populated by that streamed snapshot. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` for unknown-sidebar safety and `chat.session.selected` with the same `request_id` for active transcript hydration. The frontend only applies matching detail events so one tab cannot steal another tab's selected chat. Mutations emit targeted events such as `chat.session.created`, `chat.session.metadata.updated`, and `chat.session.deleted`, and may also emit a fresh snapshot when the whole list ordering can change.
+
 ### Configuration
 - Port: `8000` (default)
 - CORS: Configured in `main.py`

@@ -250,3 +250,83 @@ async def test_native_reasoning_deltas_stream_without_synthetic_preview():
     assert "".join(item["content"] for item in reasoning_events) == "".join(reasoning_fragments)
     assert all("synthetic" not in item["metadata"] for item in reasoning_events)
     assert all("preview" not in item["metadata"] for item in reasoning_events)
+
+
+@pytest.mark.asyncio
+async def test_final_reasoning_summary_only_updates_tokens_after_streamed_deltas():
+    graph = _FakeGraph(
+        [
+            (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content=[
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "First. "}],
+                            }
+                        ]
+                    ),
+                    {"langgraph_node": "model"},
+                ),
+            ),
+            (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content=[
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "Second."}],
+                            },
+                            {"type": "text", "text": "Done"},
+                        ]
+                    ),
+                    {"langgraph_node": "model"},
+                ),
+            ),
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Done",
+                        "messages": [
+                            AIMessage(
+                                content=[
+                                    {
+                                        "type": "reasoning",
+                                        "summary": [
+                                            {"type": "summary_text", "text": "First. Second."}
+                                        ],
+                                    },
+                                    {"type": "text", "text": "Done"},
+                                ],
+                                usage_metadata={
+                                    "input_tokens": 1,
+                                    "output_tokens": 8,
+                                    "total_tokens": 9,
+                                    "output_token_details": {"reasoning": 7},
+                                },
+                            )
+                        ],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+
+    items = await _collect_items(bridge)
+
+    reasoning_deltas = [item for item in items if item.get("event_type") == "reasoning_delta"]
+    reasoning_summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
+
+    assert "".join(item["content"] for item in reasoning_deltas) == "First. Second."
+    assert reasoning_summaries == [
+        {
+            "type": "stream_event",
+            "event_type": "reasoning_summary",
+            "content": "",
+            "metadata": {"reasoning_tokens": 7, "text_length": 0},
+        }
+    ]

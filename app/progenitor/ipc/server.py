@@ -90,6 +90,7 @@ class IPCServer:
         # Only one request can be processed at a time since the loop
         # doesn't track request IDs through the output queue
         self._request_lock = asyncio.Lock()
+        self._request_cancel_events: dict[str, asyncio.Event] = {}
         # Background task for broadcasting events
         self._event_broadcast_task: asyncio.Task | None = None
 
@@ -241,6 +242,13 @@ class IPCServer:
                 logger.info("Shutdown requested by %s", client_id)
                 self._shutdown_event.set()
 
+            elif msg.type == MessageType.CANCEL_REQUEST:
+                if msg.request_id:
+                    logger.info("Cancellation requested by %s for %s", client_id, msg.request_id)
+                    cancel_event = self._request_cancel_events.get(msg.request_id)
+                    if cancel_event is not None:
+                        cancel_event.set()
+
             elif msg.type == MessageType.USER_MESSAGE:
                 request_id = msg.request_id or f"req_{uuid.uuid4().hex[:12]}"
 
@@ -362,6 +370,7 @@ class IPCServer:
             writer: Client stream writer.
         """
         await self._notify_queued_request(request_id, streaming=True)
+        cancel_event = self._request_cancel_events.setdefault(request_id, asyncio.Event())
 
         # Serialize requests to prevent output queue race conditions.
         # The loop doesn't track request IDs, so we must ensure only
@@ -369,20 +378,36 @@ class IPCServer:
         async with self._request_lock:
             logger.info("Processing streaming request %s: %s", request_id, content[:50])
 
-            if self._can_run_deepagent_direct():
-                await self._stream_direct_deepagent_response(content, request_id, writer, metadata)
-                return
-
-            await self._drain_response_queues(request_id)
-
-            # Enqueue input
-            await self._enqueue_loop_input(content, metadata=metadata)
-
-            # Stream chunks from the loop runner's stream queue
             try:
+                if cancel_event.is_set():
+                    await write_message(writer, stream_end(request_id))
+                    return
+
+                if self._can_run_deepagent_direct():
+                    await self._stream_direct_deepagent_response(
+                        content,
+                        request_id,
+                        writer,
+                        metadata,
+                        cancel_event,
+                    )
+                    return
+
+                await self._drain_response_queues(request_id)
+
+                # Enqueue input
+                await self._enqueue_loop_input(content, metadata=metadata)
+
+                # Stream chunks from the loop runner's stream queue
                 poll_count = 0
 
                 while True:
+                    if cancel_event.is_set():
+                        logger.info("Stream cancelled for %s", request_id)
+                        await self._drain_response_queues(request_id)
+                        await write_message(writer, stream_end(request_id))
+                        return
+
                     poll_count += 1
 
                     # Get stream chunk from the stream queue
@@ -391,6 +416,7 @@ class IPCServer:
                     if chunk_data:
                         item_type = str(chunk_data.get("type", "stream_chunk"))
                         if item_type == "stream_event":
+                            _imgs = chunk_data.get("images")
                             await write_message(
                                 writer,
                                 stream_event(
@@ -398,6 +424,7 @@ class IPCServer:
                                     request_id=request_id,
                                     content=str(chunk_data.get("content", "")),
                                     metadata=chunk_data.get("metadata"),
+                                    images=_imgs if isinstance(_imgs, list) else None,
                                 ),
                             )
                             continue
@@ -449,6 +476,8 @@ class IPCServer:
                     writer,
                     error_message(str(e), error_code="STREAM_ERROR", request_id=request_id),
                 )
+            finally:
+                self._request_cancel_events.pop(request_id, None)
 
     async def _get_stream_item(self, timeout: float | None = None) -> dict[str, Any] | None:
         """Read the next stream item from loop runners old and new."""
@@ -495,13 +524,20 @@ class IPCServer:
         request_id: str,
         writer: asyncio.StreamWriter,
         metadata: dict[str, Any] | None,
+        cancel_event: asyncio.Event | None = None,
     ) -> None:
         thread_id = self._thread_id_for_request(metadata)
         async with self._direct_graph_lock():
             bridge = self._create_direct_stream_bridge()
             async for item in bridge.stream(content, thread_id=thread_id):
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("Direct DeepAgent stream cancelled for %s", request_id)
+                    await write_message(writer, stream_end(request_id))
+                    return
+
                 item_type = str(item.get("type", "stream_chunk"))
                 if item_type == "stream_event":
+                    _imgs = item.get("images")
                     await write_message(
                         writer,
                         stream_event(
@@ -509,6 +545,7 @@ class IPCServer:
                             request_id=request_id,
                             content=str(item.get("content", "")),
                             metadata=cast(dict[str, Any] | None, item.get("metadata")),
+                            images=_imgs if isinstance(_imgs, list) else None,
                         ),
                     )
                     continue

@@ -1,7 +1,7 @@
 import { useCallback, useMemo } from 'react';
 import { STREAM_EVENT_CATEGORIES } from './streamFilters';
 
-function StreamFilterMenu({ storageKey, filters, onChange }) {
+function StreamFilterMenu({ storageKey, filters, onChange, eventCounts }) {
   const updateFilters = useCallback(
     (next) => {
       onChange(next);
@@ -54,6 +54,9 @@ function StreamFilterMenu({ storageKey, filters, onChange }) {
         >
           {category.color ? <span className="adot" style={{ background: category.color }} /> : null}
           {category.label}
+          {eventCounts && eventCounts[category.id] > 0 && (
+            <span className="count">{eventCounts[category.id]}</span>
+          )}
         </button>
       ))}
     </div>

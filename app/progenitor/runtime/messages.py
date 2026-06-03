@@ -53,6 +53,19 @@ def get_last_ai_message(messages: Any) -> Any | None:
     return None
 
 
+def _coerce_to_dict(obj: Any) -> dict[str, Any] | None:
+    """Convert a dict or Pydantic model to a plain dict, returning None for other types."""
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        try:
+            dumped = obj.model_dump(mode="json")
+            return dumped if isinstance(dumped, dict) else None
+        except Exception:  # nosec B110
+            pass
+    return None
+
+
 def _coerce_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -75,9 +88,10 @@ def extract_reasoning_trace(msg: Any) -> str | None:
     if isinstance(content, list):
         parts: list[str] = []
         for part in content:
-            if not isinstance(part, dict):
+            part_dict = _coerce_to_dict(part)
+            if part_dict is None:
                 continue
-            part_type = str(part.get("type", "")).lower()
+            part_type = str(part_dict.get("type", "")).lower()
             if part_type not in {
                 "reasoning",
                 "reasoning_text",
@@ -85,10 +99,12 @@ def extract_reasoning_trace(msg: Any) -> str | None:
                 "thinking",
             }:
                 continue
-            if text := extract_reasoning_summary_text({"content": [part]}):
+            if text := extract_reasoning_summary_text({"content": [part_dict]}):
                 parts.append(text)
                 continue
-            candidate = part.get("text") or part.get("summary") or part.get("content")
+            candidate = (
+                part_dict.get("text") or part_dict.get("summary") or part_dict.get("content")
+            )
             if text := _coerce_text(candidate):
                 parts.append(text)
         if parts:

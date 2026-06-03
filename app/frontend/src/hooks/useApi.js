@@ -62,6 +62,7 @@ export function useApi() {
   const { isHealthy } = useHealth();
   const [connectionState, setConnectionState] = useState('disconnected');
   const abortControllerRef = useRef(null);
+  const activeStreamRequestIdRef = useRef(null);
 
   useEffect(() => {
     setConnectionState((current) => {
@@ -332,27 +333,32 @@ export function useApi() {
   }, [config, fetchWithRetry]);
 
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent) => {
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      const requestId = `req-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
+      activeStreamRequestIdRef.current = requestId;
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
 
       try {
         setConnectionState((current) => (isHealthy ? current : 'connecting'));
+        const body = { model: config.chat.defaultModel, input, stream: true };
+        if (metadata && typeof metadata === 'object') {
+          body.metadata = metadata;
+        }
         const response = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Request-ID': requestId,
+          },
           credentials: 'include',
-          body: JSON.stringify({
-            model: config.chat.defaultModel,
-            input,
-            stream: true
-          }),
+          body: JSON.stringify(body),
           signal: controller.signal
         });
 
@@ -419,17 +425,35 @@ export function useApi() {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
         }
+        if (activeStreamRequestIdRef.current === requestId) {
+          activeStreamRequestIdRef.current = null;
+        }
       }
     },
     [config, getApiUrl, isHealthy]
   );
 
-  const cancelStream = useCallback(() => {
+  const cancelStream = useCallback(async () => {
+    const requestId = activeStreamRequestIdRef.current;
+    let cancelPromise = Promise.resolve();
+    if (requestId) {
+      const responsesUrl = getApiUrl('responses').replace(/\/$/, '');
+      cancelPromise = fetch(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
+        method: 'PUT',
+        credentials: 'include',
+      })
+        .catch((error) => {
+          console.warn('Failed to cancel backend response stream', error);
+        });
+    }
+
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-  }, []);
+    activeStreamRequestIdRef.current = null;
+    await cancelPromise;
+  }, [getApiUrl]);
 
   const isStreaming = useCallback(() => {
     return abortControllerRef.current !== null;

@@ -70,7 +70,7 @@ function ChatInput({
   }, [message]);
 
   useEffect(() => {
-    if (autoFocus && !disabled) {
+    if (autoFocus && !disabled && !isGenerating) {
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [autoFocus, disabled, focusToken, isGenerating]);
@@ -167,7 +167,7 @@ function ChatInput({
           <textarea
             ref={textareaRef}
             className="chat-input"
-            placeholder={placeholder}
+            placeholder={disabled || isGenerating ? '' : placeholder}
             value={message}
             onChange={(e) => {
               setMessage(e.target.value);
@@ -175,11 +175,11 @@ function ChatInput({
             }}
             onKeyDown={handleKeyDown}
             rows={1}
-            disabled={disabled}
+            disabled={disabled || isGenerating}
           />
           <div className="input-actions">
             {isGenerating && allowStop ? (
-              <button className="btn-stop" title="Stop Generation (Esc)" onClick={onStop}>
+              <button type="button" className="btn-stop" title="Stop Generation (Esc)" onClick={onStop}>
                 <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
                   <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
                 </svg>
