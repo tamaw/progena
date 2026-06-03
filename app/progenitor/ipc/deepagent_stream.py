@@ -48,6 +48,7 @@ class DeepAgentIPCStream:
         self.last_reasoning_trace: str | None = None
         self._streamed_response_content = ""
         self._response_was_streamed = False
+        self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
 
     async def stream(
@@ -116,6 +117,7 @@ class DeepAgentIPCStream:
 
         stream_metadata = make_json_safe(metadata)
         for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
+            self._reasoning_was_streamed = True
             reasoning_event = build_reasoning_delta_event(
                 reasoning_delta,
                 metadata={
@@ -151,14 +153,19 @@ class DeepAgentIPCStream:
         envelope = normalize_custom_event(event)
         if envelope is None:
             return []
-        items = [
-            {
-                "type": "stream_event",
-                "event_type": envelope["event_type"],
-                "content": envelope["content"],
-                "metadata": envelope["metadata"],
-            }
-        ]
+        item: dict[str, Any] = {
+            "type": "stream_event",
+            "event_type": envelope["event_type"],
+            "content": envelope["content"],
+            "metadata": envelope["metadata"],
+        }
+        # Images are kept at the top level of the payload to bypass the 2 KB
+        # metadata truncation in normalize_custom_event.
+        if isinstance(event, dict) and envelope["event_type"] == "tool_result":
+            images = event.get("images")
+            if isinstance(images, list) and images:
+                item["images"] = images
+        items = [item]
         items.extend(self._expand_task_subagent_events(envelope))
         return items
 
@@ -177,6 +184,16 @@ class DeepAgentIPCStream:
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
             self.state.update(node_output)
+            model_name: str | None = None
+            if "messages" in node_output:
+                last_msg = get_last_ai_message(node_output.get("messages"))
+                if last_msg is not None:
+                    rm = getattr(last_msg, "response_metadata", None) or {}
+                    model_name = (
+                        (rm.get("model_name") or rm.get("model") or rm.get("model_id"))
+                        if isinstance(rm, dict)
+                        else None
+                    )
             yield {
                 "type": "stream_event",
                 "event_type": "node_update",
@@ -186,6 +203,7 @@ class DeepAgentIPCStream:
                     "output_keys": output_info,
                     "contains_messages": "messages" in node_output,
                     "contains_pending_response": "pending_response" in node_output,
+                    **({"model_name": str(model_name)} if model_name else {}),
                 },
             }
 
@@ -215,7 +233,7 @@ class DeepAgentIPCStream:
         reasoning_tokens = (
             extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
-        if last_ai_msg is not None and bool(reasoning_trace):
+        if last_ai_msg is not None and bool(reasoning_trace) and not self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or "",
                 metadata={"reasoning_tokens": reasoning_tokens},
@@ -224,6 +242,17 @@ class DeepAgentIPCStream:
                 "type": "stream_event",
                 "event_type": summary_event["event_type"],
                 "content": summary_event["content"],
+                "metadata": cast(dict[str, Any], summary_event["metadata"]),
+            }
+        elif last_ai_msg is not None and self._reasoning_was_streamed:
+            summary_event = build_reasoning_summary_event(
+                "",
+                metadata={"reasoning_tokens": reasoning_tokens},
+            )
+            yield {
+                "type": "stream_event",
+                "event_type": summary_event["event_type"],
+                "content": "",
                 "metadata": cast(dict[str, Any], summary_event["metadata"]),
             }
         elif last_ai_msg is not None and getattr(

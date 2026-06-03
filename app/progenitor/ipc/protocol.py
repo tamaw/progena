@@ -16,6 +16,7 @@ Message Types:
     - heartbeat: Keep-alive ping
     - heartbeat_ack: Keep-alive pong
     - error: Error response
+    - cancel_request: Cancel an active request by request ID
     - shutdown: Graceful shutdown request
 """
 
@@ -41,6 +42,7 @@ class MessageType(StrEnum):
 
     # Request messages (client -> server)
     USER_MESSAGE = "user_message"
+    CANCEL_REQUEST = "cancel_request"
     HEARTBEAT = "heartbeat"
     SHUTDOWN = "shutdown"
 
@@ -70,6 +72,7 @@ class IPCMessage:
     error_code: str | None = None
     timestamp: str | None = None
     event_type: str | None = None  # For AGENT_EVENT / STREAM_EVENT
+    images: list[dict[str, str]] | None = None  # For STREAM_EVENT tool_result with image content
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -91,6 +94,8 @@ class IPCMessage:
             d["timestamp"] = self.timestamp
         if self.event_type:
             d["event_type"] = self.event_type
+        if self.images:
+            d["images"] = self.images
         return d
 
     @classmethod
@@ -110,6 +115,7 @@ class IPCMessage:
             error_code=data.get("error_code"),
             timestamp=data.get("timestamp"),
             event_type=data.get("event_type"),
+            images=data.get("images"),
         )
 
 
@@ -235,6 +241,14 @@ def user_message(
     )
 
 
+def cancel_request_message(request_id: str) -> IPCMessage:
+    """Create a request-cancellation message."""
+    return IPCMessage(
+        type=MessageType.CANCEL_REQUEST,
+        request_id=request_id,
+    )
+
+
 def assistant_message(
     content: str,
     request_id: str | None = None,
@@ -267,6 +281,7 @@ def stream_event(
     request_id: str | None = None,
     content: str = "",
     metadata: dict[str, Any] | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> IPCMessage:
     """Create a structured request-scoped streaming event message."""
     return IPCMessage(
@@ -275,6 +290,7 @@ def stream_event(
         request_id=request_id,
         metadata=metadata,
         event_type=event_type,
+        images=images,
     )
 
 

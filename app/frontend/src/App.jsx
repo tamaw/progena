@@ -6,6 +6,7 @@ import { AlertCenterProvider } from './context/AlertCenterContext';
 import { ChromeRuntimeProvider } from './context/ChromeRuntimeContext';
 import { NotificationProvider } from './context/NotificationContext';
 import AppRuntimeShell from './components/layout/AppRuntimeShell';
+import RealtimeBridge from './store/RealtimeBridge';
 import ConversationPage from './pages/ConversationPage';
 import DashboardPage from './pages/DashboardPage';
 import TasksPage from './pages/TasksPage';
@@ -39,6 +40,7 @@ const AgentsPage = lazy(() => import('./pages/AgentsPage'));
 function App() {
   return (
     <ConfigProvider>
+      <RealtimeBridge />
       <HealthProvider>
         <NotificationProvider>
           <AlertCenterProvider>

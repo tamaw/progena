@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 
 function isReasoningEvent(event) {
@@ -31,6 +31,7 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
       content: reasoningText,
       metadata: {
         source: 'message_reasoning',
+        text_length: fallbackReasoningText.length,
         ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
           ? { reasoning_tokens: reasoningTokenCount }
           : {}),
@@ -40,7 +41,7 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
   ];
 }
 
-function Message({ message, streamEventFilter }) {
+function Message({ message, streamEventFilter, hideContent = false, showImages = true }) {
   const {
     role,
     content,
@@ -53,6 +54,7 @@ function Message({ message, streamEventFilter }) {
     tokenCount = 0,
     reasoningTokenCount = 0,
     reasoningText = '',
+    model = '',
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -73,7 +75,7 @@ function Message({ message, streamEventFilter }) {
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
-    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
   }, [timestamp]);
 
   const formattedTokenCount = useMemo(() => {
@@ -101,6 +103,15 @@ function Message({ message, streamEventFilter }) {
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
+  // Collect images from all tool_result events on this message (unfiltered — images
+  // belong in the agent response, not the tool row, so they survive the tool filter).
+  const messageImages = useMemo(() => {
+    if (role !== 'assistant') return [];
+    return streamEvents
+      .filter((e) => e.eventType === 'tool_result' && Array.isArray(e.images) && e.images.length > 0)
+      .flatMap((e) => e.images);
+  }, [role, streamEvents]);
+
   const messageEntry = (
     <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
       <div className="entry__gutter" aria-hidden="true">
@@ -112,13 +123,13 @@ function Message({ message, streamEventFilter }) {
         <div className="msg__head entry__head">
           {role === 'assistant' ? (
             <>
-              <span className="entry__tag">assistant</span>
+              <span className="entry__tag entry__tag--assistant">agent</span>
               <span className="msg__role">Progenitor</span>
             </>
           ) : (
             <>
               <span className="entry__tag entry__tag--in">user</span>
-              <span className="msg__role">You</span>
+              <span className="msg__role">Message</span>
             </>
           )}
           {isScheduled && (
@@ -137,6 +148,7 @@ function Message({ message, streamEventFilter }) {
                 <span className="msg__stat message-token-count">{item}</span>
               </Fragment>
             ))}
+            {model && <span className="msg__model">{model}</span>}
             <MessageActions role={role} content={content} />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
@@ -146,6 +158,9 @@ function Message({ message, streamEventFilter }) {
             className="message-content"
             dangerouslySetInnerHTML={{ __html: formattedContent }}
           />
+          {showImages && messageImages.length > 0 && (
+            <MessageImageStrip images={messageImages} />
+          )}
         </div>
       </div>
     </article>
@@ -155,7 +170,7 @@ function Message({ message, streamEventFilter }) {
     return (
       <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
         {hasConnectedEvents && <StreamEvents events={visibleStreamEvents} />}
-        {messageEntry}
+        {!hideContent && messageEntry}
       </div>
     );
   }
@@ -167,6 +182,64 @@ function Message({ message, streamEventFilter }) {
   );
 }
 
+function ImageModal({ image, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
+  return (
+    <div className="img-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
+      <div className="img-modal-inner" onClick={(e) => e.stopPropagation()}>
+        <button className="img-modal-close" onClick={onClose} aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M1 1l12 12M13 1L1 13" />
+          </svg>
+        </button>
+        <img
+          className="img-modal-img"
+          src={`data:${image.media_type || 'image/jpeg'};base64,${image.base64}`}
+          alt="Full size"
+        />
+      </div>
+    </div>
+  );
+}
+
+function MessageImageStrip({ images }) {
+  const [lightboxImage, setLightboxImage] = useState(null);
+  const openLightbox = useCallback((image) => setLightboxImage(image), []);
+  const closeLightbox = useCallback(() => setLightboxImage(null), []);
+
+  return (
+    <>
+      {lightboxImage && <ImageModal image={lightboxImage} onClose={closeLightbox} />}
+      <div className="img-strip msg-img-strip">
+        {images.map((image, index) => (
+          <div
+            key={image.id || index}
+            className="img-thumb img-thumb--photo"
+            data-label={`image_${index + 1}`}
+            onClick={() => openLightbox(image)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => e.key === 'Enter' && openLightbox(image)}
+            aria-label={`View image ${index + 1} full size`}
+          >
+            <div className="img-thumb__inner img-thumb__inner--photo">
+              <img
+                src={`data:${image.media_type || 'image/jpeg'};base64,${image.base64}`}
+                alt={`Image ${index + 1}`}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function StreamEvents({ events }) {
   return (
     <>
@@ -174,6 +247,7 @@ function StreamEvents({ events }) {
         const description = describeStreamEvent(event);
         const badge = badgeForEvent(event.eventType || 'stream_event');
         const tool = toolDetailsForEvent(event, description);
+        const tokenMetaItems = tokenMetaItemsForEvent(event);
         return (
           <article
             key={event.id}
@@ -187,7 +261,15 @@ function StreamEvents({ events }) {
               <div className="message-stream-event-header entry__head">
                 <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
                 <span className="entry__role">{description.title}</span>
-                {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
+                <span className="msg__head-trailing">
+                  {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
+                  {tokenMetaItems.map((item, index) => (
+                    <Fragment key={`${event.id}-${item}-${index}`}>
+                      {index > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
+                      <span className="msg__stat message-token-count">{item}</span>
+                    </Fragment>
+                  ))}
+                </span>
               </div>
               {description.bodyHtml && (
                 <div
@@ -203,9 +285,6 @@ function StreamEvents({ events }) {
                   <div className="tool__head">
                     <span className="tool__kind">{tool.kind}</span>
                     <span className="tool__desc">{tool.desc}</span>
-                    <span className={`tool__status ${tool.statusTone === 'err' ? 'tool__status--err' : 'tool__status--ok'}`}>
-                      {tool.status}
-                    </span>
                   </div>
                   {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
                   {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
@@ -255,6 +334,7 @@ function describeStreamEvent(event) {
 
   if (eventType === 'node_update') {
     const nodeName = typeof metadata.node_name === 'string' ? metadata.node_name : 'unknown';
+    const modelName = typeof metadata.model_name === 'string' ? metadata.model_name : null;
     const detailParts = [];
 
     if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
@@ -270,7 +350,7 @@ function describeStreamEvent(event) {
     return {
       badge: 'Step',
       title: prettifyLabel(nodeName),
-      metaDetail: summarizeNodeKind(nodeName),
+      metaDetail: modelName || summarizeNodeKind(nodeName),
       bodyDetail: detailParts.join(' • '),
     };
   }
@@ -325,7 +405,7 @@ function describeStreamEvent(event) {
       badge: 'Reasoning',
       title: 'Reasoning',
       bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
-      metaDetail: summarizeMetadata(metadata),
+      metaDetail: '',
       bodyDetail: '',
     };
   }
@@ -384,14 +464,34 @@ function summarizeMetadata(metadata) {
   if (typeof metadata.text_length === 'number' && metadata.text_length > 0) {
     summaryParts.push(`${metadata.text_length} chars`);
   }
-  if (typeof metadata.reasoning_tokens === 'number' && metadata.reasoning_tokens > 0) {
-    summaryParts.push(`${metadata.reasoning_tokens} reasoning tokens`);
-  }
   if (typeof metadata.stream_metadata?.langgraph_node === 'string') {
     summaryParts.push(`node: ${metadata.stream_metadata.langgraph_node}`);
   }
 
   return summaryParts.join(' • ');
+}
+
+function tokenMetaItemsForEvent(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  const items = [];
+
+  if (isReasoningEvent(event)) {
+    if (typeof metadata.reasoning_tokens === 'number' && metadata.reasoning_tokens > 0) {
+      const count = new Intl.NumberFormat().format(metadata.reasoning_tokens);
+      items.push(`${count} reasoning token${metadata.reasoning_tokens === 1 ? '' : 's'}`);
+    } else {
+      const contentLen = typeof event?.content === 'string' ? event.content.trim().length : 0;
+      const textLen = contentLen > 0
+        ? contentLen
+        : (typeof metadata.text_length === 'number' ? metadata.text_length : 0);
+      if (textLen > 0) {
+        const estimated = Math.round(textLen / 4);
+        items.push(`~${new Intl.NumberFormat().format(estimated)} tokens`);
+      }
+    }
+  }
+
+  return items;
 }
 
 function badgeForEventType(eventType) {
@@ -430,13 +530,16 @@ function tagClassForEventType(eventType) {
   if (eventType === 'tool_error') {
     return 'entry__tag entry__tag--err';
   }
+  if (eventType.includes('tool')) {
+    return 'entry__tag chat-event-tag--tool';
+  }
   if (eventType.includes('reasoning')) {
     return 'entry__tag chat-event-tag--reason';
   }
   if (eventType.includes('node') || eventType.includes('agent')) {
-    return 'entry__tag entry__tag--in';
+    return 'entry__tag chat-event-tag--step';
   }
-  return 'entry__tag';
+  return 'entry__tag chat-event-tag--step';
 }
 
 function toolDetailsForEvent(event, description) {

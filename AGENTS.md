@@ -68,4 +68,5 @@ progenitor/
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
 - System Specification: `docs/SPEC.md`
 - Backend Details: `docs/BACKEND.md`
+- Local Startup: `docs/LOCAL_STARTUP.md`
 - Project Structure: `docs/PROJECT_STRUCTURE.md`

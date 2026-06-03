@@ -33,6 +33,8 @@ const defaultConfig = {
       health: '/health',
       healthDetailed: '/health/detailed',
       chat: '/v1/responses',
+      stream: '/api/ui/stream',
+      chats: '/api/ui/chats',
       events: '/api/ui/events',
       status: '/api/ui/status',
       models: '/v1/models',
