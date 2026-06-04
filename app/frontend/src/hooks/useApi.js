@@ -63,6 +63,10 @@ export function useApi() {
   const [connectionState, setConnectionState] = useState('disconnected');
   const abortControllerRef = useRef(null);
   const activeStreamRequestIdRef = useRef(null);
+  // Identifies which chat the foreground stream belongs to, so a new send only
+  // supersedes (aborts) a stream for the SAME chat — a different chat's stream
+  // is left running to finish in the background.
+  const activeStreamKeyRef = useRef(null);
 
   useEffect(() => {
     setConnectionState((current) => {
@@ -316,30 +320,18 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
-  const sendMessage = useCallback(async (message, history = []) => {
-    const input = buildResponsesInput(history, message);
-    const response = await fetchWithRetry('responses', {
-      method: 'POST',
-      body: JSON.stringify({
-        model: config.chat.defaultModel,
-        input,
-        stream: false
-      })
-    });
-    const data = await response.json();
-    const content = Array.isArray(data.output?.[0]?.content) ? data.output[0].content : [];
-    const textItem = content.find((item) => item?.type === 'output_text' || item?.type === 'text');
-    return typeof textItem?.text === 'string' ? textItem.text : '';
-  }, [config, fetchWithRetry]);
-
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
-      if (abortControllerRef.current) {
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null, streamKey = null) => {
+      // Only abort an in-flight stream that belongs to the same chat. Sending in
+      // a different chat leaves the previous chat's stream running so it can
+      // finish in the background rather than being silently discarded.
+      if (abortControllerRef.current && activeStreamKeyRef.current === streamKey) {
         abortControllerRef.current.abort();
       }
 
       const controller = new AbortController();
       abortControllerRef.current = controller;
+      activeStreamKeyRef.current = streamKey;
       const requestId = `req-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
       activeStreamRequestIdRef.current = requestId;
       const input = buildResponsesInput(history, message);
@@ -424,6 +416,7 @@ export function useApi() {
       } finally {
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;
+          activeStreamKeyRef.current = null;
         }
         if (activeStreamRequestIdRef.current === requestId) {
           activeStreamRequestIdRef.current = null;
@@ -452,12 +445,9 @@ export function useApi() {
       abortControllerRef.current = null;
     }
     activeStreamRequestIdRef.current = null;
+    activeStreamKeyRef.current = null;
     await cancelPromise;
   }, [getApiUrl]);
-
-  const isStreaming = useCallback(() => {
-    return abortControllerRef.current !== null;
-  }, []);
 
   return {
     connectionState,
@@ -491,10 +481,8 @@ export function useApi() {
     generateAction,
     getSession,
     createSession,
-    sendMessage,
     sendMessageStream,
     cancelStream,
-    isStreaming,
     fetchWithRetry
   };
 }
