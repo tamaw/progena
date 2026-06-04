@@ -659,6 +659,135 @@
     color: var(--color-text-muted);
 }
 
+/* ----------------------------------------------------------------------------
+   Writing blocks (`:::writing … :::`) — a quiet ruled note.
+   Theme-adaptive (sits in the dark/light UI like other surfaces); the note
+   character comes from the faint rules, soft margin, handwriting font and tab
+   rather than a loud paper card. Rules are decorative, not writing lines.
+   ------------------------------------------------------------------------- */
+.writing-block {
+    --wb-line: 25px;          /* ruled-line spacing; text line-height matches */
+    --wb-margin: 32px;        /* left margin rule offset */
+    position: relative;
+    margin: 16px 0 12px;
+    border-radius: var(--border-radius-md);
+    background-color: color-mix(in srgb, var(--color-bg-tertiary) 89%, #5b86d6);
+    border: 1px solid var(--color-border);
+    box-shadow: var(--shadow-sm);
+}
+
+/* Understated taped index tab in the top-left corner. */
+.writing-block__tab {
+    position: absolute;
+    top: -8px;
+    left: 16px;
+    z-index: 1;
+    padding: 1px 8px;
+    font-family: "Shantell Sans", var(--font-family);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: var(--color-text-muted);
+    background-color: color-mix(in srgb, var(--color-bg-hover) 86%, #5b86d6);
+    border: 1px solid var(--color-border);
+    border-radius: 4px;
+    transform: rotate(-1.4deg);
+}
+
+/* The ruled sheet. The rules are intentionally faint — decorative paper
+   texture rather than writing lines, so prose/lists don't need to seat exactly
+   on them. Two background layers: the soft left-margin line and the rules. */
+.writing-block__sheet {
+    position: relative;
+    border-radius: var(--border-radius-md);
+    padding: 12px 16px 12px calc(var(--wb-margin) + 12px);
+    font-family: "Shantell Sans", "Segoe Print", "Comic Sans MS", var(--font-family);
+    font-size: 13.5px;
+    line-height: var(--wb-line);
+    color: var(--color-text-primary);
+    background-image:
+        linear-gradient(
+            to right,
+            transparent calc(var(--wb-margin) - 1px),
+            rgba(214, 96, 88, 0.42) calc(var(--wb-margin) - 1px),
+            rgba(214, 96, 88, 0.42) calc(var(--wb-margin) + 1px),
+            transparent calc(var(--wb-margin) + 1px)
+        ),
+        linear-gradient(to bottom, rgba(216, 190, 96, 0.2) 0, rgba(216, 190, 96, 0.2) 1px, transparent 1px);
+    background-position: 0 0, 0 10px;
+    background-size: auto, 100% var(--wb-line);
+    background-repeat: no-repeat, repeat;
+}
+
+/* Keep every block element on the ruling: zero or one-line vertical rhythm. */
+.writing-block__sheet > :first-child { margin-top: 0; }
+.writing-block__sheet > :last-child { margin-bottom: 0; }
+
+.writing-block__sheet p {
+    margin: 0 0 var(--wb-line);
+    line-height: var(--wb-line);
+}
+
+.writing-block__sheet h1,
+.writing-block__sheet h2,
+.writing-block__sheet h3,
+.writing-block__sheet h4,
+.writing-block__sheet h5,
+.writing-block__sheet h6 {
+    margin: 0 0 var(--wb-line);
+    padding: 0;
+    border: none;
+    line-height: var(--wb-line);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.writing-block__sheet h1 { font-size: 1.22em; }
+.writing-block__sheet h2 { font-size: 1.12em; }
+.writing-block__sheet h3 { font-size: 1.05em; }
+
+.writing-block__sheet ul,
+.writing-block__sheet ol {
+    margin: 0 0 var(--wb-line);
+    padding-left: 1.4em;
+}
+
+.writing-block__sheet li {
+    margin: 0;
+    line-height: var(--wb-line);
+}
+
+.writing-block__sheet a {
+    color: var(--color-accent);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--color-accent) 50%, transparent);
+}
+
+.writing-block__sheet strong { color: var(--color-text-primary); }
+
+.writing-block__sheet blockquote {
+    margin: 0 0 var(--wb-line);
+    padding-left: 10px;
+    border-left: 2px solid rgba(214, 178, 74, 0.45);
+    color: var(--color-text-secondary);
+    font-style: italic;
+}
+
+.writing-block__sheet code,
+.writing-block__sheet .inline-code {
+    padding: 1px 5px;
+    font-size: 0.85em;
+    color: var(--color-text-secondary);
+    background-color: color-mix(in srgb, var(--color-text-muted) 16%, transparent);
+    border-radius: 3px;
+}
+
+.writing-block__sheet .code-block,
+.writing-block__sheet pre {
+    line-height: 1.5;
+}
+
 /* Markdown Tables */
 .md-table {
     width: 100%;
