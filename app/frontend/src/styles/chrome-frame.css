@@ -303,6 +303,18 @@ body,
   box-shadow: 0 0 8px rgba(63, 185, 80, 0.6);
 }
 
+/* Orange while the chat is processing/generating, matching the session cards. */
+.app-shell__nav-dot--generating {
+  background: #f97316;
+  box-shadow: 0 0 8px rgba(249, 115, 22, 0.6);
+  animation: nav-dot-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes nav-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 .app-shell__nav-count {
   margin-left: auto;
   color: var(--color-text-muted);

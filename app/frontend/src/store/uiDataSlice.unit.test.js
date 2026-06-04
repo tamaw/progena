@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest';
 import reducer, {
   applyUiEvent,
   requestChatSessionDetail,
+  selectChatIndicators,
   selectChatSessions,
+  setChatIndicators,
 } from './uiDataSlice';
 
 const snapshot = (ids) => applyUiEvent({
@@ -71,5 +73,19 @@ describe('selectChatSessions (memoized)', () => {
     const r2 = selectChatSessions({ uiData: s2 });
     expect(r2).not.toBe(r1);
     expect(r2.map((c) => c.chat_session_id)).toEqual(['b', 'a']);
+  });
+});
+
+describe('chat indicators (nav dot)', () => {
+  it('defaults to no unread and not generating', () => {
+    const s = reducer(undefined, { type: '@@INIT' });
+    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: false });
+  });
+
+  it('setChatIndicators patches the fields it is given', () => {
+    let s = reducer(undefined, setChatIndicators({ isGenerating: true }));
+    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: true });
+    s = reducer(s, setChatIndicators({ hasUnread: true, isGenerating: false }));
+    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: false });
   });
 });

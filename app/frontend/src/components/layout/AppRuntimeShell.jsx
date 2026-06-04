@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { selectChatIndicators } from '../../store/uiDataSlice';
 import { useAlertCenter } from '../../context/AlertCenterContext';
 import { useChromeRuntime } from '../../context/ChromeRuntimeContext';
 import { useConfig } from '../../context/ConfigContext';
@@ -614,6 +616,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
   const [solutions, setSolutions] = useState(() => loadStoredSolutions());
   const [expandedSolutionIds, setExpandedSolutionIds] = useState(() => new Set(['main']));
   const [createModal, setCreateModal] = useState(null);
+  const chatIndicators = useSelector(selectChatIndicators);
   const counts = useMemo(() => {
     const agentCount = runtime.widgets.filter((widget) => widget.type === 'agent').length;
     return {
@@ -686,7 +689,12 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
           >
             <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
             <span className="app-shell__nav-label">{item.label}</span>
-            {item.dot ? <span className="app-shell__nav-dot" aria-hidden="true" /> : null}
+            {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
+              <span
+                className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                aria-hidden="true"
+              />
+            ) : null}
             {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
           </NavLink>
         ))}
