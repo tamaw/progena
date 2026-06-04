@@ -1,0 +1,173 @@
+// Stream-event normalization and merge helpers shared by the conversation page
+// and the message renderer. These are pure functions over the in-memory event
+// shape ({ id, eventType, content, metadata, images? }).
+
+export const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
+export const CANCELLED_SUFFIX = ' [Cancelled]';
+
+export function normalizeStreamEvent(event, index) {
+  if (!event || typeof event !== 'object') {
+    return null;
+  }
+
+  return {
+    id: typeof event.id === 'string' ? event.id : `evt_restored_${index}_${Date.now()}`,
+    eventType: typeof event.eventType === 'string'
+      ? event.eventType
+      : (typeof event.event_type === 'string' ? event.event_type : 'stream_event'),
+    content: typeof event.content === 'string' ? event.content : '',
+    metadata: event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+      ? event.metadata
+      : {},
+  };
+}
+
+export function isReasoningEvent(event) {
+  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
+}
+
+export function hasReasoningContent(event) {
+  return typeof event?.content === 'string' && event.content.trim().length > 0;
+}
+
+export function extractReasoningTokenCount(event) {
+  const tokenCount = event?.metadata?.reasoning_tokens;
+  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
+}
+
+export function appendReasoningText(currentText, event) {
+  if (!isReasoningEvent(event) || !hasReasoningContent(event)) {
+    return currentText;
+  }
+
+  const existingText = typeof currentText === 'string' ? currentText : '';
+  if (event.eventType === 'reasoning_delta') {
+    return `${existingText}${event.content}`;
+  }
+
+  if (existingText.trim().length === 0) {
+    return event.content;
+  }
+  return event.content.length >= existingText.length ? event.content : existingText;
+}
+
+export function mergeReasoningEvents(existingEvent, nextEvent) {
+  const existingContent = hasReasoningContent(existingEvent) ? existingEvent.content : '';
+  let mergedContent = existingContent;
+
+  if (nextEvent.eventType === 'reasoning_delta') {
+    mergedContent = `${existingContent}${nextEvent.content}`;
+  } else if (!existingContent && hasReasoningContent(nextEvent)) {
+    mergedContent = nextEvent.content;
+  }
+
+  return {
+    ...existingEvent,
+    eventType: !existingContent && nextEvent.eventType === 'reasoning_summary'
+      ? 'reasoning_summary'
+      : existingEvent.eventType,
+    content: mergedContent,
+    metadata: {
+      ...existingEvent.metadata,
+      ...nextEvent.metadata,
+    },
+  };
+}
+
+export function createStreamEvent(streamEvent) {
+  if (!streamEvent || typeof streamEvent !== 'object') {
+    return null;
+  }
+
+  const event = {
+    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    eventType: typeof streamEvent.event_type === 'string' ? streamEvent.event_type : 'stream_event',
+    content: typeof streamEvent.content === 'string' ? streamEvent.content : '',
+    metadata:
+      streamEvent.metadata
+      && typeof streamEvent.metadata === 'object'
+      && !Array.isArray(streamEvent.metadata)
+        ? streamEvent.metadata
+        : {},
+  };
+
+  if (Array.isArray(streamEvent.images) && streamEvent.images.length > 0) {
+    event.images = streamEvent.images;
+  }
+
+  return event;
+}
+
+export function appendStreamEvent(events, nextEvent) {
+  const currentEvents = Array.isArray(events) ? events : [];
+  if (nextEvent.eventType === 'message_delta') {
+    return currentEvents;
+  }
+  if (isReasoningEvent(nextEvent)) {
+    const firstReasoningIndex = currentEvents.findIndex((event) =>
+      isReasoningEvent(event) && hasReasoningContent(event)
+    );
+    if (nextEvent.eventType === 'reasoning_summary' && firstReasoningIndex >= 0) {
+      return currentEvents.map((event, index) => (
+        index === firstReasoningIndex ? mergeReasoningEvents(event, nextEvent) : event
+      ));
+    }
+
+    const lastIndex = currentEvents.length - 1;
+    const lastEvent = currentEvents[lastIndex];
+    if (isReasoningEvent(lastEvent)) {
+      return currentEvents.map((event, index) => (
+        index === lastIndex ? mergeReasoningEvents(lastEvent, nextEvent) : event
+      ));
+    }
+    if (!hasReasoningContent(nextEvent)) {
+      return currentEvents;
+    }
+  }
+  const lastEvent = currentEvents[currentEvents.length - 1];
+  if (
+    lastEvent
+    && lastEvent.eventType === nextEvent.eventType
+    && lastEvent.content === nextEvent.content
+    && JSON.stringify(lastEvent.metadata) === JSON.stringify(nextEvent.metadata)
+  ) {
+    return currentEvents;
+  }
+  const next = currentEvents.concat(nextEvent);
+  // Cap timeline events so a long run cannot overwhelm the chat transcript.
+  const eventLimit = MAX_STREAM_EVENTS_PER_MESSAGE;
+  let eventCount = 0;
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    eventCount += 1;
+    if (eventCount > eventLimit) {
+      next.splice(i, 1);
+    }
+  }
+  return next;
+}
+
+// Finalize an assistant placeholder that is being superseded (new send / new
+// chat) so its spinner clears. Returns null to drop an empty placeholder.
+export function finalizeSupersededAssistant(message) {
+  if (!message?.isStreaming) {
+    return message;
+  }
+
+  const content = typeof message.content === 'string' ? message.content : '';
+  const reasoningText = typeof message.reasoningText === 'string' ? message.reasoningText : '';
+  const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
+  const hasVisibleOutput =
+    content.trim().length > 0
+    || reasoningText.trim().length > 0
+    || streamEvents.length > 0;
+
+  if (!hasVisibleOutput) {
+    return null;
+  }
+
+  return {
+    ...message,
+    isStreaming: false,
+    content: content.endsWith(CANCELLED_SUFFIX) ? content : `${content}${CANCELLED_SUFFIX}`,
+  };
+}

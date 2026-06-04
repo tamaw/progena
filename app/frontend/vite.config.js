@@ -1,9 +1,66 @@
+import http from 'node:http'
+import https from 'node:https'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+const backendBaseUrl = new URL('http://127.0.0.1:8000')
+
+function shouldProxy(pathname) {
+  return pathname === '/health' || pathname.startsWith('/api/') || pathname.startsWith('/v1/')
+}
+
+function createBackendProxyMiddleware() {
+  return (req, res, next) => {
+    const requestUrl = req.url || '/'
+    const pathname = new URL(requestUrl, backendBaseUrl).pathname
+
+    if (!shouldProxy(pathname)) {
+      next()
+      return
+    }
+
+    const targetUrl = new URL(requestUrl, backendBaseUrl)
+    const client = targetUrl.protocol === 'https:' ? https : http
+    const upstream = client.request(
+      targetUrl,
+      {
+        method: req.method,
+        headers: {
+          ...req.headers,
+          host: targetUrl.host,
+          connection: 'close',
+        },
+      },
+      (upstreamRes) => {
+        res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers)
+        upstreamRes.pipe(res)
+      }
+    )
+
+    upstream.on('error', (error) => {
+      res.statusCode = 502
+      res.setHeader('Content-Type', 'application/json')
+      res.end(JSON.stringify({ error: `Proxy error: ${error.message}` }))
+    })
+
+    req.pipe(upstream)
+  }
+}
+
+const backendProxyPlugin = {
+  name: 'backend-proxy',
+  enforce: 'pre',
+  configureServer(server) {
+    server.middlewares.use(createBackendProxyMiddleware())
+  },
+  configurePreviewServer(server) {
+    server.middlewares.use(createBackendProxyMiddleware())
+  },
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react()],
+  plugins: [backendProxyPlugin, react()],
   base: '/',
   build: {
     outDir: 'dist',
@@ -20,36 +77,10 @@ export default defineConfig({
         pollInterval: 20,
       },
     },
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/v1': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/health': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      }
-    }
+    proxy: {}
   },
   preview: {
     port: 4173,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/v1': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      },
-      '/health': {
-        target: 'http://localhost:8000',
-        changeOrigin: true
-      }
-    }
+    proxy: {}
   }
 })

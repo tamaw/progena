@@ -172,6 +172,54 @@ class TestAsyncResponseHandling:
         assert response.status_code == 200
         assert captured["metadata"] == {"thread_id": "thread_sess_thread_abc"}
 
+    def test_cancel_response_sets_active_stream_event(self, client):
+        """PUT cancellation marks the active backend response stream and notifies IPC."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+        cancel_event = asyncio.Event()
+        captured: dict[str, object] = {}
+
+        class _MockClient:
+            async def cancel_request(self, request_id: str) -> bool:
+                captured["request_id"] = request_id
+                return True
+
+        backend_main.client = _MockClient()
+        backend_main._active_response_streams["req-cancel-test"] = cancel_event
+
+        try:
+            response = client.put("/v1/responses/req-cancel-test/cancel")
+        finally:
+            backend_main._active_response_streams.pop("req-cancel-test", None)
+            backend_main.client = original_client
+
+        assert response.status_code == 200
+        assert response.json()["cancelled"] is True
+        assert response.json()["progenitor_cancelled"] is True
+        assert cancel_event.is_set()
+        assert captured["request_id"] == "req-cancel-test"
+
+    def test_cancel_response_returns_404_for_unknown_request(self, client):
+        """Unknown cancellation IDs should not be reported as successful."""
+        import app.backend.main as backend_main
+
+        original_client = backend_main.client
+
+        class _MockClient:
+            async def cancel_request(self, request_id: str) -> bool:
+                del request_id
+                return False
+
+        backend_main.client = _MockClient()
+
+        try:
+            response = client.put("/v1/responses/not-active/cancel")
+        finally:
+            backend_main.client = original_client
+
+        assert response.status_code == 404
+
     def test_non_streaming_responses_use_session_thread_id(self, client):
         """Non-streaming chat should route through a thread scoped to the web session."""
         import app.backend.main as backend_main

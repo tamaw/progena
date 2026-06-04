@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
@@ -25,6 +26,16 @@ class StoredDocument:
 
     payload: Any
     updated_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class CheckpointThreadSnapshot:
+    """Latest decoded LangGraph checkpoint messages for one thread."""
+
+    thread_id: str
+    checkpoint_id: str | None
+    checkpoint_ts: str | None
+    messages: list[Any]
 
 
 class BackendDocumentStore(Protocol):
@@ -46,6 +57,19 @@ class BackendDocumentStore(Protocol):
 
     def get_log_sources(self) -> list[dict[str, Any]]: ...
 
+    def inspect_schema(self) -> list[dict[str, Any]]: ...
+
+    def list_checkpoint_thread_snapshots(
+        self, *, limit: int = 50
+    ) -> list[CheckpointThreadSnapshot]: ...
+
+    def get_checkpoint_thread_snapshot(
+        self,
+        thread_id: str,
+        *,
+        checkpoint_id: str | None = None,
+    ) -> CheckpointThreadSnapshot | None: ...
+
     def close(self) -> None: ...
 
 
@@ -54,6 +78,7 @@ class InMemoryDocumentStore:
 
     def __init__(self) -> None:
         self._documents: dict[tuple[str, str], StoredDocument] = {}
+        self._checkpoint_threads: dict[str, CheckpointThreadSnapshot] = {}
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -100,6 +125,49 @@ class InMemoryDocumentStore:
             }
         )
         return [{"source": source, "count": 0} for source in sources]
+
+    def inspect_schema(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "table": "store",
+                "columns": [
+                    {"name": "prefix", "type": "TEXT", "nullable": False},
+                    {"name": "key", "type": "TEXT", "nullable": False},
+                    {"name": "value", "type": "JSONB", "nullable": False},
+                    {"name": "created_at", "type": "TIMESTAMPTZ", "nullable": False},
+                    {"name": "updated_at", "type": "TIMESTAMPTZ", "nullable": False},
+                    {"name": "expires_at", "type": "TIMESTAMPTZ", "nullable": True},
+                    {"name": "ttl_minutes", "type": "DOUBLE PRECISION", "nullable": True},
+                ],
+                "source": "in_memory",
+            }
+        ]
+
+    def list_checkpoint_thread_snapshots(
+        self, *, limit: int = 50
+    ) -> list[CheckpointThreadSnapshot]:
+        snapshots = sorted(
+            self._checkpoint_threads.values(),
+            key=lambda snapshot: snapshot.checkpoint_ts or "",
+            reverse=True,
+        )
+        return snapshots[:limit] if limit > 0 else snapshots
+
+    def get_checkpoint_thread_snapshot(
+        self,
+        thread_id: str,
+        *,
+        checkpoint_id: str | None = None,
+    ) -> CheckpointThreadSnapshot | None:
+        snapshot = self._checkpoint_threads.get(thread_id)
+        if snapshot is None:
+            return None
+        if checkpoint_id and snapshot.checkpoint_id != checkpoint_id:
+            return None
+        return snapshot
+
+    def upsert_checkpoint_thread_snapshot(self, snapshot: CheckpointThreadSnapshot) -> None:
+        self._checkpoint_threads[snapshot.thread_id] = snapshot
 
     def close(self) -> None:
         return None
@@ -178,26 +246,29 @@ class PostgresDocumentStore:
         source: str | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        clauses = ["prefix LIKE %s"]
+        clauses = [sql.SQL("prefix LIKE %s")]
         params: list[Any] = [f"{PROGENITOR_LOG_PREFIX}.%"]
         if source:
-            clauses.append("prefix = %s")
+            clauses.append(sql.SQL("prefix = %s"))
             params.append(f"{PROGENITOR_LOG_PREFIX}.{source}")
         if level:
-            clauses.append("lower(value->>'level') = %s")
+            clauses.append(sql.SQL("lower(value->>'level') = %s"))
             params.append(level.lower())
-        limit_sql = "LIMIT %s" if limit > 0 else ""
         if limit > 0:
             params.append(limit)
+        where_clause = sql.SQL(" AND ").join(clauses)
+        limit_clause = sql.SQL("LIMIT %s") if limit > 0 else sql.SQL("")
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
-                f"""
+                sql.SQL(
+                    """
                 SELECT prefix, key, value, updated_at
                 FROM store
-                WHERE {" AND ".join(clauses)}
+                WHERE {}
                 ORDER BY COALESCE(value->>'timestamp', value->>'time', updated_at::text) DESC
-                {limit_sql}
-                """,
+                {}
+                """
+                ).format(where_clause, limit_clause),
                 params,
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
@@ -221,6 +292,139 @@ class PostgresDocumentStore:
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [dict(row) for row in rows]
 
+    def inspect_schema(self) -> list[dict[str, Any]]:
+        """Return table/column metadata for backend and LangGraph persistence tables."""
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT table_name, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema = 'public'
+                  AND (
+                    table_name = 'store'
+                    OR table_name LIKE 'checkpoint%'
+                    OR table_name LIKE 'langgraph%'
+                  )
+                ORDER BY table_name, ordinal_position
+                """
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+
+        tables: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            table_name = str(row["table_name"])
+            tables.setdefault(table_name, []).append(
+                {
+                    "name": row["column_name"],
+                    "type": row["data_type"],
+                    "nullable": row["is_nullable"] == "YES",
+                }
+            )
+        return [
+            {"table": table_name, "columns": columns, "source": "postgres"}
+            for table_name, columns in tables.items()
+        ]
+
+    def list_checkpoint_thread_snapshots(
+        self, *, limit: int = 50
+    ) -> list[CheckpointThreadSnapshot]:
+        """Return latest decoded message snapshots for LangGraph threads."""
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH ranked AS (
+                    SELECT
+                        c.thread_id,
+                        c.checkpoint_ns,
+                        c.checkpoint_id,
+                        c.checkpoint->>'ts' AS checkpoint_ts,
+                        c.checkpoint #>> '{channel_versions,messages}' AS messages_version,
+                        row_number() OVER (
+                            PARTITION BY c.thread_id
+                            ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
+                        ) AS rn
+                    FROM checkpoints c
+                    WHERE c.checkpoint ? 'channel_versions'
+                      AND c.checkpoint->'channel_versions' ? 'messages'
+                )
+                SELECT
+                    r.thread_id,
+                    r.checkpoint_id,
+                    r.checkpoint_ts,
+                    b.type,
+                    b.blob
+                FROM ranked r
+                LEFT JOIN checkpoint_blobs b
+                  ON b.thread_id = r.thread_id
+                 AND b.checkpoint_ns = r.checkpoint_ns
+                 AND b.channel = 'messages'
+                 AND b.version = r.messages_version
+                WHERE r.rn = 1
+                ORDER BY r.checkpoint_ts DESC
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [snapshot for row in rows if (snapshot := self._checkpoint_snapshot_from_row(row))]
+
+    def get_checkpoint_thread_snapshot(
+        self,
+        thread_id: str,
+        *,
+        checkpoint_id: str | None = None,
+    ) -> CheckpointThreadSnapshot | None:
+        clauses = [
+            sql.SQL("c.thread_id = %s"),
+            sql.SQL("c.checkpoint ? 'channel_versions'"),
+            sql.SQL("c.checkpoint->'channel_versions' ? 'messages'"),
+        ]
+        params: list[Any] = [thread_id]
+        if checkpoint_id:
+            clauses.append(sql.SQL("c.checkpoint_id = %s"))
+            params.append(checkpoint_id)
+        where_clause = sql.SQL(" AND ").join(clauses)
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql.SQL(
+                    """
+                SELECT
+                    c.thread_id,
+                    c.checkpoint_id,
+                    c.checkpoint->>'ts' AS checkpoint_ts,
+                    b.type,
+                    b.blob
+                FROM checkpoints c
+                LEFT JOIN checkpoint_blobs b
+                  ON b.thread_id = c.thread_id
+                 AND b.checkpoint_ns = c.checkpoint_ns
+                 AND b.channel = 'messages'
+                 AND b.version = c.checkpoint #>> '{{channel_versions,messages}}'
+                WHERE {}
+                ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
+                LIMIT 1
+                """
+                ).format(where_clause),
+                params,
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return self._checkpoint_snapshot_from_row(row) if row is not None else None
+
+    def _checkpoint_snapshot_from_row(
+        self,
+        row: dict[str, Any],
+    ) -> CheckpointThreadSnapshot | None:
+        thread_id = row.get("thread_id")
+        if not isinstance(thread_id, str) or not thread_id:
+            return None
+        messages = _deserialize_checkpoint_messages(row.get("type"), row.get("blob"))
+        return CheckpointThreadSnapshot(
+            thread_id=thread_id,
+            checkpoint_id=str(row.get("checkpoint_id")) if row.get("checkpoint_id") else None,
+            checkpoint_ts=str(row.get("checkpoint_ts")) if row.get("checkpoint_ts") else None,
+            messages=messages,
+        )
+
 
 def _log_row_to_entry(row: dict[str, Any]) -> dict[str, Any]:
     value = row.get("value")
@@ -243,6 +447,20 @@ def _timestamp_text(value: Any) -> str:
     if isinstance(value, str) and value:
         return value
     return datetime.now(UTC).isoformat()
+
+
+def _deserialize_checkpoint_messages(blob_type: Any, blob: Any) -> list[Any]:
+    if not blob_type or blob is None:
+        return []
+    try:
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+        serializer = JsonPlusSerializer(pickle_fallback=True)
+        value = serializer.loads_typed((str(blob_type), bytes(blob)))
+    except Exception as exc:
+        logger.warning("Failed to decode checkpoint messages: %s", exc)
+        return []
+    return value if isinstance(value, list) else []
 
 
 _default_store: BackendDocumentStore = InMemoryDocumentStore()

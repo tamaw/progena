@@ -8,7 +8,7 @@ const SIDEBAR_GROUPS = [
   { key: 'earlier', label: 'Earlier' },
 ];
 
-function toValidTimestamp(value) {
+export function toValidTimestamp(value) {
   if (Number.isFinite(value)) {
     return value;
   }
@@ -75,14 +75,11 @@ function getLastMessageTimestamp(messages) {
   return null;
 }
 
-function buildSessionMeta({ startedAt, archivedAt, selected }) {
-  if (startedAt) {
-    return `Started ${formatStartedTime(startedAt)}`;
-  }
+function buildSessionMeta({ activityAt, archivedAt }) {
   if (archivedAt) {
     return `Archived ${formatStartedTime(archivedAt)}`;
   }
-  return selected ? 'Not started' : 'No activity captured';
+  return formatStartedTime(activityAt) || '';
 }
 
 function buildSessionSummary({ messageCount, toolCount, tokenCount }) {
@@ -98,7 +95,7 @@ function buildSessionSummary({ messageCount, toolCount, tokenCount }) {
   return parts.join(' · ');
 }
 
-function getTimeBucket(timestamp, now = Date.now()) {
+export function getTimeBucket(timestamp, now = Date.now()) {
   const activityAt = toValidTimestamp(timestamp);
   if (!activityAt) {
     return 'today';
@@ -145,7 +142,7 @@ function buildArchivedSessionItem(entry, pinnedKeys) {
     title: typeof entry?.title === 'string' && entry.title.trim()
       ? entry.title.trim()
       : deriveChatTitle(messages),
-    meta: buildSessionMeta({ startedAt, archivedAt, selected: false }),
+    meta: buildSessionMeta({ activityAt: activityAt, archivedAt }),
     detail: 'Archived',
     summary: buildSessionSummary({ messageCount, toolCount, tokenCount }),
     activityAt,
@@ -172,8 +169,8 @@ export function buildSessionItems({
     id: sessionId || 'current-session',
     pinKey: sessionId || 'current-session',
     title: chatTitle,
-    meta: buildSessionMeta({ startedAt: firstMessageTime, archivedAt: null, selected: true }),
-    detail: 'Current',
+    meta: buildSessionMeta({ activityAt: getLastMessageTimestamp(messages) ?? firstMessageTime, archivedAt: null }),
+    detail: '',
     summary: buildSessionSummary({
       messageCount: messages.length,
       toolCount: totalToolCount,
@@ -184,6 +181,9 @@ export function buildSessionItems({
     selected: true,
     pinned: pinnedKeys.has(sessionId || 'current-session'),
     shared: sharedKeys.has(sessionId || 'current-session'),
+    messageCount: messages.length,
+    toolCount: totalToolCount,
+    errorCount: 0,
   };
 
   const archivedItems = Array.isArray(archivedSessions)
@@ -214,7 +214,7 @@ export function groupSessionItems(items) {
   return SIDEBAR_GROUPS
     .map((group) => ({
       ...group,
-      items: (buckets.get(group.key) || []).sort((left, right) => right.activityAt - left.activityAt),
+      items: buckets.get(group.key) || [],
     }))
     .filter((group) => group.items.length > 0);
 }

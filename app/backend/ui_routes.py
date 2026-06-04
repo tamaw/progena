@@ -29,7 +29,7 @@ from typing import Any, Literal
 
 import httpx
 from croniter import croniter
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -49,6 +49,9 @@ from .alerts import (
 from .alerts import (
     create_alert as store_alert,
 )
+from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
+from .chat_sessions import UiEventEnvelope
+from .document_store import get_default_document_store
 from .prompt_service import PromptService
 from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
@@ -2177,6 +2180,12 @@ async def get_workspace():
     )
 
 
+@router.get("/database/schema")
+async def get_database_schema():
+    """Return safe table/column metadata for the configured backend document store."""
+    return {"tables": get_default_document_store().inspect_schema()}
+
+
 @router.get("/widgets", response_model=WidgetsResponse)
 async def get_widgets():
     """Get unified widget data derived from existing state/config/log files."""
@@ -3451,6 +3460,10 @@ def create_alert(
 # Event subscribers for SSE - split into chat and status streams
 _chat_subscribers: list[asyncio.Queue] = []  # For IPC events (chat, tasks, alerts)
 _status_subscribers: list[asyncio.Queue] = []  # For state file status updates
+_ui_stream_subscribers: list[asyncio.Queue] = []  # Canonical typed UI event envelopes
+_ui_event_seq = 0
+_ui_event_replay: list[UiEventEnvelope] = []
+_UI_EVENT_REPLAY_LIMIT = 200
 
 # Shutdown event for SSE connections
 _sse_shutdown_event: asyncio.Event | None = None
@@ -3464,6 +3477,7 @@ _state_watch_push_task: asyncio.Task | None = None
 # Track active SSE response tasks so we can cancel them on shutdown
 _active_chat_tasks: list[asyncio.Task] = []
 _active_status_tasks: list[asyncio.Task] = []
+_active_ui_stream_tasks: list[asyncio.Task] = []
 
 
 def has_active_chat_subscribers() -> bool:
@@ -3487,7 +3501,8 @@ def get_subscriber_counts() -> dict[str, int]:
     return {
         "chat": len(_chat_subscribers),
         "status": len(_status_subscribers),
-        "total": len(_chat_subscribers) + len(_status_subscribers),
+        "stream": len(_ui_stream_subscribers),
+        "total": len(_chat_subscribers) + len(_status_subscribers) + len(_ui_stream_subscribers),
     }
 
 
@@ -3605,7 +3620,8 @@ async def _status_monitor():
 
             # Count subscribers
             status_count = len(_status_subscribers)
-            total_subscribers = status_count
+            stream_count = len(_ui_stream_subscribers)
+            total_subscribers = status_count + stream_count
 
             if total_subscribers == 0:
                 continue  # No subscribers, skip
@@ -3616,7 +3632,11 @@ async def _status_monitor():
             # Push to /status subscribers
             broadcast_status_event("status", current)
 
-            logger.debug(f"[StatusMonitor] Pushed status to {status_count} status subscribers")
+            logger.debug(
+                "[StatusMonitor] Pushed status to %d status and %d stream subscribers",
+                status_count,
+                stream_count,
+            )
 
         except asyncio.CancelledError:
             print("[StatusMonitor] Cancelled", flush=True)
@@ -3632,13 +3652,15 @@ async def _broadcast_latest_status() -> None:
         current = await _get_current_status()
         _last_status = current.copy()
         broadcast_status_event("status", current)
+        if _ui_stream_subscribers:
+            _broadcast_chat_sessions_snapshot()
     finally:
         _state_watch_push_task = None
 
 
 def _queue_state_watch_status(_snapshot) -> None:
     global _state_watch_push_task
-    if not _status_subscribers:
+    if not _status_subscribers and not _ui_stream_subscribers:
         return
     if _state_watch_push_task and not _state_watch_push_task.done():
         return
@@ -3710,17 +3732,19 @@ async def close_all_sse_connections():
     Called during server shutdown to ensure SSE connections do not block
     the graceful shutdown process.
     """
-    global _sse_shutdown_event, _active_chat_tasks, _active_status_tasks
+    global _sse_shutdown_event, _active_chat_tasks, _active_status_tasks, _active_ui_stream_tasks
 
     # Count all subscriber types
     chat_count = len(_chat_subscribers)
     status_count = len(_status_subscribers)
-    total_count = chat_count + status_count
+    stream_count = len(_ui_stream_subscribers)
+    total_count = chat_count + status_count + stream_count
 
     logger.info(
-        "Closing SSE connections: %d chat, %d status (total: %d)",
+        "Closing SSE connections: %d chat, %d status, %d stream (total: %d)",
         chat_count,
         status_count,
+        stream_count,
         total_count,
     )
 
@@ -3742,6 +3766,10 @@ async def close_all_sse_connections():
         with contextlib.suppress(asyncio.QueueFull):
             queue.put_nowait(shutdown_data)
 
+    for queue in _ui_stream_subscribers:
+        with contextlib.suppress(asyncio.QueueFull):
+            queue.put_nowait(shutdown_data)
+
     # Give connections a moment to receive the shutdown message and exit cleanly
     await asyncio.sleep(0.5)
 
@@ -3749,7 +3777,7 @@ async def close_all_sse_connections():
     stop_status_monitor()
 
     # Cancel any remaining SSE tasks that have not exited
-    all_tasks = _active_chat_tasks + _active_status_tasks
+    all_tasks = _active_chat_tasks + _active_status_tasks + _active_ui_stream_tasks
     tasks_to_cancel = [t for t in all_tasks if not t.done()]
     if tasks_to_cancel:
         logger.info("Force-cancelling %d SSE tasks", len(tasks_to_cancel))
@@ -3763,6 +3791,7 @@ async def close_all_sse_connections():
     # Clear all lists
     _active_chat_tasks.clear()
     _active_status_tasks.clear()
+    _active_ui_stream_tasks.clear()
 
     logger.info("SSE shutdown signal sent to all connections")
 
@@ -3770,6 +3799,97 @@ async def close_all_sse_connections():
 # ============================================================================
 # NEW SPLIT SSE ENDPOINTS
 # ============================================================================
+
+
+def _format_sse(event_type: str, data: Mapping[str, Any] | str, event_id: str | None = None) -> str:
+    payload = data if isinstance(data, str) else json.dumps(data, default=str)
+    id_line = f"id: {event_id}\n" if event_id else ""
+    return f"{id_line}event: {event_type}\ndata: {payload}\n\n"
+
+
+def _next_ui_envelope(
+    event_type: str,
+    payload: Mapping[str, Any],
+    *,
+    scope: Literal["global", "session", "chat"] = "global",
+    session_id: str | None = None,
+) -> UiEventEnvelope:
+    global _ui_event_seq
+    _ui_event_seq += 1
+    return UiEventEnvelope(
+        id=f"ui-{_ui_event_seq}",
+        seq=_ui_event_seq,
+        type=event_type,
+        scope=scope,
+        session_id=session_id,
+        payload=dict(payload),
+    )
+
+
+async def _generate_ui_stream(last_event_id: str | None = None) -> AsyncGenerator[str, None]:
+    """Generate the canonical typed UI event stream."""
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
+    _ui_stream_subscribers.append(queue)
+
+    current_task = asyncio.current_task()
+    if current_task:
+        _active_ui_stream_tasks.append(current_task)
+
+    shutdown_event = get_sse_shutdown_event()
+    start_status_monitor()
+
+    try:
+        if last_event_id:
+            try:
+                replay_after = int(str(last_event_id).removeprefix("ui-") or 0)
+            except ValueError:
+                replay_after = 0
+            for envelope in _ui_event_replay:
+                if envelope.seq > replay_after:
+                    yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+
+        initial_status = await _get_current_status()
+        connected = _next_ui_envelope(
+            "connection.ready",
+            {"stream": "ui", "status": initial_status, "alerts": _alerts_payload()},
+        )
+        yield _format_sse("ui.event", connected.model_dump(), connected.id)
+
+        while True:
+            if shutdown_event.is_set():
+                envelope = _next_ui_envelope(
+                    "connection.shutdown",
+                    {"reason": "server_shutdown", "message": "Server is shutting down"},
+                )
+                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                break
+
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                if event.get("type") == "shutdown":
+                    envelope = _next_ui_envelope(
+                        "connection.shutdown",
+                        {"reason": "server_shutdown", "message": "Server is shutting down"},
+                    )
+                    yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                    break
+                envelope = event["envelope"]
+                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+            except TimeoutError:
+                envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
+                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+    except asyncio.CancelledError:
+        with contextlib.suppress(Exception):
+            envelope = _next_ui_envelope(
+                "connection.shutdown",
+                {"reason": "connection_cancelled", "message": "Connection closed"},
+            )
+            yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+    finally:
+        if queue in _ui_stream_subscribers:
+            _ui_stream_subscribers.remove(queue)
+        if current_task and current_task in _active_ui_stream_tasks:
+            _active_ui_stream_tasks.remove(current_task)
 
 
 async def _generate_chat_events() -> AsyncGenerator[str, None]:
@@ -3901,6 +4021,20 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
             _active_status_tasks.remove(current_task)
 
 
+@router.get("/stream")
+async def ui_stream(last_event_id: str | None = Header(default=None, alias="Last-Event-ID")):
+    """Canonical typed SSE stream for all frontend UI updates."""
+    return StreamingResponse(
+        _generate_ui_stream(last_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/events")
 async def events_stream():
     """
@@ -3981,6 +4115,44 @@ async def status_stream():
 # ============================================================================
 
 
+def broadcast_ui_event(
+    event_type: str,
+    payload: Mapping[str, Any],
+    *,
+    scope: Literal["global", "session", "chat"] = "global",
+    session_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast one typed event envelope to canonical /api/ui/stream subscribers."""
+    envelope = _next_ui_envelope(event_type, payload, scope=scope, session_id=session_id)
+    _ui_event_replay.append(envelope)
+    del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
+
+    event = {"type": "ui.event", "envelope": envelope}
+    for queue in _ui_stream_subscribers:
+        try:
+            queue.put_nowait(event)
+        except asyncio.QueueFull:
+            logger.warning("Event queue full for UI stream subscriber")
+    return envelope
+
+
+def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
+    return broadcast_chat_sessions_snapshot(
+        get_document_store=get_default_document_store,
+        broadcast_ui_event=broadcast_ui_event,
+        include_archived=include_archived,
+    )
+
+
+router.include_router(
+    create_chat_router(
+        get_document_store=get_default_document_store,
+        broadcast_ui_event=broadcast_ui_event,
+        get_current_state=lambda: get_state_reader().get_progenitor_state(),
+    )
+)
+
+
 def broadcast_chat_event(event_type: str, data: dict):
     """
     Broadcast an event to /events SSE subscribers.
@@ -4000,6 +4172,7 @@ def broadcast_chat_event(event_type: str, data: dict):
     import json
 
     event = {"type": event_type, "data": json.dumps(data)}
+    broadcast_ui_event(event_type, data, scope="chat")
 
     # Push to /events subscribers
     for queue in _chat_subscribers:
@@ -4026,6 +4199,13 @@ def broadcast_status_event(event_type: str, data: Mapping[str, object]):
     import json
 
     event = {"type": event_type, "data": json.dumps(data)}
+    mapped_type = {
+        "status": "status.updated",
+        "heartbeat": "status.heartbeat",
+        "widgets": "widgets.updated",
+        "alerts": "alerts.updated",
+    }.get(event_type, event_type)
+    broadcast_ui_event(mapped_type, data)
 
     # Push to /status subscribers only
     for queue in _status_subscribers:
