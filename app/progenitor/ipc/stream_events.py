@@ -104,8 +104,13 @@ def build_tool_result_event(
     duration_ms: float,
     result: Any,
 ) -> dict[str, Any]:
-    """Build a ``tool_result`` event payload with redacted+truncated result."""
-    return {
+    """Build a ``tool_result`` event payload with redacted+truncated result.
+
+    Image content items are extracted to a top-level ``images`` key so they
+    bypass the 2 KB metadata truncation applied in ``normalize_custom_event``.
+    """
+    images = _extract_images(result)
+    payload: dict[str, Any] = {
         "event_type": "tool_result",
         "content": tool_name,
         "metadata": {
@@ -113,9 +118,53 @@ def build_tool_result_event(
             "tool_call_id": tool_call_id,
             "duration_ms": round(float(duration_ms), 2),
             "success": True,
-            "result_preview": _redact_preview(result),
+            "result_preview": (
+                f"{len(images)} image{'s' if len(images) != 1 else ''}"
+                if images
+                else _redact_preview(result)
+            ),
         },
     }
+    if images:
+        payload["images"] = images
+    return payload
+
+
+def _extract_images(result: Any) -> list[dict[str, str]]:
+    """Return image content items from a tool result.
+
+    Accepts a raw list, a ToolMessage, or any object with a ``content``
+    attribute whose value is a list of LangChain content blocks.
+    """
+    if hasattr(result, "content"):
+        result = result.content
+    if not isinstance(result, list):
+        return []
+    images = []
+    for item in result:
+        if not isinstance(item, dict):
+            if hasattr(item, "model_dump"):
+                try:
+                    item = item.model_dump(mode="json")
+                except Exception:  # nosec B112
+                    continue
+            elif hasattr(item, "__dict__"):
+                item = vars(item)
+            else:
+                continue
+        if str(item.get("type", "")).lower() != "image":
+            continue
+        base64_data = item.get("base64") or item.get("data") or item.get("url") or ""
+        if not isinstance(base64_data, str) or not base64_data:
+            continue
+        images.append(
+            {
+                "id": str(item.get("id") or ""),
+                "base64": base64_data,
+                "media_type": str(item.get("media_type") or item.get("mime_type") or "image/jpeg"),
+            }
+        )
+    return images
 
 
 def build_tool_error_event(

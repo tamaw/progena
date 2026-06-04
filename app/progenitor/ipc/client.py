@@ -21,6 +21,7 @@ from typing import Any, cast
 from .protocol import (
     IPCMessage,
     MessageType,
+    cancel_request_message,
     heartbeat,
     read_message,
     shutdown_message,
@@ -425,13 +426,16 @@ class IPCClient:
                                 break
 
                         elif msg.type == MessageType.STREAM_EVENT:
-                            yield {
+                            _se: dict[str, Any] = {
                                 "type": "stream_event",
                                 "event_type": msg.event_type or "unknown",
                                 "content": msg.content,
                                 "metadata": msg.metadata or {},
                                 "request_id": msg.request_id,
                             }
+                            if isinstance(msg.images, list) and msg.images:
+                                _se["images"] = msg.images
+                            yield _se
 
                         elif msg.type == MessageType.STREAM_END:
                             break
@@ -472,6 +476,13 @@ class IPCClient:
             await write_message(self._writer, shutdown_message())
         except Exception as e:
             logger.error("Error sending shutdown request: %s", e)
+
+    async def cancel_request(self, request_id: str) -> None:
+        """Request cancellation of an active Progenitor request."""
+        await self._ensure_connected()
+        if not self._writer:
+            raise ConnectionError("Not connected to Progenitor")
+        await write_message(self._writer, cancel_request_message(request_id))
 
     @property
     def is_connected(self) -> bool:

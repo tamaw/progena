@@ -106,15 +106,17 @@ class IPCProgenitorClient:
                         content[:100] if content else "",
                     )
 
+                    payload: dict = {
+                        "content": content,
+                        "metadata": metadata,
+                        "timestamp": timestamp,
+                    }
+                    images = event.get("images")
+                    if isinstance(images, list) and images:
+                        payload["images"] = images
+
                     try:
-                        callback(
-                            event_type,
-                            {
-                                "content": content,
-                                "metadata": metadata,
-                                "timestamp": timestamp,
-                            },
-                        )
+                        callback(event_type, payload)
                     except Exception as e:
                         logger.warning("Error in event callback: %s", e)
 
@@ -239,6 +241,29 @@ class IPCProgenitorClient:
         ):
             yield event
 
+    async def cancel_request(self, request_id: str) -> bool:
+        """Best-effort cancellation of an active IPC request."""
+        if not request_id.strip():
+            return False
+
+        cancel_client = IPCClient(
+            host=self.config.progenitor_ipc_host,
+            port=self.config.progenitor_ipc_port,
+            auto_reconnect=False,
+            max_reconnect_attempts=1,
+        )
+        try:
+            connected = await cancel_client.connect()
+            if not connected:
+                return False
+            await cancel_client.cancel_request(request_id)
+            return True
+        except Exception as e:
+            logger.warning("Failed to send IPC cancel for %s: %s", request_id, e)
+            return False
+        finally:
+            await cancel_client.disconnect()
+
     @property
     def is_running(self) -> bool:
         """Check if the client is running."""
@@ -292,15 +317,17 @@ class IPCProgenitorClient:
                     content[:100] if content else "",
                 )
 
+                payload: dict = {
+                    "content": content,
+                    "metadata": metadata,
+                    "timestamp": timestamp,
+                }
+                images = event.get("images")
+                if isinstance(images, list) and images:
+                    payload["images"] = images
+
                 try:
-                    callback(
-                        event_type,
-                        {
-                            "content": content,
-                            "metadata": metadata,
-                            "timestamp": timestamp,
-                        },
-                    )
+                    callback(event_type, payload)
                 except Exception as e:
                     logger.warning("Error in event callback: %s", e)
 

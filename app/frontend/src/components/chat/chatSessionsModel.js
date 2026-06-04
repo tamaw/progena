@@ -1,0 +1,226 @@
+import {
+  buildSessionItems,
+  formatStartedTime,
+  getTimeBucket,
+  toValidTimestamp,
+} from './conversationModel';
+
+export function compareSessionItems(left, right) {
+  const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
+  if (pinnedDelta !== 0) {
+    return pinnedDelta;
+  }
+
+  const activityDelta = (right.activityAt || 0) - (left.activityAt || 0);
+  if (activityDelta !== 0) {
+    return activityDelta;
+  }
+
+  return String(left.id || '').localeCompare(String(right.id || ''));
+}
+
+function buildToolStreamEvents(toolCalls, messageId) {
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+    return [];
+  }
+  const events = [];
+  toolCalls.forEach((tc, index) => {
+    const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
+    const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
+    const result = typeof tc.result === 'string' ? tc.result : '';
+    events.push({
+      id: `${messageId}-tool-start-${index}`,
+      eventType: 'tool_start',
+      content: '',
+      metadata: {
+        tool_name: toolName,
+        args_preview: args,
+        tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+        source: 'checkpoint',
+      },
+    });
+    if (result || (Array.isArray(tc.images) && tc.images.length > 0)) {
+      const resultEvent = {
+        id: `${messageId}-tool-result-${index}`,
+        eventType: 'tool_result',
+        content: '',
+        metadata: {
+          tool_name: toolName,
+          result_preview: Array.isArray(tc.images) && tc.images.length > 0
+            ? `${tc.images.length} image${tc.images.length !== 1 ? 's' : ''}`
+            : result,
+          tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+          source: 'checkpoint',
+        },
+      };
+      if (Array.isArray(tc.images) && tc.images.length > 0) {
+        resultEvent.images = tc.images;
+      }
+      events.push(resultEvent);
+    }
+  });
+  return events;
+}
+
+export function normalizeBackendChatMessage(message, index) {
+  if (!message || typeof message !== 'object') {
+    return null;
+  }
+  const raw = message.raw && typeof message.raw === 'object' && !Array.isArray(message.raw)
+    ? message.raw
+    : {};
+  const createdAt = message.created_at || raw.created_at || raw.timestamp || raw.time;
+  const timestamp = toValidTimestamp(createdAt) ?? Date.now();
+  const role = typeof message.role === 'string' ? message.role : 'assistant';
+  const content = typeof message.content === 'string'
+    ? message.content
+    : String(message.content ?? '');
+  const id = typeof message.id === 'string' ? message.id : `backend_msg_${index}_${timestamp}`;
+  const streamEvents = buildToolStreamEvents(
+    Array.isArray(message.tool_calls) ? message.tool_calls : [],
+    id,
+  );
+
+  return {
+    id,
+    role,
+    content,
+    timestamp,
+    tokenCount: Number.isFinite(message.token_count) ? message.token_count : 0,
+    reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
+      ? message.reasoning_token_count
+      : 0,
+    reasoningText: typeof message.reasoning_text === 'string' ? message.reasoning_text : '',
+    model: (() => {
+      if (typeof message.model === 'string' && message.model) return message.model;
+      if (typeof raw.model === 'string' && raw.model) return raw.model;
+      const rm = raw.response_metadata && typeof raw.response_metadata === 'object' ? raw.response_metadata : {};
+      return typeof rm.model_name === 'string' ? rm.model_name : (typeof rm.model === 'string' ? rm.model : '');
+    })(),
+    streamEvents,
+    raw,
+  };
+}
+
+function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds) {
+  const activityAt = toValidTimestamp(chat.last_activity || chat.updated_at)
+    ?? toValidTimestamp(chat.created_at)
+    ?? 0;
+  const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
+  const summary = chat.preview || `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`;
+
+  return {
+    id: chat.chat_session_id,
+    pinKey: chat.chat_session_id,
+    title: chat.title || 'Untitled chat',
+    meta: formatStartedTime(activityAt) || formatStartedTime(chat.created_at) || '',
+    detail: chat.archived ? 'Archived' : (chat.shared ? 'Shared' : ''),
+    summary,
+    activityAt,
+    bucket: getTimeBucket(activityAt),
+    selected: selectedBackendChatId === chat.chat_session_id,
+    unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.chat_session_id) : false,
+    generatingInBackground: backgroundGeneratingChatIds instanceof Set
+      ? backgroundGeneratingChatIds.has(chat.chat_session_id)
+      : false,
+    erroredInBackground: backgroundErrorChatIds instanceof Set
+      ? backgroundErrorChatIds.has(chat.chat_session_id)
+      : false,
+    pinned: Boolean(chat.pinned),
+    shared: Boolean(chat.shared),
+    archived: Boolean(chat.archived),
+    source: 'backend',
+    chatSessionId: chat.chat_session_id,
+    messageCount,
+    toolCount: Number.isFinite(chat.tool_count) ? chat.tool_count : 0,
+    errorCount: Number.isFinite(chat.error_count) ? chat.error_count : 0,
+  };
+}
+
+export function buildChatSessionItems({
+  messages,
+  sessionId,
+  chatTitle,
+  totalTokenCount,
+  totalToolCount,
+  firstMessageTime,
+  archivedSessions,
+  pinnedSessionIds,
+  sharedSessionIds,
+  backendChatSessions,
+  backendChatsLoaded,
+  selectedBackendChatId,
+  unreadChatIds,
+  backgroundGeneratingChatIds,
+  backgroundErrorChatIds,
+}) {
+  const shouldShowLocalCurrentSession =
+    !selectedBackendChatId
+    && (
+      messages.length > 0
+      || (backendChatsLoaded && backendChatSessions.length === 0)
+    );
+  const localItems = shouldShowLocalCurrentSession
+    ? buildSessionItems({
+      messages,
+      sessionId,
+      chatTitle,
+      totalTokenCount,
+      totalToolCount,
+      firstMessageTime,
+      archivedSessions,
+      pinnedSessionIds,
+      sharedSessionIds,
+    })
+      .map((item) => ({
+        ...item,
+        source: 'local',
+        archived: item.detail === 'Archived',
+        selected: item.selected,
+      }))
+    : [];
+
+  const localIds = new Set(localItems.map((item) => item.pinKey));
+  const backendItems = backendChatSessions
+    .filter((chat) => (
+      chat.chat_session_id
+      && !localIds.has(chat.chat_session_id)
+      && !localIds.has(chat.progenitor_session_id)
+      && !localIds.has(chat.thread_id)
+    ))
+    .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds));
+
+  return [...localItems, ...backendItems];
+}
+
+export function visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessionItems }) {
+  if (sidebarFilter === 'unread') {
+    return [{ key: 'unread', label: 'Unread', items: sessionItems.filter((item) => item.unread && !item.archived) }]
+      .filter((group) => group.items.length > 0);
+  }
+  if (sidebarFilter === 'shared') {
+    return [{ key: 'shared', label: 'Shared', items: sessionItems.filter((item) => item.shared && !item.archived) }]
+      .filter((group) => group.items.length > 0);
+  }
+  if (sidebarFilter === 'archived') {
+    return [{ key: 'archived', label: 'Archived', items: sessionItems.filter((item) => item.archived) }]
+      .filter((group) => group.items.length > 0);
+  }
+  return groupSessionItems(sessionItems.filter((item) => !item.archived));
+}
+
+export function sidebarEmptyMessage({ sidebarFilter, backendChatsLoaded, backendChatsLoading }) {
+  if (!backendChatsLoaded || backendChatsLoading) {
+    return 'Loading chats...';
+  }
+  if (sidebarFilter === 'unread') {
+    return 'No unread chats.';
+  }
+  if (sidebarFilter === 'shared') {
+    return 'No shared chats yet.';
+  }
+  if (sidebarFilter === 'archived') {
+    return 'No archived chats yet.';
+  }
+  return 'No chats yet.';
+}

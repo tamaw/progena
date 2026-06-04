@@ -92,6 +92,7 @@ logger = logging.getLogger(__name__)
 config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
 client: ProgenitorClient | IPCProgenitorClient | None = None
+_active_response_streams: dict[str, asyncio.Event] = {}
 
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(
@@ -1189,6 +1190,36 @@ async def responses(request: Request, response: Response, body: ResponseRequest)
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.put("/v1/responses/{request_id}/cancel")
+async def cancel_response(request_id: str):
+    """Cancel an active streaming Responses API request."""
+    request_id = request_id.strip()
+    if not request_id:
+        raise HTTPException(status_code=400, detail="request_id is required")
+
+    cancel_event = _active_response_streams.get(request_id)
+    if cancel_event is not None:
+        cancel_event.set()
+
+    progenitor_cancelled = False
+    if client is not None:
+        cancel_request = getattr(client, "cancel_request", None)
+        if callable(cancel_request):
+            result = cancel_request(request_id)
+            progenitor_cancelled = (
+                bool(await result) if inspect.isawaitable(result) else bool(result)
+            )
+
+    if cancel_event is None and not progenitor_cancelled:
+        raise HTTPException(status_code=404, detail="No active response stream for request_id")
+
+    return {
+        "request_id": request_id,
+        "cancelled": cancel_event is not None,
+        "progenitor_cancelled": progenitor_cancelled,
+    }
+
+
 def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
     """Normalize Responses API input to a single user string."""
     inputs: list[str] = []
@@ -1252,13 +1283,20 @@ async def stream_response_unified(
     """Stream SSE events using the Responses API shape."""
     assert client is not None, "Client must be initialized"
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
+    effective_request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
+    cancel_event = asyncio.Event()
+    _active_response_streams[effective_request_id] = cancel_event
 
     try:
         async for item in client.send_message_stream_events(
             message,
-            request_id=request_id,
+            request_id=effective_request_id,
             metadata=metadata,
         ):
+            if cancel_event.is_set():
+                logger.info("Response stream cancelled for %s", effective_request_id)
+                break
+
             item_type = str(item.get("type", ""))
             if item_type == "stream_chunk":
                 chunk = str(item.get("content", ""))
@@ -1285,8 +1323,11 @@ async def stream_response_unified(
                     "event_type": item.get("event_type", "unknown"),
                     "content": item.get("content", ""),
                     "metadata": item.get("metadata", {}),
-                    "request_id": item.get("request_id"),
+                    "request_id": item.get("request_id") or effective_request_id,
                 }
+                images = item.get("images")
+                if isinstance(images, list) and images:
+                    structured_event["images"] = images
                 yield "event: response.stream_event\n" + f"data: {json.dumps(structured_event)}\n\n"
 
         completed_event = {
@@ -1300,6 +1341,8 @@ async def stream_response_unified(
         logger.error(f"Streaming error: {e}", exc_info=True)
         error_event = {"error": str(e)}
         yield "event: error\n" + f"data: {json.dumps(error_event)}\n\n"
+    finally:
+        _active_response_streams.pop(effective_request_id, None)
 
 
 async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
