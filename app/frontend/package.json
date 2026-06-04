@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:unit": "vitest run unit.test",
     "test:watch": "vitest",
     "smoke:routes": "node scripts/smoke-routes.mjs",
     "clean": "rimraf dist"
