@@ -4148,6 +4148,7 @@ router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
+        get_current_state=lambda: get_state_reader().get_progenitor_state(),
     )
 )
 

@@ -616,3 +616,33 @@ def get_chat_detail(
         return None
     summary = _summary_from_metadata(metadata, fallback_messages=messages)
     return ChatSessionDetail(**summary.model_dump(), messages=messages)
+
+
+def current_state_chat_detail(state: dict[str, Any]) -> ChatSessionDetail | None:
+    """Build a chat detail for the live "current state" session (current_state.json).
+
+    Used to materialize backend UI metadata for the not-yet-persisted current
+    session when the user pins/archives/deletes its card.
+    """
+    if not isinstance(state, dict):
+        return None
+    session_id = state.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    messages = _messages_from_state(state)
+    now = _now_iso()
+    metadata = {
+        "chat_session_id": session_id,
+        "title": str(state.get("title") or "Current chat"),
+        "thread_id": _thread_id_from_session_id(session_id),
+        "progenitor_session_id": session_id,
+        "checkpoint_id": None,
+        "pinned": False,
+        "shared": False,
+        "archived": False,
+        "created_at": now,
+        "updated_at": now,
+        "last_activity": now,
+    }
+    summary = _summary_from_metadata(metadata, fallback_messages=messages)
+    return ChatSessionDetail(**summary.model_dump(), messages=messages)

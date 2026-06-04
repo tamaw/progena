@@ -15,6 +15,7 @@ from .chat_sessions import (
     ChatSessionsResponse,
     UiEventEnvelope,
     create_chat_metadata,
+    current_state_chat_detail,
     delete_chat_metadata,
     get_chat_detail,
     list_chat_sessions,
@@ -69,6 +70,7 @@ def create_chat_router(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
+    get_current_state: Callable[[], dict[str, Any]] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -78,6 +80,19 @@ def create_chat_router(
             broadcast_ui_event=broadcast_ui_event,
             include_archived=include_archived,
         )
+
+    def current_state_detail(chat_session_id: str) -> ChatSessionDetail | None:
+        """The live (not-yet-persisted) current-session card, if it matches the id."""
+        if get_current_state is None:
+            return None
+        try:
+            state = get_current_state() or {}
+        except Exception:  # nosec B110 - state is best-effort; absence just means no card
+            return None
+        detail = current_state_chat_detail(state)
+        if detail is not None and detail.chat_session_id == chat_session_id:
+            return detail
+        return None
 
     @router.get("/chats", response_model=ChatSessionsResponse)
     async def get_chats(include_archived: bool = False):
@@ -122,7 +137,9 @@ def create_chat_router(
         store = get_document_store()
         metadata = patch_chat_metadata(store, chat_session_id, request)
         if metadata is None:
-            detail_before_patch = get_chat_detail(store, chat_session_id)
+            detail_before_patch = get_chat_detail(store, chat_session_id) or current_state_detail(
+                chat_session_id
+            )
             if detail_before_patch is not None:
                 materialize_chat_metadata(store, detail_before_patch)
                 metadata = patch_chat_metadata(store, chat_session_id, request)
@@ -146,7 +163,9 @@ def create_chat_router(
         store = get_document_store()
         deleted = delete_chat_metadata(store, chat_session_id)
         if not deleted:
-            detail = get_chat_detail(store, chat_session_id)
+            detail = get_chat_detail(store, chat_session_id) or current_state_detail(
+                chat_session_id
+            )
             if detail is not None:
                 materialize_chat_metadata(store, detail)
                 deleted = delete_chat_metadata(store, chat_session_id)
