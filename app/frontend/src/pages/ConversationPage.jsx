@@ -994,6 +994,75 @@ function ConversationPage() {
     startNewChatSession();
   }, [config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
 
+  // Conversation actions, shared between the inline header icon row (desktop)
+  // and the collapsed "⋮" dropdown (narrow / mobile widths).
+  const isPinned = currentSessionItem?.pinned === true;
+  const isShared = currentSessionItem?.shared === true;
+  const chatActions = [
+    {
+      key: 'pin',
+      label: isPinned ? 'Unpin' : 'Pin',
+      role: 'menuitemcheckbox',
+      checked: isPinned,
+      active: isPinned,
+      disabled: isClearingSession || !currentSessionItem,
+      onClick: () => togglePinnedSession(currentSessionItem),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          {isPinned ? (
+            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="currentColor" />
+          ) : (
+            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
+          )}
+        </svg>
+      ),
+    },
+    {
+      key: 'share',
+      label: 'Share',
+      role: 'menuitemcheckbox',
+      checked: isShared,
+      active: isShared,
+      disabled: isClearingSession || !currentSessionItem,
+      onClick: () => toggleSharedSession(currentSessionItem),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M5.75 8.1 10.4 5.3M5.75 7.9l4.65 2.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <circle cx="4" cy="8" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+          <circle cx="12" cy="4.4" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+          <circle cx="12" cy="11.6" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
+        </svg>
+      ),
+    },
+    {
+      key: 'archive',
+      label: 'Archive',
+      role: 'menuitem',
+      disabled: isClearingSession || !currentSessionItem,
+      onClick: () => archiveSession(currentSessionItem),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M2.5 4h11v2.25h-11zM3.5 7.25h9v5.25h-9z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+          <path d="M8 8.5v2.25M6.5 9.5 8 11l1.5-1.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      role: 'menuitem',
+      danger: true,
+      disabled: isClearingSession,
+      onClick: () => deleteSession(currentSessionItem),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M3.5 4.5h9M6.25 4.5V3.25h3.5V4.5M5 6.25v5.25M8 6.25v5.25M11 6.25v5.25" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+          <path d="M4.5 4.5l.6 8A1.75 1.75 0 0 0 6.85 14h2.3a1.75 1.75 0 0 0 1.75-1.5l.6-8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+        </svg>
+      ),
+    },
+  ];
+
   return (
     <div className="chat-page">
       <aside className="chat-sessions-pane" aria-label="Conversation sessions">
@@ -1178,6 +1247,22 @@ function ConversationPage() {
                 )}
               </button>
               <span className="chat-page-header__spacer" />
+              <div className="chat-header-actions" role="group" aria-label="Conversation actions">
+                {chatActions.map((action) => (
+                  <button
+                    key={action.key}
+                    type="button"
+                    className={`chat-icon-button chat-icon-button--lg${action.danger ? ' chat-icon-button--danger' : ''}${action.active ? ' is-active' : ''}`}
+                    title={action.label}
+                    aria-label={action.label}
+                    aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
+                    disabled={action.disabled}
+                    onClick={action.onClick}
+                  >
+                    {action.icon}
+                  </button>
+                ))}
+              </div>
               <div className="chat-options-menu" ref={chatMenuRef}>
                 <button
                   type="button"
@@ -1195,85 +1280,23 @@ function ConversationPage() {
                 </button>
                 {chatMenuOpen && (
                   <div className="chat-options-dropdown" role="menu" aria-label="Conversation options">
-                    <button
-                      type="button"
-                      className="chat-options-item"
-                      role="menuitemcheckbox"
-                      aria-checked={currentSessionItem?.pinned === true}
-                      onClick={() => {
-                        togglePinnedSession(currentSessionItem);
-                        setChatMenuOpen(false);
-                      }}
-                      disabled={isClearingSession || !currentSessionItem}
-                    >
-                      <span className="chat-options-item__icon" aria-hidden="true">
-                        <svg viewBox="0 0 16 16" width="13" height="13">
-                          {currentSessionItem?.pinned ? (
-                            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="currentColor" />
-                          ) : (
-                            <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
-                          )}
-                        </svg>
-                      </span>
-                      <span>{currentSessionItem?.pinned ? 'Unpin' : 'Pin'}</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-options-item"
-                      role="menuitemcheckbox"
-                      aria-checked={currentSessionItem?.shared === true}
-                      onClick={() => {
-                        toggleSharedSession(currentSessionItem);
-                        setChatMenuOpen(false);
-                      }}
-                      disabled={isClearingSession || !currentSessionItem}
-                    >
-                      <span className="chat-options-item__icon" aria-hidden="true">
-                        <svg viewBox="0 0 16 16" width="13" height="13">
-                          <path d="M5.75 8.1 10.4 5.3M5.75 7.9l4.65 2.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                          <circle cx="4" cy="8" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-                          <circle cx="12" cy="4.4" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-                          <circle cx="12" cy="11.6" r="1.6" fill="none" stroke="currentColor" strokeWidth="1.2" />
-                        </svg>
-                      </span>
-                      <span>Share</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-options-item"
-                      role="menuitem"
-                      onClick={() => {
-                        archiveSession(currentSessionItem);
-                        setChatMenuOpen(false);
-                      }}
-                      disabled={isClearingSession || !currentSessionItem}
-                    >
-                      <span className="chat-options-item__icon" aria-hidden="true">
-                        <svg viewBox="0 0 16 16" width="13" height="13">
-                          <path d="M2.5 4h11v2.25h-11zM3.5 7.25h9v5.25h-9z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                          <path d="M8 8.5v2.25M6.5 9.5 8 11l1.5-1.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                      </span>
-                      <span>Archive</span>
-                    </button>
-                    <button
-                      type="button"
-                      className="chat-options-item chat-options-item--danger"
-                      role="menuitem"
-                      onClick={() => {
-                        deleteSession(currentSessionItem);
-                        setChatMenuOpen(false);
-                      }}
-                      disabled={isClearingSession}
-                    >
-                      <span className="chat-options-item__icon" aria-hidden="true">
-                        <svg viewBox="0 0 16 16" width="13" height="13">
-                          <path d="M3.5 4.5h9M6.25 4.5V3.25h3.5V4.5M5 6.25v5.25M8 6.25v5.25M11 6.25v5.25" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-                          <path d="M4.5 4.5l.6 8A1.75 1.75 0 0 0 6.85 14h2.3a1.75 1.75 0 0 0 1.75-1.5l.6-8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-                        </svg>
-                      </span>
-                      <span>Delete</span>
-                    </button>
+                    {chatActions.map((action) => (
+                      <button
+                        key={action.key}
+                        type="button"
+                        className={`chat-options-item${action.danger ? ' chat-options-item--danger' : ''}`}
+                        role={action.role}
+                        aria-checked={action.role === 'menuitemcheckbox' ? action.checked : undefined}
+                        disabled={action.disabled}
+                        onClick={() => {
+                          action.onClick();
+                          setChatMenuOpen(false);
+                        }}
+                      >
+                        <span className="chat-options-item__icon" aria-hidden="true">{action.icon}</span>
+                        <span>{action.label}</span>
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
