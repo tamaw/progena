@@ -1500,8 +1500,8 @@
     border: 0;
     border-radius: 5px;
     background: transparent;
-    color: var(--color-text-tertiary);
-    transition: background var(--transition-fast), color var(--transition-fast);
+    color: var(--color-text-secondary);
+    transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
 }
 
 .chat-icon-button:hover {
@@ -1509,9 +1509,48 @@
     color: var(--color-text-primary);
 }
 
+.chat-icon-button:active {
+    transform: translateY(1px);
+}
+
+.chat-icon-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+.chat-icon-button:disabled:hover {
+    background: transparent;
+    color: var(--color-text-secondary);
+}
+
+.chat-icon-button.is-active {
+    color: var(--color-accent);
+}
+
+/* Slightly larger affordance for the inline conversation-action icons. */
+.chat-icon-button--lg {
+    width: 30px;
+    height: 30px;
+    border-radius: 7px;
+}
+
+.chat-icon-button--danger:not(:disabled):hover {
+    background: rgba(180, 35, 24, 0.1);
+    color: #b42318;
+}
+
+/* Inline action row (desktop). Collapses into the "⋮" menu on narrow widths. */
+.chat-header-actions {
+    display: inline-flex;
+    flex: none;
+    align-items: center;
+    gap: 4px;
+}
+
 .chat-options-menu {
     position: relative;
-    display: inline-flex;
+    /* Hidden by default; revealed only when the header collapses (mobile). */
+    display: none;
 }
 
 .chat-options-dropdown {
@@ -1549,9 +1588,9 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    flex: 0 0 14px;
-    width: 14px;
-    height: 14px;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
 }
 
 .chat-options-item:hover {
@@ -2086,6 +2125,15 @@
 
     .chat-page-header__spacer {
         display: none;
+    }
+
+    /* Tight header: collapse the inline action icons back into the "⋮" menu. */
+    .chat-header-actions {
+        display: none;
+    }
+
+    .chat-options-menu {
+        display: inline-flex;
     }
 
     .chat-page-header__meta {
