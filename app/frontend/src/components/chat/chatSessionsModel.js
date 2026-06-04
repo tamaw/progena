@@ -102,7 +102,7 @@ export function normalizeBackendChatMessage(message, index) {
   };
 }
 
-function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatId) {
+function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds) {
   const activityAt = toValidTimestamp(chat.last_activity || chat.updated_at)
     ?? toValidTimestamp(chat.created_at)
     ?? 0;
@@ -120,7 +120,12 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     bucket: getTimeBucket(activityAt),
     selected: selectedBackendChatId === chat.chat_session_id,
     unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.chat_session_id) : false,
-    generatingInBackground: backgroundGeneratingChatId === chat.chat_session_id,
+    generatingInBackground: backgroundGeneratingChatIds instanceof Set
+      ? backgroundGeneratingChatIds.has(chat.chat_session_id)
+      : false,
+    erroredInBackground: backgroundErrorChatIds instanceof Set
+      ? backgroundErrorChatIds.has(chat.chat_session_id)
+      : false,
     pinned: Boolean(chat.pinned),
     shared: Boolean(chat.shared),
     archived: Boolean(chat.archived),
@@ -146,7 +151,8 @@ export function buildChatSessionItems({
   backendChatsLoaded,
   selectedBackendChatId,
   unreadChatIds,
-  backgroundGeneratingChatId,
+  backgroundGeneratingChatIds,
+  backgroundErrorChatIds,
 }) {
   const shouldShowLocalCurrentSession =
     !selectedBackendChatId
@@ -182,7 +188,7 @@ export function buildChatSessionItems({
       && !localIds.has(chat.progenitor_session_id)
       && !localIds.has(chat.thread_id)
     ))
-    .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatId));
+    .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds));
 
   return [...localItems, ...backendItems];
 }

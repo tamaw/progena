@@ -1,13 +1,6 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { renderMarkdownToHtml } from '../../lib/markdown';
-
-function isReasoningEvent(event) {
-  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
-}
-
-function hasReasoningContent(event) {
-  return typeof event?.content === 'string' && event.content.trim().length > 0;
-}
+import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 
 function isTimelineStreamEvent(event) {
   return event?.eventType !== 'message_delta';
@@ -41,7 +34,7 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
   ];
 }
 
-function Message({ message, streamEventFilter, hideContent = false, showImages = true }) {
+function MessageView({ message, streamEventFilter, hideContent = false, showImages = true }) {
   const {
     role,
     content,
@@ -586,6 +579,11 @@ function summarizeNodeKind(nodeName) {
 function formatMessage(content) {
   return renderMarkdownToHtml(content);
 }
+
+// Memoized so a streamed token only re-renders the streaming message, not the
+// whole transcript. streamEventFilter is a stable useCallback in the parent and
+// hideContent/showImages are booleans, so the default shallow compare is safe.
+const Message = memo(MessageView);
 
 export { Message };
 

@@ -3,11 +3,12 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useApi } from '../hooks/useApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
+import { useChatStream } from '../hooks/useChatStream';
+import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { selectLastUiEvent } from '../store/realtimeSlice';
 import {
   createChatSession,
   deleteChatSession,
-  fetchChatSessions,
   requestChatSessionDetail,
   selectActiveChatSession,
   selectChatSessions,
@@ -18,6 +19,7 @@ import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
+import { DetailTabs } from '../components/layout/DetailHeader';
 import {
   CHAT_AGENT_NAME,
   countToolInvocations,
@@ -38,13 +40,20 @@ import {
   isEventVisible,
   loadStreamFilters,
 } from '../components/chat/streamFilters';
-
-const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
-const CANCELLED_SUFFIX = ' [Cancelled]';
-const ARCHIVED_CHAT_SESSIONS_KEY = 'progenitor:archived-chat-sessions';
-const CUSTOM_CHAT_TITLE_KEY = 'progenitor:chat-custom-title';
-const PINNED_CHAT_SESSIONS_KEY = 'progenitor:pinned-chat-sessions';
-const SHARED_CHAT_SESSIONS_KEY = 'progenitor:shared-chat-sessions';
+import {
+  appendStreamEvent,
+  finalizeSupersededAssistant,
+  normalizeStreamEvent,
+} from '../components/chat/streamEventsModel';
+import {
+  ARCHIVED_CHAT_SESSIONS_KEY,
+  CUSTOM_CHAT_TITLE_KEY,
+  loadQuickChatHandoff,
+  loadStoredCustomChatTitle,
+  persistCustomChatTitle,
+  persistPinnedSessionIds,
+  persistSharedSessionIds,
+} from '../components/chat/chatStorage';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -58,176 +67,6 @@ const WEEKDAY_WELCOME_MESSAGES = [
 
 function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
-}
-
-function loadStoredArchivedChatSessions() {
-  const saved = localStorage.getItem(ARCHIVED_CHAT_SESSIONS_KEY);
-  if (!saved) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(saved);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (error) {
-    console.warn('Failed to load archived chat sessions:', error);
-    return [];
-  }
-}
-
-function loadStoredPinnedSessionIds() {
-  const saved = localStorage.getItem(PINNED_CHAT_SESSIONS_KEY);
-  if (!saved) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(saved);
-    return Array.isArray(parsed)
-      ? parsed.filter((value) => typeof value === 'string' && value)
-      : [];
-  } catch (error) {
-    console.warn('Failed to load pinned chat sessions:', error);
-    return [];
-  }
-}
-
-function persistPinnedSessionIds(pinnedSessionIds) {
-  if (!Array.isArray(pinnedSessionIds) || pinnedSessionIds.length === 0) {
-    localStorage.removeItem(PINNED_CHAT_SESSIONS_KEY);
-    return;
-  }
-
-  localStorage.setItem(PINNED_CHAT_SESSIONS_KEY, JSON.stringify(pinnedSessionIds));
-}
-
-function loadStoredSharedSessionIds() {
-  const saved = localStorage.getItem(SHARED_CHAT_SESSIONS_KEY);
-  if (!saved) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(saved);
-    return Array.isArray(parsed)
-      ? parsed.filter((value) => typeof value === 'string' && value)
-      : [];
-  } catch (error) {
-    console.warn('Failed to load shared chat sessions:', error);
-    return [];
-  }
-}
-
-function persistSharedSessionIds(sharedSessionIds) {
-  if (!Array.isArray(sharedSessionIds) || sharedSessionIds.length === 0) {
-    localStorage.removeItem(SHARED_CHAT_SESSIONS_KEY);
-    return;
-  }
-
-  localStorage.setItem(SHARED_CHAT_SESSIONS_KEY, JSON.stringify(sharedSessionIds));
-}
-
-function loadStoredCustomChatTitle() {
-  const saved = localStorage.getItem(CUSTOM_CHAT_TITLE_KEY);
-  if (!saved) {
-    return { sessionId: null, title: '' };
-  }
-
-  try {
-    const parsed = JSON.parse(saved);
-    if (!parsed || typeof parsed !== 'object') {
-      return { sessionId: null, title: '' };
-    }
-    return {
-      sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
-      title: typeof parsed.title === 'string' ? parsed.title : '',
-    };
-  } catch (error) {
-    console.warn('Failed to load custom chat title:', error);
-    return { sessionId: null, title: '' };
-  }
-}
-
-function persistCustomChatTitle(sessionId, title) {
-  const normalizedTitle = typeof title === 'string' ? title.trim() : '';
-  if (!normalizedTitle) {
-    localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
-    return;
-  }
-
-  localStorage.setItem(CUSTOM_CHAT_TITLE_KEY, JSON.stringify({
-    sessionId: typeof sessionId === 'string' ? sessionId : null,
-    title: normalizedTitle,
-  }));
-}
-
-function normalizeStreamEvent(event, index) {
-  if (!event || typeof event !== 'object') {
-    return null;
-  }
-
-  return {
-    id: typeof event.id === 'string' ? event.id : `evt_restored_${index}_${Date.now()}`,
-    eventType: typeof event.eventType === 'string'
-      ? event.eventType
-      : (typeof event.event_type === 'string' ? event.event_type : 'stream_event'),
-    content: typeof event.content === 'string' ? event.content : '',
-    metadata: event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
-      ? event.metadata
-      : {},
-  };
-}
-
-function isReasoningEvent(event) {
-  return event?.eventType === 'reasoning_delta' || event?.eventType === 'reasoning_summary';
-}
-
-function hasReasoningContent(event) {
-  return typeof event?.content === 'string' && event.content.trim().length > 0;
-}
-
-function extractReasoningTokenCount(event) {
-  const tokenCount = event?.metadata?.reasoning_tokens;
-  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
-}
-
-function appendReasoningText(currentText, event) {
-  if (!isReasoningEvent(event) || !hasReasoningContent(event)) {
-    return currentText;
-  }
-
-  const existingText = typeof currentText === 'string' ? currentText : '';
-  if (event.eventType === 'reasoning_delta') {
-    return `${existingText}${event.content}`;
-  }
-
-  if (existingText.trim().length === 0) {
-    return event.content;
-  }
-  return event.content.length >= existingText.length ? event.content : existingText;
-}
-
-function mergeReasoningEvents(existingEvent, nextEvent) {
-  const existingContent = hasReasoningContent(existingEvent) ? existingEvent.content : '';
-  let mergedContent = existingContent;
-
-  if (nextEvent.eventType === 'reasoning_delta') {
-    mergedContent = `${existingContent}${nextEvent.content}`;
-  } else if (!existingContent && hasReasoningContent(nextEvent)) {
-    mergedContent = nextEvent.content;
-  }
-
-  return {
-    ...existingEvent,
-    eventType: !existingContent && nextEvent.eventType === 'reasoning_summary'
-      ? 'reasoning_summary'
-      : existingEvent.eventType,
-    content: mergedContent,
-    metadata: {
-      ...existingEvent.metadata,
-      ...nextEvent.metadata,
-    },
-  };
 }
 
 function normalizeStoredMessage(message, index) {
@@ -275,97 +114,58 @@ function normalizeStoredMessage(message, index) {
   };
 }
 
-function loadQuickChatHandoff(storageKey) {
-  const saved = localStorage.getItem(storageKey);
-  if (!saved) {
-    return null;
-  }
+// Stable per-nick colours, the way IRC clients hash a nick to a palette entry.
+const NICK_COLORS = [
+  '#e06c75',
+  '#e5c07b',
+  '#98c379',
+  '#56b6c2',
+  '#61afef',
+  '#c678dd',
+  '#d19a66',
+  '#7fdbb6',
+  '#f0a0c0',
+  '#b0a0ff',
+];
 
-  try {
-    const parsed = JSON.parse(saved);
-    if (!parsed || typeof parsed !== 'object') {
-      return null;
-    }
+// Your own nick gets a fixed warm signature colour (IRC clients highlight your
+// own nick); everyone else hashes to a palette entry.
+const OWN_NICK_COLOR = '#f5b942';
+
+function nickColor(name) {
+  if (name === 'You') {
+    return OWN_NICK_COLOR;
+  }
+  let hash = 0;
+  for (let i = 0; i < name.length; i += 1) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  return NICK_COLORS[Math.abs(hash) % NICK_COLORS.length];
+}
+
+function formatIrcTime(timestamp) {
+  if (!Number.isFinite(timestamp)) {
+    return '';
+  }
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+}
+
+// Plain-text (IRC-style) transcript rows: one line per message, no images.
+function buildTranscriptRows(messages) {
+  return messages.map((message) => {
+    const nick = message.role === 'assistant' ? CHAT_AGENT_NAME : 'You';
     return {
-      messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-      sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+      id: message.id,
+      time: formatIrcTime(message.timestamp),
+      nick,
+      color: nickColor(nick),
+      content: typeof message.content === 'string' ? message.content : '',
     };
-  } catch (error) {
-    console.warn('Failed to load quick chat handoff:', error);
-    return null;
-  }
-}
-
-function createStreamEvent(streamEvent) {
-  if (!streamEvent || typeof streamEvent !== 'object') {
-    return null;
-  }
-
-  const event = {
-    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    eventType: typeof streamEvent.event_type === 'string' ? streamEvent.event_type : 'stream_event',
-    content: typeof streamEvent.content === 'string' ? streamEvent.content : '',
-    metadata:
-      streamEvent.metadata
-      && typeof streamEvent.metadata === 'object'
-      && !Array.isArray(streamEvent.metadata)
-        ? streamEvent.metadata
-        : {},
-  };
-
-  if (Array.isArray(streamEvent.images) && streamEvent.images.length > 0) {
-    event.images = streamEvent.images;
-  }
-
-  return event;
-}
-
-function appendStreamEvent(events, nextEvent) {
-  const currentEvents = Array.isArray(events) ? events : [];
-  if (nextEvent.eventType === 'message_delta') {
-    return currentEvents;
-  }
-  if (isReasoningEvent(nextEvent)) {
-    const firstReasoningIndex = currentEvents.findIndex((event) =>
-      isReasoningEvent(event) && hasReasoningContent(event)
-    );
-    if (nextEvent.eventType === 'reasoning_summary' && firstReasoningIndex >= 0) {
-      return currentEvents.map((event, index) => (
-        index === firstReasoningIndex ? mergeReasoningEvents(event, nextEvent) : event
-      ));
-    }
-
-    const lastIndex = currentEvents.length - 1;
-    const lastEvent = currentEvents[lastIndex];
-    if (isReasoningEvent(lastEvent)) {
-      return currentEvents.map((event, index) => (
-        index === lastIndex ? mergeReasoningEvents(lastEvent, nextEvent) : event
-      ));
-    }
-    if (!hasReasoningContent(nextEvent)) {
-      return currentEvents;
-    }
-  }
-  const lastEvent = currentEvents[currentEvents.length - 1];
-  if (
-    lastEvent
-    && lastEvent.eventType === nextEvent.eventType
-    && lastEvent.content === nextEvent.content
-    && JSON.stringify(lastEvent.metadata) === JSON.stringify(nextEvent.metadata)
-  ) {
-    return currentEvents;
-  }
-  const next = currentEvents.concat(nextEvent);
-  // Cap timeline events so a long run cannot overwhelm the chat transcript.
-  const eventLimit = MAX_STREAM_EVENTS_PER_MESSAGE;
-  let eventCount = 0;
-  for (let i = next.length - 1; i >= 0; i -= 1) {
-    eventCount += 1;
-    if (eventCount > eventLimit) {
-      next.splice(i, 1);
-    }
-  }
-  return next;
+  });
 }
 
 function stripEphemeralStreamEvents(message) {
@@ -379,30 +179,6 @@ function stripEphemeralStreamEvents(message) {
     return message;
   }
   return { ...message, streamEvents: persistable };
-}
-
-function finalizeSupersededAssistant(message) {
-  if (!message?.isStreaming) {
-    return message;
-  }
-
-  const content = typeof message.content === 'string' ? message.content : '';
-  const reasoningText = typeof message.reasoningText === 'string' ? message.reasoningText : '';
-  const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
-  const hasVisibleOutput =
-    content.trim().length > 0
-    || reasoningText.trim().length > 0
-    || streamEvents.length > 0;
-
-  if (!hasVisibleOutput) {
-    return null;
-  }
-
-  return {
-    ...message,
-    isStreaming: false,
-    content: content.endsWith(CANCELLED_SUFFIX) ? content : `${content}${CANCELLED_SUFFIX}`,
-  };
 }
 
 function ConversationPage() {
@@ -456,7 +232,6 @@ function ConversationPage() {
       return [];
     }
   });
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isClearingSession, setIsClearingSession] = useState(false);
   const [sessionId, setSessionId] = useState(() => (
     typeof initialQuickChatHandoff?.sessionId === 'string' ? initialQuickChatHandoff.sessionId : null
@@ -467,24 +242,78 @@ function ConversationPage() {
   );
   const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
   const [customChatTitleSessionId, setCustomChatTitleSessionId] = useState(() => initialStoredCustomTitle.sessionId);
-  const [archivedSessions, setArchivedSessions] = useState(() => loadStoredArchivedChatSessions());
-  const [pinnedSessionIds, setPinnedSessionIds] = useState(() => loadStoredPinnedSessionIds());
-  const [sharedSessionIds, setSharedSessionIds] = useState(() => loadStoredSharedSessionIds());
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
+  const [activeDetailTab, setActiveDetailTab] = useState('Chat');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
-  const [unreadChatIds, setUnreadChatIds] = useState(() => new Set());
-  const [backgroundGeneratingChatId, setBackgroundGeneratingChatId] = useState(null);
   const messagesEndRef = useRef(null);
-  const activeAssistantIdRef = useRef(null);
   const chatMenuRef = useRef(null);
   const titleInputRef = useRef(null);
   const lastProcessedUiEventIdRef = useRef(null);
   const lastAppliedBackendChatIdRef = useRef(null);
   const hasAutoSelectedOnMountRef = useRef(false);
-  const backgroundOriginChatIdRef = useRef(null);
+  // Current selection, mirrored into a ref so a stream that finishes in the
+  // background can tell whether the user is now viewing its origin chat.
+  const selectedBackendChatIdRef = useRef(null);
+  // Track recently added scheduled messages to deduplicate.
+  const recentScheduledContent = useRef(new Set());
+
+  useEffect(() => {
+    selectedBackendChatIdRef.current = selectedBackendChatId;
+  }, [selectedBackendChatId]);
+
+  // Reload the currently-open backend chat's detail (used when a background
+  // stream for the chat the user is viewing finishes — so the reply shows
+  // without marking the open chat unread).
+  const reloadOpenChat = useCallback((chatSessionId) => {
+    lastAppliedBackendChatIdRef.current = null;
+    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    dispatch(requestChatSessionDetail({
+      chatsUrl: getApiUrl('chats'),
+      chatSessionId,
+      requestId,
+    })).unwrap().catch((error) => show('error', 'Chat reload failed', error.message));
+  }, [dispatch, getApiUrl, show]);
+
+  const {
+    archivedSessions,
+    setArchivedSessions,
+    pinnedSessionIds,
+    setPinnedSessionIds,
+    sharedSessionIds,
+    setSharedSessionIds,
+    togglePinnedSession,
+    toggleSharedSession,
+  } = useChatSessionPrefs({ dispatch, getApiUrl, show });
+
+  const {
+    isGenerating,
+    setIsGenerating,
+    unreadChatIds,
+    setUnreadChatIds,
+    backgroundGeneratingChatIds,
+    setBackgroundGeneratingChatIds,
+    backgroundErrorChatIds,
+    setBackgroundErrorChatIds,
+    activeAssistantIdRef,
+    backgroundOriginChatIdRef,
+    handleSend,
+    handleStop,
+  } = useChatStream({
+    messages,
+    setMessages,
+    activeBackendChat,
+    sessionId,
+    sendMessageStream,
+    cancelStream,
+    dispatch,
+    getApiUrl,
+    show,
+    selectedBackendChatIdRef,
+    reloadOpenChat,
+  });
 
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   const chatTitle = customChatTitle || derivedChatTitle;
@@ -660,7 +489,7 @@ function ConversationPage() {
     return () => {
       window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
     };
-  }, [config.storage.quickChatHandoff]);
+  }, [activeAssistantIdRef, config.storage.quickChatHandoff, setIsGenerating]);
 
   // Save chat history to localStorage only for locally-owned sessions.
   // Backend chat messages must not leak into localStorage — they are the server's
@@ -709,15 +538,12 @@ function ConversationPage() {
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeBackendChat, config.storage.chatHistory, selectedBackendChatId]);
+  }, [activeAssistantIdRef, activeBackendChat, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [messages, isGenerating]);
-
-  // Track recently added scheduled messages to deduplicate
-  const recentScheduledContent = useRef(new Set());
 
   // Handle chat events (from /chat SSE stream)
   const handleChatEvent = useCallback((event) => {
@@ -805,156 +631,6 @@ function ConversationPage() {
       data: lastUiEvent.payload,
     });
   }, [handleChatEvent, lastUiEvent]);
-
-  const handleSend = useCallback(async (content) => {
-    const userMessage = {
-      id: `msg_${Date.now()}`,
-      role: 'user',
-      content,
-      timestamp: Date.now()
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setIsGenerating(true);
-
-    let assistantContent = '';
-    const assistantId = `msg_${Date.now()}_assistant`;
-    const previousAssistantId = activeAssistantIdRef.current;
-    activeAssistantIdRef.current = assistantId;
-
-    // Add placeholder assistant message; clear isStreaming on any prior
-    // placeholder that is being superseded so the spinner doesn't stick.
-    setMessages(prev => {
-      const next = previousAssistantId
-        ? prev
-          .map((m) => (
-            m.id === previousAssistantId
-              ? finalizeSupersededAssistant(m)
-              : m
-          ))
-          .filter(Boolean)
-        : prev;
-      return [...next, {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        tokenCount: 0,
-        reasoningTokenCount: 0,
-        reasoningText: '',
-        isStreaming: true,
-        streamEvents: [],
-      }];
-    });
-
-    const history = messages.slice(-10).map(m => ({
-      role: m.role,
-      content: m.content
-    }));
-
-    // When continuing a backend chat, route to its original LangGraph thread so
-    // the full conversation history is preserved rather than starting a new thread.
-    const threadMetadata = activeBackendChat?.thread_id
-      ? { thread_id: activeBackendChat.thread_id }
-      : null;
-
-    // Track which chat this stream belongs to so we can mark it unread if the
-    // user navigates away before the response finishes.
-    // Use activeBackendChat (which is in the deps) rather than selectedBackendChatId
-    // (which is not) to avoid a stale closure.
-    backgroundOriginChatIdRef.current = activeBackendChat?.chat_session_id ?? null;
-
-    try {
-      const isStale = () => activeAssistantIdRef.current !== assistantId;
-      await sendMessageStream(
-        content,
-        history,
-        // onChunk
-        (chunk) => {
-          if (isStale()) return;
-          assistantContent += chunk;
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, content: assistantContent, tokenCount: (m.tokenCount || 0) + 1 }
-              : m
-          ));
-        },
-        // onComplete
-        (status) => {
-          const originChatId = backgroundOriginChatIdRef.current;
-          backgroundOriginChatIdRef.current = null;
-          if (isStale()) {
-            setBackgroundGeneratingChatId(null);
-            if (status !== 'cancelled') {
-              // Completed in the background while the user was on another chat.
-              dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-              if (originChatId) {
-                setUnreadChatIds((prev) => new Set([...prev, originChatId]));
-              }
-            }
-            return;
-          }
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, isStreaming: false, content: assistantContent + (status === 'cancelled' ? ' [Cancelled]' : '') }
-              : m
-          ));
-          dispatch(fetchChatSessions({
-            chatsUrl: getApiUrl('chats'),
-            includeArchived: true,
-          }));
-          setIsGenerating(false);
-        },
-        // onError
-        (error) => {
-          if (isStale()) return;
-          show('error', 'Chat Error', error.message);
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, isStreaming: false, error: true, content: `Error: ${error.message}` }
-              : m
-          ));
-          setIsGenerating(false);
-        },
-        // onStreamEvent
-        (streamEvent) => {
-          // Discard frames that arrive after this request was superseded
-          // (cancel/retry) so they cannot attach to a newer message.
-          if (isStale()) {
-            return;
-          }
-          const nextEvent = createStreamEvent(streamEvent);
-          if (!nextEvent) {
-            return;
-          }
-          const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
-          const modelName = nextEvent.eventType === 'node_update'
-            && typeof nextEvent.metadata?.model_name === 'string'
-            ? nextEvent.metadata.model_name
-            : null;
-          setMessages((prev) => prev.map(m =>
-            m.id === assistantId
-              ? {
-                ...m,
-                streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
-                reasoningText: appendReasoningText(m.reasoningText, nextEvent),
-                reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
-                ...(modelName && !m.model ? { model: modelName } : {}),
-              }
-              : m
-          ));
-        },
-        threadMetadata,
-      );
-    } catch (error) {
-      show('error', 'Chat Error', error.message);
-      setIsGenerating(false);
-    }
-  }, [activeBackendChat, dispatch, getApiUrl, messages, sendMessageStream, show]);
-
-  const handleStop = useCallback(() => {
-    cancelStream();
-  }, [cancelStream]);
 
   const handleQuickAction = useCallback((message) => {
     handleSend(message);
@@ -1055,6 +731,7 @@ function ConversationPage() {
       setIsClearingSession(false);
     }
   }, [
+    activeAssistantIdRef,
     backendChatSessions,
     cancelStream,
     chatTitle,
@@ -1064,6 +741,8 @@ function ConversationPage() {
     createSession,
     messages,
     sessionId,
+    setArchivedSessions,
+    setIsGenerating,
     show,
   ]);
 
@@ -1089,17 +768,31 @@ function ConversationPage() {
     // in the background and show an orange dot on that card.
     const streamingOriginId = backgroundOriginChatIdRef.current;
     if (streamingOriginId && activeAssistantIdRef.current !== null) {
-      setBackgroundGeneratingChatId(streamingOriginId);
+      setBackgroundGeneratingChatIds((prev) => {
+        if (prev.has(streamingOriginId)) return prev;
+        const next = new Set(prev);
+        next.add(streamingOriginId);
+        return next;
+      });
     }
     activeAssistantIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
     setChatMenuOpen(false);
     setSelectedBackendChatId(sessionItem.chatSessionId);
-    setBackgroundGeneratingChatId((prev) =>
-      prev === sessionItem.chatSessionId ? null : prev,
-    );
+    setBackgroundGeneratingChatIds((prev) => {
+      if (!prev.has(sessionItem.chatSessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionItem.chatSessionId);
+      return next;
+    });
     setUnreadChatIds((prev) => {
+      if (!prev.has(sessionItem.chatSessionId)) return prev;
+      const next = new Set(prev);
+      next.delete(sessionItem.chatSessionId);
+      return next;
+    });
+    setBackgroundErrorChatIds((prev) => {
       if (!prev.has(sessionItem.chatSessionId)) return prev;
       const next = new Set(prev);
       next.delete(sessionItem.chatSessionId);
@@ -1116,7 +809,18 @@ function ConversationPage() {
     } catch (error) {
       show('error', 'Chat load failed', error.message);
     }
-  }, [dispatch, getApiUrl, messages.length, show]);
+  }, [
+    activeAssistantIdRef,
+    backgroundOriginChatIdRef,
+    dispatch,
+    getApiUrl,
+    messages.length,
+    setBackgroundErrorChatIds,
+    setBackgroundGeneratingChatIds,
+    setIsGenerating,
+    setUnreadChatIds,
+    show,
+  ]);
 
   const handleCommand = useCallback(async (commandName) => {
     if (commandName !== 'new') {
@@ -1126,6 +830,7 @@ function ConversationPage() {
     await startNewChatSession();
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
+  const transcriptRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const totalTokenCount = useMemo(
     () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
     [messages],
@@ -1168,13 +873,15 @@ function ConversationPage() {
       backendChatsLoaded: backendChatSessionsState.loaded,
       selectedBackendChatId,
       unreadChatIds,
-      backgroundGeneratingChatId,
+      backgroundGeneratingChatIds,
+      backgroundErrorChatIds,
     }),
     [
       archivedSessions,
       backendChatSessions,
       backendChatSessionsState.loaded,
-      backgroundGeneratingChatId,
+      backgroundErrorChatIds,
+      backgroundGeneratingChatIds,
       chatTitle,
       firstMessageTime,
       messages,
@@ -1207,6 +914,24 @@ function ConversationPage() {
     [backendChatSessionsState.loaded, backendChatSessionsState.loading, sidebarFilter],
   );
 
+  // Drop persisted pinned/shared ids whose chats no longer exist.
+  usePrunedSelection({
+    ids: pinnedSessionIds,
+    setIds: setPinnedSessionIds,
+    persist: persistPinnedSessionIds,
+    sessionItems,
+    show,
+    errorTitle: 'Pinned chats sync failed',
+  });
+  usePrunedSelection({
+    ids: sharedSessionIds,
+    setIds: setSharedSessionIds,
+    persist: persistSharedSessionIds,
+    sessionItems,
+    show,
+    errorTitle: 'Shared chats sync failed',
+  });
+
   // Auto-select the top card when sessions load (or are already loaded on remount).
   // Fires once per component lifetime; if there are no backend sessions, the new-chat
   // pane is shown naturally since selectedBackendChatId stays null.
@@ -1219,104 +944,6 @@ function ConversationPage() {
       selectSessionItem(topItem);
     }
   }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
-
-  useEffect(() => {
-    const activePinKeys = new Set(sessionItems.map((item) => item.pinKey));
-    if (!pinnedSessionIds.some((pinKey) => !activePinKeys.has(pinKey))) {
-      return;
-    }
-
-    const nextPinnedSessionIds = pinnedSessionIds.filter((pinKey) => activePinKeys.has(pinKey));
-    try {
-      persistPinnedSessionIds(nextPinnedSessionIds);
-      setPinnedSessionIds(nextPinnedSessionIds);
-    } catch (error) {
-      show('error', 'Pinned chats sync failed', error.message);
-    }
-  }, [pinnedSessionIds, sessionItems, show]);
-
-  const togglePinnedSession = useCallback((sessionItem) => {
-    if (!sessionItem?.pinKey) {
-      return;
-    }
-
-    if (sessionItem.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        patch: { pinned: !sessionItem.pinned },
-      })).unwrap()
-        .catch((error) => show('error', 'Pinning failed', error.message));
-      return;
-    }
-
-    setPinnedSessionIds((currentPinnedSessionIds) => {
-      const nextPinnedSessionIds = currentPinnedSessionIds.includes(sessionItem.pinKey)
-        ? currentPinnedSessionIds.filter((pinKey) => pinKey !== sessionItem.pinKey)
-        : [sessionItem.pinKey, ...currentPinnedSessionIds];
-
-      try {
-        persistPinnedSessionIds(nextPinnedSessionIds);
-        return nextPinnedSessionIds;
-      } catch (error) {
-        show('error', 'Pinning failed', error.message);
-        return currentPinnedSessionIds;
-      }
-    });
-  }, [dispatch, getApiUrl, show]);
-
-  useEffect(() => {
-    const activeShareKeys = new Set(sessionItems.map((item) => item.pinKey));
-    if (!sharedSessionIds.some((shareKey) => !activeShareKeys.has(shareKey))) {
-      return;
-    }
-
-    const nextSharedSessionIds = sharedSessionIds.filter((shareKey) => activeShareKeys.has(shareKey));
-    try {
-      persistSharedSessionIds(nextSharedSessionIds);
-      setSharedSessionIds(nextSharedSessionIds);
-    } catch (error) {
-      show('error', 'Shared chats sync failed', error.message);
-    }
-  }, [sessionItems, sharedSessionIds, show]);
-
-  const toggleSharedSession = useCallback((sessionItem) => {
-    if (!sessionItem?.pinKey) {
-      return;
-    }
-
-    if (sessionItem.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        patch: { shared: !sessionItem.shared },
-      })).unwrap()
-        .catch((error) => show('error', 'Sharing failed', error.message));
-      return;
-    }
-
-    setSharedSessionIds((currentSharedSessionIds) => {
-      const isCurrentlyShared = currentSharedSessionIds.includes(sessionItem.pinKey);
-      const nextSharedSessionIds = isCurrentlyShared
-        ? currentSharedSessionIds.filter((shareKey) => shareKey !== sessionItem.pinKey)
-        : [sessionItem.pinKey, ...currentSharedSessionIds];
-
-      try {
-        persistSharedSessionIds(nextSharedSessionIds);
-        show(
-          'success',
-          isCurrentlyShared ? 'Chat unshared' : 'Chat shared',
-          isCurrentlyShared
-            ? 'Removed this chat from the shared list.'
-            : 'Added this chat to the shared list.',
-        );
-        return nextSharedSessionIds;
-      } catch (error) {
-        show('error', 'Sharing failed', error.message);
-        return currentSharedSessionIds;
-      }
-    });
-  }, [dispatch, getApiUrl, show]);
 
   const archiveSession = useCallback((sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
@@ -1443,7 +1070,7 @@ function ConversationPage() {
                         <span className="chat-session-card__status-dot chat-session-card__status-dot--generating" />
                       )}
                       {item.unread && !item.generatingInBackground && (
-                        <span className="chat-session-card__status-dot" />
+                        <span className={`chat-session-card__status-dot${item.erroredInBackground ? ' chat-session-card__status-dot--error' : ''}`} />
                       )}
                       <span className="chat-session-card__age">{item.meta}</span>
                       {item.detail && (
@@ -1660,9 +1287,17 @@ function ConversationPage() {
                 )}
               </div>
             )}
+            {!isContentLoading && (
+              <DetailTabs
+                tabs={['Chat', 'Text']}
+                activeTab={activeDetailTab}
+                onTabChange={setActiveDetailTab}
+                tabLabel="Conversation detail tabs"
+              />
+            )}
           </div>
         </header>
-        {!isContentLoading && (
+        {!isContentLoading && activeDetailTab === 'Chat' && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
@@ -1679,6 +1314,18 @@ function ConversationPage() {
               <div className="welcome-message">
                 <h2>{welcomeMessage}</h2>
                 <QuickActions onAction={handleQuickAction} />
+              </div>
+            ) : activeDetailTab === 'Text' ? (
+              <div className="chat-text-export" role="log" aria-label="Conversation transcript">
+                {transcriptRows.map((row) => (
+                  <div className="irc-line" key={row.id}>
+                    <span className="irc-line__time">{row.time}</span>
+                    <span className="irc-line__nick" style={{ color: row.color }}>
+                      {`<${row.nick}>`}
+                    </span>
+                    <span className="irc-line__text">{row.content}</span>
+                  </div>
+                ))}
               </div>
             ) : (
               <>

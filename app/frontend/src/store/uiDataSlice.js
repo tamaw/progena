@@ -1,4 +1,4 @@
-import { createAsyncThunk, createSlice } from '@reduxjs/toolkit';
+import { createAsyncThunk, createSelector, createSlice } from '@reduxjs/toolkit';
 
 export const fetchChatSessions = createAsyncThunk(
   'uiData/fetchChatSessions',
@@ -292,10 +292,10 @@ export const { applyUiEvent } = uiDataSlice.actions;
 export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
 export const selectUiWidgets = (state) => state.uiData.widgets;
-export const selectChatSessions = (state) =>
-  state.uiData.chats.order
-    .map((chatSessionId) => state.uiData.chats.byId[chatSessionId])
-    .filter(Boolean);
+export const selectChatSessions = createSelector(
+  [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
+  (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),
+);
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
