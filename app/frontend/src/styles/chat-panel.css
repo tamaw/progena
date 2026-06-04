@@ -1120,7 +1120,8 @@
 }
 
 .chat-sessions-pane__search {
-    padding: 0 10px 8px;
+    padding: 0 10px 6px;
+    border-bottom: 1px solid var(--color-border);
 }
 
 .chat-sessions-pane__title {
@@ -1164,8 +1165,7 @@
 }
 
 .chat-pane-tabs {
-    padding: 0 8px 8px;
-    border-bottom: 1px solid var(--color-border);
+    padding: 0 8px 4px;
 }
 
 .chat-pane-tab {
@@ -1173,7 +1173,7 @@
     align-items: center;
     justify-content: center;
     gap: 4px;
-    padding: 3px 8px;
+    padding: 2px 8px;
     border: 1px solid transparent;
     border-radius: 6px;
     background: transparent;
@@ -1195,8 +1195,11 @@
     box-shadow: var(--shadow-sm);
 }
 
-.chat-pane-tab--sort {
-    margin-left: auto;
+.chat-pane-tab__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #22c55e;
 }
 
 .chat-sessions-pane__scroll {
