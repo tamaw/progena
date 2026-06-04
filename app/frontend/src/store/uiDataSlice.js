@@ -88,6 +88,12 @@ const initialState = {
   status: null,
   alerts: null,
   widgets: [],
+  // Lightweight chat signals surfaced to the primary nav dot. Owned by the
+  // chat page while it is mounted; reset on unmount.
+  chatIndicators: {
+    hasUnread: false,
+    isGenerating: false,
+  },
   chats: {
     byId: {},
     order: [],
@@ -174,6 +180,9 @@ const uiDataSlice = createSlice({
   name: 'uiData',
   initialState,
   reducers: {
+    setChatIndicators(state, action) {
+      state.chatIndicators = { ...state.chatIndicators, ...action.payload };
+    },
     applyUiEvent(state, action) {
       const event = action.payload;
       const payload = event?.payload || {};
@@ -287,7 +296,7 @@ const uiDataSlice = createSlice({
   },
 });
 
-export const { applyUiEvent } = uiDataSlice.actions;
+export const { applyUiEvent, setChatIndicators } = uiDataSlice.actions;
 
 export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
@@ -297,6 +306,7 @@ export const selectChatSessions = createSelector(
   (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
+export const selectChatIndicators = (state) => state.uiData.chatIndicators;
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
 

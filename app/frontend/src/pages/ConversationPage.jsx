@@ -13,6 +13,7 @@ import {
   selectActiveChatSession,
   selectChatSessions,
   selectChatSessionsState,
+  setChatIndicators,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
@@ -322,6 +323,17 @@ function ConversationPage() {
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
+
+  // Surface unread / generating state to the primary nav dot (rendered outside
+  // this page). Green when there are unread chats, orange while generating.
+  const hasUnreadChats = unreadChatIds.size > 0;
+  const isAnyChatGenerating = isGenerating || backgroundGeneratingChatIds.size > 0;
+  useEffect(() => {
+    dispatch(setChatIndicators({ hasUnread: hasUnreadChats, isGenerating: isAnyChatGenerating }));
+  }, [dispatch, hasUnreadChats, isAnyChatGenerating]);
+  useEffect(() => () => {
+    dispatch(setChatIndicators({ hasUnread: false, isGenerating: false }));
+  }, [dispatch]);
 
   const updateStreamFilters = useCallback(
     (nextFilters) => {
@@ -993,7 +1005,38 @@ function ConversationPage() {
             onClick={() => startNewChatSession()}
             disabled={isClearingSession}
           >
-            + New
+            + New chat
+          </button>
+        </div>
+        <div className="chat-pane-tabs" role="tablist" aria-label="Session filters">
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'all' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('all')}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'unread' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('unread')}
+          >
+            {hasUnreadChats && <span className="chat-pane-tab__dot" aria-hidden="true" />}
+            Unread
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'shared' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('shared')}
+          >
+            Shared
+          </button>
+          <button
+            type="button"
+            className={`chat-pane-tab${sidebarFilter === 'archived' ? ' is-active' : ''}`}
+            onClick={() => setSidebarFilter('archived')}
+          >
+            Archived
           </button>
         </div>
         <div className="chat-sessions-pane__search">
@@ -1009,36 +1052,6 @@ function ConversationPage() {
               onChange={(e) => setSidebarQuery(e.target.value)}
             />
           </label>
-        </div>
-        <div className="chat-pane-tabs" role="tablist" aria-label="Session filters">
-          <button
-            type="button"
-            className={`chat-pane-tab${sidebarFilter === 'all' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('all')}
-          >
-            All
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab${sidebarFilter === 'unread' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('unread')}
-          >
-            Unread
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab${sidebarFilter === 'shared' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('shared')}
-          >
-            Shared
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab chat-pane-tab--sort${sidebarFilter === 'archived' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('archived')}
-          >
-            Archived
-          </button>
         </div>
         <div className="chat-sessions-pane__scroll">
           {visibleSessionGroups.length === 0 ? (
