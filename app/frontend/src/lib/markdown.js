@@ -3,8 +3,27 @@ import hljs from 'highlight.js/lib/common';
 export function renderMarkdownToHtml(content) {
   if (!content) return '';
 
+  // Pull `:::writing … :::` directives out first so their inner content renders
+  // as its own markdown document inside a notepad container (see chat-panel.css).
+  const writingBlocks = [];
+  const pushWritingBlock = (inner) => {
+    const index = writingBlocks.length;
+    writingBlocks.push(renderWritingBlock(inner));
+    return `@@WRITINGBLOCK_${index}@@`;
+  };
+  let formatted = content.replace(
+    /^[ \t]*:::writing[ \t]*\n([\s\S]*?)\n[ \t]*:::[ \t]*$/gm,
+    (match, inner) => pushWritingBlock(inner),
+  );
+  // An unterminated block (still streaming) renders as a notepad anyway so the
+  // styling appears as the text arrives rather than snapping in at the close.
+  formatted = formatted.replace(
+    /^[ \t]*:::writing[ \t]*\n([\s\S]*)$/m,
+    (match, inner) => pushWritingBlock(inner),
+  );
+
   const codeBlocks = [];
-  let formatted = content.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
+  formatted = formatted.replace(/```(\w*)\n([\s\S]*?)```/g, (match, lang, code) => {
     const codeBlockIndex = codeBlocks.length;
     codeBlocks.push(renderCodeBlock(lang, code));
     return `@@CODEBLOCK_${codeBlockIndex}@@`;
@@ -62,7 +81,37 @@ export function renderMarkdownToHtml(content) {
     formatted = `<p>${formatted}</p>`;
   }
 
-  return normalizeListMarkup(formatted);
+  // Restore notepad blocks AFTER list normalization. The placeholder is inert
+  // text at this point, so normalizeListMarkup never sees the (already
+  // normalized) <li> nested inside the injected notepad and won't strip it.
+  formatted = normalizeListMarkup(formatted);
+
+  return restoreWritingBlocks(formatted, writingBlocks);
+}
+
+function renderWritingBlock(inner) {
+  const body = renderMarkdownToHtml(inner.replace(/^\n+/, '').replace(/\s+$/, ''));
+  return (
+    '<div class="writing-block" role="note">'
+    + '<div class="writing-block__tab">Notes</div>'
+    + `<div class="writing-block__sheet">${body}</div>`
+    + '</div>'
+  );
+}
+
+function restoreWritingBlocks(html, writingBlocks) {
+  if (writingBlocks.length === 0) return html;
+  // Drop the wrapping <p>…</p> the paragraph pass put around a lone placeholder
+  // so the block-level notepad isn't nested inside an inline paragraph.
+  return html
+    .replace(
+      /<p>\s*(?:<br>\s*)*@@WRITINGBLOCK_(\d+)@@(?:\s*<br>)*\s*<\/p>/g,
+      (match, index) => writingBlocks[Number(index)] || '',
+    )
+    .replace(
+      /@@WRITINGBLOCK_(\d+)@@/g,
+      (match, index) => writingBlocks[Number(index)] || '',
+    );
 }
 
 function normalizeListMarkup(html) {
