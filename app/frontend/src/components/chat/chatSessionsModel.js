@@ -1,6 +1,7 @@
 import {
   buildSessionItems,
-  formatStartedTime,
+  formatPreview,
+  formatRelativeAge,
   getTimeBucket,
   toValidTimestamp,
 } from './conversationModel';
@@ -102,27 +103,32 @@ export function normalizeBackendChatMessage(message, index) {
   };
 }
 
-function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds) {
+function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating) {
   const activityAt = toValidTimestamp(chat.last_activity || chat.updated_at)
     ?? toValidTimestamp(chat.created_at)
     ?? 0;
   const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
   const summary = chat.preview || `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`;
+  const selected = selectedBackendChatId === chat.chat_session_id;
 
   return {
     id: chat.chat_session_id,
     pinKey: chat.chat_session_id,
     title: chat.title || 'Untitled chat',
-    meta: formatStartedTime(activityAt) || formatStartedTime(chat.created_at) || '',
+    meta: formatRelativeAge(activityAt) || formatRelativeAge(chat.created_at) || '',
     detail: chat.archived ? 'Archived' : (chat.shared ? 'Shared' : ''),
     summary,
     activityAt,
     bucket: getTimeBucket(activityAt),
-    selected: selectedBackendChatId === chat.chat_session_id,
+    preview: formatPreview(chat.preview),
+    selected,
     unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.chat_session_id) : false,
-    generatingInBackground: backgroundGeneratingChatIds instanceof Set
-      ? backgroundGeneratingChatIds.has(chat.chat_session_id)
-      : false,
+    // Generating whether the stream is in the foreground (the chat being
+    // viewed) or carried on in the background — the card shows one dot either
+    // way, so the two sources collapse into a single flag here.
+    generating: (backgroundGeneratingChatIds instanceof Set
+      && backgroundGeneratingChatIds.has(chat.chat_session_id))
+      || (Boolean(isGenerating) && selected),
     erroredInBackground: backgroundErrorChatIds instanceof Set
       ? backgroundErrorChatIds.has(chat.chat_session_id)
       : false,
@@ -153,6 +159,7 @@ export function buildChatSessionItems({
   unreadChatIds,
   backgroundGeneratingChatIds,
   backgroundErrorChatIds,
+  isGenerating,
 }) {
   const shouldShowLocalCurrentSession =
     !selectedBackendChatId
@@ -177,6 +184,9 @@ export function buildChatSessionItems({
         source: 'local',
         archived: item.detail === 'Archived',
         selected: item.selected,
+        // The live local session is the active chat, so it generates in the
+        // foreground exactly when the composer is streaming.
+        generating: Boolean(isGenerating) && item.selected,
       }))
     : [];
 
@@ -188,7 +198,7 @@ export function buildChatSessionItems({
       && !localIds.has(chat.progenitor_session_id)
       && !localIds.has(chat.thread_id)
     ))
-    .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds));
+    .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating));
 
   return [...localItems, ...backendItems];
 }

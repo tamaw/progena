@@ -36,6 +36,66 @@ export function formatStartedTime(timestamp) {
   });
 }
 
+// Compact, glanceable age for sidebar cards: "now", "4m ago", "3h ago",
+// "2d ago", "5w ago", then a short date once it stops being useful as a
+// relative offset. Kept terse so it sits quietly in the card's meta row.
+export function formatRelativeAge(timestamp, now = Date.now()) {
+  const value = toValidTimestamp(timestamp);
+  if (!value) {
+    return '';
+  }
+  const diffSeconds = Math.max(0, Math.floor((now - value) / 1000));
+  if (diffSeconds < 45) {
+    return 'now';
+  }
+  const minutes = Math.floor(diffSeconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours}h ago`;
+  }
+  const days = Math.floor(hours / 24);
+  if (days < 7) {
+    return `${days}d ago`;
+  }
+  const weeks = Math.floor(days / 7);
+  if (weeks < 5) {
+    return `${weeks}w ago`;
+  }
+  return new Date(value).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+// Flatten a stored message body into a single-line preview for the sidebar
+// card: strip ":::directive" fences, collapse whitespace/newlines, trim. The
+// CSS ellipsis handles truncation, so we only need a clean one-liner here.
+export function formatPreview(text) {
+  if (typeof text !== 'string' || !text) {
+    return '';
+  }
+  return text
+    .replace(/:::[^\n]*\n?/g, ' ')
+    .replace(/`+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Last non-empty message body in a thread, used to derive a card preview when
+// the backend hasn't supplied one (e.g. the live local session).
+export function lastMessageContent(messages) {
+  if (!Array.isArray(messages)) {
+    return '';
+  }
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const content = messages[index]?.content;
+    if (typeof content === 'string' && content.trim()) {
+      return content;
+    }
+  }
+  return '';
+}
+
 export function deriveChatTitle(messages) {
   const firstUserMessage = messages.find((message) => message.role === 'user' && message.content);
   if (!firstUserMessage) {
@@ -76,10 +136,7 @@ function getLastMessageTimestamp(messages) {
 }
 
 function buildSessionMeta({ activityAt, archivedAt }) {
-  if (archivedAt) {
-    return `Archived ${formatStartedTime(archivedAt)}`;
-  }
-  return formatStartedTime(activityAt) || '';
+  return formatRelativeAge(archivedAt ?? activityAt) || '';
 }
 
 function buildSessionSummary({ messageCount, toolCount, tokenCount }) {
@@ -147,6 +204,7 @@ function buildArchivedSessionItem(entry, pinnedKeys) {
     summary: buildSessionSummary({ messageCount, toolCount, tokenCount }),
     activityAt,
     bucket: getTimeBucket(activityAt),
+    preview: formatPreview(lastMessageContent(messages)),
     selected: false,
     pinned: pinnedKeys.has(pinKey),
   };
@@ -178,6 +236,7 @@ export function buildSessionItems({
     }),
     activityAt: getLastMessageTimestamp(messages) ?? firstMessageTime ?? Date.now(),
     bucket: getTimeBucket(getLastMessageTimestamp(messages) ?? firstMessageTime ?? Date.now()),
+    preview: formatPreview(lastMessageContent(messages)),
     selected: true,
     pinned: pinnedKeys.has(sessionId || 'current-session'),
     shared: sharedKeys.has(sessionId || 'current-session'),
