@@ -88,9 +88,26 @@ describe('buildChatSessionItems', () => {
     const byId = Object.fromEntries(items.map((i) => [i.id, i]));
     expect(items.every((i) => i.source === 'backend')).toBe(true); // no local card when a backend chat is selected
     expect(byId.c1.selected).toBe(true);
-    expect(byId.c1.generatingInBackground).toBe(true);
+    expect(byId.c1.generating).toBe(true);
     expect(byId.c2.unread).toBe(true);
     expect(byId.c2.erroredInBackground).toBe(true);
+  });
+
+  it('marks the selected card as generating while it streams in the foreground', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      backendChatSessions: [
+        { chat_session_id: 'c1', title: 'One' },
+        { chat_session_id: 'c2', title: 'Two' },
+      ],
+      selectedBackendChatId: 'c1',
+      isGenerating: true,
+    });
+    const byId = Object.fromEntries(items.map((i) => [i.id, i]));
+    // Foreground stream on the viewed chat shows the dot without ever entering
+    // the background-generating set.
+    expect(byId.c1.generating).toBe(true);
+    expect(byId.c2.generating).toBe(false);
   });
 
   it('dedupes a backend card that matches the local current session', () => {
