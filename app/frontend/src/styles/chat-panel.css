@@ -1120,7 +1120,7 @@
 }
 
 .chat-sessions-pane__search {
-    padding: 0 10px 6px;
+    padding: 0 10px 8px;
     border-bottom: 1px solid var(--color-border);
 }
 
@@ -1229,8 +1229,12 @@
 }
 
 .chat-session-card {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr);
+    column-gap: 6px;
+    align-items: start;
     margin-bottom: 1px;
-    padding: 7px 10px 9px;
+    padding: 7px 10px 8px;
     border: 1px solid transparent;
     border-radius: 6px;
     background: transparent;
@@ -1252,93 +1256,31 @@
     background: var(--color-accent-soft);
 }
 
-.chat-session-card__top {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    margin-bottom: 3px;
-}
-
-.chat-session-card__age {
-    flex: 1;
-    white-space: nowrap;
-    color: var(--color-text-muted);
-    font-size: 10.5px;
-    font-variant-numeric: tabular-nums;
-}
-
-
-.chat-session-card__actions {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 2px;
-}
-
-.chat-session-card__title {
-    display: -webkit-box;
-    margin-bottom: 3px;
-    overflow: hidden;
-    color: var(--color-text-primary);
-    font-family: var(--font-family-mono);
-    font-size: 12.5px;
-    font-weight: 500;
-    letter-spacing: -0.01em;
-    line-height: 1.35;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
-}
-
-.chat-session-card__pin {
-    width: 24px;
-    height: 24px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: none;
-    margin: -3px -5px 0 0;
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--color-text-muted);
-    opacity: 0.84;
-    transition: background-color 120ms ease, color 120ms ease, opacity 120ms ease;
-}
-
-.chat-session-card__pin:hover {
-    background: color-mix(in oklab, var(--color-bg-hover) 82%, transparent);
-    color: var(--color-text-primary);
-    opacity: 1;
-}
-
-.chat-session-card__pin:focus-visible {
-    outline: 1px solid color-mix(in oklab, var(--color-accent) 55%, transparent);
-    outline-offset: 1px;
-    background: color-mix(in oklab, var(--color-accent) 18%, transparent);
-    color: var(--color-text-primary);
-    opacity: 1;
-}
-
-.chat-session-card__pin.is-active {
-    color: var(--color-accent);
-    opacity: 1;
-}
-
-.chat-session-card__status-dot {
-    flex: 0 0 auto;
-    width: 6px;
-    height: 6px;
+/* Leading status dot — its own left rail, aligned with the title line. It only
+   carries colour when there's something worth surfacing (unread, generating,
+   error); idle cards leave the rail empty so the live ones genuinely pop. */
+.chat-session-card__dot {
+    grid-column: 1;
+    grid-row: 1;
+    align-self: center;
+    justify-self: center;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
-    background: #22c55e;
+    background: transparent;
 }
 
-.chat-session-card__status-dot--generating {
+.chat-session-card__dot--unread {
+    background: var(--color-accent);
+}
+
+.chat-session-card__dot--error {
+    background: var(--color-error, #ef4444);
+}
+
+.chat-session-card__dot--generating {
     background: #f97316;
     animation: status-dot-pulse 1.2s ease-in-out infinite;
-}
-
-.chat-session-card__status-dot--error {
-    background: var(--color-error, #ef4444);
 }
 
 @keyframes status-dot-pulse {
@@ -1346,29 +1288,61 @@
     50% { opacity: 0.35; }
 }
 
-.chat-session-card__state {
-    flex: none;
-    color: var(--color-text-muted);
-    font-size: 10.5px;
-}
-
-
-.chat-session-card__counts {
+.chat-session-card__top {
+    grid-column: 2;
+    grid-row: 1;
     display: flex;
-    gap: 6px;
-    align-items: center;
-    margin-top: 3px;
-    color: var(--color-text-muted);
-    font-size: 10.5px;
+    align-items: baseline;
+    gap: 8px;
+    min-width: 0;
 }
 
-.chat-session-card__counts .num {
-    color: var(--color-text-secondary);
+.chat-session-card__title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-primary);
+    font-family: var(--font-family-mono);
+    font-size: 12.5px;
+    font-weight: 500;
+    letter-spacing: -0.01em;
+    line-height: 1.35;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chat-session-card.is-unread .chat-session-card__title {
+    color: var(--color-text-primary);
+    font-weight: 650;
+}
+
+.chat-session-card__age {
+    flex: none;
+    white-space: nowrap;
+    color: var(--color-text-muted);
+    font-size: 10.5px;
     font-variant-numeric: tabular-nums;
 }
 
-.chat-session-card__counts .err {
-    color: var(--color-error);
+.chat-session-card__preview {
+    grid-column: 2;
+    grid-row: 2;
+    margin-top: 2px;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.chat-session-card__state {
+    margin-right: 6px;
+    color: var(--color-text-secondary);
+    font-size: 9.5px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
 }
 
 .agent-dot {
