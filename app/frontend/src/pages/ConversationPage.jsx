@@ -887,6 +887,7 @@ function ConversationPage() {
       unreadChatIds,
       backgroundGeneratingChatIds,
       backgroundErrorChatIds,
+      isGenerating,
     }),
     [
       archivedSessions,
@@ -896,6 +897,7 @@ function ConversationPage() {
       backgroundGeneratingChatIds,
       chatTitle,
       firstMessageTime,
+      isGenerating,
       messages,
       pinnedSessionIds,
       selectedBackendChatId,
@@ -1077,17 +1079,17 @@ function ConversationPage() {
             + New chat
           </button>
         </div>
-        <div className="chat-pane-tabs" role="tablist" aria-label="Session filters">
+        <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Session filters">
           <button
             type="button"
-            className={`chat-pane-tab${sidebarFilter === 'all' ? ' is-active' : ''}`}
+            className={`chat-pane-tab sess-filter${sidebarFilter === 'all' ? ' is-active' : ''}`}
             onClick={() => setSidebarFilter('all')}
           >
             All
           </button>
           <button
             type="button"
-            className={`chat-pane-tab${sidebarFilter === 'unread' ? ' is-active' : ''}`}
+            className={`chat-pane-tab sess-filter${sidebarFilter === 'unread' ? ' is-active' : ''}`}
             onClick={() => setSidebarFilter('unread')}
           >
             {hasUnreadChats && <span className="chat-pane-tab__dot" aria-hidden="true" />}
@@ -1095,14 +1097,14 @@ function ConversationPage() {
           </button>
           <button
             type="button"
-            className={`chat-pane-tab${sidebarFilter === 'shared' ? ' is-active' : ''}`}
+            className={`chat-pane-tab sess-filter${sidebarFilter === 'shared' ? ' is-active' : ''}`}
             onClick={() => setSidebarFilter('shared')}
           >
             Shared
           </button>
           <button
             type="button"
-            className={`chat-pane-tab${sidebarFilter === 'archived' ? ' is-active' : ''}`}
+            className={`chat-pane-tab sess-filter${sidebarFilter === 'archived' ? ' is-active' : ''}`}
             onClick={() => setSidebarFilter('archived')}
           >
             Archived
@@ -1135,7 +1137,7 @@ function ConversationPage() {
                 {group.items.map((item) => (
                   <article
                     key={item.id}
-                    className={`chat-session-card${item.selected ? ' is-selected' : ''}`}
+                    className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
                     role="button"
                     tabIndex={0}
                     aria-current={item.selected ? 'true' : undefined}
@@ -1147,52 +1149,30 @@ function ConversationPage() {
                       }
                     }}
                   >
+                    <span
+                      className={`chat-session-card__dot${
+                        item.generating
+                          ? ' chat-session-card__dot--generating'
+                          : item.erroredInBackground
+                            ? ' chat-session-card__dot--error'
+                            : item.unread
+                              ? ' chat-session-card__dot--unread'
+                              : ''
+                      }`}
+                      aria-hidden="true"
+                    />
                     <div className="chat-session-card__top">
-                      {item.generatingInBackground && (
-                        <span className="chat-session-card__status-dot chat-session-card__status-dot--generating" />
-                      )}
-                      {item.unread && !item.generatingInBackground && (
-                        <span className={`chat-session-card__status-dot${item.erroredInBackground ? ' chat-session-card__status-dot--error' : ''}`} />
-                      )}
+                      <span className="chat-session-card__title">{item.title}</span>
                       <span className="chat-session-card__age">{item.meta}</span>
-                      {item.detail && (
-                        <span className="chat-session-card__state">{item.detail}</span>
-                      )}
-                      <div className="chat-session-card__actions" aria-label={`${item.title} actions`}>
-                        <button
-                          type="button"
-                          className={`chat-session-card__pin${item.pinned ? ' is-active' : ''}`}
-                          aria-label={item.pinned ? `Unpin ${item.title}` : `Pin ${item.title}`}
-                          title={item.pinned ? 'Unpin chat' : 'Pin chat'}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            togglePinnedSession(item);
-                          }}
-                        >
-                          {item.pinned ? (
-                            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                              <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="currentColor" />
-                            </svg>
-                          ) : (
-                            <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                              <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
-                            </svg>
-                          )}
-                        </button>
+                    </div>
+                    {(item.preview || item.detail) && (
+                      <div className="chat-session-card__preview">
+                        {item.detail && (
+                          <span className="chat-session-card__state">{item.detail}</span>
+                        )}
+                        {item.preview}
                       </div>
-                    </div>
-                    <div className="chat-session-card__title">{item.title}</div>
-                    <div className="chat-session-card__counts">
-                      <span><span className="num">{item.messageCount ?? 0}</span> msgs</span>
-                      <span>·</span>
-                      <span><span className="num">{item.toolCount ?? 0}</span> tools</span>
-                      {(item.errorCount ?? 0) > 0 && (
-                        <>
-                          <span>·</span>
-                          <span className="err"><span className="num">{item.errorCount}</span> err</span>
-                        </>
-                      )}
-                    </div>
+                    )}
                   </article>
                 ))}
               </div>
