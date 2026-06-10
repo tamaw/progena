@@ -37,6 +37,7 @@ from langgraph.graph import END, StateGraph
 from .config import ObserveConfig, get_config, setup_logging
 from .prompts import load_prompt
 from .queue_worker import ObserveTaskQueue, _QueuedTask
+from .store import ObserveStore
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +206,21 @@ class ObserveAgent:
             "system.md",
             prompts_dir=self.config.storage.prompts_dir,
         ).strip()
+        self._store: ObserveStore | None = None
         self._graph = self._build_graph()
+
+    async def attach_store(self, store: ObserveStore) -> None:
+        """Bind the Postgres store: source the prompt from it and add checkpoints.
+
+        The store is seeded (prompt + skills) by the caller before this runs, so
+        the system prompt is read back from the database; the conversation graph
+        is recompiled with the LangGraph checkpointer.
+        """
+        self._store = store
+        stored_prompt = await store.get_system_prompt()
+        if stored_prompt:
+            self._system_prompt = stored_prompt.strip()
+        self._graph = self._build_graph(checkpointer=store.checkpointer)
 
     async def initialize(self) -> None:
         self.agent_log_dir.mkdir(parents=True, exist_ok=True)
@@ -387,7 +402,7 @@ class ObserveAgent:
     def _responses_endpoint(self) -> str:
         return _build_responses_endpoint(self.config.llm.base_url)
 
-    def _build_graph(self):
+    def _build_graph(self, checkpointer: Any = None):
         async def prepare(state: ObserveGraphState) -> dict[str, Any]:
             request = (state.get("request") or "").strip() or (
                 "Summarize current Progenitor health and explain any recent errors."
@@ -506,7 +521,7 @@ class ObserveAgent:
         )
         graph.add_edge("run_tools", "llm_call")
         graph.add_edge("finalize", END)
-        return graph.compile()
+        return graph.compile(checkpointer=checkpointer)
 
     async def _post_responses(self, payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self._responses_endpoint()
@@ -570,13 +585,17 @@ class ObserveAgent:
         req = (
             request or ""
         ).strip() or "Summarize current Progenitor health and explain any recent errors."
+        ctx = context if isinstance(context, dict) else {}
         initial_state: ObserveGraphState = {
             "request": req,
-            "context": context if isinstance(context, dict) else {},
+            "context": ctx,
         }
+        thread_id = str(
+            ctx.get("a2a_context_id") or ctx.get("a2a_task_id") or f"observe_{int(time.time())}"
+        )
         result = await self._graph.ainvoke(
             initial_state,
-            {"configurable": {"thread_id": f"observe_{int(time.time())}"}},
+            {"configurable": {"thread_id": thread_id}},
         )
         text = str(result.get("final_text") or "").strip()
         return text or "No response text returned from Observe graph."
@@ -664,10 +683,35 @@ class ObserveExecutor(AgentExecutor):
         )
 
 
+def default_skill_payloads() -> list[dict[str, Any]]:
+    """Default skill catalog, used both to build the card and seed the store."""
+    return [
+        {
+            "id": capability,
+            "name": capability.replace("_", " ").title(),
+            "description": f"Observe capability: {capability}",
+            "tags": ["observe", "diagnostics"],
+            "examples": [f"Run {capability}"],
+        }
+        for capability in CAPABILITIES
+    ]
+
+
+def _agent_skill_from_payload(payload: dict[str, Any]) -> AgentSkill:
+    return AgentSkill(
+        id=str(payload.get("id") or ""),
+        name=str(payload.get("name") or payload.get("id") or ""),
+        description=str(payload.get("description") or ""),
+        tags=[str(tag) for tag in (payload.get("tags") or [])],
+        examples=[str(example) for example in (payload.get("examples") or [])],
+    )
+
+
 agent = ObserveAgent()
 _PORT = int(os.environ.get("PORT", str(DEFAULT_PORT)))
 _HOST = os.environ.get("A2A_PUBLIC_HOST", "localhost").strip() or "localhost"
 _task_queue: ObserveTaskQueue | None = None
+_store: ObserveStore | None = None
 
 AGENT_CARD = AgentCard(
     name=AGENT_NAME,
@@ -677,16 +721,7 @@ AGENT_CARD = AgentCard(
     capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
     default_input_modes=["text/plain"],
     default_output_modes=["text/plain"],
-    skills=[
-        AgentSkill(
-            id=capability,
-            name=capability.replace("_", " ").title(),
-            description=f"Observe capability: {capability}",
-            tags=["observe", "diagnostics"],
-            examples=[f"Run {capability}"],
-        )
-        for capability in CAPABILITIES
-    ],
+    skills=[_agent_skill_from_payload(payload) for payload in default_skill_payloads()],
 )
 
 _executor = ObserveExecutor()
@@ -712,14 +747,39 @@ async def _health(request: Any) -> JSONResponse:
 app.add_route("/health", _health, methods=["GET"])
 
 
+async def _open_store(runtime_config: ObserveConfig) -> ObserveStore | None:
+    """Open the Postgres store and seed the prompt + skills (best-effort)."""
+    if not runtime_config.database.enabled:
+        logger.warning(
+            "Observe database is not configured (set PROGENITOR_DATABASE_URL or "
+            "OBSERVE_DATABASE_URL); running without Postgres-backed prompt/skills/checkpoints",
+        )
+        return None
+    try:
+        store = ObserveStore(runtime_config.database)
+        await store.open()
+        await store.seed_system_prompt(agent._system_prompt)
+        await store.seed_skills(default_skill_payloads())
+        await agent.attach_store(store)
+        stored_skills = await store.list_skills()
+        if stored_skills:
+            AGENT_CARD.skills = [_agent_skill_from_payload(skill) for skill in stored_skills]
+        logger.info("Observe store ready (%d skills)", len(stored_skills))
+        return store
+    except Exception as exc:
+        logger.warning("Observe store unavailable, falling back to files: %s", exc)
+        return None
+
+
 @asynccontextmanager
 async def _lifespan(_app: Any):
-    global _task_queue
+    global _task_queue, _store
     runtime_config = get_config()
     setup_logging(runtime_config, _runtime_agent_name())
     logger.info("Observe agent starting on port %d", _PORT)
     await agent.initialize()
-    _task_queue = ObserveTaskQueue(agent)
+    _store = await _open_store(runtime_config)
+    _task_queue = ObserveTaskQueue(agent, store=_store)
     _task_queue.start()
     logger.info("Observe agent ready")
     try:
@@ -729,6 +789,9 @@ async def _lifespan(_app: Any):
         if _task_queue is not None:
             await _task_queue.stop()
             _task_queue = None
+        if _store is not None:
+            await _store.close()
+            _store = None
         await agent.shutdown()
 
 

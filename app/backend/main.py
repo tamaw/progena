@@ -29,6 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .agent_routes import router as agent_router
+from .agent_store import configure_agent_store
 from .alerts import AlertInfo
 from .attachments import (
     AttachmentConfig,
@@ -590,6 +591,21 @@ async def lifespan(app: FastAPI):
     async def close_document_store() -> None:
         document_store.close()
 
+    # Backend-owned agent data lives in a separate database on the same server.
+    try:
+        agent_store = configure_agent_store(
+            config.database_url,
+            config.backend_database_url,
+            config.backend_database_name,
+        )
+    except Exception:  # noqa: BLE001 - backend must still start if agent DB is unavailable
+        logger.exception("Failed to configure backend agent store")
+        agent_store = None
+
+    async def close_agent_store() -> None:
+        if agent_store is not None:
+            agent_store.close()
+
     # Initialize session manager
     await session_manager.start()
     logger.info("Session manager started")
@@ -610,6 +626,12 @@ async def lifespan(app: FastAPI):
     graceful_shutdown.register_callback(
         "close_document_store",
         close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
+    graceful_shutdown.register_callback(
+        "close_agent_store",
+        close_agent_store,
         priority=45,
         timeout=5.0,
     )

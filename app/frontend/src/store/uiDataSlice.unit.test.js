@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import reducer, {
   applyUiEvent,
+  requestAgentDetail,
   requestChatSessionDetail,
+  selectActiveAgentProfile,
+  selectAgentProfiles,
   selectChatIndicators,
   selectChatSessions,
   setChatIndicators,
@@ -73,6 +76,79 @@ describe('selectChatSessions (memoized)', () => {
     const r2 = selectChatSessions({ uiData: s2 });
     expect(r2).not.toBe(r1);
     expect(r2.map((c) => c.chat_session_id)).toEqual(['b', 'a']);
+  });
+});
+
+const agentsSnapshot = (ids) => applyUiEvent({
+  type: 'agents.snapshot',
+  payload: { agents: ids.map((id) => ({ id, name: id })) },
+});
+
+describe('agent reducers', () => {
+  it('agents.snapshot replaces the agent list and marks loaded', () => {
+    const s = reducer(undefined, agentsSnapshot(['alpha', 'beta']));
+    expect(s.agents.order).toEqual(['alpha', 'beta']);
+    expect(s.agents.loaded).toBe(true);
+    expect(selectAgentProfiles({ uiData: s }).map((a) => a.id)).toEqual(['alpha', 'beta']);
+  });
+
+  it('agent.upserted merges into an existing agent and appends new ones', () => {
+    let s = reducer(undefined, agentsSnapshot(['alpha']));
+    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));
+    expect(s.agents.order).toEqual(['alpha']);
+    expect(s.agents.byId.alpha.role).toBe('changed');
+    s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'gamma' } } }));
+    expect(s.agents.order).toEqual(['alpha', 'gamma']);
+  });
+
+  it('agent.selected applies only when request_id matches the active request', () => {
+    let s = reducer(undefined, requestAgentDetail.pending('rid', {
+      agentsUrl: '/x', agentId: 'alpha', requestId: 'REQ1',
+    }));
+    expect(s.agents.active.requestId).toBe('REQ1');
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ2' } }));
+    expect(selectActiveAgentProfile({ uiData: s })).toBeNull();
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ1' } }));
+    expect(selectActiveAgentProfile({ uiData: s })).toEqual({ id: 'alpha' });
+  });
+
+  it('agents.snapshot carries A2A fields (skills, url, transport) through to selectors', () => {
+    const s = reducer(undefined, applyUiEvent({
+      type: 'agents.snapshot',
+      payload: {
+        agents: [{
+          id: 'a2a-observe',
+          name: 'Observe Agent',
+          kind: 'a2a',
+          group: 'A2A agents',
+          transport: 'JSONRPC',
+          url: 'http://localhost:8080',
+          card: {
+            protocolVersion: '0.3.0',
+            capabilities: { streaming: false, stateTransitionHistory: true },
+            inputModes: ['text/plain'],
+          },
+          skills: [{ id: 'progenitor_health_report', name: 'Health', tags: ['observe'], examples: ['Run it'] }],
+        }],
+      },
+    }));
+    const agent = selectAgentProfiles({ uiData: s })[0];
+    expect(agent.group).toBe('A2A agents');
+    expect(agent.url).toBe('http://localhost:8080');
+    expect(agent.transport).toBe('JSONRPC');
+    expect(agent.card.protocolVersion).toBe('0.3.0');
+    expect(agent.card.capabilities.stateTransitionHistory).toBe(true);
+    expect(agent.skills.map((skill) => skill.id)).toEqual(['progenitor_health_report']);
+    expect(agent.skills[0].examples).toEqual(['Run it']);
+  });
+
+  it('agent.graph.updated patches the active detail graph', () => {
+    let s = reducer(undefined, agentsSnapshot(['alpha']));
+    s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' } } }));
+    const graph = { status: 'Designed', nodes: [{ id: 'a' }], edges: [] };
+    s = reducer(s, applyUiEvent({ type: 'agent.graph.updated', payload: { agent_id: 'alpha', graph } }));
+    expect(s.agents.active.detail.graph).toEqual(graph);
+    expect(s.agents.byId.alpha.graph).toEqual(graph);
   });
 });
 

@@ -15,7 +15,10 @@ will hang behind it.
 
 To make local startup more predictable:
 
-1. Add `PROGENITOR_DATABASE_URL` to `.env` so backend and progenitor share the same database config.
+1. Add `PROGENITOR_DATABASE_URL` to `.env` so backend and progenitor share the same Postgres
+   server. The backend keeps its own data (agents, agent graphs) in a separate database on that
+   same server; its name defaults to `backend` and is configurable via `BACKEND_DATABASE_NAME`.
+   The backend creates this database automatically on startup if it does not already exist.
 2. Quote values with spaces, especially `CHAT_SERVER_API_TITLE`, so `.env` works with both
    `python-dotenv` and `source .env` in a shell.
 3. Keep the IPC settings explicit so the backend always points at the local progenitor process:
@@ -26,6 +29,7 @@ Example additions/adjustments:
 
 ```dotenv
 PROGENITOR_DATABASE_URL=postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor
+BACKEND_DATABASE_NAME=backend
 CHAT_SERVER_API_TITLE="Progenitor Chat API"
 ```
 
@@ -94,6 +98,35 @@ cd app/frontend
 npm install
 npm run dev -- --port 5173
 ```
+
+## Start the Observe Agent (optional, A2A)
+
+The Observe Agent is an A2A monitoring agent. It runs with plain Python (no Docker) and, like
+progenitor and the backend, keeps its own database on the same Postgres server. The database name
+defaults to `observe` and is configurable via `OBSERVE_DATABASE_NAME`; it is created automatically
+on startup if it does not exist (deriving its URL from `PROGENITOR_DATABASE_URL`).
+
+In a fourth shell:
+
+```bash
+source .venv/bin/activate
+export PYTHONPATH="$PWD"
+export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor"
+export PORT=8080 AGENT_NAME=observe_agent A2A_PUBLIC_HOST=localhost
+python -m uvicorn app.agents.observe_agent.agent:app --host 0.0.0.0 --port 8080
+```
+
+Endpoint checks (the agent card and health respond without LLM credentials; executing a
+monitoring task additionally needs `AZURE_OPENAI_BASE_URL` / `AZURE_OPENAI_API_KEY`):
+
+```bash
+curl -s http://localhost:8080/health
+curl -s http://localhost:8080/.well-known/agent-card.json | jq '{name, version, skills: [.skills[].id]}'
+```
+
+When the progenitor runtime is running, it auto-discovers this agent (it scans `app/agents/`),
+registers it into `data/config/agents.json`, and the backend then surfaces it on the Agents page
+under the **A2A agents** group.
 
 ## Quick checks
 
