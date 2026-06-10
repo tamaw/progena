@@ -36,6 +36,8 @@ from pydantic import BaseModel, Field
 from app.progenitor.schedule import Scheduler
 from app.progenitor.utils import utcnow
 
+from .agent_profile_routes import create_agent_profile_router
+from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
     AlertsResponse,
@@ -4149,6 +4151,14 @@ router.include_router(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
         get_current_state=lambda: get_state_reader().get_progenitor_state(),
+    )
+)
+
+
+router.include_router(
+    create_agent_profile_router(
+        get_agent_store=get_agent_store,
+        broadcast_ui_event=broadcast_ui_event,
     )
 )
 

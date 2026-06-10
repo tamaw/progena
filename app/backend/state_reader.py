@@ -145,6 +145,7 @@ class AgentInfo:
     status_message: str | None = None
     port: int | None = None
     agent_card_url: str | None = None
+    agent_card: dict[str, Any] | None = None
     pid: int | None = None
     startup_time: str | None = None
     last_heartbeat: str | None = None
@@ -170,6 +171,7 @@ class AgentInfo:
             status_message=data.get("status_message"),
             port=data.get("port"),
             agent_card_url=data.get("agent_card_url"),
+            agent_card=data.get("agent_card") if isinstance(data.get("agent_card"), dict) else None,
             pid=data.get("pid"),
             startup_time=data.get("startup_time"),
             last_heartbeat=data.get("last_heartbeat"),
@@ -578,6 +580,23 @@ class StateReader:
                     agent_entries.append({"name": name, **cfg})
 
         agents = [AgentInfo.from_dict(a) for a in agent_entries]
+        return self._registry_tools(agents)
+
+    def get_a2a_tasks(self) -> list[dict[str, Any]]:
+        """Read Progenitor's tracked A2A task records (read-through).
+
+        Progenitor owns the A2A task lifecycle and persists the records to its
+        ``("progenitor","state","a2a_tasks")`` document; the backend just reads
+        them so the Agents page can show per-agent task history.
+        """
+        if self.document_store is not None:
+            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "a2a_tasks", [])
+            doc = document.payload if document is not None else []
+        else:
+            doc = self._read_json_from_path(self.state_dir / "a2a_tasks.json")
+        return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
+
+    def _registry_tools(self, agents: list[AgentInfo]) -> tuple[list[AgentInfo], list[ToolInfo]]:
         tools = (
             self._mcp_tools_from_store()
             if self.document_store is not None

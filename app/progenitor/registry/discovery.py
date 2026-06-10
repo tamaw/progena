@@ -24,6 +24,18 @@ SKIP_FOLDERS = {"__pycache__", ".git", "base", ".venv", "node_modules"}
 SKIP_FILES = {"__init__.py", ".gitkeep", ".DS_Store"}
 
 
+def _read_manifest(path: Path) -> dict[str, Any]:
+    """Parse an ``agent.yml`` manifest, returning {} on any error."""
+    try:
+        import yaml
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception as exc:
+        logger.warning("Failed to read agent manifest %s: %s", path, exc)
+        return {}
+
+
 class DiscoveredAgentSpec(BaseModel):
     """Structured output for an agent discovered from source files."""
 
@@ -72,6 +84,18 @@ class AgentFolderInfo:
     folder_path: Path
     files: list[str] = field(default_factory=list)
     file_contents: dict[str, str] = field(default_factory=dict)
+    manifest: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def manifest_port(self) -> int | None:
+        runtime = self.manifest.get("runtime") if isinstance(self.manifest, dict) else None
+        if isinstance(runtime, dict):
+            port = runtime.get("port")
+            if isinstance(port, int):
+                return port
+            if isinstance(port, str) and port.strip().isdigit():
+                return int(port.strip())
+        return None
 
     def to_prompt_string(self) -> str:
         lines = [f"## Agent Folder: {self.folder_name}"]
@@ -124,6 +148,8 @@ class AgentDiscovery:
                             )
                         except Exception as exc:
                             logger.warning("Failed to read %s: %s", file_item, exc)
+                    elif file_item.name in {"agent.yml", "agent.yaml"}:
+                        folder_info.manifest = _read_manifest(file_item)
             if folder_info.file_contents:
                 folders.append(folder_info)
                 logger.debug("Found agent folder: %s with files: %s", item.name, folder_info.files)
@@ -134,12 +160,12 @@ class AgentDiscovery:
             return AgentDiscoveryResult(agents=[])
 
         folder_descriptions = "\n\n".join(folder.to_prompt_string() for folder in folders)
-        system_prompt = load_prompt("progenitor/agent_discovery_analysis_system.md")
-        user_prompt = load_prompt(
-            "agent_discovery.analysis.md",
-            folder_descriptions=folder_descriptions,
-        )
         try:
+            system_prompt = load_prompt("progenitor/agent_discovery_analysis_system.md")
+            user_prompt = load_prompt(
+                "agent_discovery.analysis.md",
+                folder_descriptions=folder_descriptions,
+            )
             return await self.llm_client.chat_structured(
                 prompt=user_prompt,
                 response_model=AgentDiscoveryResult,
@@ -188,6 +214,7 @@ class AgentDiscovery:
                     capabilities=[],
                     entrypoint=entrypoint,
                     transport=transport,
+                    port=folder.manifest_port,
                     is_valid_agent=True,
                 )
             )
@@ -238,6 +265,13 @@ class AgentDiscovery:
             }
 
         result = await self.analyze_agents_with_llm(folders)
+
+        # Apply declared manifest ports so an already-running A2A agent gets a
+        # deterministic URL even when the LLM analysis did not infer one.
+        ports_by_folder = {f.folder_name: f.manifest_port for f in folders if f.manifest_port}
+        for spec in result.agents:
+            self._apply_manifest_port(spec, ports_by_folder)
+
         registered = 0
         skipped = 0
         errors = []
@@ -287,6 +321,19 @@ class AgentDiscovery:
         except Exception as exc:
             summary["registry_refresh"] = {"error": str(exc)}
         return summary
+
+    def _apply_manifest_port(
+        self, spec: DiscoveredAgentSpec, ports_by_folder: dict[str, int]
+    ) -> None:
+        """Fill a spec's port/url from its folder manifest when not already set."""
+        if spec.url or spec.port:
+            return
+        port = ports_by_folder.get(spec.name)
+        if port is None:
+            normalized = spec.name.strip().lower().replace(" ", "_")
+            port = ports_by_folder.get(normalized)
+        if port is not None:
+            spec.port = port
 
     async def _register_agent(self, spec: DiscoveredAgentSpec) -> None:
         from ..state.models import AgentRegistryEntry, AgentStatus

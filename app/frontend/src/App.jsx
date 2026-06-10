@@ -25,7 +25,6 @@ import ProjectPage from './pages/ProjectPage';
 import './styles/main.css';
 import './styles/chat-panel.css';
 import './styles/dashboard.css';
-import './styles/agents.css';
 import './styles/logs-page.css';
 import './styles/kanban.css';
 import './styles/notifications.css';
@@ -51,7 +50,7 @@ function App() {
                     <Route path="/" element={<ConversationPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route
-                      path="/agents"
+                      path="/agents/:agentId?/:tab?"
                       element={(
                         <Suspense fallback={<div className="chrome-route-loading">Loading agents...</div>}>
                           <AgentsPage />
