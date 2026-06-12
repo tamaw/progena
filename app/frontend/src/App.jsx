@@ -20,6 +20,8 @@ import KnowledgePage from './pages/KnowledgePage';
 import ToolsPage from './pages/ToolsPage';
 import SchedulesPage from './pages/SchedulesPage';
 import ProjectPage from './pages/ProjectPage';
+import ModelsPage from './pages/ModelsPage';
+import ChannelsPage from './pages/ChannelsPage';
 
 // Import styles
 import './styles/main.css';
@@ -49,11 +51,21 @@ function App() {
                   <Route element={<AppRuntimeShell />}>
                     <Route path="/" element={<ConversationPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/models" element={<ModelsPage />} />
+                    <Route path="/channels" element={<ChannelsPage />} />
                     <Route
                       path="/agents/:agentId?/:tab?"
                       element={(
                         <Suspense fallback={<div className="chrome-route-loading">Loading agents...</div>}>
-                          <AgentsPage />
+                          <AgentsPage variant="agents" />
+                        </Suspense>
+                      )}
+                    />
+                    <Route
+                      path="/sequences/:agentId?"
+                      element={(
+                        <Suspense fallback={<div className="chrome-route-loading">Loading sequences...</div>}>
+                          <AgentsPage variant="sequences" />
                         </Suspense>
                       )}
                     />
