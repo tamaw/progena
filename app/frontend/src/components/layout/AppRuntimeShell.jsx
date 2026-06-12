@@ -10,7 +10,6 @@ import { useApi } from '../../hooks/useApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
-import AppStatusBar from './AppStatusBar';
 import {
   createSolutionFromName,
   createProjectFromName,
@@ -20,10 +19,13 @@ import {
 
 const navItems = [
   { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
-  { to: '/workspace', icon: <WorkspaceNavIcon />, label: 'Workspace' },
+  { to: '/workspace', icon: <WorkspaceNavIcon />, label: 'Workflows' },
+  { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
   { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' },
   { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
+  { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
   { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
+  { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
   { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
   { to: '/sessions', icon: <SessionsNavIcon />, label: 'Sessions', countKey: 'sessions' },
   { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
@@ -65,6 +67,24 @@ const quickPrompts = [
   'Draft a short status update',
 ];
 
+function UserAvatarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
+function RailSettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 function DashboardNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -100,10 +120,30 @@ function WorkspaceNavIcon() {
   );
 }
 
+function SequencesNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="6" cy="19" r="3" />
+      <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" />
+      <circle cx="18" cy="5" r="3" />
+    </svg>
+  );
+}
+
 function ProjectsNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </svg>
+  );
+}
+
+function ModelsNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path d="m3.3 7 8.7 5 8.7-5" />
+      <path d="M12 22V12" />
     </svg>
   );
 }
@@ -117,6 +157,15 @@ function AgentsNavIcon() {
       <path d="M20 14h2" />
       <path d="M15 13v2" />
       <path d="M9 13v2" />
+    </svg>
+  );
+}
+
+function ChannelsNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" />
+      <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
     </svg>
   );
 }
@@ -866,6 +915,16 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
             })}
           </details>
         ))}
+      </div>
+      <div className="app-shell__rail-foot">
+        <button type="button" className="app-shell__rail-icon-btn" aria-label="Settings">
+          <RailSettingsIcon />
+          <span className="app-shell__rail-tip" aria-hidden="true">Settings</span>
+        </button>
+        <button type="button" className="app-shell__rail-user-btn" aria-label="Account">
+          <UserAvatarIcon />
+          <span className="app-shell__rail-tip" aria-hidden="true">Account</span>
+        </button>
       </div>
       {createModal ? (
         <SidebarCreateModal
@@ -1642,7 +1701,6 @@ function AppRuntimeShell() {
   const [isNavCollapsed, setIsNavCollapsed] = useState(true);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const runtime = useChromeRuntime();
-  const location = useLocation();
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -1693,7 +1751,6 @@ function AppRuntimeShell() {
         <Outlet />
       </main>
       {isNavOpen ? <button type="button" className="app-shell__nav-scrim" aria-label="Close navigation" onClick={() => setIsNavOpen(false)} /> : null}
-      <AppStatusBar runtime={runtime} pathname={location.pathname} />
       <PanelHost
         activePanel={activePanel}
         searchQuery={searchQuery}

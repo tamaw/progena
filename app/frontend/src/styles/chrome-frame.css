@@ -15,7 +15,7 @@ body,
 .app-shell {
   display: grid;
   grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
-  grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) var(--chrome-status-height);
+  grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -225,6 +225,109 @@ body,
 
 .app-shell__rail-logo .app-shell__brand-mark {
   font-size: 18px;
+}
+
+/* Settings + account avatar pinned to the bottom of the rail. */
+.app-shell__rail-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0 12px;
+}
+
+.app-shell__rail-icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.app-shell__rail-icon-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Account avatar — a touch larger and more pronounced than the icon row. */
+.app-shell__rail-user-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.app-shell__rail-user-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-shell__rail-user-btn:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* Hover tooltip (collapsed rail only), mirroring the nav-item tooltips. */
+.app-shell__rail-tip {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  z-index: 60;
+  padding: 6px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.app-shell__rail-tip::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--color-bg-tertiary);
+  border-left: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-bottom-left-radius: 2px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn:hover .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn:focus-visible .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:hover .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:focus-visible .app-shell__rail-tip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+  transition-delay: 0.15s;
 }
 
 .app-shell__nav-scrim {
@@ -2885,8 +2988,10 @@ body,
   color: var(--color-error);
 }
 
+/* Left-pane list footers (Agents/Tools/Repositories/Knowledge/Schedules/
+   Sessions/Workspace) hidden for now. */
 .sess-list__foot {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
@@ -6001,7 +6106,7 @@ body,
   .app-shell,
   .app-shell.is-nav-collapsed {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) auto;
+    grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
   }
 
   .app-shell > .app-shell__header,
