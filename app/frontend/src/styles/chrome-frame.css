@@ -180,7 +180,7 @@ body,
 }
 
 .app-shell__grid.is-nav-collapsed {
-  grid-template-columns: 60px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr);
 }
 
 .app-shell__sidebar {
@@ -333,6 +333,11 @@ body,
 .app-shell__sidebar.is-collapsed {
   padding-right: 6px;
   padding-left: 6px;
+  /* Let hover tooltips escape the narrow rail instead of being clipped,
+     and lift the rail above the content column so they paint on top. */
+  position: relative;
+  z-index: 30;
+  overflow: visible;
 }
 
 .app-shell__sidebar.is-collapsed .workspace-switcher {
@@ -341,7 +346,6 @@ body,
 }
 
 .app-shell__sidebar.is-collapsed .workspace-switcher__label,
-.app-shell__sidebar.is-collapsed .app-shell__nav-label,
 .app-shell__sidebar.is-collapsed .app-shell__nav-count,
 .app-shell__sidebar.is-collapsed .app-shell__nav-dot,
 .app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
@@ -352,9 +356,73 @@ body,
   margin-left: 0;
 }
 
+/* Collapsed rail: evenly spaced square icon buttons. */
+.app-shell__sidebar.is-collapsed .app-shell__nav {
+  gap: 2px;
+  align-items: center;
+  margin-top: 8px;
+}
+
 .app-shell__sidebar.is-collapsed .app-shell__nav-item {
+  position: relative;
   justify-content: center;
-  padding: 8px 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 9px;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item.is-active {
+  background: var(--color-accent-soft);
+}
+
+/* Repurpose the row label as a hover tooltip floating to the right. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-label {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  z-index: 60;
+  padding: 6px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+/* Caret on the left edge of the tooltip. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-label::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--color-bg-tertiary);
+  border-left: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-bottom-left-radius: 2px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:hover .app-shell__nav-label,
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:focus-visible .app-shell__nav-label {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+  transition-delay: 0.15s;
 }
 
 .app-shell__sidebar-section {
