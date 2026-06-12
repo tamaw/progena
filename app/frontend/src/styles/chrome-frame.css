@@ -14,6 +14,7 @@ body,
 
 .app-shell {
   display: grid;
+  grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
   grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) var(--chrome-status-height);
   height: 100vh;
   min-height: 0;
@@ -22,7 +23,34 @@ body,
   color: var(--color-text-primary);
 }
 
+.app-shell.is-nav-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+/* Left rail spans the full height as one continuous bar. */
+.app-shell > .app-shell__sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+
+.app-shell > .app-shell__header {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.app-shell > .app-shell__content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.app-shell > .app-shell__statusbar {
+  grid-column: 2;
+  grid-row: 3;
+}
+
 .app-shell__header {
+  position: relative;
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -172,62 +200,44 @@ body,
   display: none;
 }
 
-.app-shell__grid {
-  display: grid;
-  grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.app-shell__grid.is-nav-collapsed {
-  grid-template-columns: 52px minmax(0, 1fr);
-}
-
 .app-shell__sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 10px 10px 0;
+  padding: 0 10px;
   overflow-y: auto;
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border);
+}
+
+/* Branding logo cell at the very top of the rail, aligned with the header. */
+.app-shell__rail-logo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  height: var(--chrome-header-height);
+  margin: 0 -10px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.app-shell__rail-logo .app-shell__brand-mark {
+  font-size: 18px;
 }
 
 .app-shell__nav-scrim {
   display: none;
 }
 
-.workspace-switcher {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  color: var(--color-text-primary);
-  background: transparent;
-  border: 0;
-  border-radius: 7px;
-  cursor: pointer;
-  font: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.workspace-switcher__avatar {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  border-radius: 5px;
-  background: linear-gradient(135deg, var(--color-accent), #a78bfa);
-}
-
-.workspace-switcher__label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+/* Sidebar nav collapse toggle (workspace switcher moved to the header).
+   Hidden for now while we iterate on the collapsed rail; expand/collapse
+   wiring is kept intact so it can be restored by removing this display:none. */
+.app-shell__nav-toggle {
+  display: none;
+  justify-content: flex-end;
+  padding: 2px 2px 4px;
 }
 
 .workspace-switcher__toggle {
@@ -236,16 +246,124 @@ body,
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-left: auto;
   color: var(--color-text-secondary);
   background: transparent;
   border: 0;
   border-radius: 6px;
+  cursor: pointer;
 }
 
 .workspace-switcher__toggle:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
+}
+
+/* Header workspace switcher dropdown (replaces the "Progenitor" wordmark). */
+.workspace-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.workspace-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.workspace-menu__label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-menu__chevron {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 2px;
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.workspace-menu__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* Breadcrumb separator + current page after the workspace selector. */
+.app-shell__crumb-sep {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+}
+
+.app-shell__crumb {
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.workspace-menu__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 280px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 11px;
+  box-shadow: var(--shadow-md);
+}
+
+.workspace-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.workspace-menu__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.workspace-menu__item.is-active {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.workspace-menu__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-menu__check {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+  font-size: 13px;
 }
 
 .app-shell__nav {
@@ -340,20 +458,18 @@ body,
   overflow: visible;
 }
 
-.app-shell__sidebar.is-collapsed .workspace-switcher {
-  justify-content: center;
-  padding: 7px 0;
+.app-shell__sidebar.is-collapsed .app-shell__rail-logo {
+  margin: 0 -6px;
 }
 
-.app-shell__sidebar.is-collapsed .workspace-switcher__label,
+.app-shell__sidebar.is-collapsed .app-shell__nav-toggle {
+  justify-content: center;
+}
+
 .app-shell__sidebar.is-collapsed .app-shell__nav-count,
 .app-shell__sidebar.is-collapsed .app-shell__nav-dot,
 .app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
   display: none;
-}
-
-.app-shell__sidebar.is-collapsed .workspace-switcher__toggle {
-  margin-left: 0;
 }
 
 /* Collapsed rail: evenly spaced square icon buttons. */
@@ -371,6 +487,13 @@ body,
   padding: 0;
   border-radius: 9px;
   transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+/* Slightly larger glyphs in the collapsed rail. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-icon,
+.app-shell__sidebar.is-collapsed .app-shell__nav-icon svg {
+  width: 19px;
+  height: 19px;
 }
 
 .app-shell__sidebar.is-collapsed .app-shell__nav-item:hover {
@@ -5794,11 +5917,10 @@ body,
 }
 
 @media (max-width: 980px) {
-  .app-shell__grid {
+  .app-shell {
     grid-template-columns: 58px minmax(0, 1fr);
   }
 
-  .workspace-switcher__label,
   .app-shell__nav-item span:not(.app-shell__nav-icon),
   .app-shell__sidebar-section {
     display: none;
@@ -5876,8 +5998,16 @@ body,
 }
 
 @media (max-width: 720px) {
-  .app-shell {
+  .app-shell,
+  .app-shell.is-nav-collapsed {
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) auto;
+  }
+
+  .app-shell > .app-shell__header,
+  .app-shell > .app-shell__content,
+  .app-shell > .app-shell__statusbar {
+    grid-column: 1;
   }
 
   .app-shell__menu-btn {
@@ -5893,14 +6023,10 @@ body,
     flex: 1;
   }
 
-  .app-shell__grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .app-shell__sidebar {
     position: fixed;
-    top: var(--chrome-header-height);
-    bottom: var(--chrome-status-height);
+    top: 0;
+    bottom: 0;
     left: 0;
     z-index: 70;
     width: min(280px, 84vw);
@@ -5913,7 +6039,6 @@ body,
     transform: translateX(0);
   }
 
-  .workspace-switcher__label,
   .app-shell__nav-item span:not(.app-shell__nav-icon),
   .app-shell__sidebar-section {
     display: block;
@@ -5921,7 +6046,7 @@ body,
 
   .app-shell__nav-scrim {
     position: fixed;
-    inset: var(--chrome-header-height) 0 var(--chrome-status-height);
+    inset: 0;
     z-index: 60;
     display: block;
     background: rgba(0, 0, 0, 0.35);
