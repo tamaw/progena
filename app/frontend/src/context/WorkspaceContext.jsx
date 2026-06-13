@@ -824,6 +824,30 @@ function mergeNodes(savedNodes, widgets) {
   return haveSameNodeReferences(savedNodes, mergedNodes) ? savedNodes : mergedNodes;
 }
 
+// Server-managed widget cards (agents, MCP servers) are rebuilt from the live
+// widget feed on every sync, so they cannot be deleted outright — removing one
+// would unregister nothing and the card would reappear on the next refresh.
+// Instead we remember dismissed card ids locally and filter them back out.
+const DISMISSED_WIDGETS_KEY = 'progenitor:dismissedWidgetIds';
+
+function loadDismissedWidgetIds() {
+  try {
+    const raw = window.localStorage.getItem(DISMISSED_WIDGETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function persistDismissedWidgetIds(idSet) {
+  try {
+    window.localStorage.setItem(DISMISSED_WIDGETS_KEY, JSON.stringify([...idSet]));
+  } catch {
+    // Storage is best-effort; ignore quota/availability failures.
+  }
+}
+
 export function WorkspaceProvider({ children }) {
   const {
     getWorkspace,
@@ -851,6 +875,7 @@ export function WorkspaceProvider({ children }) {
   const latestViewportRef = useRef({ x: 0, y: 0, zoom: 1 });
   const lastSavedGraphSignatureRef = useRef('');
   const lastSavedViewportSignatureRef = useRef(getViewportSignature({ x: 0, y: 0, zoom: 1 }));
+  const dismissedWidgetIdsRef = useRef(loadDismissedWidgetIds());
   const runNodeByTypeRef = useRef(null);
   const [edges, setEdges] = useState([]);
 
@@ -861,7 +886,8 @@ export function WorkspaceProvider({ children }) {
     }
 
     setNodes((currentNodes) => {
-      const mergedNodes = mergeNodes(currentNodes, widgetList);
+      const mergedNodes = mergeNodes(currentNodes, widgetList)
+        .filter((node) => !dismissedWidgetIdsRef.current.has(node.id));
       latestNodesRef.current = mergedNodes;
       return mergedNodes;
     });
@@ -892,7 +918,8 @@ export function WorkspaceProvider({ children }) {
       const schemaMap = Object.fromEntries(
         ((schemasPayload?.schemas) || []).map((schema) => [schema.type, schema])
       );
-      const mergedNodes = mergeNodes(savedNodes, widgetList);
+      const mergedNodes = mergeNodes(savedNodes, widgetList)
+        .filter((node) => !dismissedWidgetIdsRef.current.has(node.id));
       const persistedGraph = createPersistedGraph(mergedNodes, savedEdges);
 
       latestNodesRef.current = mergedNodes;
@@ -1502,6 +1529,18 @@ export function WorkspaceProvider({ children }) {
 
     removeNodeIdsLocally(removableIds);
   }, [deleteBackendManagedNode, removeNodeIdsLocally, setNodeSaveError]);
+
+  // Remove a server-managed widget card (e.g. an agent) from the canvas without
+  // touching the underlying registration. The id is remembered so the card is
+  // not re-added on the next widget sync or reload.
+  const dismissWidget = useCallback((nodeId) => {
+    if (!nodeId) {
+      return;
+    }
+    dismissedWidgetIdsRef.current.add(nodeId);
+    persistDismissedWidgetIds(dismissedWidgetIdsRef.current);
+    removeNodeIdsLocally([nodeId]);
+  }, [removeNodeIdsLocally]);
 
   const duplicateNode = useCallback((nodeId) => {
     setNodes((currentNodes) => {
@@ -2121,6 +2160,7 @@ export function WorkspaceProvider({ children }) {
     updateNodeData,
     connectPromptToAgent,
     removeNodes,
+    dismissWidget,
     removeEdges,
     duplicateNode,
     bringToFront,
@@ -2147,6 +2187,7 @@ export function WorkspaceProvider({ children }) {
     updateNodeData,
     connectPromptToAgent,
     removeNodes,
+    dismissWidget,
     removeEdges,
     duplicateNode,
     bringToFront,
