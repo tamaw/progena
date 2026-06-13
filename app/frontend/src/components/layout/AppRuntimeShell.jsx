@@ -17,23 +17,53 @@ import {
   saveStoredSolutions,
 } from '../../data/solutions';
 
-const navItems = [
-  { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
-  { to: '/workspace', icon: <WorkspaceNavIcon />, label: 'Workflows' },
-  { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
-  { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' },
-  { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
-  { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
-  { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
-  { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
-  { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
-  { to: '/sessions', icon: <SessionsNavIcon />, label: 'Sessions', countKey: 'sessions' },
-  { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
-  { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
-  { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
-  { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
-  { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
-  { to: '/logs', icon: <LogsNavIcon />, label: 'Logs' },
+// Grouped by owner/level (see the entity-relationship model):
+//   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
+//   Delegate — agents and the reusable building blocks they're composed of
+//   Automate — runtime: triggers, schedules, I/O, work in flight
+// Sessions and Logs are intentionally dropped from the rail (still routable).
+const navGroups = [
+  {
+    id: 'operate',
+    label: 'Operate',
+    items: [
+      { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
+      { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
+      { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' },
+      { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
+    ],
+  },
+  {
+    id: 'delegate',
+    label: 'Delegate',
+    items: [
+      { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
+      { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
+      { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
+      { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
+      { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
+      { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
+      { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
+    ],
+  },
+  {
+    id: 'automate',
+    label: 'Automate',
+    items: [
+      { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
+      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
+      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
+    ],
+  },
+];
+
+// Flattened list of rail items, plus the routes that no longer appear in the
+// rail but still need a breadcrumb label.
+const navItems = navGroups.flatMap((group) => group.items);
+const breadcrumbRoutes = [
+  ...navItems,
+  { to: '/sessions', label: 'Sessions' },
+  { to: '/logs', label: 'Logs' },
 ];
 
 const settingsSections = [
@@ -56,7 +86,7 @@ function getPageLabel(pathname) {
   if (pathname.startsWith('/solutions') || pathname.startsWith('/projects')) {
     return 'Projects';
   }
-  const match = navItems.find((item) => item.to !== '/' && pathname.startsWith(item.to));
+  const match = breadcrumbRoutes.find((item) => item.to !== '/' && pathname.startsWith(item.to));
   return match?.label ?? 'Chat';
 }
 
@@ -270,21 +300,6 @@ function InsightsIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path d="M2 13h12M4 11V7M7 11V3M10 11V8M13 11V5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path
-        d="M6.4 2.4l.4-1.1h2.4l.4 1.1 1 .45 1.1-.35 1.7 1.7-.35 1.1.45 1 1.1.4v2.4l-1.1.4-.45 1 .35 1.1-1.7 1.7-1.1-.35-1 .45-.4 1.1H6.8l-.4-1.1-1-.45L4.3 13l-1.7-1.7.35-1.1-.45-1L1.4 8.8V6.4l1.1-.4.45-1L2.6 3.9l1.7-1.7 1.1.35z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }
@@ -725,10 +740,14 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
           onClick={() => openPanel('insights')}
         />
         <ChromeIconButton
-          label="Settings"
-          icon={<SettingsIcon />}
-          active={activePanel === 'settings'}
-          onClick={() => openPanel('settings')}
+          label="Toggle theme"
+          icon={(
+            <>
+              <MoonIcon className={currentTheme === 'dark' ? '' : 'chrome-icon-btn__theme-icon is-hidden'} />
+              <SunIcon className={currentTheme === 'dark' ? 'chrome-icon-btn__theme-icon is-hidden' : ''} />
+            </>
+          )}
+          onClick={toggleTheme}
         />
         <ChromeIconButton
           label="Quick chat"
@@ -743,26 +762,14 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
           badge={unreadCount > 0 ? (unreadCount > 99 ? '99+' : unreadCount) : ''}
           onClick={() => openPanel('alerts')}
         />
-        <ChromeIconButton
-          label="Toggle theme"
-          icon={(
-            <>
-              <MoonIcon className={currentTheme === 'dark' ? '' : 'chrome-icon-btn__theme-icon is-hidden'} />
-              <SunIcon className={currentTheme === 'dark' ? 'chrome-icon-btn__theme-icon is-hidden' : ''} />
-            </>
-          )}
-          onClick={toggleTheme}
-        />
       </div>
     </header>
   );
 }
 
-function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime }) {
+function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSettings, onOpenAccount, runtime }) {
   const navigate = useNavigate();
-  const location = useLocation();
   const [solutions, setSolutions] = useState(() => loadStoredSolutions());
-  const [expandedSolutionIds, setExpandedSolutionIds] = useState(() => new Set(['main']));
   const [createModal, setCreateModal] = useState(null);
   const chatIndicators = useSelector(selectChatIndicators);
   const counts = useMemo(() => {
@@ -795,7 +802,6 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
     ));
     saveStoredSolutions(nextSolutions);
     setSolutions(nextSolutions);
-    setExpandedSolutionIds((current) => new Set(current).add(solutionId));
     setCreateModal(null);
 
     onClose();
@@ -807,7 +813,6 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
     const nextSolutions = [...solutions, createdSolution];
     saveStoredSolutions(nextSolutions);
     setSolutions(nextSolutions);
-    setExpandedSolutionIds((current) => new Set(current).add(createdSolution.id));
     setCreateModal(null);
   }, [solutions]);
 
@@ -815,114 +820,70 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
     <aside className={`app-shell__sidebar ${isOpen ? 'is-open' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}>
       <div className="app-shell__rail-logo">
         <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
-      </div>
-      <div className="app-shell__nav-toggle">
+        <span className="app-shell__brand-name">Progenitor</span>
         <button
           type="button"
-          className="workspace-switcher__toggle"
-          aria-label={isCollapsed ? 'Show navigation pane' : 'Hide navigation pane'}
-          title={isCollapsed ? 'Show navigation pane' : 'Hide navigation pane'}
+          className="app-shell__rail-toggle"
+          aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
           onClick={onToggleCollapse}
         >
           {isCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </button>
       </div>
       <nav className="app-shell__nav" aria-label="Primary">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
-            onClick={onClose}
-          >
-            <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
-            <span className="app-shell__nav-label">{item.label}</span>
-            {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
-              <span
-                className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
-                aria-hidden="true"
-              />
-            ) : null}
-            {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="app-shell__sidebar-section">
-        <div className="app-shell__sidebar-title app-shell__sidebar-title--row">
-          <span>PROJECTS</span>
-          <button
-            type="button"
-            className="app-shell__tree-add"
-            aria-label="Add solution"
-            title="Add solution"
-            onClick={() => setCreateModal({ mode: 'solution' })}
-          >
-            +
-          </button>
-        </div>
-        {solutions.map((solution) => (
-          <details
-            key={solution.id}
-            open={expandedSolutionIds.has(solution.id)}
-            className="app-shell__tree"
-            onToggle={(event) => {
-              const isExpanded = event.currentTarget.open;
-              setExpandedSolutionIds((current) => {
-                const next = new Set(current);
-                if (isExpanded) {
-                  next.add(solution.id);
-                } else {
-                  next.delete(solution.id);
-                }
-                return next;
-              });
-            }}
-          >
-            <summary>
-              <span className="app-shell__tree-summary-main">
-                <span className="app-shell__tree-chevron" aria-hidden="true">›</span>
-                <span className="app-shell__tree-name">{solution.name}</span>
-              </span>
-              <button
-                type="button"
-                className="app-shell__tree-add"
-                aria-label={`Add project to ${solution.name}`}
-                title={`Add project to ${solution.name}`}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setCreateModal({ mode: 'project', solutionId: solution.id });
-                }}
-              >
-                +
-              </button>
-            </summary>
-            {solution.projects.map((project) => {
-              const to = `/solutions/${solution.id}/projects/${project.id}`;
-              const isActive = location.pathname === to;
-              return (
+        {navGroups.map((group) => (
+          <div className="app-shell__nav-group" key={group.id} data-group={group.id}>
+            <div className="app-shell__nav-group-label">{group.label}</div>
+            <div className="app-shell__nav-group-items">
+              {group.items.map((item) => (
                 <NavLink
-                  key={project.id}
-                  to={to}
-                  className={`app-shell__tree-link ${isActive ? 'is-active' : ''}`}
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
                   onClick={onClose}
                 >
-                  <span className="app-shell__tree-dot" style={{ background: project.accent }} />
-                  <span>{project.name}</span>
+                  <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="app-shell__nav-label">{item.label}</span>
+                  {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
+                    <span
+                      className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
                 </NavLink>
-              );
-            })}
-          </details>
+              ))}
+            </div>
+          </div>
         ))}
-      </div>
+      </nav>
       <div className="app-shell__rail-foot">
-        <button type="button" className="app-shell__rail-icon-btn" aria-label="Settings">
-          <RailSettingsIcon />
+        <button
+          type="button"
+          className="app-shell__rail-icon-btn"
+          aria-label="Settings"
+          onClick={() => {
+            onClose();
+            onOpenSettings();
+          }}
+        >
+          <span className="app-shell__rail-glyph" aria-hidden="true"><RailSettingsIcon /></span>
+          <span className="app-shell__rail-label">Settings</span>
           <span className="app-shell__rail-tip" aria-hidden="true">Settings</span>
         </button>
-        <button type="button" className="app-shell__rail-user-btn" aria-label="Account">
-          <UserAvatarIcon />
+        <button
+          type="button"
+          className="app-shell__rail-user-btn"
+          aria-label="Account"
+          onClick={() => {
+            onClose();
+            onOpenAccount();
+          }}
+        >
+          <span className="app-shell__rail-glyph" aria-hidden="true"><UserAvatarIcon /></span>
+          <span className="app-shell__rail-label">Account</span>
           <span className="app-shell__rail-tip" aria-hidden="true">Account</span>
         </button>
       </div>
@@ -1671,6 +1632,30 @@ function InsightsPanel({ runtime, onClose }) {
   );
 }
 
+function AccountPanel({ onClose }) {
+  return (
+    <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose}>
+      <div className="account-pane__id">
+        <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
+        <div className="account-pane__id-text">
+          <div className="account-pane__name">Tama Waddell</div>
+          <div className="account-pane__email">me@tama.id.au</div>
+        </div>
+      </div>
+      <dl className="account-pane__facts">
+        <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
+        <div className="account-pane__fact"><dt>Role</dt><dd>Owner</dd></div>
+        <div className="account-pane__fact"><dt>Workspace</dt><dd>progenitor-main</dd></div>
+        <div className="account-pane__fact"><dt>Member since</dt><dd>June 2026</dd></div>
+      </dl>
+      <div className="account-pane__foot">
+        <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
+        <button type="button" className="task-btn task-btn--secondary" disabled>Sign out</button>
+      </div>
+    </TopNavPane>
+  );
+}
+
 function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -1686,6 +1671,7 @@ function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
   if (activePanel === 'alerts') return <AlertsPanel onClose={closePanel} />;
   if (activePanel === 'quickChat') return <QuickChatPanel onClose={closePanel} />;
   if (activePanel === 'settings') return <SettingsPanel onClose={closePanel} />;
+  if (activePanel === 'account') return <AccountPanel onClose={closePanel} />;
   if (activePanel === 'search') {
     return <SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} />;
   }
@@ -1698,7 +1684,7 @@ function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
 function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isNavCollapsed, setIsNavCollapsed] = useState(true);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const runtime = useChromeRuntime();
 
@@ -1738,6 +1724,8 @@ function AppRuntimeShell() {
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
         onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
+        onOpenSettings={() => setActivePanel('settings')}
+        onOpenAccount={() => setActivePanel('account')}
         runtime={runtime}
       />
       <Header

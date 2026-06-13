@@ -110,6 +110,7 @@ function AgentNode({ id, data, selected }) {
     toggleExpanded,
     refreshWidgetNode,
     updateNodeData,
+    dismissWidget,
   } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
@@ -164,6 +165,10 @@ function AgentNode({ id, data, selected }) {
   const onRefresh = useCallback(() => {
     refreshWidgetNode(id);
   }, [id, refreshWidgetNode]);
+
+  const onRemove = useCallback(() => {
+    dismissWidget(id);
+  }, [id, dismissWidget]);
 
   const selectAction = useCallback((selection) => {
     updateNodeData(id, { selectedAction: selection });
@@ -587,6 +592,15 @@ function AgentNode({ id, data, selected }) {
           )}
           <button type="button" className="node-expand-btn" onClick={onToggle}>
             {expanded ? '\u25B2' : '\u25BC'}
+          </button>
+          <button
+            type="button"
+            className="node-remove-btn nodrag"
+            onClick={onRemove}
+            title={`Remove ${titleLabel.toLowerCase()}`}
+            aria-label={`Remove ${data.title}`}
+          >
+            {'\u00D7'}
           </button>
         </div>
 

@@ -35,7 +35,7 @@ import './styles/prompts.css';
 import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 
-const WorkspacePage = lazy(() => import('./pages/WorkspacePage'));
+const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
 
 function App() {
@@ -82,10 +82,10 @@ function App() {
                     <Route path="/repositories" element={<RepositoriesPage />} />
                     <Route path="/knowledge" element={<KnowledgePage />} />
                     <Route
-                      path="/workspace"
+                      path="/workflows"
                       element={(
-                        <Suspense fallback={<div className="chrome-route-loading">Loading workspace...</div>}>
-                          <WorkspacePage />
+                        <Suspense fallback={<div className="chrome-route-loading">Loading workflows...</div>}>
+                          <WorkflowsPage />
                         </Suspense>
                       )}
                     />

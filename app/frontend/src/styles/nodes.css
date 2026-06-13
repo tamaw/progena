@@ -137,6 +137,29 @@
   background: var(--color-bg-hover);
 }
 
+.node-remove-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--border-radius-sm);
+  font-size: 16px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.node-remove-btn:hover {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+}
+
 .workspace-handle {
   width: 10px;
   height: 10px;

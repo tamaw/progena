@@ -212,14 +212,16 @@ body,
 
 /* Branding logo cell at the very top of the rail, aligned with the header. */
 .app-shell__rail-logo {
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 8px;
   flex: 0 0 auto;
   height: var(--chrome-header-height);
   margin: 0 -10px;
+  padding-left: 16px;
   border-bottom: 1px solid var(--color-border);
-  font-size: 18px;
   line-height: 1;
 }
 
@@ -227,62 +229,148 @@ body,
   font-size: 18px;
 }
 
-/* Settings + account avatar pinned to the bottom of the rail. */
+/* Collapse / expand control, pinned to the right of the branding. */
+.app-shell__rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  margin-right: 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.app-shell__rail-toggle:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Collapsed: the toggle covers the logo cell and reveals on hover, swapping
+   the brand mark for an expand chevron in place. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-toggle {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border-radius: 0;
+  background: var(--color-bg-secondary);
+  opacity: 0;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-logo:hover .app-shell__rail-toggle,
+.app-shell__sidebar.is-collapsed .app-shell__rail-toggle:focus-visible {
+  opacity: 1;
+}
+
+.app-shell__brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.01em;
+}
+
+/* Settings + account pinned to the bottom of the rail. Expanded: full-width
+   rows with the glyph flush left and a label. Collapsed: centred icons. */
 .app-shell__rail-foot {
   margin-top: auto;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 6px;
+  align-items: stretch;
+  gap: 2px;
   padding: 8px 0 12px;
 }
 
-.app-shell__rail-icon-btn {
+.app-shell__rail-icon-btn,
+.app-shell__rail-user-btn {
   position: relative;
-  display: inline-flex;
+  display: flex;
   align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
   color: var(--color-text-secondary);
   background: transparent;
   border: 0;
-  border-radius: 9px;
+  border-radius: 8px;
   cursor: pointer;
-  transition: color var(--transition-fast), background var(--transition-fast);
-}
-
-.app-shell__rail-icon-btn:hover {
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-}
-
-/* Account avatar — a touch larger and more pronounced than the icon row. */
-.app-shell__rail-user-btn {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-hover);
-  border: 1px solid var(--color-border-light);
-  border-radius: 50%;
-  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  text-align: left;
   transition: color var(--transition-fast), background var(--transition-fast),
     border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
-.app-shell__rail-user-btn svg {
+.app-shell__rail-icon-btn:hover,
+.app-shell__rail-user-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.app-shell__rail-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
   width: 18px;
   height: 18px;
 }
 
-.app-shell__rail-user-btn:hover {
+.app-shell__rail-glyph svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-shell__rail-label {
+  flex: 1 1 auto;
+}
+
+/* Collapsed rail: restore the compact centred icons and the avatar circle. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-foot {
+  align-items: center;
+  gap: 6px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 9px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  justify-content: center;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:hover {
   background: var(--color-bg-tertiary);
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* Inline labels only make sense in the expanded rail; collapsed uses tooltips. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-label,
+.app-shell__sidebar.is-collapsed .app-shell__brand-name {
+  display: none;
 }
 
 /* Hover tooltip (collapsed rail only), mirroring the nav-item tooltips. */
@@ -332,15 +420,6 @@ body,
 
 .app-shell__nav-scrim {
   display: none;
-}
-
-/* Sidebar nav collapse toggle (workspace switcher moved to the header).
-   Hidden for now while we iterate on the collapsed rail; expand/collapse
-   wiring is kept intact so it can be restored by removing this display:none. */
-.app-shell__nav-toggle {
-  display: none;
-  justify-content: flex-end;
-  padding: 2px 2px 4px;
 }
 
 .workspace-switcher__toggle {
@@ -472,8 +551,64 @@ body,
 .app-shell__nav {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.app-shell__nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell__nav-group-label {
+  padding: 0 4px 5px 6px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Relationship "spine": a vertical line the group's rows hang off, with a
+   short horizontal tick joining each row — reads as a containment tree. */
+.app-shell__nav-group-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   gap: 1px;
-  margin-top: 7px;
+  padding-left: 16px;
+}
+
+.app-shell__nav-group-items::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 2px;
+  bottom: 16px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: var(--color-border);
+}
+
+.app-shell__nav-group-items .app-shell__nav-item {
+  position: relative;
+}
+
+.app-shell__nav-group-items .app-shell__nav-item::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--color-border);
+  transform: translateY(-50%);
+}
+
+/* Active row lights up its tick to reinforce the connection to the group. */
+.app-shell__nav-group-items .app-shell__nav-item.is-active::before {
+  background: var(--color-accent);
 }
 
 .app-shell__nav-item {
@@ -563,9 +698,7 @@ body,
 
 .app-shell__sidebar.is-collapsed .app-shell__rail-logo {
   margin: 0 -6px;
-}
-
-.app-shell__sidebar.is-collapsed .app-shell__nav-toggle {
+  padding-left: 0;
   justify-content: center;
 }
 
@@ -575,20 +708,73 @@ body,
   display: none;
 }
 
-/* Collapsed rail: evenly spaced square icon buttons. */
+/* Collapsed rail: groups become clusters of icons threaded on a short strand,
+   with a gap between groups standing in for the section break. */
 .app-shell__sidebar.is-collapsed .app-shell__nav {
-  gap: 2px;
-  align-items: center;
+  gap: 14px;
+  align-items: stretch;
   margin-top: 8px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group {
+  align-items: center;
+}
+
+/* No room for the text heading; collapse it away. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-label {
+  height: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items {
+  padding-left: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Vertical strand running through the centre of the group's icons. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items::before {
+  left: 50%;
+  top: 7px;
+  bottom: 7px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--color-text-muted);
+  opacity: 0.45;
+  transform: translateX(-50%);
+}
+
+/* A node anchoring the top of each strand. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  opacity: 0.55;
+  transform: translateX(-50%);
+}
+
+/* Drop the horizontal ticks — the strand passes through the icons instead. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items .app-shell__nav-item::before {
+  display: none;
 }
 
 .app-shell__sidebar.is-collapsed .app-shell__nav-item {
   position: relative;
+  z-index: 1;
   justify-content: center;
   width: 36px;
   height: 36px;
   padding: 0;
   border-radius: 9px;
+  /* Match the rail fill so each icon masks the strand, leaving it visible
+     only in the gaps — icons read as beads on a thread. */
+  background: var(--color-bg-secondary);
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 
@@ -1686,6 +1872,90 @@ body,
 
 .topnav-pane--search {
   width: min(590px, calc(100vw - 48px));
+}
+
+.topnav-pane--account {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.account-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.account-pane__id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-pane__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+}
+
+.account-pane__avatar svg {
+  width: 22px;
+  height: 22px;
+}
+
+.account-pane__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account-pane__email {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+.account-pane__facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.account-pane__fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+}
+
+.account-pane__fact + .account-pane__fact {
+  border-top: 1px solid var(--color-border);
+}
+
+.account-pane__fact dt {
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+}
+
+.account-pane__fact dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.account-pane__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .topnav-pane__head {
