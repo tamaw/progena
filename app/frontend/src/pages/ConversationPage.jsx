@@ -21,6 +21,8 @@ import { Message } from '../components/chat/Message';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import { DetailTabs } from '../components/layout/DetailHeader';
+import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import {
   CHAT_AGENT_NAME,
   countToolInvocations,
@@ -184,6 +186,7 @@ function stripEphemeralStreamEvents(message) {
 
 function ConversationPage() {
   const dispatch = useDispatch();
+  const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
   const {
     connectionState,
@@ -1067,18 +1070,12 @@ function ConversationPage() {
 
   return (
     <div className="chat-page">
-      <aside className="chat-sessions-pane" aria-label="Conversation sessions">
-        <div className="chat-sessions-pane__head">
-          <div className="chat-sessions-pane__title">Chats</div>
-          <button
-            type="button"
-            className="chat-pane-action"
-            onClick={() => startNewChatSession()}
-            disabled={isClearingSession}
-          >
-            + New chat
-          </button>
-        </div>
+      <aside className={sessionsPaneClassName} aria-label="Conversation sessions">
+        {sessionsCollapsed ? (
+          <PaneExpandRail label="Chats" onExpand={() => setSessionsCollapsed(false)} />
+        ) : (
+        <>
+        <PaneCollapseSeam label="Chats" onCollapse={() => setSessionsCollapsed(true)} />
         <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Session filters">
           <button
             type="button"
@@ -1123,6 +1120,14 @@ function ConversationPage() {
               onChange={(e) => setSidebarQuery(e.target.value)}
             />
           </label>
+          <button
+            type="button"
+            className="chat-pane-action new-task sess-list__tools-action"
+            onClick={() => startNewChatSession()}
+            disabled={isClearingSession}
+          >
+            + New chat
+          </button>
         </div>
         <div className="chat-sessions-pane__scroll">
           {visibleSessionGroups.length === 0 ? (
@@ -1179,6 +1184,8 @@ function ConversationPage() {
             ))
           )}
         </div>
+        </>
+        )}
       </aside>
 
       <section className="chat-container" aria-label="Chat conversation">

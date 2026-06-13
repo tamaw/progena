@@ -1095,7 +1095,7 @@
     --chat-pane-bg: var(--color-bg-secondary);
     --chat-pane-subtle-bg: var(--color-bg-tertiary);
     display: grid;
-    grid-template-columns: minmax(246px, 292px) minmax(0, 1fr);
+    grid-template-columns: auto minmax(0, 1fr);
     height: 100%;
     min-height: 0;
     overflow: hidden;
@@ -1120,6 +1120,9 @@
 }
 
 .chat-sessions-pane__search {
+    display: flex;
+    gap: 6px;
+    align-items: center;
     padding: 0 10px 8px;
     border-bottom: 1px solid var(--color-border);
 }

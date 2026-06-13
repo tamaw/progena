@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   PaneList,
-  PaneListHeader,
   PaneListFilters,
   PaneListToolbar,
   PaneListSearch,
@@ -209,7 +208,6 @@ export default function ModelsPage() {
   return (
     <div className="agents-page">
       <PaneList label="Models" className="agents-pane">
-        <PaneListHeader title="Models" count={MODELS.length} />
         <PaneListFilters filters={MODEL_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search models..." onChange={setSearch} />

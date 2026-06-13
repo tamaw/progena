@@ -4,7 +4,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -343,9 +342,8 @@ export default function RepositoriesPage() {
   return (
     <div className="repositories-page">
       <PaneList className="repositories-pane" label="Repositories">
-        <PaneListHeader title="Repositories" count={repositories.length} actionLabel="+ Source" onAction={connectRepository} />
         <PaneListFilters filters={SOURCE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar>
+        <PaneListToolbar actionLabel="+ Source" onAction={connectRepository}>
           <PaneListSearch value={query} placeholder="Search sources" onChange={setQuery} />
           <PaneListSortButton title="Sort">Health</PaneListSortButton>
         </PaneListToolbar>

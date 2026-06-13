@@ -4,7 +4,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -442,9 +441,8 @@ export default function ToolsPage() {
   return (
     <div className="tools-page">
       <PaneList className="tools-pane" label="MCP servers">
-        <PaneListHeader title="MCP Servers" count={servers.length} actionLabel="+ Add server" onAction={addServer} />
         <PaneListFilters filters={SERVER_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar>
+        <PaneListToolbar actionLabel="+ Add server" onAction={addServer}>
           <PaneListSearch value={query} placeholder="Search servers" onChange={setQuery} />
           <PaneListSortButton title="Sort" onClick={() => emitServerAction('Sorted MCP servers')}>Usage</PaneListSortButton>
         </PaneListToolbar>
