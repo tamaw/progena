@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { renderMarkdownToHtml } from '../lib/markdown';
+import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -78,6 +80,7 @@ function SkillRow({ skill, selectedPath, onSelectSkill }) {
 
 export default function SkillsPage() {
   const { getSkills, updateSkillContent, createSkill } = useApi();
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('skills-sidebar prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
   const [skills, setSkills] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
@@ -265,16 +268,12 @@ export default function SkillsPage() {
 
   return (
     <div className="skills-page prompts-page">
-      <aside className="skills-sidebar prompts-sidebar sess-list">
-        <div className="chat-sessions-pane__head sess-list__head">
-          <div className="chat-sessions-pane__title sess-list__title">
-            Skills <span className="muted">{skills.length}</span>
-          </div>
-          <button type="button" className="chat-pane-action new-task" onClick={handleStartCreate}>
-            + New
-          </button>
-        </div>
-
+      <aside className={paneClassName} aria-label="Skills">
+        {collapsed ? (
+          <PaneExpandRail label="Skills" onExpand={() => setCollapsed(false)} />
+        ) : (
+        <>
+        <PaneCollapseSeam label="Skills" onCollapse={() => setCollapsed(true)} />
         <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Skill agents">
           {groupFilters.map((group) => (
             <button
@@ -300,6 +299,9 @@ export default function SkillsPage() {
           </label>
           <button type="button" className="sess-sort" onClick={handleRefreshList}>
             Refresh
+          </button>
+          <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={handleStartCreate}>
+            + New
           </button>
         </div>
 
@@ -332,6 +334,8 @@ export default function SkillsPage() {
             </div>
           ))}
         </div>
+        </>
+        )}
       </aside>
 
       <main className="skills-editor prompts-editor">

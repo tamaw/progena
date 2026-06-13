@@ -113,18 +113,6 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
     <aside
       className={`workspace-sidebar sess-list ${collapsed ? 'collapsed' : ''}`}
     >
-      <div className="chat-sessions-pane__head sess-list__head">
-        <div className="chat-sessions-pane__title sess-list__title">Workflows <span className="muted">{workspaces.length}</span></div>
-        <button
-          className="chat-pane-action new-task"
-          onClick={collapsed ? onToggle : createWorkspace}
-          title={collapsed ? 'Expand sidebar' : 'Create workflow'}
-          type="button"
-        >
-          {collapsed ? 'Open' : '+ New'}
-        </button>
-      </div>
-
       {!collapsed ? (
         <>
           <div className="chat-pane-tabs sess-list__filters workspace-sidebar__filters">
@@ -157,6 +145,14 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
               disabled={!selectedWorkspace}
             >
               Rename
+            </button>
+            <button
+              type="button"
+              className="chat-pane-action new-task sess-list__tools-action"
+              onClick={createWorkspace}
+              title="Create workflow"
+            >
+              + New
             </button>
           </div>
 

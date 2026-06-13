@@ -1,3 +1,5 @@
+import { usePaneCollapse } from './usePaneCollapse';
+
 function SearchIcon() {
   return (
     <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
@@ -15,20 +17,65 @@ function ChevronDownIcon() {
   );
 }
 
-export function PaneList({ label, className = '', children }) {
+function ChevronLeftIcon() {
   return (
-    <section className={`${className} sess-list`.trim()} aria-label={label}>
-      {children}
-    </section>
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="m9.8 4.2-3.6 3.8 3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
   );
 }
 
-export function PaneListHeader({ title, count, actionLabel, onAction }) {
+function ChevronRightIcon() {
   return (
-    <div className="chat-sessions-pane__head sess-list__head">
-      <div className="chat-sessions-pane__title sess-list__title">{title} <span className="muted">{count}</span></div>
-      {actionLabel ? <button type="button" className="chat-pane-action new-task" onClick={onAction}>{actionLabel}</button> : null}
-    </div>
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+export function PaneCollapseSeam({ label, onCollapse }) {
+  return (
+    <button
+      type="button"
+      className="sess-list__collapse"
+      onClick={onCollapse}
+      title={`Collapse ${label}`}
+      aria-label={`Collapse ${label} list`}
+    >
+      <ChevronLeftIcon />
+    </button>
+  );
+}
+
+export function PaneExpandRail({ label, onExpand }) {
+  return (
+    <button
+      type="button"
+      className="sess-list__expand"
+      onClick={onExpand}
+      title={`Expand ${label}`}
+      aria-label={`Expand ${label} list`}
+    >
+      <ChevronRightIcon />
+      <span className="sess-list__expand-label">{label}</span>
+    </button>
+  );
+}
+
+export function PaneList({ label, className = '', children }) {
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse(`${className} sess-list`.trim());
+
+  return (
+    <section className={paneClassName} aria-label={label}>
+      {collapsed ? (
+        <PaneExpandRail label={label} onExpand={() => setCollapsed(false)} />
+      ) : (
+        <>
+          <PaneCollapseSeam label={label} onCollapse={() => setCollapsed(true)} />
+          {children}
+        </>
+      )}
+    </section>
   );
 }
 
@@ -49,8 +96,17 @@ export function PaneListFilters({ filters, activeFilter, onFilterChange, renderF
   );
 }
 
-export function PaneListToolbar({ children }) {
-  return <div className="sess-list__tools">{children}</div>;
+export function PaneListToolbar({ children, actionLabel, onAction }) {
+  return (
+    <div className="sess-list__tools">
+      {children}
+      {actionLabel ? (
+        <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={onAction}>
+          {actionLabel}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 export function PaneListSearch({ value, placeholder, onChange }) {

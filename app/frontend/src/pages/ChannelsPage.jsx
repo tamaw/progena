@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
   PaneList,
-  PaneListHeader,
   PaneListFilters,
   PaneListToolbar,
   PaneListSearch,
@@ -234,7 +233,6 @@ export default function ChannelsPage() {
   return (
     <div className="agents-page">
       <PaneList label="Channels" className="agents-pane">
-        <PaneListHeader title="Channels" count={CHANNELS.length} />
         <PaneListFilters filters={CHANNEL_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search channels..." onChange={setSearch} />

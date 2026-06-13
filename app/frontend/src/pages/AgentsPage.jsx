@@ -39,7 +39,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -1128,7 +1127,6 @@ function AgentsPage({ variant = 'agents' }) {
   return (
     <div className="agents-page">
       <PaneList label="Agents" className="agents-pane">
-        <PaneListHeader title="Agents" count={agents.length} />
         <PaneListFilters filters={AGENT_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
