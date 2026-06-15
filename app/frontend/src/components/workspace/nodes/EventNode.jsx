@@ -4,6 +4,7 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, PlayActionIcon, SaveActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 const eventTypeOptions = [
   { value: 'kanban.card.created', label: 'Card created' },
@@ -38,7 +39,7 @@ function formatEventLabel(eventType) {
 }
 
 function EventNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, saveEventNode, runEventNode } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, saveEventNode, runEventNode, removeNodes } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
@@ -67,6 +68,19 @@ function EventNode({ id, data, selected }) {
     updateNodeData(id, { enabled: !data.enabled });
   }, [data.enabled, id, updateNodeData]);
 
+  const enabled = Boolean(data.enabled);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
+
+  const onDelete = useCallback(() => {
+    removeNodes([id]);
+  }, [id, removeNodes]);
+
   const payloadText = useMemo(() => formatPayload(data.lastPayload), [data.lastPayload]);
   const recentLogs = data.logs?.slice(0, 5) || [];
 
@@ -80,7 +94,7 @@ function EventNode({ id, data, selected }) {
         handleClassName="react-flow__resize-control handle"
       />
       <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon event">E</div>
           <div className="node-title">{data.title}</div>
@@ -89,9 +103,9 @@ function EventNode({ id, data, selected }) {
               {isSaving ? 'saving' : 'unsaved'}
             </span>
           )}
-          <span className={`schedule-enabled-badge ${data.enabled ? 'enabled' : 'disabled'}`}>
-            {data.enabled ? 'ON' : 'OFF'}
-          </span>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           {data.lastRunStatus && data.lastRunStatus !== 'idle' && (
             <span className={`node-status-badge ${data.lastRunStatus}`}>
               {data.lastRunStatus}
@@ -129,20 +143,13 @@ function EventNode({ id, data, selected }) {
                 <div className="schedule-form">
                   <div className="schedule-form-field">
                     <label>Event Type</label>
-                    <select className="nodrag" value={data.eventType || ''} onChange={onEventTypeChange}>
+                    <select className="nodrag app-select" value={data.eventType || ''} onChange={onEventTypeChange}>
                       {eventTypeOptions.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </select>
-                  </div>
-
-                  <div className="schedule-toggle" onClick={onToggleEnabled}>
-                    <div className={`schedule-toggle-switch ${data.enabled ? 'enabled' : ''}`} />
-                    <span style={{ fontSize: 'var(--font-size-sm)' }}>
-                      {data.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
                   </div>
 
                   <div className="event-summary-note">
@@ -198,24 +205,46 @@ function EventNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            <button
-              className="node-action-btn primary"
-              onClick={() => runEventNode(id)}
-              disabled={isSaving}
+          <div className="node-actions node-actions--split">
+            <div
+              className="node-toggle nodrag"
+              role="switch"
+              aria-checked={enabled}
+              tabIndex={0}
+              onClick={onToggleEnabled}
+              onKeyDown={onToggleEnabledKeyDown}
+              title={enabled ? 'Disable event' : 'Enable event'}
             >
-              Run
-            </button>
-            {isUnsaved && (
-              <button
-                className="node-action-btn"
-                onClick={() => saveEventNode(id)}
-                disabled={isSaving}
-              >
-                {isSaving ? 'Saving...' : 'Save Event'}
-              </button>
-            )}
-            <NodeHelpButton description={helpText} title={data.title} alignRight />
+              <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              <span className="node-toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <DetailHeaderActions>
+              <DetailHeaderAction
+                icon={<PlayActionIcon />}
+                ariaLabel="Run event"
+                tooltip="Run"
+                onClick={() => runEventNode(id)}
+                disabled={isSaving || !enabled}
+              />
+              {isUnsaved && (
+                <DetailHeaderAction
+                  icon={<SaveActionIcon />}
+                  ariaLabel="Save event"
+                  tooltip={isSaving ? 'Saving…' : 'Save'}
+                  onClick={() => saveEventNode(id)}
+                  disabled={isSaving}
+                />
+              )}
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel="Delete event"
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onDelete}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>

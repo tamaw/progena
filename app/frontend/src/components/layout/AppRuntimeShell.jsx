@@ -19,8 +19,8 @@ import {
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
-//   Delegate — agents and the reusable building blocks they're composed of
 //   Automate — runtime: triggers, schedules, I/O, work in flight
+//   Delegate — agents and the reusable building blocks they're composed of
 // Sessions and Logs are intentionally dropped from the rail (still routable).
 const navGroups = [
   {
@@ -29,8 +29,17 @@ const navGroups = [
     items: [
       { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
       { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
-      { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' },
+      // { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' }, // hidden for now
       { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
+    ],
+  },
+  {
+    id: 'automate',
+    label: 'Automate',
+    items: [
+      { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
+      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
+      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
     ],
   },
   {
@@ -44,15 +53,6 @@ const navGroups = [
       { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
       { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
-    ],
-  },
-  {
-    id: 'automate',
-    label: 'Automate',
-    items: [
-      { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
-      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
-      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
     ],
   },
 ];

@@ -4,6 +4,7 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, PlayActionIcon, ReconnectActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 function formatDateTime(value) {
   if (!value) return '';
@@ -169,6 +170,19 @@ function AgentNode({ id, data, selected }) {
   const onRemove = useCallback(() => {
     dismissWidget(id);
   }, [id, dismissWidget]);
+
+  const enabled = data.enabled !== false;
+
+  const onToggleEnabled = useCallback(() => {
+    updateNodeData(id, { enabled: data.enabled === false });
+  }, [data.enabled, id, updateNodeData]);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
 
   const selectAction = useCallback((selection) => {
     updateNodeData(id, { selectedAction: selection });
@@ -583,10 +597,13 @@ function AgentNode({ id, data, selected }) {
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
       <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className={`workspace-node ${selected ? 'selected' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon agent">{icon}</div>
           <div className="node-title nodrag">{data.title}</div>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           {statusClass !== 'idle' && (
             <span className={`node-status-badge ${statusClass}`}>{statusClass}</span>
           )}
@@ -625,28 +642,44 @@ function AgentNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            <button
-              type="button"
-              className="node-action-btn primary"
-              onClick={onRun}
-              disabled={data.isRefreshing}
+          <div className="node-actions node-actions--split">
+            <div
+              className="node-toggle nodrag"
+              role="switch"
+              aria-checked={enabled}
+              tabIndex={0}
+              onClick={onToggleEnabled}
+              onKeyDown={onToggleEnabledKeyDown}
+              title={enabled ? `Disable ${titleLabel.toLowerCase()}` : `Enable ${titleLabel.toLowerCase()}`}
             >
-              Run
-            </button>
-            <button
-              type="button"
-              className="node-action-btn secondary"
-              onClick={onRefresh}
-              disabled={data.isRefreshing}
-            >
-              {data.isRefreshing ? 'Refreshing...' : 'Refresh'}
-            </button>
-            <NodeHelpButton
-              description={helpText}
-              title={data.title}
-              alignRight
-            />
+              <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              <span className="node-toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <DetailHeaderActions>
+              <DetailHeaderAction
+                icon={<PlayActionIcon />}
+                ariaLabel={`Run ${titleLabel.toLowerCase()}`}
+                tooltip="Run"
+                onClick={onRun}
+                disabled={data.isRefreshing || !enabled}
+              />
+              <DetailHeaderAction
+                icon={<ReconnectActionIcon />}
+                ariaLabel={`Refresh ${titleLabel.toLowerCase()}`}
+                tooltip={data.isRefreshing ? 'Refreshing…' : 'Refresh'}
+                onClick={onRefresh}
+                disabled={data.isRefreshing}
+              />
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel={`Delete ${titleLabel.toLowerCase()}`}
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onRemove}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>

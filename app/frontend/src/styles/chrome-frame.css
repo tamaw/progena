@@ -205,6 +205,7 @@ body,
   flex-direction: column;
   min-height: 0;
   padding: 0 10px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border);
@@ -375,6 +376,9 @@ body,
 
 /* Hover tooltip (collapsed rail only), mirroring the nav-item tooltips. */
 .app-shell__rail-tip {
+  /* Only used as a hover label in the collapsed rail; hidden (and out of the
+     layout) when expanded so it can't extend the sidebar's scroll width. */
+  display: none;
   position: absolute;
   left: calc(100% + 12px);
   top: 50%;
@@ -407,6 +411,11 @@ body,
   border-bottom: 1px solid var(--color-border);
   border-bottom-left-radius: 2px;
   transform: translateY(-50%) rotate(45deg);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-tip {
+  display: block;
+  opacity: 0;
 }
 
 .app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn:hover .app-shell__rail-tip,
@@ -2901,21 +2910,26 @@ body,
 }
 
 /* Hover-reveal seam pinned to the pane's inner right edge. */
+/* Collapse control: a vertically-centered handle on the pane's right edge
+   (the divider with the next column). Keeps the top corners free for filters
+   and actions. */
 .sess-list__collapse {
   position: absolute;
-  top: 8px;
-  right: 6px;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
   z-index: 6;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 48px;
   padding: 0;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
   cursor: pointer;
   opacity: 0;
   transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
@@ -2929,11 +2943,6 @@ body,
 .sess-list__collapse:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
-}
-
-/* Reserve room so the seam never sits on top of the filter chips. */
-.sess-list--collapsible .sess-list__filters {
-  padding-right: 34px;
 }
 
 /* Collapsed rail: full-height button that expands the pane, with the pane label
@@ -2968,7 +2977,6 @@ body,
 }
 
 .chat-sessions-pane__head,
-.tasks-list__head,
 .sess-list__head {
   display: flex;
   align-items: center;
@@ -2978,7 +2986,6 @@ body,
 }
 
 .chat-sessions-pane__title,
-.tasks-list__title,
 .sess-list__title {
   color: var(--color-text-primary);
   font-size: 14px;
@@ -3025,7 +3032,6 @@ body,
 }
 
 .chat-pane-tab,
-.task-tab,
 .sess-filter,
 .sess-fchip {
   display: inline-flex;
@@ -3048,7 +3054,6 @@ body,
 }
 
 .chat-pane-tab:hover,
-.task-tab:hover,
 .sess-filter:hover,
 .sess-fchip:hover {
   color: var(--color-text-primary);
@@ -3056,7 +3061,6 @@ body,
 }
 
 .chat-pane-tab.is-active,
-.task-tab.is-active,
 .sess-filter.is-active,
 .sess-fchip.is-active {
   color: var(--color-text-primary);
