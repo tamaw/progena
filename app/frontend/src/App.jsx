@@ -34,6 +34,7 @@ import './styles/status.css';
 import './styles/prompts.css';
 import './styles/chrome-frame.css';
 import './styles/detail-header.css';
+import './styles/forms.css';
 
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));

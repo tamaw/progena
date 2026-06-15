@@ -58,6 +58,24 @@ export function PlayActionIcon() {
   );
 }
 
+export function StopActionIcon() {
+  return (
+    <ActionSvg>
+      <rect x="4.75" y="4.75" width="6.5" height="6.5" rx="1.25" fill="currentColor" stroke="none" />
+    </ActionSvg>
+  );
+}
+
+export function SaveActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M3.75 2.75h6.5L13.25 5.75v7.5H3.75z" />
+      <path d="M5.75 2.75v3.5h4.5v-3.5" />
+      <path d="M5.75 13.25v-3.75h4.5v3.75" />
+    </ActionSvg>
+  );
+}
+
 export function DeleteActionIcon() {
   return (
     <ActionSvg>
