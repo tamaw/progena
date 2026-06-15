@@ -42,19 +42,21 @@ class TestBackendFactory:
 
             runtime_free_cls = self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data", "data/prompts", "logs"):
+            for rel in ("app", "data", "data/prompts", "logs", "repos"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
-            backend = create_progenitor_backend(project_root=tmpdir)
+            backend = create_progenitor_backend(project_root=tmpdir, worktree_dir=root / "repos")
             assert backend is not None
             assert isinstance(backend.default, runtime_free_cls)
             assert "/memories/" in backend.routes
             assert "/self/" in backend.routes
+            assert "/repos/" in backend.routes
             assert "/data/" in backend.routes
             assert "/logs/" in backend.routes
             assert "/prompts/" in backend.routes
             assert isinstance(backend.routes["/memories/"], FilesystemBackend)
             assert isinstance(backend.routes["/self/"], ReadOnlyFilesystemBackend)
+            assert isinstance(backend.routes["/repos/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/data/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/logs/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/prompts/"], ReadOnlyFilesystemBackend)

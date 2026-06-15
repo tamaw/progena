@@ -78,6 +78,7 @@ If you need direct host access to backend port `8000`, add your own port mapping
 Host-mounted by default:
 - `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data`
 - `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`
+- `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
 
 Ephemeral storage:
 - `/app/tmp` is a `tmpfs` mount in `progenitor` and `backend`
@@ -85,8 +86,8 @@ Ephemeral storage:
 Notes:
 - Prompt assets now live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
 - Skill assets now live inside `${PROGENITOR_HOST_DATA_DIR}/skills` and resolve to `/app/data/skills` in containers.
-- The compose file does **not** currently mount `/app/worktrees` from the host.
-- `PROGENITOR_WORKTREE_DIR` is still set in the `progenitor` container, so the directory exists there, but it is container-local unless you add your own volume.
+- Repository/worktree state now mounts from `${PROGENITOR_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
+- `PROGENITOR_WORKTREE_DIR` is set to `/app/repos` in `progenitor` and `backend`.
 
 ## Health checks
 
