@@ -4911,6 +4911,27 @@ body,
 
 .agents-agent-row__name {
   font-weight: 700;
+  color: var(--agent-color, var(--color-text-primary));
+}
+
+/* Agent accent dot, driven by the per-agent --agent-color custom property
+   rather than an inline background so colour stays data-token driven. */
+.adot--agent {
+  background: var(--agent-color, var(--color-accent));
+}
+
+/* A2A agent endpoint link in the detail header meta row. */
+.agents-agent-url {
+  text-decoration: none;
+  max-width: 22rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agents-agent-url:hover {
+  text-decoration: underline;
+  color: var(--color-text-primary);
 }
 
 .schedule-row {
@@ -4974,6 +4995,128 @@ body,
   min-height: 0;
   max-width: none;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.agents-graph-toolbar {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px var(--chat-content-gutter, 16px);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.agents-graph-layout {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.agents-graph-layout > .agents-graph-panel {
+  flex: 1;
+  min-width: 0;
+}
+
+/* JSON graph editor — schema-aware editing surface beside the canvas. */
+.agents-graph-editor {
+  flex: none;
+  width: min(420px, 42vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.agents-graph-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agents-graph-editor__head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+/* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
+   syntax-highlighted layer shows through while the user types. Both layers must
+   share identical box metrics for the caret to line up. */
+.agents-graph-editor__code {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.agents-graph-editor__highlight,
+.agents-graph-editor__code .agents-graph-editor__textarea {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+
+.agents-graph-editor__highlight {
+  position: absolute;
+  inset: 0;
+  background: var(--color-bg-primary);
+  pointer-events: none;
+}
+
+.agents-graph-editor__highlight code.hljs {
+  padding: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.agents-graph-editor__code .agents-graph-editor__textarea {
+  position: relative;
+  flex: 1;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--color-text-primary);
+}
+
+.agents-graph-editor__code .agents-graph-editor__textarea::selection {
+  background: var(--color-accent-soft);
+}
+
+.agents-graph-editor__textarea:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.agents-graph-editor__error {
+  margin: 0;
+  color: var(--color-error, #ef4444);
+  font-size: 11.5px;
+}
+
+.agents-graph-editor__saved {
+  margin: 0;
+  color: var(--color-success, #22c55e);
+  font-size: 11.5px;
+}
+
+.agents-graph-editor__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .agents-status-pill,
@@ -5023,6 +5166,25 @@ body,
   border-color: transparent;
 }
 
+.agents-status-pill--executing,
+.agents-status-pill--waiting {
+  color: var(--color-info);
+  background: color-mix(in oklab, var(--color-info) 13%, transparent);
+  border-color: transparent;
+}
+
+.agents-status-pill--starting,
+.agents-status-pill--stopping {
+  color: var(--color-warning);
+  background: color-mix(in oklab, var(--color-warning) 13%, transparent);
+  border-color: transparent;
+}
+
+.agents-status-pill--stopped {
+  color: var(--color-text-muted);
+  background: var(--color-bg-tertiary);
+}
+
 .agents-status-pill--draft,
 .agents-chip--muted {
   color: var(--color-text-muted);
@@ -5033,6 +5195,109 @@ body,
   color: var(--color-info);
   background: color-mix(in oklab, var(--color-info) 12%, transparent);
   border-color: transparent;
+}
+
+.agents-chip--error {
+  color: var(--color-error);
+  background: color-mix(in oklab, var(--color-error) 13%, transparent);
+  border-color: transparent;
+}
+
+/* A2A card detail pane */
+.agents-chip-row {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.agents-card-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.agents-card-fact {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+}
+
+.agents-card-fact__label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.agents-card-fact__value {
+  min-width: 0;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  word-break: break-word;
+}
+
+.agents-skill-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agents-skill-card {
+  padding: 12px 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.agents-skill-card__head {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+
+.agents-skill-card__head strong {
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.agents-skill-card__desc {
+  margin: 6px 0 0;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+}
+
+.agents-skill-card__examples {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agents-skill-card__examples code {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.agents-skill-card__time {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.agents-task-meta {
+  margin: 8px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  word-break: break-all;
 }
 
 .agents-metrics {
@@ -5194,88 +5459,175 @@ body,
   background: var(--color-accent-soft);
 }
 
-.agents-graph-canvas .react-flow__background {
-  background:
-    linear-gradient(135deg, color-mix(in oklab, var(--agent-color, var(--color-accent)) 4%, transparent), transparent 45%),
-    var(--color-bg-primary);
+/* ── Subagent workflow canvas ──────────────────────────────────────────────
+   The canvas chrome (node card, title bar, body, dock, minimap, controls,
+   background) is shared with the Workspace canvas via the .workspace-* and
+   .node-* classes — the agents canvas wears `workspace-canvas` and each node
+   wears `workspace-node`. Only the agent-domain deltas live below: the per-kind
+   accent colour, the editable inputs, the edge label, and the save UI. */
+
+/* Node: fixed width (Workspace nodes are explicitly sized; these are not) and
+   colour the shared chrome from the per-kind --node-color. Scoped under the
+   canvas so these win over the shared .workspace-node rules regardless of the
+   order the lazy-loaded stylesheets inject in. */
+.agents-graph-canvas .agents-graph-node {
+  width: 220px;
+  height: auto;
 }
 
-.agents-graph-canvas .react-flow__controls {
-  overflow: hidden;
+.agents-graph-canvas .agents-graph-node.selected {
+  border-color: var(--node-color);
+  box-shadow: 0 0 0 1px var(--node-color), var(--shadow-md);
+}
+
+.agents-graph-canvas .node-type-icon {
+  color: var(--node-color);
+  background: color-mix(in oklab, var(--node-color) 20%, transparent);
+}
+
+.agents-graph-canvas .workspace-handle {
+  background: var(--node-color);
+}
+
+/* Editable label in the shared title bar; kind badge reuses .node-status-badge. */
+.agents-node-title {
+  padding: 1px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  user-select: text;
+}
+
+.agents-node-kind-badge {
+  color: var(--node-color);
+  background: color-mix(in oklab, var(--node-color) 14%, transparent);
+}
+
+/* Step content inputs. */
+.agents-graph-node__prompt,
+.agents-graph-node__toolinput {
+  width: 100%;
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agents-graph-node__prompt {
+  min-height: 52px;
+  max-height: 120px;
+  resize: vertical;
+  overflow: auto;
+}
+
+.agents-graph-node__toolinput {
+  color: var(--node-color);
+  font-weight: 700;
+}
+
+.agents-node-title:focus,
+.agents-graph-node__prompt:focus,
+.agents-graph-node__toolinput:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--node-color) 55%, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--node-color) 22%, transparent);
+}
+
+/* Editable edge label pill (double-click to edit). */
+.agents-graph-edge-label {
+  position: absolute;
+  pointer-events: all;
+  padding: 1px 7px;
+  color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: text;
+}
+
+.agents-graph-edge-label__add {
+  color: var(--color-text-muted);
+  opacity: 0.55;
+}
+
+.agents-graph-edge-label input {
+  width: 84px;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  font: inherit;
+  outline: none;
+}
+
+/* Save status chip in the floating header. */
+.agents-graph-floating .agents-graph-save--saving { color: var(--color-text-muted); }
+.agents-graph-floating .agents-graph-save--saved { color: var(--color-success, #22c55e); }
+.agents-graph-floating .agents-graph-save--error { color: var(--color-error, #ef4444); }
+
+.agents-graph-save-error {
+  position: absolute;
+  left: 50%;
+  bottom: 76px;
+  z-index: 8;
+  max-width: min(520px, 80%);
+  transform: translateX(-50%);
+  padding: 7px 12px;
+  color: var(--color-error, #ef4444);
+  background: color-mix(in oklab, var(--color-error, #ef4444) 14%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in oklab, var(--color-error, #ef4444) 40%, var(--color-border));
   border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: center;
   box-shadow: var(--shadow-md);
 }
 
-.agents-graph-canvas .react-flow__controls button {
-  width: 30px;
-  height: 30px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-secondary);
-  border-bottom: 1px solid var(--color-border);
+.agents-graph-shell {
+  position: relative;
 }
 
-.agents-graph-canvas .react-flow__controls button:hover {
-  background: var(--color-bg-hover);
+/* Dock items are <button>s here (the Workspace uses <div>s) — reset native
+   button chrome so the shared .workspace-dock-item styling applies, then colour
+   each icon by step kind. Structure/position come from workspace.css. */
+.agents-graph-dock .workspace-dock-item {
+  background: transparent;
+  border: none;
+  font: inherit;
 }
 
-.agents-graph-canvas .react-flow__controls button svg {
-  fill: currentColor;
+.agents-graph-dock .workspace-dock-icon.start { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
+.agents-graph-dock .workspace-dock-icon.ask { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
+.agents-graph-dock .workspace-dock-icon.tool { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
+.agents-graph-dock .workspace-dock-icon.decision { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
+.agents-graph-dock .workspace-dock-icon.end { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
+
+/* Per-kind accents for the executable workflow node kinds. Each overrides the
+   shared --node-color (defaulted to the agent colour) so steps read at a glance. */
+.agents-graph-node--start {
+  --node-color: #2f9e6f;
 }
 
-.agents-graph-node {
-  width: 214px;
-  padding: 14px 15px;
-  color: var(--color-text-primary);
-  background:
-    radial-gradient(circle at 10% 0%, color-mix(in oklab, var(--node-color) 15%, transparent), transparent 34%),
-    color-mix(in oklab, var(--color-bg-secondary) 94%, black);
-  border: 1px solid color-mix(in oklab, var(--node-color) 28%, var(--color-border));
-  border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+.agents-graph-node--ask {
+  --node-color: #2f6ff6;
 }
 
-.agents-graph-node__kind {
-  display: inline-flex;
-  margin-bottom: 9px;
-  padding: 2px 6px;
-  color: var(--node-color);
-  background: color-mix(in oklab, var(--node-color) 12%, transparent);
-  border: 1px solid color-mix(in oklab, var(--node-color) 22%, transparent);
-  border-radius: 999px;
-  font-size: 9.5px;
-  font-weight: 800;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.agents-graph-node--tool {
+  --node-color: #b06ef6;
 }
 
-.agents-graph-node strong {
-  display: block;
-  overflow: hidden;
-  font-family: var(--font-family-mono);
-  font-size: 14px;
-  line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.agents-graph-node--decision {
+  --node-color: #e0a23a;
 }
 
-.agents-graph-node p {
-  display: -webkit-box;
-  margin: 8px 0 0;
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 1.4;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-}
-
-.agents-graph-node .react-flow__handle {
-  width: 8px;
-  height: 8px;
-  background: var(--node-color);
-  border: 2px solid var(--color-bg-primary);
+.agents-graph-node--end {
+  --node-color: #6b7280;
 }
 
 .agents-detail-grid {

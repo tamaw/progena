@@ -84,6 +84,61 @@ export const deleteChatSession = createAsyncThunk(
   },
 );
 
+export const fetchAgentProfiles = createAsyncThunk(
+  'uiData/fetchAgentProfiles',
+  async ({ agentsUrl }) => {
+    const response = await fetch(agentsUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load agents (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
+export const requestAgentDetail = createAsyncThunk(
+  'uiData/requestAgentDetail',
+  async ({ agentsUrl, agentId, requestId }) => {
+    const encodedId = encodeURIComponent(agentId);
+    const separator = agentsUrl.includes('?') ? '&' : '?';
+    const response = await fetch(
+      `${agentsUrl}/${encodedId}${separator}request_id=${encodeURIComponent(requestId)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to load agent (${response.status})`);
+    }
+    await response.json();
+    return { agentId, requestId };
+  },
+);
+
+export const updateAgentGraph = createAsyncThunk(
+  'uiData/updateAgentGraph',
+  async ({ agentsUrl, agentId, nodes, edges, status, summary }) => {
+    const response = await fetch(`${agentsUrl}/${encodeURIComponent(agentId)}/graph`, {
+      method: 'PATCH',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ nodes, edges, status, summary }),
+    });
+    if (!response.ok) {
+      let detail = `(${response.status})`;
+      try {
+        const body = await response.json();
+        if (body?.detail) {
+          detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        }
+      } catch {
+        // non-JSON error body; keep the status-code detail
+      }
+      throw new Error(`Failed to update agent graph: ${detail}`);
+    }
+    return response.json();
+  },
+);
+
 const initialState = {
   status: null,
   alerts: null,
@@ -104,6 +159,20 @@ const initialState = {
     lastRequestTotal: null,
     active: {
       chatSessionId: null,
+      detail: null,
+      loading: false,
+      error: null,
+      requestId: null,
+    },
+  },
+  agents: {
+    byId: {},
+    order: [],
+    loaded: false,
+    loading: false,
+    error: null,
+    active: {
+      agentId: null,
       detail: null,
       loading: false,
       error: null,
@@ -174,6 +243,33 @@ function mergeActiveDetail(active, session) {
     ...session,
     messages: active.detail.messages || [],
   };
+}
+
+function replaceAgentList(agents, items) {
+  agents.byId = {};
+  agents.order = [];
+  for (const agent of Array.isArray(items) ? items : []) {
+    const agentId = typeof agent?.id === 'string' ? agent.id : null;
+    if (!agentId || agents.byId[agentId]) {
+      continue;
+    }
+    agents.byId[agentId] = agent;
+    agents.order.push(agentId);
+  }
+}
+
+function upsertAgent(agents, agent) {
+  const agentId = typeof agent?.id === 'string' ? agent.id : null;
+  if (!agentId) {
+    return;
+  }
+  if (!agents.byId[agentId]) {
+    agents.order.push(agentId);
+  }
+  agents.byId[agentId] = { ...(agents.byId[agentId] || {}), ...agent };
+  if (agents.active.agentId === agentId && agents.active.detail) {
+    agents.active.detail = { ...agents.active.detail, ...agent };
+  }
 }
 
 const uiDataSlice = createSlice({
@@ -256,6 +352,42 @@ const uiDataSlice = createSlice({
             requestId: null,
           };
         }
+        return;
+      }
+      if (event?.type === 'agents.snapshot') {
+        replaceAgentList(state.agents, payload.agents);
+        state.agents.loaded = true;
+        state.agents.loading = false;
+        state.agents.error = null;
+        return;
+      }
+      if (event?.type === 'agent.upserted') {
+        upsertAgent(state.agents, payload.agent);
+        state.agents.loaded = true;
+        return;
+      }
+      if (event?.type === 'agent.selected') {
+        if (
+          payload.request_id
+          && state.agents.active.requestId
+          && payload.request_id !== state.agents.active.requestId
+        ) {
+          return;
+        }
+        state.agents.active.detail = payload.agent || null;
+        state.agents.active.agentId = payload.agent?.id || null;
+        state.agents.active.loading = false;
+        state.agents.active.error = null;
+        return;
+      }
+      if (event?.type === 'agent.graph.updated') {
+        const { agent_id: agentId, graph } = payload;
+        if (agentId && state.agents.byId[agentId]) {
+          state.agents.byId[agentId] = { ...state.agents.byId[agentId], graph };
+        }
+        if (agentId && state.agents.active.agentId === agentId && state.agents.active.detail) {
+          state.agents.active.detail = { ...state.agents.active.detail, graph };
+        }
       }
     },
   },
@@ -292,6 +424,34 @@ const uiDataSlice = createSlice({
           state.chats.active.loading = false;
           state.chats.active.error = action.error?.message || 'Failed to load chat';
         }
+      })
+      .addCase(fetchAgentProfiles.pending, (state) => {
+        state.agents.loading = true;
+        state.agents.error = null;
+      })
+      .addCase(fetchAgentProfiles.fulfilled, (state) => {
+        state.agents.loading = false;
+      })
+      .addCase(fetchAgentProfiles.rejected, (state, action) => {
+        state.agents.loading = false;
+        state.agents.error = action.error?.message || 'Failed to load agents';
+      })
+      .addCase(requestAgentDetail.pending, (state, action) => {
+        state.agents.active.agentId = action.meta.arg.agentId;
+        state.agents.active.loading = true;
+        state.agents.active.error = null;
+        state.agents.active.requestId = action.meta.arg.requestId;
+      })
+      .addCase(requestAgentDetail.fulfilled, (state, action) => {
+        if (state.agents.active.requestId === action.payload.requestId) {
+          state.agents.active.loading = false;
+        }
+      })
+      .addCase(requestAgentDetail.rejected, (state, action) => {
+        if (state.agents.active.requestId === action.meta.arg.requestId) {
+          state.agents.active.loading = false;
+          state.agents.active.error = action.error?.message || 'Failed to load agent';
+        }
       });
   },
 });
@@ -309,5 +469,12 @@ export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectChatIndicators = (state) => state.uiData.chatIndicators;
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
+export const selectAgentProfiles = createSelector(
+  [(state) => state.uiData.agents.order, (state) => state.uiData.agents.byId],
+  (order, byId) => order.map((agentId) => byId[agentId]).filter(Boolean),
+);
+export const selectAgentProfilesState = (state) => state.uiData.agents;
+export const selectActiveAgentProfile = (state) => state.uiData.agents.active.detail;
+export const selectActiveAgentProfileState = (state) => state.uiData.agents.active;
 
 export default uiDataSlice.reducer;

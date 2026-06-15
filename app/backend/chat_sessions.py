@@ -341,7 +341,7 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
         tool_calls = getattr(raw, "tool_calls", None)
     if not isinstance(tool_calls, list):
         return []
-    result = []
+    result: list[dict[str, Any]] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
             continue

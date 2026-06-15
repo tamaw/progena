@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -32,6 +33,14 @@ def _env_int(key: str, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _swap_database_name(url: str, db_name: str) -> str:
+    """Return ``url`` with its database name replaced by ``db_name``."""
+    if not url or not db_name:
+        return ""
+    parts = urlsplit(url)
+    return urlunsplit(parts._replace(path=f"/{db_name}"))
 
 
 DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[3] / "data"
@@ -130,11 +139,51 @@ class StorageConfig:
 
 
 @dataclass
+class DatabaseConfig:
+    """Postgres settings for the observe agent's own database.
+
+    Like the backend, the observe agent keeps its data in a separate database on
+    the *same* Postgres server as the Progenitor runtime; only the database name
+    differs. ``admin_url`` (the runtime database) is used to ``CREATE DATABASE``
+    the observe database if it does not yet exist.
+    """
+
+    admin_url: str = ""
+    database_url: str = ""
+    db_name: str = "observe"
+    pool_min_size: int = 1
+    pool_max_size: int = 5
+    setup: bool = True
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.database_url)
+
+    @classmethod
+    def from_env(cls) -> DatabaseConfig:
+        admin_url = (os.getenv("PROGENITOR_DATABASE_URL") or "").strip()
+        db_name = (os.getenv("OBSERVE_DATABASE_NAME") or "observe").strip() or "observe"
+        database_url = (os.getenv("OBSERVE_DATABASE_URL") or "").strip()
+        if not database_url and admin_url:
+            database_url = _swap_database_name(admin_url, db_name)
+        setup_raw = (os.getenv("OBSERVE_DATABASE_SETUP") or "true").strip().lower()
+        return cls(
+            admin_url=admin_url,
+            database_url=database_url,
+            db_name=db_name,
+            pool_min_size=_env_int("OBSERVE_DATABASE_POOL_MIN_SIZE", 1),
+            pool_max_size=_env_int("OBSERVE_DATABASE_POOL_MAX_SIZE", 5),
+            setup=setup_raw not in {"false", "0", "no"},
+        )
+
+
+@dataclass
 class ObserveConfig:
     """Complete observe agent configuration."""
 
     llm: LLMConfig = field(default_factory=LLMConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    database: DatabaseConfig = field(default_factory=DatabaseConfig)
     log_level: str = "info"
     log_format: str = "text"
     max_tool_rounds: int = 12
@@ -144,6 +193,7 @@ class ObserveConfig:
         return cls(
             llm=LLMConfig.from_env(),
             storage=StorageConfig.from_env(project_root),
+            database=DatabaseConfig.from_env(),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
             max_tool_rounds=_env_int("OBSERVE_MAX_TOOL_ROUNDS", 12),

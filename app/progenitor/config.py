@@ -133,6 +133,8 @@ class RuntimeConfig:
     timezone: str = "Australia/Melbourne"
     idle_backoff_seconds: int = 30
     mcp_refresh_seconds: int = 900
+    # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
+    # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
     max_actions_per_cycle: int = 10
     log_level: str = "info"

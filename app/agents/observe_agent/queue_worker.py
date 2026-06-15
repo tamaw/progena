@@ -16,6 +16,7 @@ from a2a.types import Message, Part, Role, TaskState, TaskStatus, TaskStatusUpda
 
 if TYPE_CHECKING:
     from .agent import ObserveAgent
+    from .store import ObserveStore
 
 logger = logging.getLogger(__name__)
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[3] / "logs"
@@ -158,12 +159,34 @@ class ObserveTaskQueue:
         service: ObserveAgent,
         max_concurrent: int = 1,
         log_path: Path | None = None,
+        *,
+        store: ObserveStore | None = None,
     ) -> None:
         self._service = service
         self._semaphore = asyncio.Semaphore(max(1, max_concurrent))
         self._log_path = _resolve_log_path(log_path)
+        self._store = store
         self._active_task_ids: set[str] = set()
         self._started = False
+
+    async def _persist(self, record: TaskRecord) -> None:
+        """Record a completed task to Postgres when available, else the JSONL log."""
+        if self._store is not None:
+            try:
+                await self._store.record_task_run(
+                    {
+                        "task_id": record.task_id,
+                        "context_id": record.context_id,
+                        "status": record.status,
+                        "response_text": record.response_text,
+                        "error": record.error,
+                        "timestamp_utc": record.timestamp_utc,
+                    }
+                )
+                return
+            except Exception as exc:
+                logger.warning("Failed to record task run to store, using file log: %s", exc)
+        append_task_record(record, log_path=self._log_path)
 
     def start(self) -> None:
         if self._started:
@@ -188,7 +211,7 @@ class ObserveTaskQueue:
                 await self._run_task(task)
         except asyncio.CancelledError:
             if not started:
-                append_task_record(
+                await self._persist(
                     TaskRecord(
                         task_id=task.task_id,
                         context_id=task.context_id,
@@ -196,8 +219,7 @@ class ObserveTaskQueue:
                         response_text=None,
                         error="Cancelled before execution.",
                         timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                    ),
-                    log_path=self._log_path,
+                    )
                 )
                 logger.info("ObserveTaskQueue: cancelled before start task_id=%s", task.task_id)
             raise
@@ -261,7 +283,7 @@ class ObserveTaskQueue:
                         ),
                     )
                 )
-            append_task_record(
+            await self._persist(
                 TaskRecord(
                     task_id=task.task_id,
                     context_id=task.context_id,
@@ -269,7 +291,6 @@ class ObserveTaskQueue:
                     response_text=response_text,
                     error=error,
                     timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                ),
-                log_path=self._log_path,
+                )
             )
             logger.info("ObserveTaskQueue: finished task_id=%s status=%s", task.task_id, status)

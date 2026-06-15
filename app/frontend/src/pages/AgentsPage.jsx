@@ -1,16 +1,39 @@
-import { useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
+  addEdge,
   Background,
+  BaseEdge,
   Controls,
+  EdgeLabelRenderer,
+  getSmoothStepPath,
   Handle,
   MarkerType,
+  MiniMap,
   Position,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
   useNodesState,
+  useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+// Reuse the Workspace canvas chrome (dock, minimap, controls, node card) so both
+// canvases share one source of truth. Agent-domain deltas live in chrome-frame.css.
+import '../styles/workspace.css';
+import '../styles/nodes.css';
+import hljs from 'highlight.js/lib/common';
+import { useConfig } from '../context/ConfigContext';
+import { selectRealtime } from '../store/realtimeSlice';
+import {
+  fetchAgentProfiles,
+  requestAgentDetail,
+  selectActiveAgentProfile,
+  selectAgentProfiles,
+  selectAgentProfilesState,
+  updateAgentGraph,
+} from '../store/uiDataSlice';
 import {
   PaneList,
   PaneListFilters,
@@ -30,538 +53,130 @@ import DetailHeader, {
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
 
-const AGENT_FILTERS = ['All', 'Running', 'Paused', 'Drafts'];
+const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped'];
 const AGENT_DETAIL_TABS = ['Details', 'Graph'];
+// A2A agents are read through from Progenitor and have no backend-editable graph.
+const A2A_DETAIL_TABS = ['Details'];
 
-const graphFitViewOptions = { padding: 0.1 };
-const graphLayoutScale = 0.62;
+// Chip tone per A2A task status (matches Progenitor's A2ATaskStatus enum).
+const TASK_TONE = {
+  completed: 'ok',
+  working: 'info',
+  submitted: 'info',
+  'input-required': 'info',
+  'auth-required': 'info',
+  failed: 'error',
+  rejected: 'error',
+  canceled: 'muted',
+  unknown: 'muted',
+};
+
+const graphFitViewOptions = { padding: 0.18 };
 const graphDefaultEdgeOptions = {
-  type: 'smoothstep',
+  type: 'editable',
   animated: true,
 };
 
-const AGENT_TEMPLATES = [
-  {
-    id: 'builder',
-    group: 'Core',
-    name: 'Builder',
-    handle: '@builder',
-    initials: 'B',
-    color: '#2f6ff6',
-    status: 'running',
-    model: 'gpt-5-mini',
-    role: 'Autonomous implementation agent',
-    version: 'v0.1.0',
-    updated: 'now',
-    summary: 'Completes coding tasks end-to-end across connected repositories.',
-    tools: [
-      { name: 'filesystem', type: 'MCP', calls: '418', enabled: true },
-      { name: 'git', type: 'MCP', calls: '96', enabled: true },
-      { name: 'shell', type: 'native', calls: '214', enabled: true },
-      { name: 'todos', type: 'MCP', calls: '87', enabled: true },
-      { name: 'knowledge', type: 'MCP', calls: '141', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'write' },
-      { name: 'progenitor-mcp', branch: 'feature/tools', access: 'write' },
-      { name: 'agent-runtime', branch: 'release/0.8', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Chrome migration notes', freshness: 'updated today', records: '42' },
-      { name: 'Frontend design patterns', freshness: '2d old', records: '118' },
-      { name: 'LangGraph runtime spec', freshness: '1w old', records: '64' },
-    ],
-    memories: [
-      { title: 'Use shared pane primitives', scope: 'repository', age: 'today' },
-      { title: 'Prefer mock data for workspace pages', scope: 'workspace', age: '2d' },
-      { title: 'Validate with lint and build', scope: 'repository', age: '3d' },
-    ],
-    sessions: [
-      { title: 'Tools page alignment', outcome: 'complete', age: '12m' },
-      { title: 'Repository profile refinement', outcome: 'complete', age: '1h' },
-      { title: 'Quick chat streaming', outcome: 'complete', age: '2h' },
-    ],
-    tasks: [
-      { title: 'Implement agents page shell', state: 'active', age: 'now' },
-      { title: 'Connect MCP server controls', state: 'queued', age: 'next' },
-      { title: 'Refresh knowledge graph snapshots', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '1,284',
-      sessions: '38',
-      tasks: '164',
-      memories: '27',
-    },
-    prompt: [
-      'You are Builder, an autonomous engineering agent operating inside the Progenitor workspace.',
-      '',
-      'Complete assigned tasks end-to-end: read context, plan briefly, edit carefully, validate, and hand off concise results.',
-      '',
-      'Use connected tools, repositories, and knowledge bases before guessing. Prefer existing project patterns.',
-    ].join('\n'),
-  },
-  {
-    id: 'planner',
-    group: 'Core',
-    name: 'Planner',
-    handle: '@planner',
-    initials: 'P',
-    color: '#6f86c4',
-    status: 'running',
-    model: 'gpt-5',
-    role: 'Decomposes goals into executable work',
-    version: 'v0.1.0',
-    updated: '4m',
-    summary: 'Turns broad requests into scoped tasks, dependencies, and acceptance checks.',
-    tools: [
-      { name: 'todos', type: 'MCP', calls: '512', enabled: true },
-      { name: 'github', type: 'MCP', calls: '88', enabled: true },
-      { name: 'knowledge', type: 'MCP', calls: '303', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-      { name: 'planning-playground', branch: 'main', access: 'write' },
-    ],
-    knowledge: [
-      { name: 'Architecture decisions', freshness: 'today', records: '91' },
-      { name: 'Project roadmap', freshness: '4h old', records: '37' },
-    ],
-    memories: [
-      { title: 'User prefers direct execution from plans', scope: 'user', age: '1w' },
-      { title: 'Keep page-specific work after chrome', scope: 'workspace', age: 'today' },
-    ],
-    sessions: [
-      { title: 'Chrome migration rollout', outcome: 'complete', age: '2d' },
-      { title: 'Tools page planning', outcome: 'complete', age: '36m' },
-    ],
-    tasks: [
-      { title: 'Split page work into pane/detail units', state: 'complete', age: 'today' },
-      { title: 'Draft quality checklist', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '842',
-      sessions: '24',
-      tasks: '318',
-      memories: '19',
-    },
-    prompt: 'You are Planner. Convert high-level goals into practical work queues, dependencies, and crisp acceptance criteria.',
-  },
-  {
-    id: 'observer',
-    group: 'Core',
-    name: 'Observer',
-    handle: '@observer',
-    initials: 'O',
-    color: '#22a06b',
-    status: 'running',
-    model: 'observe-agent',
-    role: 'Monitors runtime health and workspace activity',
-    version: 'v0.2.0',
-    updated: '8m',
-    summary: 'Watches logs, sessions, and tasks for signals that need agent attention.',
-    tools: [
-      { name: 'logs', type: 'native', calls: '1,020', enabled: true },
-      { name: 'sqlite', type: 'MCP', calls: '288', enabled: true },
-      { name: 'metrics', type: 'native', calls: '604', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Runtime incidents', freshness: 'live', records: '12' },
-      { name: 'Heartbeat evaluations', freshness: 'today', records: '28' },
-    ],
-    memories: [
-      { title: 'Live evaluator command', scope: 'repository', age: '3d' },
-      { title: 'Heartbeat callbacks require async coverage', scope: 'repository', age: '3d' },
-    ],
-    sessions: [
-      { title: 'Heartbeat live evaluation', outcome: 'complete', age: '1d' },
-      { title: 'Status bar connection cleanup', outcome: 'complete', age: '3h' },
-    ],
-    tasks: [
-      { title: 'Watch long-running tools', state: 'active', age: 'now' },
-      { title: 'Summarize stalled sessions', state: 'queued', age: '30m' },
-    ],
-    metrics: {
-      invocations: '2,418',
-      sessions: '57',
-      tasks: '89',
-      memories: '34',
-    },
-    prompt: 'You are Observer. Watch the workspace for anomalies, drift, and useful signals. Report clearly and avoid noise.',
-  },
-  {
-    id: 'reviewer',
-    group: 'Planning and review',
-    name: 'Reviewer',
-    handle: '@reviewer',
-    initials: 'R',
-    color: '#c98e5a',
-    status: 'running',
-    model: 'claude-haiku-4.5',
-    role: 'Reviews changes for correctness',
-    version: 'v0.1.0',
-    updated: '18m',
-    summary: 'Checks patches, tests, and behavior before a task is considered complete.',
-    tools: [
-      { name: 'git diff', type: 'native', calls: '164', enabled: true },
-      { name: 'tests', type: 'native', calls: '78', enabled: true },
-      { name: 'github', type: 'MCP', calls: '42', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-      { name: 'agent-runtime', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Code review rubric', freshness: 'today', records: '14' },
-      { name: 'Testing conventions', freshness: '1d old', records: '22' },
-    ],
-    memories: [
-      { title: 'No broad silent fallbacks', scope: 'repository', age: 'today' },
-      { title: 'Prefer precise edits over rewrites', scope: 'workspace', age: 'today' },
-    ],
-    sessions: [
-      { title: 'Chat page markdown review', outcome: 'complete', age: '4h' },
-      { title: 'Tools pane consistency check', outcome: 'complete', age: '25m' },
-    ],
-    tasks: [
-      { title: 'Review agents page structure', state: 'queued', age: 'next' },
-      { title: 'Check responsive shell layout', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '694',
-      sessions: '31',
-      tasks: '112',
-      memories: '21',
-    },
-    prompt: 'You are Reviewer. Find correctness issues that matter. Ignore style-only noise unless it affects usability.',
-  },
-  {
-    id: 'researcher',
-    group: 'Planning and review',
-    name: 'Researcher',
-    handle: '@researcher',
-    initials: 'Re',
-    color: '#a78bfa',
-    status: 'paused',
-    model: 'gemini-2.5-pro',
-    role: 'Grounds unknowns in external or repo context',
-    version: 'v0.1.0',
-    updated: '1h',
-    summary: 'Collects citations, examples, and compatibility notes for unfamiliar work.',
-    tools: [
-      { name: 'web search', type: 'MCP', calls: '244', enabled: true },
-      { name: 'github search', type: 'MCP', calls: '138', enabled: true },
-      { name: 'knowledge', type: 'MCP', calls: '119', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'MCP protocol notes', freshness: '1w old', records: '56' },
-      { name: 'Design reference captures', freshness: 'today', records: '76' },
-    ],
-    memories: [
-      { title: 'Use citations for research claims', scope: 'workspace', age: '4d' },
-      { title: 'Prototype visuals live in new/', scope: 'repository', age: 'today' },
-    ],
-    sessions: [
-      { title: 'MCP server page reference', outcome: 'complete', age: '52m' },
-      { title: 'Agent Workspace prototype pass', outcome: 'complete', age: 'today' },
-    ],
-    tasks: [
-      { title: 'Compare agent profile layouts', state: 'paused', age: '1h' },
-      { title: 'Collect model picker references', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '388',
-      sessions: '15',
-      tasks: '64',
-      memories: '18',
-    },
-    prompt: 'You are Researcher. Find grounded context, cite sources, and summarize only the parts that change the plan.',
-  },
-  {
-    id: 'indexer',
-    group: 'Background',
-    name: 'Indexer',
-    handle: '@indexer',
-    initials: 'I',
-    color: '#58a6ff',
-    status: 'running',
-    model: 'local-embed',
-    role: 'Keeps knowledge and repository indexes warm',
-    version: 'v0.3.0',
-    updated: '2m',
-    summary: 'Indexes files, memories, and session artifacts for fast retrieval.',
-    tools: [
-      { name: 'filesystem', type: 'MCP', calls: '1,448', enabled: true },
-      { name: 'embeddings', type: 'native', calls: '902', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-      { name: 'progenitor-docs', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Repository symbols', freshness: 'live', records: '12.4k' },
-      { name: 'Session artifacts', freshness: 'live', records: '249' },
-    ],
-    memories: [
-      { title: 'Session screenshots are not committed', scope: 'workspace', age: 'today' },
-      { title: 'Frontend screenshots saved under files/', scope: 'workspace', age: 'today' },
-    ],
-    sessions: [
-      { title: 'Knowledge page mock data refresh', outcome: 'complete', age: '5h' },
-      { title: 'Repository tree indexing', outcome: 'complete', age: '1d' },
-    ],
-    tasks: [
-      { title: 'Embed new frontend files', state: 'active', age: 'now' },
-      { title: 'Compact old session traces', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '4,902',
-      sessions: '12',
-      tasks: '41',
-      memories: '86',
-    },
-    prompt: 'You are Indexer. Keep workspace knowledge current, lightweight, and easy for other agents to query.',
-  },
-  {
-    id: 'watchdog',
-    group: 'Background',
-    name: 'Watchdog',
-    handle: '@watchdog',
-    initials: 'W',
-    color: '#ef6c2a',
-    status: 'paused',
-    model: 'gpt-5-mini',
-    role: 'Guards long-running jobs and stalled queues',
-    version: 'v0.1.0',
-    updated: '36m',
-    summary: 'Tracks timeouts, retries, and background work that needs intervention.',
-    tools: [
-      { name: 'processes', type: 'native', calls: '184', enabled: true },
-      { name: 'logs', type: 'native', calls: '268', enabled: true },
-      { name: 'alerts', type: 'MCP', calls: '31', enabled: false },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Operational runbooks', freshness: '3d old', records: '18' },
-      { name: 'Known flaky checks', freshness: 'today', records: '7' },
-    ],
-    memories: [
-      { title: 'Do not kill processes by name', scope: 'workspace', age: 'today' },
-      { title: 'Use detached mode for persistent servers', scope: 'workspace', age: 'today' },
-    ],
-    sessions: [
-      { title: 'Dev server smoke check', outcome: 'complete', age: '3h' },
-      { title: 'Playwright route verification', outcome: 'complete', age: '1h' },
-    ],
-    tasks: [
-      { title: 'Watch frontend preview server', state: 'paused', age: '36m' },
-      { title: 'Alert on failed build loop', state: 'queued', age: 'later' },
-    ],
-    metrics: {
-      invocations: '528',
-      sessions: '9',
-      tasks: '73',
-      memories: '11',
-    },
-    prompt: 'You are Watchdog. Detect stalls and risky process states. Escalate with precise evidence and safe actions.',
-  },
+// Workflow step kinds offered in the canvas dock (drag onto the canvas or click
+// to add). Mirrors the backend VALID_NODE_KINDS executable schema.
+const GRAPH_NODE_KINDS = [
+  { kind: 'start', label: 'Start', icon: '▶' },
+  { kind: 'ask', label: 'Ask', icon: '?' },
+  { kind: 'tool', label: 'Tool', icon: '⚙' },
+  { kind: 'decision', label: 'Decision', icon: '⑃' },
+  { kind: 'end', label: 'End', icon: '■' },
 ];
 
-const AGENT_GRAPH_BLUEPRINTS = {
-  builder: {
-    status: 'Designed',
-    summary: 'DeepAgent implementation subagent with a LangGraph-style build loop and validation gate.',
-    nodes: [
-      { id: 'intake', label: 'Task intake', kind: 'input', detail: 'Normalize user goal, repo context, and constraints.', x: 0, y: 70 },
-      { id: 'observe', label: 'Observe', kind: 'state', detail: 'Read files, plans, todos, memories, and tool output.', x: 210, y: 25 },
-      { id: 'plan', label: 'Plan', kind: 'reason', detail: 'Choose edits, risks, and validation strategy.', x: 410, y: 92 },
-      { id: 'build', label: 'Build', kind: 'action', detail: 'Patch code and update mock data or UI surfaces.', x: 630, y: 28 },
-      { id: 'validate', label: 'Validate', kind: 'check', detail: 'Run lint, build, route smoke, and focused tests.', x: 840, y: 92 },
-      { id: 'handoff', label: 'Handoff', kind: 'output', detail: 'Summarize what changed and remaining risks.', x: 1040, y: 52 },
-    ],
-    edges: [
-      ['intake', 'observe'],
-      ['observe', 'plan'],
-      ['plan', 'build'],
-      ['build', 'validate'],
-      ['validate', 'handoff'],
-      ['validate', 'plan', 'fix loop'],
-    ],
-  },
-  planner: {
-    status: 'Drafting',
-    summary: 'Planning subagent that turns high-level intent into prioritized work and acceptance checks.',
-    nodes: [
-      { id: 'goal', label: 'Goal', kind: 'input', detail: 'Capture desired outcome and constraints.', x: 20, y: 74 },
-      { id: 'breakdown', label: 'Breakdown', kind: 'reason', detail: 'Split work into coherent slices.', x: 255, y: 30 },
-      { id: 'dependencies', label: 'Dependencies', kind: 'state', detail: 'Order tasks by dependency and readiness.', x: 505, y: 106 },
-      { id: 'criteria', label: 'Acceptance', kind: 'check', detail: 'Define what proves each slice is done.', x: 760, y: 34 },
-      { id: 'queue', label: 'Todo queue', kind: 'output', detail: 'Write executable planner items.', x: 1000, y: 82 },
-    ],
-    edges: [
-      ['goal', 'breakdown'],
-      ['breakdown', 'dependencies'],
-      ['dependencies', 'criteria'],
-      ['criteria', 'queue'],
-    ],
-  },
-  observer: {
-    status: 'Live',
-    summary: 'Runtime monitor subagent with a lightweight graph for signal collection and escalation.',
-    nodes: [
-      { id: 'heartbeat', label: 'Heartbeat', kind: 'input', detail: 'Listen to status events and runtime cycles.', x: 40, y: 45 },
-      { id: 'logs', label: 'Logs', kind: 'state', detail: 'Read recent backend and agent events.', x: 255, y: 115 },
-      { id: 'score', label: 'Signal score', kind: 'reason', detail: 'Filter noise and detect drift.', x: 505, y: 55 },
-      { id: 'escalate', label: 'Escalate', kind: 'action', detail: 'Open task or alert only when useful.', x: 760, y: 120 },
-      { id: 'memory', label: 'Memory update', kind: 'output', detail: 'Preserve durable operational facts.', x: 1010, y: 52 },
-    ],
-    edges: [
-      ['heartbeat', 'logs'],
-      ['logs', 'score'],
-      ['score', 'escalate'],
-      ['score', 'memory'],
-      ['escalate', 'heartbeat', 'watch'],
-    ],
-  },
-  researcher: {
-    status: 'Optional',
-    summary: 'Research subagent graph focused on collecting grounded context before implementation.',
-    nodes: [
-      { id: 'question', label: 'Question', kind: 'input', detail: 'Clarify the unknown being researched.', x: 40, y: 88 },
-      { id: 'sources', label: 'Sources', kind: 'action', detail: 'Search repo, docs, web, and GitHub.', x: 285, y: 34 },
-      { id: 'evidence', label: 'Evidence', kind: 'state', detail: 'Keep cited facts and discard weak signals.', x: 540, y: 110 },
-      { id: 'synthesis', label: 'Synthesis', kind: 'reason', detail: 'Turn findings into a decision-changing summary.', x: 800, y: 45 },
-      { id: 'handoff', label: 'Handoff', kind: 'output', detail: 'Return concise findings with citations.', x: 1040, y: 92 },
-    ],
-    edges: [
-      ['question', 'sources'],
-      ['sources', 'evidence'],
-      ['evidence', 'synthesis'],
-      ['synthesis', 'handoff'],
-    ],
-  },
+// Accent per kind (kept in sync with the .agents-graph-node--* CSS and used by
+// the minimap so steps read at a glance).
+const GRAPH_KIND_COLORS = {
+  start: '#2f9e6f',
+  ask: '#2f6ff6',
+  tool: '#b06ef6',
+  decision: '#e0a23a',
+  end: '#6b7280',
 };
 
-const DEFAULT_AGENT_GRAPH_NODES = [
-  { id: 'input', label: 'Input', kind: 'input', detail: 'Receive delegated work or scheduled trigger.', x: 50, y: 80 },
-  { id: 'context', label: 'Context', kind: 'state', detail: 'Load tools, repositories, memories, and skills.', x: 305, y: 34 },
-  { id: 'think', label: 'Think', kind: 'reason', detail: 'Choose the next graph step.', x: 560, y: 112 },
-  { id: 'act', label: 'Act', kind: 'action', detail: 'Call tools or update task state.', x: 815, y: 42 },
-  { id: 'return', label: 'Return', kind: 'output', detail: 'Send result back to the parent DeepAgent graph.', x: 1055, y: 92 },
-];
+const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
 
-const DEFAULT_AGENT_GRAPH_EDGES = [
-  ['input', 'context'],
-  ['context', 'think'],
-  ['think', 'act'],
-  ['act', 'return'],
-  ['act', 'think', 'retry'],
-];
+function minimapNodeColor(node) {
+  return GRAPH_KIND_COLORS[node?.data?.kind] || '#8b949e';
+}
+
+const FALLBACK_GRAPH = {
+  status: 'Draft',
+  summary: '',
+  nodes: [],
+  edges: [],
+};
 
 function normalizeStatus(status) {
-  if (status === 'draft') {
+  if (!status || status === 'draft') {
     return 'Drafts';
   }
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function createAgentGraph(agent) {
-  return {
-    status: 'Draft',
-    summary: `${agent.name} is modeled as a DeepAgent subagent with one editable LangGraph-style node graph.`,
-    nodes: DEFAULT_AGENT_GRAPH_NODES,
-    edges: DEFAULT_AGENT_GRAPH_EDGES,
-  };
-}
-
-function getAgentGraph(agent) {
-  return AGENT_GRAPH_BLUEPRINTS[agent.id] || agent.graph || createAgentGraph(agent);
-}
-
-function createDraftAgent(index) {
-  const agent = {
-    ...AGENT_TEMPLATES[0],
-    id: `draft-agent-${index}`,
-    group: 'Drafts',
-    name: `New Agent ${index}`,
-    handle: `@new_agent_${index}`,
-    initials: 'N',
-    color: '#8b949e',
-    status: 'draft',
-    model: 'choose-model',
-    role: 'Lightweight draft agent',
-    version: 'v0.0.1',
-    updated: 'new',
-    summary: 'A new mocked agent ready for tools, repositories, and knowledge.',
-    tools: [
-      { name: 'knowledge', type: 'MCP', calls: '0', enabled: true },
-      { name: 'todos', type: 'MCP', calls: '0', enabled: true },
-    ],
-    repositories: [
-      { name: 'progenitor', branch: 'main', access: 'read' },
-    ],
-    knowledge: [
-      { name: 'Workspace starter pack', freshness: 'new', records: '8' },
-    ],
-    memories: [
-      { title: 'Draft agent created from workspace UI', scope: 'workspace', age: 'now' },
-    ],
-    sessions: [],
-    tasks: [
-      { title: 'Configure role, model, and connected context', state: 'draft', age: 'now' },
-    ],
-    metrics: {
-      invocations: '0',
-      sessions: '0',
-      tasks: '1',
-      memories: '1',
-    },
-    prompt: 'Describe this agent role, the tools it can use, and when it should hand off to another agent.',
-  };
-  return {
-    ...agent,
-    graph: createAgentGraph(agent),
-  };
+function formatAge(iso) {
+  if (!iso) {
+    return '';
+  }
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) {
+    return '';
+  }
+  const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+  if (seconds < 60) return 'now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.round(hours / 24);
+  return `${days}d`;
 }
 
 function matchesAgent(agent, filter, search) {
-  const normalizedFilter = normalizeStatus(agent.status);
-  const matchesFilter = filter === 'All' || normalizedFilter === filter;
+  const matchesFilter = filter === 'All' || normalizeStatus(agent.status) === filter;
+  if (!matchesFilter) {
+    return false;
+  }
+  if (!search) {
+    return true;
+  }
   const haystack = [
     agent.name,
     agent.handle,
     agent.model,
     agent.role,
     agent.summary,
-    ...agent.tools.map((tool) => tool.name),
-    ...agent.repositories.map((repo) => repo.name),
-    ...agent.knowledge.map((item) => item.name),
-  ].join(' ').toLowerCase();
-  return matchesFilter && (!search || haystack.includes(search.toLowerCase()));
+    ...(agent.skills || []).map((skill) => skill.name),
+    ...(agent.tools || []).map((tool) => tool.name),
+    ...(agent.repositories || []).map((repo) => repo.name),
+    ...(agent.knowledge || []).map((item) => item.name),
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+  return haystack.includes(search.toLowerCase());
 }
 
 function groupAgents(agents) {
   return agents.reduce((groups, agent) => {
-    if (!groups[agent.group]) {
-      groups[agent.group] = [];
+    const key = agent.group || 'Agents';
+    if (!groups[key]) {
+      groups[key] = [];
     }
-    groups[agent.group].push(agent);
+    groups[key].push(agent);
     return groups;
   }, {});
 }
 
 function StatusPill({ status }) {
+  const label = status || 'draft';
   return (
-    <span className={`agents-status-pill agents-status-pill--${status}`}>
+    <span className={`agents-status-pill agents-status-pill--${label}`}>
       <span className="adot" />
-      {status}
+      {label}
     </span>
   );
 }
@@ -575,15 +190,15 @@ function AgentRow({ agent, selected, onSelect }) {
     >
       <span className="sess-row__top">
         <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${agent.status}`} />
-        <span className="sess-row__agent agents-agent-row__name" style={{ color: agent.color }}>{agent.name}</span>
+        <span className="sess-row__agent agents-agent-row__name" style={{ '--agent-color': agent.color }}>{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
-      <span className="sess-row__age">{agent.updated}</span>
+      <span className="sess-row__age">{formatAge(agent.updated)}</span>
       <span className="sess-row__title">{agent.role}</span>
       <span className="sess-row__msgs">
-        <span><span className="num">{agent.tools.length}</span> tools</span>
-        <span><span className="num">{agent.repositories.length}</span> repos</span>
-        <span><span className="num">{agent.knowledge.length}</span> knowledge</span>
+        <span><span className="num">{(agent.tools || []).length}</span> tools</span>
+        <span><span className="num">{(agent.repositories || []).length}</span> repos</span>
+        <span><span className="num">{(agent.knowledge || []).length}</span> knowledge</span>
       </span>
     </button>
   );
@@ -624,160 +239,893 @@ function ConnectionRow({ icon, title, detail, meta, tone }) {
   );
 }
 
-function AgentGraphNode({ data }) {
+function CapabilityChip({ label, on }) {
   return (
-    <div className={`agents-graph-node agents-graph-node--${data.kind}`} style={{ '--node-color': data.color }}>
-      <Handle type="target" position={Position.Left} />
-      <div className="agents-graph-node__kind">{data.kind}</div>
-      <strong>{data.label}</strong>
-      <p>{data.detail}</p>
-      <Handle type="source" position={Position.Right} />
+    <span className={`agents-chip ${on ? 'agents-chip--ok' : 'agents-chip--muted'}`}>
+      {label}: {on ? 'yes' : 'no'}
+    </span>
+  );
+}
+
+function CardFact({ label, children }) {
+  return (
+    <div className="agents-card-fact">
+      <span className="agents-card-fact__label">{label}</span>
+      <span className="agents-card-fact__value">{children}</span>
     </div>
   );
 }
 
-const agentGraphNodeTypes = {
-  agentGraph: AgentGraphNode,
-};
+// Detail pane for A2A agents: everything shown is sourced from the live agent
+// card (capabilities, transport, protocol, interaction modes, skills), not the
+// subagent definition fields, which do not apply to a remote A2A server.
+function A2ADetailBody({ agent }) {
+  const card = agent.card || {};
+  const capabilities = card.capabilities || {};
+  const inputModes = card.inputModes || [];
+  const outputModes = card.outputModes || [];
+  const provider = card.provider || {};
+  const skills = agent.skills || [];
+  const tasks = agent.tasks || [];
+  const checkpoints = agent.metrics?.checkpoints ?? new Set(tasks.map((t) => t.context_id).filter(Boolean)).size;
 
-function toFlowNode(node, agent) {
-  return {
+  return (
+    <div className="agents-detail__body">
+      <div className="agents-metrics">
+        <MetricCard label="Skills" value={skills.length} detail="advertised" />
+        <MetricCard label="Tasks" value={agent.metrics?.tasks ?? tasks.length} detail="A2A runs" />
+        <MetricCard label="Checkpoints" value={checkpoints} detail="conversation threads" />
+        <MetricCard label="Protocol" value={card.protocolVersion || '—'} detail="A2A version" />
+      </div>
+
+      <section className="agents-section">
+        <header className="agents-section__head"><h2>Agent card</h2></header>
+        <div className="agents-card-facts">
+          {agent.summary ? <CardFact label="Description">{agent.summary}</CardFact> : null}
+          {agent.url ? (
+            <CardFact label="Endpoint">
+              <a className="agents-agent-url" href={agent.url} target="_blank" rel="noreferrer">{agent.url}</a>
+            </CardFact>
+          ) : null}
+          {provider.organization ? (
+            <CardFact label="Provider">
+              {provider.url ? (
+                <a className="agents-agent-url" href={provider.url} target="_blank" rel="noreferrer">{provider.organization}</a>
+              ) : provider.organization}
+            </CardFact>
+          ) : null}
+          {card.documentationUrl ? (
+            <CardFact label="Docs">
+              <a className="agents-agent-url" href={card.documentationUrl} target="_blank" rel="noreferrer">{card.documentationUrl}</a>
+            </CardFact>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="agents-section">
+        <header className="agents-section__head"><h2>Capabilities</h2></header>
+        <div className="agents-chip-row">
+          <CapabilityChip label="Streaming" on={!!capabilities.streaming} />
+          <CapabilityChip label="Push notifications" on={!!capabilities.pushNotifications} />
+          <CapabilityChip label="State history" on={!!capabilities.stateTransitionHistory} />
+        </div>
+      </section>
+
+      {inputModes.length || outputModes.length ? (
+        <section className="agents-section">
+          <header className="agents-section__head"><h2>Interaction modes</h2></header>
+          <div className="agents-card-facts">
+            {inputModes.length ? (
+              <CardFact label="Input">
+                <span className="agents-chip-row">
+                  {inputModes.map((mode) => <span key={mode} className="agents-chip agents-chip--info">{mode}</span>)}
+                </span>
+              </CardFact>
+            ) : null}
+            {outputModes.length ? (
+              <CardFact label="Output">
+                <span className="agents-chip-row">
+                  {outputModes.map((mode) => <span key={mode} className="agents-chip agents-chip--info">{mode}</span>)}
+                </span>
+              </CardFact>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
+      <MiniListSection title="Skills" count={`${skills.length} advertised`}>
+        <div className="agents-skill-list">
+          {skills.length ? skills.map((skill) => (
+            <article key={skill.id || skill.name} className="agents-skill-card">
+              <header className="agents-skill-card__head">
+                <strong>{skill.name || skill.id}</strong>
+                <span className="agents-chip-row">
+                  {(skill.tags || []).map((tag) => <span key={tag} className="agents-chip agents-chip--info">{tag}</span>)}
+                </span>
+              </header>
+              {skill.description ? <p className="agents-skill-card__desc">{skill.description}</p> : null}
+              {(skill.examples || []).length ? (
+                <ul className="agents-skill-card__examples">
+                  {skill.examples.map((example) => <li key={example}><code>{example}</code></li>)}
+                </ul>
+              ) : null}
+            </article>
+          )) : <div className="agents-empty-state">No skills advertised.</div>}
+        </div>
+      </MiniListSection>
+
+      <MiniListSection title="Recent tasks" count={`${tasks.length} tracked`}>
+        <div className="agents-skill-list">
+          {tasks.length ? tasks.map((task) => (
+            <article key={task.id} className="agents-skill-card">
+              <header className="agents-skill-card__head">
+                <strong>{task.title || task.id || '(task)'}</strong>
+                <span className="agents-chip-row">
+                  <span className={`agents-chip agents-chip--${TASK_TONE[task.status] || 'muted'}`}>{task.status}</span>
+                  {task.updated ? <span className="agents-skill-card__time">{formatAge(task.updated)}</span> : null}
+                </span>
+              </header>
+              {task.summary ? <p className="agents-skill-card__desc">{task.summary}</p> : null}
+              <p className="agents-task-meta">
+                {task.source || 'a2a'}{task.context_id ? ` · thread ${task.context_id}` : ''}
+              </p>
+            </article>
+          )) : <div className="agents-empty-state">No A2A tasks yet.</div>}
+        </div>
+      </MiniListSection>
+    </div>
+  );
+}
+
+// Detail pane for DeepAgent subagents: definition-centric (system prompt, tools,
+// repositories, knowledge, and activity), reflecting their in-process nature.
+function SubagentDetailBody({ agent }) {
+  return (
+    <div className="agents-detail__body">
+      <div className="agents-metrics">
+        <MetricCard label="Invocations" value={agent.metrics?.invocations ?? '0'} detail="last 30 days" />
+        <MetricCard label="Sessions" value={agent.metrics?.sessions ?? '0'} detail="linked conversations" />
+        <MetricCard label="Tasks" value={agent.metrics?.tasks ?? '0'} detail="open and completed" />
+        <MetricCard label="Memories" value={agent.metrics?.memories ?? '0'} detail="available context" />
+      </div>
+
+      <section className="agents-section agents-section--prompt">
+        <header className="agents-section__head">
+          <h2>System prompt <span>{(agent.prompt || '').length} chars</span></h2>
+          <div>
+            <button type="button" className="repo-btn repo-btn--ghost">Edit</button>
+            <button type="button" className="repo-btn repo-btn--ghost">Diff</button>
+          </div>
+        </header>
+        <pre className="agents-prompt"><code>{agent.prompt || 'No system prompt set.'}</code></pre>
+      </section>
+
+      <div className="agents-detail-grid">
+        <MiniListSection title="Connected tools" count={`${(agent.tools || []).length} attached`} action="+ Add tool">
+          <div className="agents-connection-list">
+            {(agent.tools || []).length ? agent.tools.map((tool) => (
+              <ConnectionRow
+                key={tool.name}
+                icon={(tool.name || '').slice(0, 2)}
+                title={tool.name}
+                detail={`${tool.type} - ${tool.calls} calls`}
+                meta={tool.enabled ? 'on' : 'off'}
+                tone={tool.enabled ? 'ok' : 'muted'}
+              />
+            )) : <div className="agents-empty-state">No tools connected.</div>}
+          </div>
+        </MiniListSection>
+
+        <MiniListSection title="Repositories" count={`${(agent.repositories || []).length} connected`} action="+ Attach repo">
+          <div className="agents-connection-list">
+            {(agent.repositories || []).length ? agent.repositories.map((repo) => (
+              <ConnectionRow
+                key={`${repo.name}-${repo.branch}`}
+                icon="repo"
+                title={repo.name}
+                detail={`branch ${repo.branch}`}
+                meta={repo.access}
+                tone={repo.access === 'write' ? 'ok' : 'info'}
+              />
+            )) : <div className="agents-empty-state">No repositories connected.</div>}
+          </div>
+        </MiniListSection>
+
+        <MiniListSection title="Knowledge" count={`${(agent.knowledge || []).length} sources`} action="+ Link source">
+          <div className="agents-connection-list">
+            {(agent.knowledge || []).length ? agent.knowledge.map((item) => (
+              <ConnectionRow
+                key={item.name}
+                icon="kb"
+                title={item.name}
+                detail={`${item.records} records`}
+                meta={item.freshness}
+                tone="info"
+              />
+            )) : <div className="agents-empty-state">No knowledge linked.</div>}
+          </div>
+        </MiniListSection>
+      </div>
+
+      <div className="agents-activity-grid">
+        <MiniListSection title="Memories" count={`${(agent.memories || []).length} pinned`}>
+          <div className="agents-mini-list">
+            {(agent.memories || []).length ? agent.memories.map((memory) => (
+              <div key={memory.title} className="agents-mini-row">
+                <span className="agents-mini-row__icon">mem</span>
+                <div>
+                  <strong>{memory.title}</strong>
+                  <p>{memory.scope} - {memory.age}</p>
+                </div>
+              </div>
+            )) : <div className="agents-empty-state">No memories yet.</div>}
+          </div>
+        </MiniListSection>
+
+        <MiniListSection title="Sessions" count={`${(agent.sessions || []).length} recent`}>
+          <div className="agents-mini-list">
+            {(agent.sessions || []).length ? agent.sessions.map((session) => (
+              <div key={session.title} className="agents-mini-row">
+                <span className="agents-mini-row__icon">ses</span>
+                <div>
+                  <strong>{session.title}</strong>
+                  <p>{session.outcome} - {session.age}</p>
+                </div>
+              </div>
+            )) : <div className="agents-empty-state">No sessions yet.</div>}
+          </div>
+        </MiniListSection>
+
+        <MiniListSection title="Tasks" count={`${(agent.tasks || []).length} tracked`}>
+          <div className="agents-mini-list">
+            {(agent.tasks || []).length ? agent.tasks.map((task) => (
+              <div key={task.title} className="agents-mini-row">
+                <span className="agents-mini-row__icon">tsk</span>
+                <div>
+                  <strong>{task.title}</strong>
+                  <p>{task.state} - {task.age}</p>
+                </div>
+                <span className={`agents-chip agents-chip--${task.state === 'active' ? 'ok' : 'info'}`}>{task.state}</span>
+              </div>
+            )) : <div className="agents-empty-state">No tasks tracked.</div>}
+          </div>
+        </MiniListSection>
+      </div>
+    </div>
+  );
+}
+
+// Edit callbacks shared with the custom node/edge renderers (avoids threading
+// mutable refs through node data, which React forbids reading during render).
+const GraphEditContext = createContext({ updateNodeData: () => {}, updateEdgeLabel: () => {} });
+
+// Inline-editable workflow step, styled like the Workspace canvas nodes: a title
+// bar (type-icon chip + editable label + kind badge) over a body whose content is
+// editable per kind. Edits are autosaved by the canvas.
+function EditableGraphNode({ id, data, selected }) {
+  const { updateNodeData } = useContext(GraphEditContext);
+  const hasTarget = data.kind !== 'start';
+  const hasSource = data.kind !== 'end';
+  const hasBody = data.kind === 'ask' || data.kind === 'decision' || data.kind === 'tool';
+  return (
+    <div
+      className={`workspace-node agents-graph-node agents-graph-node--${data.kind} ${selected ? 'selected' : ''}`}
+      style={{ '--node-color': GRAPH_KIND_COLORS[data.kind] || data.color }}
+    >
+      {hasTarget ? <Handle type="target" position={Position.Left} className="workspace-handle" /> : null}
+      <div className="node-title-bar drag-handle">
+        <span className="node-type-icon">{GRAPH_KIND_ICONS[data.kind] || '•'}</span>
+        <input
+          className="nodrag node-title agents-node-title"
+          value={data.label || ''}
+          placeholder="Label"
+          onChange={(event) => updateNodeData(id, { label: event.target.value })}
+        />
+        <span className="node-status-badge agents-node-kind-badge">{data.kind}</span>
+      </div>
+      {hasBody ? (
+        <div className="node-body node-body-compact">
+          {data.kind === 'tool' ? (
+            <input
+              className="nodrag agents-graph-node__toolinput"
+              value={data.tool || ''}
+              placeholder="tool name"
+              onChange={(event) => updateNodeData(id, { tool: event.target.value })}
+            />
+          ) : (
+            <textarea
+              className="nodrag nowheel agents-graph-node__prompt"
+              value={data.prompt || ''}
+              placeholder={data.kind === 'decision' ? 'Decision question…' : 'Prompt…'}
+              onChange={(event) => updateNodeData(id, { prompt: event.target.value })}
+            />
+          )}
+        </div>
+      ) : null}
+      {hasSource ? <Handle type="source" position={Position.Right} className="workspace-handle" /> : null}
+    </div>
+  );
+}
+
+// Edge with a double-click-to-edit label. Decision branches and retry loops use
+// the label to name the route.
+function EditableGraphEdge({
+  id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, label,
+}) {
+  const { updateEdgeLabel } = useContext(GraphEditContext);
+  const [edgePath, labelX, labelY] = getSmoothStepPath({
+    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition,
+  });
+  const [editing, setEditing] = useState(false);
+  const value = label ?? '';
+  return (
+    <>
+      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
+      <EdgeLabelRenderer>
+        <div
+          className="agents-graph-edge-label nodrag nopan"
+          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
+          onDoubleClick={() => setEditing(true)}
+        >
+          {editing ? (
+            <input
+              autoFocus
+              className="nodrag"
+              value={value}
+              onChange={(event) => updateEdgeLabel(id, event.target.value)}
+              onBlur={() => setEditing(false)}
+              onKeyDown={(event) => { if (event.key === 'Enter') setEditing(false); }}
+            />
+          ) : (
+            value ? <span>{value}</span> : <span className="agents-graph-edge-label__add">+ label</span>
+          )}
+        </div>
+      </EdgeLabelRenderer>
+    </>
+  );
+}
+
+const agentGraphNodeTypes = { agentGraph: EditableGraphNode };
+const agentGraphEdgeTypes = { editable: EditableGraphEdge };
+
+function seedNodes(graph, agent) {
+  return (graph.nodes || []).map((node, index) => ({
     id: node.id,
     type: 'agentGraph',
-    position: { x: Math.round(node.x * graphLayoutScale), y: node.y },
+    position: { x: node.x ?? index * 240, y: node.y ?? 80 },
     data: {
-      ...node,
+      kind: node.kind,
+      label: node.label ?? node.id,
+      prompt: node.prompt,
+      tool: node.tool,
+      detail: node.detail,
       color: agent.color,
     },
-  };
+  }));
 }
 
-function toFlowEdge(edge, index, agent) {
-  const [source, target, label] = edge;
+function seedEdges(graph, agent) {
+  return (graph.edges || []).map((edge, index) => {
+    const [source, target, label] = edge;
+    return {
+      id: `${source}-${target}-${index}`,
+      source,
+      target,
+      label,
+      type: 'editable',
+      animated: true,
+      style: { stroke: agent.color },
+      markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
+    };
+  });
+}
+
+// Serialize the live React Flow state back into the backend graph schema,
+// stripping the injected callbacks and keeping positions for round-tripping.
+function serializeGraph(nodes, edges, meta) {
   return {
-    id: `${source}-${target}-${index}`,
-    source,
-    target,
-    label,
-    type: 'smoothstep',
-    animated: true,
-    style: { stroke: agent.color },
-    markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
+    status: meta.status || 'Draft',
+    summary: meta.summary || '',
+    nodes: nodes.map((node) => {
+      const data = node.data || {};
+      const out = {
+        id: node.id,
+        kind: data.kind,
+        label: data.label,
+        x: Math.round(node.position?.x ?? 0),
+        y: Math.round(node.position?.y ?? 0),
+      };
+      if (data.prompt) out.prompt = data.prompt;
+      if (data.tool) out.tool = data.tool;
+      if (data.detail) out.detail = data.detail;
+      return out;
+    }),
+    edges: edges.map((edge) => (edge.label ? [edge.source, edge.target, String(edge.label)] : [edge.source, edge.target])),
   };
 }
 
-function AgentGraphCanvas({ agent, graph, onShowProfile }) {
-  const initialNodes = useMemo(
-    () => graph.nodes.map((node) => toFlowNode(node, agent)),
-    [agent, graph],
-  );
-  const initialEdges = useMemo(
-    () => graph.edges.map((edge, index) => toFlowEdge(edge, index, agent)),
-    [agent, graph],
-  );
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+function uniqueNodeId(kind, nodes) {
+  const ids = new Set(nodes.map((node) => node.id));
+  if (!ids.has(kind)) return kind;
+  let i = 1;
+  while (ids.has(`${kind}-${i}`)) i += 1;
+  return `${kind}-${i}`;
+}
 
+// The Sessions/Workspace canvas: an interactive React Flow editor with a bottom
+// dock of step kinds, a minimap (right), zoom controls (bottom-left), and inline
+// editable nodes/edges. Edits autosave (debounced) to the backend.
+function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onCloseJson }) {
+  const reactFlow = useReactFlow();
+  const wrapperRef = useRef(null);
+  const persistRef = useRef(onPersist);
+
+  const [nodes, setNodes, onNodesChange] = useNodesState(seedNodes(graph, agent));
+  const [edges, setEdges, onEdgesChange] = useEdgesState(seedEdges(graph, agent));
+  const [meta, setMeta] = useState({ status: graph.status || 'Draft', summary: graph.summary || '' });
+  const [saveState, setSaveState] = useState('idle');
+  const [saveError, setSaveError] = useState(null);
+
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+
+  const updateNodeData = useCallback((id, patch) => {
+    setNodes((current) => current.map((node) => (node.id === id ? { ...node, data: { ...node.data, ...patch } } : node)));
+  }, [setNodes]);
+
+  const updateEdgeLabel = useCallback((id, label) => {
+    setEdges((current) => current.map((edge) => (edge.id === id ? { ...edge, label } : edge)));
+  }, [setEdges]);
+
+  const editContext = useMemo(() => ({ updateNodeData, updateEdgeLabel }), [updateNodeData, updateEdgeLabel]);
+
+  // Keep refs in sync outside of render so callbacks/effects see the latest
+  // values (React forbids writing refs during render).
+  useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  useEffect(() => { edgesRef.current = edges; }, [edges]);
+
+  const addNode = useCallback((kind, position) => {
+    const id = uniqueNodeId(kind, nodesRef.current);
+    const point = position || (() => {
+      const rect = wrapperRef.current?.getBoundingClientRect();
+      if (!rect) return { x: 0, y: 0 };
+      return reactFlow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    })();
+    const data = {
+      kind,
+      label: kind.charAt(0).toUpperCase() + kind.slice(1),
+      color: agent.color,
+    };
+    if (kind === 'ask' || kind === 'decision') data.prompt = '';
+    if (kind === 'tool') data.tool = '';
+    setNodes((current) => [...current, { id, type: 'agentGraph', position: point, data }]);
+  }, [agent.color, reactFlow, setNodes]);
+
+  const onConnect = useCallback((params) => {
+    const sourceNode = nodesRef.current.find((node) => node.id === params.source);
+    const label = sourceNode?.data?.kind === 'decision' ? 'branch' : undefined;
+    setEdges((current) => addEdge({
+      ...params,
+      type: 'editable',
+      animated: true,
+      label,
+      style: { stroke: agent.color },
+      markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
+    }, current));
+  }, [agent.color, setEdges]);
+
+  const onDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onDrop = useCallback((event) => {
+    event.preventDefault();
+    const kind = event.dataTransfer.getData('application/agentgraph');
+    if (!kind) return;
+    const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    addNode(kind, position);
+  }, [addNode, reactFlow]);
+
+  // Delete selected nodes/edges on Delete/Backspace, but never while editing a
+  // node's text fields (so typing in a prompt doesn't remove the node).
   useEffect(() => {
-    setNodes(initialNodes);
-    setEdges(initialEdges);
-  }, [initialEdges, initialNodes, setEdges, setNodes]);
+    function handleKey(event) {
+      const tag = event.target.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
+      const selectedNodeIds = nodesRef.current.filter((node) => node.selected).map((node) => node.id);
+      const selectedEdgeIds = edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id);
+      if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
+      if (selectedNodeIds.length) {
+        const removed = new Set(selectedNodeIds);
+        setNodes((current) => current.filter((node) => !removed.has(node.id)));
+        setEdges((current) => current.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target) && !selectedEdgeIds.includes(edge.id)));
+      } else {
+        const removed = new Set(selectedEdgeIds);
+        setEdges((current) => current.filter((edge) => !removed.has(edge.id)));
+      }
+    }
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [setNodes, setEdges]);
 
-  function addDraftNode() {
-    setNodes((current) => {
-      const nextIndex = current.filter((node) => node.id.startsWith('draft-node')).length + 1;
-      return [
-        ...current,
-        {
-          id: `draft-node-${Date.now()}`,
-          type: 'agentGraph',
-          position: { x: 320 + nextIndex * 42, y: 280 },
-          data: {
-            kind: 'draft',
-            label: `Draft node ${nextIndex}`,
-            detail: 'Sketch a future LangGraph step for the builder agent to generate.',
-            color: agent.color,
-          },
-        },
-      ];
-    });
-  }
+  // Debounced autosave: serialize the working graph and PATCH it. The first run
+  // records the baseline so simply opening the tab does not trigger a save.
+  const lastSavedRef = useRef(null);
+  useEffect(() => {
+    const payload = serializeGraph(nodes, edges, meta);
+    const signature = JSON.stringify(payload);
+    if (lastSavedRef.current === null) {
+      lastSavedRef.current = signature;
+      return undefined;
+    }
+    if (signature === lastSavedRef.current) return undefined;
+    const timer = setTimeout(async () => {
+      setSaveState('saving');
+      try {
+        await persistRef.current(payload);
+        lastSavedRef.current = signature;
+        setSaveError(null);
+        setSaveState('saved');
+      } catch (error) {
+        setSaveError(error.message || 'Save failed');
+        setSaveState('error');
+      }
+    }, 700);
+    return () => clearTimeout(timer);
+  }, [nodes, edges, meta]);
+
+  const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
+
+  const handleJsonApply = useCallback(async (parsed) => {
+    const nextMeta = { status: parsed.status || 'Draft', summary: parsed.summary || '' };
+    setMeta(nextMeta);
+    const nextNodes = seedNodes(parsed, agent);
+    const nextEdges = seedEdges(parsed, agent);
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    const payload = { status: nextMeta.status, summary: nextMeta.summary, nodes: parsed.nodes, edges: parsed.edges };
+    await persistRef.current(payload);
+    lastSavedRef.current = JSON.stringify(serializeGraph(nextNodes, nextEdges, nextMeta));
+    setSaveError(null);
+    setSaveState('saved');
+  }, [agent, setNodes, setEdges]);
 
   return (
-    <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
-      <div className="agents-graph-shell">
-        <div className="agents-graph-canvas">
-          <div className="agents-graph-floating">
-            <span>{agent.name}</span>
-            <span>{nodes.length} nodes</span>
-            <button type="button" onClick={onShowProfile}>Details</button>
-            <button type="button" onClick={addDraftNode}>+ Node</button>
-          </div>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            nodeTypes={agentGraphNodeTypes}
-            defaultEdgeOptions={graphDefaultEdgeOptions}
-            fitView
-            fitViewOptions={graphFitViewOptions}
-            minZoom={0.6}
-            maxZoom={1.8}
-            snapToGrid
-            snapGrid={[16, 16]}
-            nodesConnectable={false}
-            deleteKeyCode={null}
+    <>
+      <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
+        <div className="agents-graph-shell">
+          <div
+            className="workspace-canvas agents-graph-canvas"
+            ref={wrapperRef}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
           >
-            <Background gap={18} size={1} color="var(--color-border)" variant="dots" />
-            <Controls showInteractive={false} />
-          </ReactFlow>
+            <div className="agents-graph-floating">
+              <span>{agent.name}</span>
+              <span>{nodes.length} nodes</span>
+              {saveState !== 'idle' ? (
+                <span className={`agents-graph-save agents-graph-save--${saveState}`}>
+                  {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
+                </span>
+              ) : null}
+              <button type="button" onClick={onShowProfile}>Details</button>
+            </div>
+            <GraphEditContext.Provider value={editContext}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                nodeTypes={agentGraphNodeTypes}
+                edgeTypes={agentGraphEdgeTypes}
+                defaultEdgeOptions={graphDefaultEdgeOptions}
+                fitView
+                fitViewOptions={graphFitViewOptions}
+                minZoom={0.3}
+                maxZoom={2}
+                snapToGrid
+                snapGrid={[16, 16]}
+                nodesConnectable
+                nodesDraggable
+                elementsSelectable
+                deleteKeyCode={null}
+                multiSelectionKeyCode="Shift"
+              >
+                <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
+                <Controls showInteractive={false} />
+                <MiniMap
+                  style={{ height: 100, width: 150 }}
+                  nodeColor={minimapNodeColor}
+                  maskColor="rgba(0, 0, 0, 0.6)"
+                  pannable
+                  zoomable
+                />
+              </ReactFlow>
+            </GraphEditContext.Provider>
+            <GraphDock onAdd={addNode} />
+          </div>
+          {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
         </div>
-      </div>
-    </section>
+      </section>
+      {jsonOpen ? (
+        <AgentGraphEditor
+          key={agent.id}
+          graph={workingGraph}
+          onSave={handleJsonApply}
+          onClose={onCloseJson}
+        />
+      ) : null}
+    </>
   );
 }
 
-function AgentGraphTab({ agent, graph, onShowProfile }) {
+// Bottom-center dock of step kinds. Drag an item onto the canvas, or click to add
+// it at the canvas centre. Mirrors the Workspace dock.
+function GraphDock({ onAdd }) {
+  const onDragStart = (event, kind) => {
+    event.dataTransfer.setData('application/agentgraph', kind);
+    event.dataTransfer.effectAllowed = 'move';
+  };
+  return (
+    <div className="workspace-dock agents-graph-dock">
+      <div className="workspace-dock-shell">
+        {GRAPH_NODE_KINDS.map((item) => (
+          <button
+            key={item.kind}
+            type="button"
+            className={`workspace-dock-item agents-graph-dock__item--${item.kind}`}
+            draggable
+            onDragStart={(event) => onDragStart(event, item.kind)}
+            onClick={() => onAdd(item.kind)}
+          >
+            <span className={`workspace-dock-icon ${item.kind}`}>{item.icon}</span>
+            <span className="workspace-dock-tooltip">{item.label}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentGraphTab({ agent, graph, onPersist, onShowProfile, jsonOpen, onCloseJson }) {
   return (
     <ReactFlowProvider>
-      <AgentGraphCanvas key={agent.id} agent={agent} graph={graph} onShowProfile={onShowProfile} />
+      <GraphCanvas
+        agent={agent}
+        graph={graph}
+        onPersist={onPersist}
+        onShowProfile={onShowProfile}
+        jsonOpen={jsonOpen}
+        onCloseJson={onCloseJson}
+      />
     </ReactFlowProvider>
   );
 }
 
+function graphToJson(graph) {
+  return JSON.stringify(
+    {
+      status: graph.status || 'Draft',
+      summary: graph.summary || '',
+      nodes: graph.nodes || [],
+      edges: graph.edges || [],
+    },
+    null,
+    2,
+  );
+}
+
+// A lightweight JSON editor: an editable textarea overlaid on a highlight.js
+// rendered <pre> so the user gets JSON syntax highlighting while typing. The two
+// layers share identical typography so the caret/text line up; the textarea text
+// is transparent and the highlighted layer shows through.
+function JsonCodeEditor({ value, onChange }) {
+  const highlightRef = useRef(null);
+  const highlighted = useMemo(() => {
+    try {
+      return hljs.highlight(value, { language: 'json' }).value;
+    } catch {
+      return value;
+    }
+  }, [value]);
+
+  function syncScroll(event) {
+    const target = highlightRef.current;
+    if (target) {
+      target.scrollTop = event.target.scrollTop;
+      target.scrollLeft = event.target.scrollLeft;
+    }
+  }
+
+  return (
+    <div className="agents-graph-editor__code">
+      <pre ref={highlightRef} className="agents-graph-editor__highlight" aria-hidden="true">
+        <code
+          className="hljs language-json"
+          dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }}
+        />
+      </pre>
+      <textarea
+        className="agents-graph-editor__textarea"
+        spellCheck={false}
+        value={value}
+        onChange={onChange}
+        onScroll={syncScroll}
+      />
+    </div>
+  );
+}
+
+// Edit the agent graph by describing it as JSON conforming to the published
+// schema. The PATCH endpoint validates and persists; the broadcast updates the
+// canvas. Keyed by agent id so switching agents resets the draft.
+function AgentGraphEditor({ graph, onSave, onClose }) {
+  const [draft, setDraft] = useState(() => graphToJson(graph));
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  async function handleApply() {
+    let parsed;
+    try {
+      parsed = JSON.parse(draft);
+    } catch (parseError) {
+      setError(`Invalid JSON: ${parseError.message}`);
+      return;
+    }
+    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
+      setError('Graph must include "nodes" and "edges" arrays.');
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await onSave(parsed);
+      setSaved(true);
+    } catch (saveError) {
+      setError(saveError.message || 'Failed to save graph');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <aside className="agents-graph-editor">
+      <header className="agents-graph-editor__head">
+        <h2>Edit graph as JSON</h2>
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={onClose}>Close</button>
+      </header>
+      <JsonCodeEditor
+        value={draft}
+        onChange={(event) => { setDraft(event.target.value); setSaved(false); }}
+      />
+      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+      {saved ? <p className="agents-graph-editor__saved">Graph saved.</p> : null}
+      <div className="agents-graph-editor__actions">
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => { setDraft(graphToJson(graph)); setError(null); setSaved(false); }}>Reset</button>
+        <button type="button" className="repo-btn" onClick={handleApply} disabled={saving}>
+          {saving ? 'Saving…' : 'Apply changes'}
+        </button>
+      </div>
+    </aside>
+  );
+}
+
 function AgentsPage() {
-  const [customAgents, setCustomAgents] = useState([]);
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const realtime = useSelector(selectRealtime);
+  const agents = useSelector(selectAgentProfiles);
+  const agentsState = useSelector(selectAgentProfilesState);
+  const activeAgent = useSelector(selectActiveAgentProfile);
+
+  const { agentId: routeAgentId, tab: routeTab } = useParams();
+  const navigate = useNavigate();
+
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
-  const [selectedAgentId, setSelectedAgentId] = useState(AGENT_TEMPLATES[0].id);
-  const [activeDetailTab, setActiveDetailTab] = useState('Details');
+  const [graphEditorOpen, setGraphEditorOpen] = useState(false);
 
-  const agents = useMemo(() => [...AGENT_TEMPLATES, ...customAgents], [customAgents]);
-  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) || agents[0];
-  const selectedGraph = useMemo(() => getAgentGraph(selectedAgent), [selectedAgent]);
+  // Selection and active tab are derived from the URL (/agents/<id>/<tab>) so the
+  // view is refreshable and shareable; user actions navigate rather than setState.
+  const selectedAgentId = routeAgentId ?? null;
+  const activeDetailTab = routeTab === 'graph' ? 'Graph' : 'Details';
+
+  const agentsUrl = getApiUrl('agentProfiles');
+  const requestedListRef = useRef(null);
+
+  // Load the agent list once the realtime stream is connected; the snapshot
+  // arrives on the stream (the GET just acknowledges and triggers it).
+  useEffect(() => {
+    if (!realtime.connected) {
+      requestedListRef.current = null;
+      return;
+    }
+    if (requestedListRef.current === agentsUrl) {
+      return;
+    }
+    requestedListRef.current = agentsUrl;
+    dispatch(fetchAgentProfiles({ agentsUrl }));
+  }, [agentsUrl, dispatch, realtime.connected]);
+
+  // Selection defaults to the first agent without writing state in an effect.
+  const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
+
+  const selectAgent = useCallback((id) => {
+    navigate(`/agents/${encodeURIComponent(id)}/${activeDetailTab.toLowerCase()}`);
+  }, [navigate, activeDetailTab]);
+  const selectTab = useCallback((tab) => {
+    if (!effectiveAgentId) return;
+    navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/${tab.toLowerCase()}`);
+  }, [navigate, effectiveAgentId]);
+
+  // Request the full profile (incl. graph) whenever the selection changes.
+  useEffect(() => {
+    if (!effectiveAgentId) {
+      return;
+    }
+    dispatch(requestAgentDetail({
+      agentsUrl,
+      agentId: effectiveAgentId,
+      requestId: `${effectiveAgentId}-${Date.now()}`,
+    }));
+  }, [agentsUrl, dispatch, effectiveAgentId]);
+
+  const listAgent = useMemo(
+    () => agents.find((agent) => agent.id === effectiveAgentId) || null,
+    [agents, effectiveAgentId],
+  );
+  const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
+  const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
+  // A2A agents are read-only (no editable graph), so they only get the Details tab.
+  const isA2A = selectedAgent?.kind === 'a2a';
+  const detailTabs = isA2A ? A2A_DETAIL_TABS : AGENT_DETAIL_TABS;
+  const effectiveDetailTab = isA2A ? 'Details' : activeDetailTab;
+
+  // Reflect the active agent + tab in the URL so the view is refreshable and
+  // shareable (e.g. /agents/subagent-code-reviewer/graph).
+  useEffect(() => {
+    if (!effectiveAgentId) return;
+    const tabSeg = effectiveDetailTab.toLowerCase();
+    const target = `/agents/${encodeURIComponent(effectiveAgentId)}/${tabSeg}`;
+    if (`${window.location.pathname}` !== target) {
+      navigate(target, { replace: true });
+    }
+  }, [effectiveAgentId, effectiveDetailTab, navigate]);
+
   const visibleAgents = useMemo(
     () => agents.filter((agent) => matchesAgent(agent, activeFilter, search)),
     [activeFilter, agents, search],
   );
   const groupedAgents = useMemo(() => groupAgents(visibleAgents), [visibleAgents]);
+  const groupOrder = useMemo(
+    () => [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))],
+    [visibleAgents],
+  );
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
-  const taskCount = agents.reduce((total, agent) => total + agent.tasks.length, 0);
-  const memoryCount = agents.reduce((total, agent) => total + agent.memories.length, 0);
-  const order = ['Core', 'Planning and review', 'Background', 'Drafts'];
+  const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
+  const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
 
-  function handleNewAgent() {
-    const nextAgent = createDraftAgent(customAgents.length + 1);
-    setCustomAgents((current) => [...current, nextAgent]);
-    setSelectedAgentId(nextAgent.id);
-    setActiveFilter('All');
-    setActiveDetailTab('Details');
+  async function handleSaveGraph(parsed) {
+    return dispatch(updateAgentGraph({
+      agentsUrl,
+      agentId: effectiveAgentId,
+      nodes: parsed.nodes,
+      edges: parsed.edges,
+      status: parsed.status,
+      summary: parsed.summary,
+    })).unwrap();
   }
 
   return (
     <div className="agents-page">
       <PaneList label="Agents" className="agents-pane">
-        <PaneListHeader title="Agents" count={agents.length} actionLabel="+ New agent" onAction={handleNewAgent} />
+        <PaneListHeader title="Agents" count={agents.length} />
         <PaneListFilters filters={AGENT_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
@@ -785,22 +1133,24 @@ function AgentsPage() {
         </PaneListToolbar>
         <PaneListScroll>
           {visibleAgents.length ? (
-            order.map((group) => (
+            groupOrder.map((group) => (
               groupedAgents[group]?.length ? (
                 <PaneListGroup key={group} title={group} count={groupedAgents[group].length}>
                   {groupedAgents[group].map((agent) => (
                     <AgentRow
                       key={agent.id}
                       agent={agent}
-                      selected={selectedAgent.id === agent.id}
-                      onSelect={setSelectedAgentId}
+                      selected={selectedAgent?.id === agent.id}
+                      onSelect={selectAgent}
                     />
                   ))}
                 </PaneListGroup>
               ) : null
             ))
           ) : (
-            <div className="agents-empty-state">No agents match this view.</div>
+            <div className="agents-empty-state">
+              {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}
+            </div>
           )}
         </PaneListScroll>
         <PaneListFooter>
@@ -810,10 +1160,11 @@ function AgentsPage() {
         </PaneListFooter>
       </PaneList>
 
-      <main className={`agents-detail ${activeDetailTab === 'Graph' ? 'is-graph-mode' : ''}`} aria-label={`${selectedAgent.name} profile`}>
+      {selectedAgent ? (
+        <main className={`agents-detail ${effectiveDetailTab === 'Graph' ? 'is-graph-mode' : ''}`} aria-label={`${selectedAgent.name} profile`}>
           <DetailHeader
             title={selectedAgent.name}
-            subtitle={`${selectedAgent.handle} · ${selectedAgent.version}`}
+            subtitle={`${selectedAgent.handle || ''}${selectedAgent.version ? ` · ${selectedAgent.version}` : ''}`}
             actions={(
               <DetailHeaderActions>
                 <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure agent" ariaLabel="Configure agent" />
@@ -829,135 +1180,57 @@ function AgentsPage() {
             )}
             meta={[
               <StatusPill key="status" status={selectedAgent.status} />,
-              <span key="model" className="sess-detail__model"><span className="adot" style={{ background: selectedAgent.color }} />{selectedAgent.model}</span>,
+              <span key="model" className="sess-detail__model" style={{ '--agent-color': selectedAgent.color }}><span className="adot adot--agent" />{selectedAgent.model}</span>,
               <span key="role" className="muted">{selectedAgent.role}</span>,
-              <span key="links" className="muted">{selectedAgent.tools.length} tools · {selectedAgent.repositories.length} repos · {selectedAgent.knowledge.length} knowledge</span>,
+              selectedAgent.url ? (
+                <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
+                  {selectedAgent.transport ? `${selectedAgent.transport} · ` : ''}{selectedAgent.url}
+                </a>
+              ) : null,
+              <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools · {(selectedAgent.repositories || []).length} repos · {(selectedAgent.knowledge || []).length} knowledge</span>,
             ]}
-            tabs={AGENT_DETAIL_TABS}
-            activeTab={activeDetailTab}
-            onTabChange={setActiveDetailTab}
+            tabs={detailTabs}
+            activeTab={effectiveDetailTab}
+            onTabChange={selectTab}
             tabLabel="Agent detail tabs"
           />
 
-        {activeDetailTab === 'Details' ? (
-        <div className="agents-detail__body">
-          <div className="agents-metrics">
-            <MetricCard label="Invocations" value={selectedAgent.metrics.invocations} detail="last 30 days" />
-            <MetricCard label="Sessions" value={selectedAgent.metrics.sessions} detail="linked conversations" />
-            <MetricCard label="Tasks" value={selectedAgent.metrics.tasks} detail="open and completed" />
-            <MetricCard label="Memories" value={selectedAgent.metrics.memories} detail="available context" />
+          {effectiveDetailTab === 'Details' ? (
+            isA2A
+              ? <A2ADetailBody agent={selectedAgent} />
+              : <SubagentDetailBody agent={selectedAgent} />
+          ) : (
+            <div className="agents-detail__body agents-detail__body--graph">
+              <div className="agents-graph-toolbar">
+                <button
+                  type="button"
+                  className={`repo-btn repo-btn--ghost ${graphEditorOpen ? 'is-active' : ''}`}
+                  onClick={() => setGraphEditorOpen((open) => !open)}
+                >
+                  {graphEditorOpen ? 'Hide JSON' : 'Edit as JSON'}
+                </button>
+              </div>
+              <div className={`agents-graph-layout ${graphEditorOpen ? 'is-editing' : ''}`}>
+                <AgentGraphTab
+                  key={selectedAgent.id}
+                  agent={selectedAgent}
+                  graph={selectedGraph}
+                  onPersist={handleSaveGraph}
+                  onShowProfile={() => selectTab('Details')}
+                  jsonOpen={graphEditorOpen}
+                  onCloseJson={() => setGraphEditorOpen(false)}
+                />
+              </div>
+            </div>
+          )}
+        </main>
+      ) : (
+        <main className="agents-detail" aria-label="Agent profile">
+          <div className="agents-empty-state agents-empty-state--detail">
+            {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}
           </div>
-
-          <section className="agents-section agents-section--prompt">
-            <header className="agents-section__head">
-              <h2>System prompt <span>{selectedAgent.prompt.length} chars</span></h2>
-              <div>
-                <button type="button" className="repo-btn repo-btn--ghost">Edit</button>
-                <button type="button" className="repo-btn repo-btn--ghost">Diff</button>
-              </div>
-            </header>
-            <pre className="agents-prompt"><code>{selectedAgent.prompt}</code></pre>
-          </section>
-
-          <div className="agents-detail-grid">
-            <MiniListSection title="Connected tools" count={`${selectedAgent.tools.length} attached`} action="+ Add tool">
-              <div className="agents-connection-list">
-                {selectedAgent.tools.map((tool) => (
-                  <ConnectionRow
-                    key={tool.name}
-                    icon={tool.name.slice(0, 2)}
-                    title={tool.name}
-                    detail={`${tool.type} - ${tool.calls} calls`}
-                    meta={tool.enabled ? 'on' : 'off'}
-                    tone={tool.enabled ? 'ok' : 'muted'}
-                  />
-                ))}
-              </div>
-            </MiniListSection>
-
-            <MiniListSection title="Repositories" count={`${selectedAgent.repositories.length} connected`} action="+ Attach repo">
-              <div className="agents-connection-list">
-                {selectedAgent.repositories.map((repo) => (
-                  <ConnectionRow
-                    key={`${repo.name}-${repo.branch}`}
-                    icon="repo"
-                    title={repo.name}
-                    detail={`branch ${repo.branch}`}
-                    meta={repo.access}
-                    tone={repo.access === 'write' ? 'ok' : 'info'}
-                  />
-                ))}
-              </div>
-            </MiniListSection>
-
-            <MiniListSection title="Knowledge" count={`${selectedAgent.knowledge.length} sources`} action="+ Link source">
-              <div className="agents-connection-list">
-                {selectedAgent.knowledge.map((item) => (
-                  <ConnectionRow
-                    key={item.name}
-                    icon="kb"
-                    title={item.name}
-                    detail={`${item.records} records`}
-                    meta={item.freshness}
-                    tone="info"
-                  />
-                ))}
-              </div>
-            </MiniListSection>
-
-          </div>
-
-          <div className="agents-activity-grid">
-            <MiniListSection title="Memories" count={`${selectedAgent.memories.length} pinned`}>
-              <div className="agents-mini-list">
-                {selectedAgent.memories.map((memory) => (
-                  <div key={memory.title} className="agents-mini-row">
-                    <span className="agents-mini-row__icon">mem</span>
-                    <div>
-                      <strong>{memory.title}</strong>
-                      <p>{memory.scope} - {memory.age}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </MiniListSection>
-
-            <MiniListSection title="Sessions" count={`${selectedAgent.sessions.length} recent`}>
-              <div className="agents-mini-list">
-                {selectedAgent.sessions.length ? selectedAgent.sessions.map((session) => (
-                  <div key={session.title} className="agents-mini-row">
-                    <span className="agents-mini-row__icon">ses</span>
-                    <div>
-                      <strong>{session.title}</strong>
-                      <p>{session.outcome} - {session.age}</p>
-                    </div>
-                  </div>
-                )) : <div className="agents-empty-state">No sessions yet.</div>}
-              </div>
-            </MiniListSection>
-
-            <MiniListSection title="Tasks" count={`${selectedAgent.tasks.length} tracked`}>
-              <div className="agents-mini-list">
-                {selectedAgent.tasks.map((task) => (
-                  <div key={task.title} className="agents-mini-row">
-                    <span className="agents-mini-row__icon">tsk</span>
-                    <div>
-                      <strong>{task.title}</strong>
-                      <p>{task.state} - {task.age}</p>
-                    </div>
-                    <span className={`agents-chip agents-chip--${task.state === 'active' ? 'ok' : 'info'}`}>{task.state}</span>
-                  </div>
-                ))}
-              </div>
-            </MiniListSection>
-          </div>
-        </div>
-        ) : (
-          <div className="agents-detail__body agents-detail__body--graph">
-            <AgentGraphTab agent={selectedAgent} graph={selectedGraph} onShowProfile={() => setActiveDetailTab('Details')} />
-          </div>
-        )}
-      </main>
+        </main>
+      )}
     </div>
   );
 }

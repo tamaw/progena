@@ -6,6 +6,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
@@ -37,7 +38,10 @@ class ChatServerConfig:
     # Progenitor IPC settings (socket-based communication)
     progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
     progenitor_ipc_port: int = 9500  # IPC server port
-    database_url: str = ""  # Postgres URL shared with Progenitor runtime state
+    database_url: str = ""  # Postgres URL for the Progenitor runtime database (read)
+    # Backend-owned data lives in a separate database on the *same* Postgres
+    # server. Only the database name differs from ``database_url``.
+    backend_database_name: str = "backend"
 
     # API settings
     api_title: str = "Progenitor Chat API"
@@ -78,6 +82,18 @@ class ChatServerConfig:
         ""  # Comma-separated chat IDs allowed to send messages (empty = only chat_id)
     )
 
+    @property
+    def backend_database_url(self) -> str:
+        """Backend database URL: ``database_url`` with the db name swapped.
+
+        Same DBMS/host/credentials as the Progenitor runtime database; only the
+        database-name path component differs. Returns "" when no base URL is set.
+        """
+        if not self.database_url or not self.backend_database_name:
+            return ""
+        parts = urlsplit(self.database_url)
+        return urlunsplit(parts._replace(path=f"/{self.backend_database_name}"))
+
     @classmethod
     def from_env(cls) -> "ChatServerConfig":
         """Load config from environment variables."""
@@ -92,6 +108,7 @@ class ChatServerConfig:
             progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
             progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
             database_url=os.getenv("PROGENITOR_DATABASE_URL", ""),
+            backend_database_name=os.getenv("BACKEND_DATABASE_NAME", "backend"),
             # API settings
             api_title=os.getenv("CHAT_SERVER_API_TITLE", "Progenitor Chat API"),
             model_name=os.getenv("CHAT_SERVER_MODEL_NAME", "progenitor-v1"),
