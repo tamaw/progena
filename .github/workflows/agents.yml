@@ -59,7 +59,7 @@ jobs:
   # ------------------------------------------------------------------ test
   test-agent:
     needs: [discover-agents]
-    runs-on: [self-hosted, Linux]
+    runs-on: [self-hosted, Linux, docker]
     container:
       image: python:3.12-slim
     env:
@@ -248,7 +248,7 @@ jobs:
   build-agent:
     needs: [test-agent, detect-changes]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: self-hosted
+    runs-on: [self-hosted, Linux, docker]
     strategy:
       fail-fast: false
       matrix:
@@ -319,7 +319,7 @@ jobs:
   deploy-agent:
     needs: [detect-changes, build-agent]
     if: needs.detect-changes.outputs.agents != '[]' && needs.detect-changes.outputs.agents != ''
-    runs-on: [self-hosted, Linux, python]
+    runs-on: [self-hosted, Linux, python, docker]
     environment: cronix
     strategy:
       fail-fast: false
