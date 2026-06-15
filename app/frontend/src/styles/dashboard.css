@@ -780,6 +780,90 @@
     color: var(--color-text-primary);
 }
 
+/* ============================================================================
+   Detail Drawer (used by the dashboard widget inspector)
+   Relocated from the now-removed agents.css; only the dashboard uses these.
+   ============================================================================ */
+.agent-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    width: 480px;
+    max-width: 90vw;
+    height: 100vh;
+    background: var(--color-bg-secondary);
+    border-left: 1px solid var(--color-border);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    animation: slideIn var(--transition-normal) ease;
+}
+
+.drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999;
+}
+
+.drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: var(--spacing-md) var(--spacing-lg);
+    border-bottom: 1px solid var(--color-border);
+    background: var(--color-bg-tertiary);
+}
+
+.drawer-title {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+}
+
+.drawer-icon {
+    font-size: 1.5rem;
+}
+
+.drawer-title h2 {
+    margin: 0;
+    font-size: var(--font-size-lg);
+    color: var(--color-text-primary);
+}
+
+.drawer-close {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: var(--border-radius-sm);
+    background: transparent;
+    color: var(--color-text-secondary);
+    font-size: 1.5rem;
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.drawer-close:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.drawer-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: var(--spacing-lg);
+}
+
+.drawer-section {
+    margin-bottom: var(--spacing-lg);
+}
+
+@media (max-width: 768px) {
+    .agent-drawer {
+        width: 100%;
+    }
+}
+
 .dashboard-agent-drawer .drawer-section h4 {
     margin: 0 0 var(--spacing-sm) 0;
     color: var(--color-text-secondary);
