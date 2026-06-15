@@ -4,6 +4,7 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, PlayActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 const MESSAGE_TYPE_OPTIONS = [
   { value: 'say_to_user', label: 'say_to_user' },
@@ -38,7 +39,7 @@ function formatMessageType(value) {
 }
 
 function UserNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runUserNode } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, runUserNode, removeNodes } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('user');
@@ -56,6 +57,23 @@ function UserNode({ id, data, selected }) {
   const onToggle = useCallback(() => {
     toggleExpanded(id);
   }, [id, toggleExpanded]);
+
+  const enabled = data.enabled !== false;
+
+  const onToggleEnabled = useCallback(() => {
+    updateNodeData(id, { enabled: data.enabled === false });
+  }, [data.enabled, id, updateNodeData]);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
+
+  const onDelete = useCallback(() => {
+    removeNodes([id]);
+  }, [id, removeNodes]);
 
   const onMessageTypeChange = useCallback((event) => {
     updateNodeData(id, { messageType: event.target.value });
@@ -86,11 +104,14 @@ function UserNode({ id, data, selected }) {
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
       <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className={`workspace-node ${selected ? 'selected' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon user">U</div>
           <div className="node-title">{data.title}</div>
           <span className="node-meta-chip">{formatMessageType(data.messageType)}</span>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           {data.status !== 'idle' && (
             <span className={`node-status-badge ${data.status}`}>{data.status}</span>
           )}
@@ -124,7 +145,7 @@ function UserNode({ id, data, selected }) {
                 <div className="schedule-form">
                   <div className="schedule-form-field">
                     <label>Message Type</label>
-                    <select className="nodrag" value={data.messageType || 'say_to_user'} onChange={onMessageTypeChange}>
+                    <select className="nodrag app-select" value={data.messageType || 'say_to_user'} onChange={onMessageTypeChange}>
                       {MESSAGE_TYPE_OPTIONS.map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
@@ -146,7 +167,7 @@ function UserNode({ id, data, selected }) {
                       </div>
                       <div className="schedule-form-field">
                         <label>Notification Level</label>
-                        <select className="nodrag" value={data.level || 'info'} onChange={onLevelChange}>
+                        <select className="nodrag app-select" value={data.level || 'info'} onChange={onLevelChange}>
                           {NOTIFICATION_LEVELS.map((option) => (
                             <option key={option.value} value={option.value}>
                               {option.label}
@@ -205,11 +226,37 @@ function UserNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            <button className="node-action-btn primary" onClick={() => runUserNode(id)}>
-              Send
-            </button>
-            <NodeHelpButton description={helpText} title={data.title} alignRight />
+          <div className="node-actions node-actions--split">
+            <div
+              className="node-toggle nodrag"
+              role="switch"
+              aria-checked={enabled}
+              tabIndex={0}
+              onClick={onToggleEnabled}
+              onKeyDown={onToggleEnabledKeyDown}
+              title={enabled ? 'Disable message' : 'Enable message'}
+            >
+              <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              <span className="node-toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <DetailHeaderActions>
+              <DetailHeaderAction
+                icon={<PlayActionIcon />}
+                ariaLabel="Send message"
+                tooltip="Send"
+                onClick={() => runUserNode(id)}
+                disabled={!enabled}
+              />
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel="Delete message"
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onDelete}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { renderMarkdownToHtml } from '../lib/markdown';
+import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 
 function buildPromptTree(prompts) {
   const groups = {};
@@ -120,6 +122,7 @@ function PromptTreeBranch({
 
 export default function PromptsPage() {
   const { getPrompts, updatePromptContent } = useApi();
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompts, setPrompts] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
@@ -265,16 +268,12 @@ export default function PromptsPage() {
 
   return (
     <div className="prompts-page">
-      <aside className="prompts-sidebar sess-list">
-        <div className="chat-sessions-pane__head sess-list__head">
-          <div className="chat-sessions-pane__title sess-list__title">
-            Prompts <span className="muted">{prompts.length}</span>
-          </div>
-          <button type="button" className="chat-pane-action new-task" onClick={handleRefreshList}>
-            Refresh
-          </button>
-        </div>
-
+      <aside className={paneClassName} aria-label="Prompts">
+        {collapsed ? (
+          <PaneExpandRail label="Prompts" onExpand={() => setCollapsed(false)} />
+        ) : (
+        <>
+        <PaneCollapseSeam label="Prompts" onCollapse={() => setCollapsed(true)} />
         <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Prompt groups">
           {groupFilters.map((group) => (
             <button
@@ -300,6 +299,9 @@ export default function PromptsPage() {
           </label>
           <button type="button" className="sess-sort" onClick={() => setExpandedNodes({})}>
             Reset
+          </button>
+          <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={handleRefreshList}>
+            Refresh
           </button>
         </div>
 
@@ -330,6 +332,8 @@ export default function PromptsPage() {
             </div>
           ))}
         </div>
+        </>
+        )}
       </aside>
 
       <main className="prompts-editor">

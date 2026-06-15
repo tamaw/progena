@@ -14,7 +14,8 @@ body,
 
 .app-shell {
   display: grid;
-  grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) var(--chrome-status-height);
+  grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
+  grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
   overflow: hidden;
@@ -22,7 +23,34 @@ body,
   color: var(--color-text-primary);
 }
 
+.app-shell.is-nav-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr);
+}
+
+/* Left rail spans the full height as one continuous bar. */
+.app-shell > .app-shell__sidebar {
+  grid-column: 1;
+  grid-row: 1 / -1;
+}
+
+.app-shell > .app-shell__header {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.app-shell > .app-shell__content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.app-shell > .app-shell__statusbar {
+  grid-column: 2;
+  grid-row: 3;
+}
+
 .app-shell__header {
+  position: relative;
+  z-index: 40;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -172,62 +200,235 @@ body,
   display: none;
 }
 
-.app-shell__grid {
-  display: grid;
-  grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr);
-  min-height: 0;
-  overflow: hidden;
-}
-
-.app-shell__grid.is-nav-collapsed {
-  grid-template-columns: 60px minmax(0, 1fr);
-}
-
 .app-shell__sidebar {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  padding: 10px 10px 0;
+  padding: 0 10px;
+  overflow-x: hidden;
   overflow-y: auto;
   background: var(--color-bg-secondary);
   border-right: 1px solid var(--color-border);
 }
 
-.app-shell__nav-scrim {
-  display: none;
-}
-
-.workspace-switcher {
+/* Branding logo cell at the very top of the rail, aligned with the header. */
+.app-shell__rail-logo {
+  position: relative;
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
-  width: 100%;
-  padding: 7px 8px;
-  color: var(--color-text-primary);
+  flex: 0 0 auto;
+  height: var(--chrome-header-height);
+  margin: 0 -10px;
+  padding-left: 16px;
+  border-bottom: 1px solid var(--color-border);
+  line-height: 1;
+}
+
+.app-shell__rail-logo .app-shell__brand-mark {
+  font-size: 18px;
+}
+
+/* Collapse / expand control, pinned to the right of the branding. */
+.app-shell__rail-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: auto;
+  margin-right: 8px;
+  color: var(--color-text-muted);
   background: transparent;
   border: 0;
-  border-radius: 7px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    opacity var(--transition-fast);
+}
+
+.app-shell__rail-toggle:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Collapsed: the toggle covers the logo cell and reveals on hover, swapping
+   the brand mark for an expand chevron in place. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-toggle {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  margin: 0;
+  border-radius: 0;
+  background: var(--color-bg-secondary);
+  opacity: 0;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-logo:hover .app-shell__rail-toggle,
+.app-shell__sidebar.is-collapsed .app-shell__rail-toggle:focus-visible {
+  opacity: 1;
+}
+
+.app-shell__brand-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  letter-spacing: 0.01em;
+}
+
+/* Settings + account pinned to the bottom of the rail. Expanded: full-width
+   rows with the glyph flush left and a label. Collapsed: centred icons. */
+.app-shell__rail-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 8px 0 12px;
+}
+
+.app-shell__rail-icon-btn,
+.app-shell__rail-user-btn {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 8px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
   cursor: pointer;
   font: inherit;
   font-size: 12.5px;
-  font-weight: 600;
-}
-
-.workspace-switcher__avatar {
-  width: 16px;
-  height: 16px;
-  flex: 0 0 auto;
-  border-radius: 5px;
-  background: linear-gradient(135deg, var(--color-accent), #a78bfa);
-}
-
-.workspace-switcher__label {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+  font-weight: 500;
   text-align: left;
-  text-overflow: ellipsis;
+  transition: color var(--transition-fast), background var(--transition-fast),
+    border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.app-shell__rail-icon-btn:hover,
+.app-shell__rail-user-btn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.app-shell__rail-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+}
+
+.app-shell__rail-glyph svg {
+  width: 18px;
+  height: 18px;
+}
+
+.app-shell__rail-label {
+  flex: 1 1 auto;
+}
+
+/* Collapsed rail: restore the compact centred icons and the avatar circle. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-foot {
+  align-items: center;
+  gap: 6px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 9px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  justify-content: center;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:hover {
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* Inline labels only make sense in the expanded rail; collapsed uses tooltips. */
+.app-shell__sidebar.is-collapsed .app-shell__rail-label,
+.app-shell__sidebar.is-collapsed .app-shell__brand-name {
+  display: none;
+}
+
+/* Hover tooltip (collapsed rail only), mirroring the nav-item tooltips. */
+.app-shell__rail-tip {
+  /* Only used as a hover label in the collapsed rail; hidden (and out of the
+     layout) when expanded so it can't extend the sidebar's scroll width. */
+  display: none;
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  z-index: 60;
+  padding: 6px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
   white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.app-shell__rail-tip::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--color-bg-tertiary);
+  border-left: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-bottom-left-radius: 2px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-tip {
+  display: block;
+  opacity: 0;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn:hover .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-icon-btn:focus-visible .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:hover .app-shell__rail-tip,
+.app-shell__sidebar.is-collapsed .app-shell__rail-user-btn:focus-visible .app-shell__rail-tip {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+  transition-delay: 0.15s;
+}
+
+.app-shell__nav-scrim {
+  display: none;
 }
 
 .workspace-switcher__toggle {
@@ -236,11 +437,11 @@ body,
   justify-content: center;
   width: 22px;
   height: 22px;
-  margin-left: auto;
   color: var(--color-text-secondary);
   background: transparent;
   border: 0;
   border-radius: 6px;
+  cursor: pointer;
 }
 
 .workspace-switcher__toggle:hover {
@@ -248,11 +449,175 @@ body,
   background: var(--color-bg-hover);
 }
 
+/* Header workspace switcher dropdown (replaces the "Progenitor" wordmark). */
+.workspace-menu {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.workspace-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.workspace-menu__label {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-menu__chevron {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 2px;
+  color: var(--color-text-muted);
+  transition: transform var(--transition-fast);
+}
+
+.workspace-menu__chevron.is-open {
+  transform: rotate(180deg);
+}
+
+/* Breadcrumb separator + current page after the workspace selector. */
+.app-shell__crumb-sep {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-text-muted);
+}
+
+.app-shell__crumb {
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.workspace-menu__list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  min-width: 280px;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 11px;
+  box-shadow: var(--shadow-md);
+}
+
+.workspace-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: left;
+}
+
+.workspace-menu__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.workspace-menu__item.is-active {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.workspace-menu__item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-menu__check {
+  flex: 0 0 auto;
+  color: var(--color-accent);
+  font-size: 13px;
+}
+
 .app-shell__nav {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  margin-top: 10px;
+}
+
+.app-shell__nav-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.app-shell__nav-group-label {
+  padding: 0 4px 5px 6px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Relationship "spine": a vertical line the group's rows hang off, with a
+   short horizontal tick joining each row — reads as a containment tree. */
+.app-shell__nav-group-items {
+  position: relative;
+  display: flex;
+  flex-direction: column;
   gap: 1px;
-  margin-top: 7px;
+  padding-left: 16px;
+}
+
+.app-shell__nav-group-items::before {
+  content: "";
+  position: absolute;
+  left: 8px;
+  top: 2px;
+  bottom: 16px;
+  width: 1.5px;
+  border-radius: 1px;
+  background: var(--color-border);
+}
+
+.app-shell__nav-group-items .app-shell__nav-item {
+  position: relative;
+}
+
+.app-shell__nav-group-items .app-shell__nav-item::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 8px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: var(--color-border);
+  transform: translateY(-50%);
+}
+
+/* Active row lights up its tick to reinforce the connection to the group. */
+.app-shell__nav-group-items .app-shell__nav-item.is-active::before {
+  background: var(--color-accent);
 }
 
 .app-shell__nav-item {
@@ -333,28 +698,139 @@ body,
 .app-shell__sidebar.is-collapsed {
   padding-right: 6px;
   padding-left: 6px;
+  /* Let hover tooltips escape the narrow rail instead of being clipped,
+     and lift the rail above the content column so they paint on top. */
+  position: relative;
+  z-index: 30;
+  overflow: visible;
 }
 
-.app-shell__sidebar.is-collapsed .workspace-switcher {
+.app-shell__sidebar.is-collapsed .app-shell__rail-logo {
+  margin: 0 -6px;
+  padding-left: 0;
   justify-content: center;
-  padding: 7px 0;
 }
 
-.app-shell__sidebar.is-collapsed .workspace-switcher__label,
-.app-shell__sidebar.is-collapsed .app-shell__nav-label,
 .app-shell__sidebar.is-collapsed .app-shell__nav-count,
 .app-shell__sidebar.is-collapsed .app-shell__nav-dot,
 .app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
   display: none;
 }
 
-.app-shell__sidebar.is-collapsed .workspace-switcher__toggle {
-  margin-left: 0;
+/* Collapsed rail: groups become clusters of icons threaded on a short strand,
+   with a gap between groups standing in for the section break. */
+.app-shell__sidebar.is-collapsed .app-shell__nav {
+  gap: 14px;
+  align-items: stretch;
+  margin-top: 8px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group {
+  align-items: center;
+}
+
+/* No room for the text heading; replace it with a short horizontal rule that
+   marks the start of each group. The first group needs no divider above it. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-label {
+  width: 28px;
+  height: 0;
+  margin: 0 auto 8px;
+  padding: 0;
+  border-top: 1px solid var(--color-border);
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group:first-child .app-shell__nav-group-label {
+  display: none;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items {
+  padding-left: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+/* Collapsed rail shows grouping through the gap between sections alone — no
+   connecting strand or ticks. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items::before {
+  display: none;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-group-items .app-shell__nav-item::before {
+  display: none;
 }
 
 .app-shell__sidebar.is-collapsed .app-shell__nav-item {
+  position: relative;
+  z-index: 1;
   justify-content: center;
-  padding: 8px 0;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 9px;
+  background: transparent;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+/* Slightly larger glyphs in the collapsed rail. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-icon,
+.app-shell__sidebar.is-collapsed .app-shell__nav-icon svg {
+  width: 19px;
+  height: 19px;
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item.is-active {
+  background: var(--color-accent-soft);
+}
+
+/* Repurpose the row label as a hover tooltip floating to the right. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-label {
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  z-index: 60;
+  padding: 6px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-50%) translateX(-4px);
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+/* Caret on the left edge of the tooltip. */
+.app-shell__sidebar.is-collapsed .app-shell__nav-label::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  background: var(--color-bg-tertiary);
+  border-left: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  border-bottom-left-radius: 2px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:hover .app-shell__nav-label,
+.app-shell__sidebar.is-collapsed .app-shell__nav-item:focus-visible .app-shell__nav-label {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+  transition-delay: 0.15s;
 }
 
 .app-shell__sidebar-section {
@@ -855,7 +1331,7 @@ body,
 
 .knowledge-page {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -1392,6 +1868,90 @@ body,
 
 .topnav-pane--search {
   width: min(590px, calc(100vw - 48px));
+}
+
+.topnav-pane--account {
+  width: min(440px, calc(100vw - 48px));
+}
+
+.account-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  overflow-y: auto;
+}
+
+.account-pane__id {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.account-pane__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 44px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border-light);
+  border-radius: 50%;
+}
+
+.account-pane__avatar svg {
+  width: 22px;
+  height: 22px;
+}
+
+.account-pane__name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.account-pane__email {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+}
+
+.account-pane__facts {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.account-pane__fact {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+}
+
+.account-pane__fact + .account-pane__fact {
+  border-top: 1px solid var(--color-border);
+}
+
+.account-pane__fact dt {
+  color: var(--color-text-secondary);
+  font-size: 12.5px;
+}
+
+.account-pane__fact dd {
+  margin: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.account-pane__foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .topnav-pane__head {
@@ -2319,7 +2879,7 @@ body,
 
 .sessions-page {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -2335,8 +2895,88 @@ body,
   border-right: 1px solid var(--color-border);
 }
 
+/* Collapsible list pane (shared PaneList). The page grid track is `auto`, so the
+   pane drives its own width and animates down to a slim rail when collapsed. */
+.sess-list--collapsible {
+  position: relative;
+  width: 300px;
+  overflow: hidden;
+  transition: width 180ms ease;
+}
+
+.sess-list--collapsible.is-collapsed {
+  width: 44px;
+  min-width: 44px;
+}
+
+/* Hover-reveal seam pinned to the pane's inner right edge. */
+/* Collapse control: a vertically-centered handle on the pane's right edge
+   (the divider with the next column). Keeps the top corners free for filters
+   and actions. */
+.sess-list__collapse {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 48px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
+}
+
+.sess-list--collapsible:hover .sess-list__collapse,
+.sess-list__collapse:focus-visible {
+  opacity: 1;
+}
+
+.sess-list__collapse:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Collapsed rail: full-height button that expands the pane, with the pane label
+   rotated vertically so you can still tell which list it is. */
+.sess-list__expand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+  padding: 12px 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.sess-list__expand:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.sess-list__expand-label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
 .chat-sessions-pane__head,
-.tasks-list__head,
 .sess-list__head {
   display: flex;
   align-items: center;
@@ -2346,7 +2986,6 @@ body,
 }
 
 .chat-sessions-pane__title,
-.tasks-list__title,
 .sess-list__title {
   color: var(--color-text-primary);
   font-size: 14px;
@@ -2382,7 +3021,7 @@ body,
   display: flex;
   gap: 2px;
   align-items: center;
-  padding: 0 8px 8px;
+  padding: 12px 8px 8px;
   overflow-x: auto;
   scrollbar-width: none;
 }
@@ -2393,7 +3032,6 @@ body,
 }
 
 .chat-pane-tab,
-.task-tab,
 .sess-filter,
 .sess-fchip {
   display: inline-flex;
@@ -2416,7 +3054,6 @@ body,
 }
 
 .chat-pane-tab:hover,
-.task-tab:hover,
 .sess-filter:hover,
 .sess-fchip:hover {
   color: var(--color-text-primary);
@@ -2424,7 +3061,6 @@ body,
 }
 
 .chat-pane-tab.is-active,
-.task-tab.is-active,
 .sess-filter.is-active,
 .sess-fchip.is-active {
   color: var(--color-text-primary);
@@ -2453,6 +3089,13 @@ body,
   align-items: center;
   padding: 0 10px 8px;
   border-bottom: 1px solid var(--color-border);
+}
+
+/* Create/refresh action relocated from the removed pane heading into the
+   toolbar/search row — keep it intact at the right of the row. */
+.sess-list__tools-action {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .sess-search {
@@ -2694,8 +3337,10 @@ body,
   color: var(--color-error);
 }
 
+/* Left-pane list footers (Agents/Tools/Repositories/Knowledge/Schedules/
+   Sessions/Workspace) hidden for now. */
 .sess-list__foot {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: space-between;
   padding: 8px 14px;
@@ -3514,7 +4159,7 @@ body,
 
 .repositories-page {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -4328,7 +4973,7 @@ body,
 
 .tools-page {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -4863,7 +5508,7 @@ body,
 .agents-page,
 .schedules-page {
   display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -5726,11 +6371,10 @@ body,
 }
 
 @media (max-width: 980px) {
-  .app-shell__grid {
+  .app-shell {
     grid-template-columns: 58px minmax(0, 1fr);
   }
 
-  .workspace-switcher__label,
   .app-shell__nav-item span:not(.app-shell__nav-icon),
   .app-shell__sidebar-section {
     display: none;
@@ -5808,8 +6452,16 @@ body,
 }
 
 @media (max-width: 720px) {
-  .app-shell {
-    grid-template-rows: var(--chrome-header-height) minmax(0, 1fr) auto;
+  .app-shell,
+  .app-shell.is-nav-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
+  }
+
+  .app-shell > .app-shell__header,
+  .app-shell > .app-shell__content,
+  .app-shell > .app-shell__statusbar {
+    grid-column: 1;
   }
 
   .app-shell__menu-btn {
@@ -5825,14 +6477,10 @@ body,
     flex: 1;
   }
 
-  .app-shell__grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .app-shell__sidebar {
     position: fixed;
-    top: var(--chrome-header-height);
-    bottom: var(--chrome-status-height);
+    top: 0;
+    bottom: 0;
     left: 0;
     z-index: 70;
     width: min(280px, 84vw);
@@ -5845,7 +6493,6 @@ body,
     transform: translateX(0);
   }
 
-  .workspace-switcher__label,
   .app-shell__nav-item span:not(.app-shell__nav-icon),
   .app-shell__sidebar-section {
     display: block;
@@ -5853,7 +6500,7 @@ body,
 
   .app-shell__nav-scrim {
     position: fixed;
-    inset: var(--chrome-header-height) 0 var(--chrome-status-height);
+    inset: 0;
     z-index: 60;
     display: block;
     background: rgba(0, 0, 0, 0.35);

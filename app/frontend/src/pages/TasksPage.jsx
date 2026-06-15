@@ -5,6 +5,8 @@ import DetailHeader, {
   DetailHeaderActions,
   EditActionIcon,
 } from '../components/layout/DetailHeader';
+import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { useApi } from '../hooks/useApi';
 
 const priorityOrder = { high: 0, medium: 1, med: 1, low: 2 };
@@ -178,6 +180,15 @@ function ChevronDownIcon() {
   return (
     <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
       <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+      <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
   );
 }
@@ -364,6 +375,7 @@ export default function TasksPage({ context = null }) {
   const [taskFilter, setTaskFilter] = useState('all');
   const [detailTab, setDetailTab] = useState('Task');
   const [searchQuery, setSearchQuery] = useState('');
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
   const loadBoard = useCallback(async () => {
     setLoading(true);
@@ -534,29 +546,34 @@ export default function TasksPage({ context = null }) {
 
   return (
     <div className={`tasks-page ${context ? 'tasks-page--project' : ''}`}>
-      <section className="tasks-list">
-        <div className="tasks-list__head">
-          <div className="tasks-list__title">{context?.listTitle || 'Tasks'} <span className="muted">{board?.cards.filter((card) => !isArchivedCard(card)).length ?? 0}</span></div>
-          <button type="button" className="new-task" onClick={openCreateModal}>{context?.newCardLabel || '+ New task'}</button>
-        </div>
-        <div className="tasks-list__tabs">
+      <section className={paneClassName} aria-label="Tasks">
+        {collapsed ? (
+          <PaneExpandRail label={context?.listTitle || 'Tasks'} onExpand={() => setCollapsed(false)} />
+        ) : (
+        <>
+        <PaneCollapseSeam label={context?.listTitle || 'Tasks'} onCollapse={() => setCollapsed(true)} />
+        <div className="chat-pane-tabs sess-list__filters">
           {[
             ['all', 'All'],
             ['mine', 'My tasks'],
             ['watching', 'Watching'],
           ].map(([value, label]) => (
-            <button key={value} type="button" className={`task-tab ${taskFilter === value ? 'is-active' : ''}`} onClick={() => setTaskFilter(value)}>
+            <button key={value} type="button" className={`chat-pane-tab sess-filter ${taskFilter === value ? 'is-active' : ''}`} onClick={() => setTaskFilter(value)}>
               {label}
             </button>
           ))}
-          <button type="button" className="task-tab task-tab--sort">Sort: Priority <ChevronDownIcon /></button>
-        </div>
-        <div className="tasks-list__search">
-          <input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search tasks" />
-          <button type="button" onClick={loadBoard}>Refresh</button>
+          <button type="button" className="chat-pane-action new-task tasks-list__new" onClick={openCreateModal}>{context?.newCardLabel || '+ New'}</button>
         </div>
 
-        <div className="tasks-list__scroll">
+        <div className="sess-list__tools">
+          <label className="sess-search">
+            <SearchIcon />
+            <input value={searchQuery} type="text" placeholder="Search tasks" onChange={(event) => setSearchQuery(event.target.value)} />
+          </label>
+          <button type="button" className="sess-sort" title="Sorted by priority">Priority <ChevronDownIcon /></button>
+        </div>
+
+        <div className="sess-list__scroll">
           {loading ? <div className="task-empty">Loading tasks...</div> : null}
           {error ? <div className="task-alert">{error}</div> : null}
           {!loading && !visibleCards.length ? <div className="task-empty">No matching tasks.</div> : null}
@@ -578,6 +595,12 @@ export default function TasksPage({ context = null }) {
             ) : null
           ))}
         </div>
+
+        <div className="sess-list__foot">
+          <span><span className="num">{board?.cards.filter((card) => !isArchivedCard(card)).length ?? 0}</span> tasks</span>
+        </div>
+        </>
+        )}
       </section>
 
       <section className="task-detail">

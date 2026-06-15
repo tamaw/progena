@@ -4,6 +4,7 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, PlayActionIcon, StopActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 const LANGUAGES = [
   'javascript', 'python', 'html', 'css', 'bash',
@@ -11,7 +12,7 @@ const LANGUAGES = [
 ];
 
 function CodeNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runCodeNode } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, runCodeNode, removeNodes } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const tabs = getWidgetTabs('code');
@@ -37,6 +38,23 @@ function CodeNode({ id, data, selected }) {
   const onToggle = useCallback(() => {
     toggleExpanded(id);
   }, [id, toggleExpanded]);
+
+  const enabled = data.enabled !== false;
+
+  const onToggleEnabled = useCallback(() => {
+    updateNodeData(id, { enabled: data.enabled === false });
+  }, [data.enabled, id, updateNodeData]);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
+
+  const onDelete = useCallback(() => {
+    removeNodes([id]);
+  }, [id, removeNodes]);
 
   const onKeyDown = useCallback((e) => {
     if (e.key === 'Tab') {
@@ -67,11 +85,14 @@ function CodeNode({ id, data, selected }) {
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
       <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className={`workspace-node ${selected ? 'selected' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon code">&lt;&gt;</div>
           <div className="node-title">{data.title}</div>
           <span className="code-language-badge">{data.language || 'js'}</span>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           {data.status !== 'idle' && (
             <span className={`node-status-badge ${data.status}`}>{data.status}</span>
           )}
@@ -93,7 +114,7 @@ function CodeNode({ id, data, selected }) {
                   <>
                     <div className="code-editor-toolbar">
                       <select
-                        className="code-language-select nodrag"
+                        className="nodrag app-select"
                         value={data.language || 'javascript'}
                         onChange={onLanguageChange}
                       >
@@ -122,12 +143,45 @@ function CodeNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            <button className="node-action-btn primary" onClick={() => runCodeNode(id)}>Run</button>
-            {data.status === 'running' && (
-              <button className="node-action-btn danger">Stop</button>
-            )}
-            <NodeHelpButton description={helpText} title={data.title} alignRight />
+          <div className="node-actions node-actions--split">
+            <div
+              className="node-toggle nodrag"
+              role="switch"
+              aria-checked={enabled}
+              tabIndex={0}
+              onClick={onToggleEnabled}
+              onKeyDown={onToggleEnabledKeyDown}
+              title={enabled ? 'Disable code' : 'Enable code'}
+            >
+              <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              <span className="node-toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <DetailHeaderActions>
+              <DetailHeaderAction
+                icon={<PlayActionIcon />}
+                ariaLabel="Run code"
+                tooltip="Run"
+                onClick={() => runCodeNode(id)}
+                disabled={!enabled}
+              />
+              {data.status === 'running' && (
+                <DetailHeaderAction
+                  icon={<StopActionIcon />}
+                  ariaLabel="Stop code"
+                  tooltip="Stop"
+                  variant="danger"
+                />
+              )}
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel="Delete code"
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onDelete}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>

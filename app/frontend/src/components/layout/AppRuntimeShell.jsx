@@ -10,7 +10,6 @@ import { useApi } from '../../hooks/useApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
-import AppStatusBar from './AppStatusBar';
 import {
   createSolutionFromName,
   createProjectFromName,
@@ -18,19 +17,53 @@ import {
   saveStoredSolutions,
 } from '../../data/solutions';
 
-const navItems = [
-  { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
-  { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
-  { to: '/workspace', icon: <WorkspaceNavIcon />, label: 'Workspace' },
-  { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
-  { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
-  { to: '/sessions', icon: <SessionsNavIcon />, label: 'Sessions', countKey: 'sessions' },
-  { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
-  { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
-  { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
-  { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
-  { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
-  { to: '/logs', icon: <LogsNavIcon />, label: 'Logs' },
+// Grouped by owner/level (see the entity-relationship model):
+//   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
+//   Automate — runtime: triggers, schedules, I/O, work in flight
+//   Delegate — agents and the reusable building blocks they're composed of
+// Sessions and Logs are intentionally dropped from the rail (still routable).
+const navGroups = [
+  {
+    id: 'operate',
+    label: 'Operate',
+    items: [
+      { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
+      { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
+      // { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' }, // hidden for now
+      { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
+    ],
+  },
+  {
+    id: 'automate',
+    label: 'Automate',
+    items: [
+      { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
+      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
+      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
+    ],
+  },
+  {
+    id: 'delegate',
+    label: 'Delegate',
+    items: [
+      { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
+      { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
+      { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
+      { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
+      { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
+      { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
+      { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
+    ],
+  },
+];
+
+// Flattened list of rail items, plus the routes that no longer appear in the
+// rail but still need a breadcrumb label.
+const navItems = navGroups.flatMap((group) => group.items);
+const breadcrumbRoutes = [
+  ...navItems,
+  { to: '/sessions', label: 'Sessions' },
+  { to: '/logs', label: 'Logs' },
 ];
 
 const settingsSections = [
@@ -44,6 +77,19 @@ const settingsSections = [
   { id: 'about', label: 'About', icon: <SettingsAboutIcon /> },
 ];
 
+const workspaceOptions = ['progenitor-main', 'local-development', 'agent-lab'];
+
+function getPageLabel(pathname) {
+  if (pathname === '/') {
+    return navItems.find((item) => item.to === '/')?.label ?? 'Chat';
+  }
+  if (pathname.startsWith('/solutions') || pathname.startsWith('/projects')) {
+    return 'Projects';
+  }
+  const match = breadcrumbRoutes.find((item) => item.to !== '/' && pathname.startsWith(item.to));
+  return match?.label ?? 'Chat';
+}
+
 const insightRanges = ['24h', '7d', '30d'];
 const quickPrompts = [
   'Summarize the latest workspace activity',
@@ -51,13 +97,31 @@ const quickPrompts = [
   'Draft a short status update',
 ];
 
+function UserAvatarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
+function RailSettingsIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 function DashboardNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <rect x="2.5" y="2.5" width="4.2" height="4.2" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="9.3" y="2.5" width="4.2" height="7.2" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="2.5" y="9.3" width="7.2" height="4.2" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="11.1" y="11.1" width="2.4" height="2.4" rx="0.6" fill="currentColor" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="7" height="9" rx="1" />
+      <rect x="14" y="3" width="7" height="5" rx="1" />
+      <rect x="14" y="12" width="7" height="9" rx="1" />
+      <rect x="3" y="16" width="7" height="5" rx="1" />
     </svg>
   );
 }
@@ -66,7 +130,7 @@ function ChatNavIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path
-        d="M2.5 4.2A1.7 1.7 0 0 1 4.2 2.5h7.6A1.7 1.7 0 0 1 13.5 4.2v5.6a1.7 1.7 0 0 1-1.7 1.7H6.5L3.5 14v-2.5h-1V4.2z"
+        d="M1.5 4.6A1.7 1.7 0 0 1 3.2 2.9h9.6A1.7 1.7 0 0 1 14.5 4.6v5.2a1.7 1.7 0 0 1-1.7 1.7H5.2L2.8 14v-2.5h-1.3V4.6z"
         fill="none"
         stroke="currentColor"
         strokeWidth="1.3"
@@ -78,33 +142,70 @@ function ChatNavIcon() {
 
 function WorkspaceNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <rect x="2.5" y="2.5" width="4" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="9.5" y="2.5" width="4" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <rect x="2.5" y="9.5" width="4" height="4" rx="1" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M11.5 9.5v4M9.5 11.5h4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="3" width="7.5" height="7.5" rx="1.6" />
+      <rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6" />
+      <path d="M6.75 10.5v6.75h6.75" />
+    </svg>
+  );
+}
+
+function SequencesNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="6" cy="19" r="3" />
+      <path d="M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15" />
+      <circle cx="18" cy="5" r="3" />
+    </svg>
+  );
+}
+
+function ProjectsNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />
+    </svg>
+  );
+}
+
+function ModelsNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+      <path d="m3.3 7 8.7 5 8.7-5" />
+      <path d="M12 22V12" />
     </svg>
   );
 }
 
 function AgentsNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M8 2.5v2.2M4.4 4l1.3 1.3M11.6 4l-1.3 1.3M3 8h2.1M10.9 8H13" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <rect x="4.5" y="5.5" width="7" height="6" rx="2" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <circle cx="7" cy="8.5" r=".7" fill="currentColor" />
-      <circle cx="9" cy="8.5" r=".7" fill="currentColor" />
-      <path d="M7 11.5v1.5M9 11.5v1.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 8V4H8" />
+      <rect width="16" height="12" x="4" y="8" rx="2" />
+      <path d="M2 14h2" />
+      <path d="M20 14h2" />
+      <path d="M15 13v2" />
+      <path d="M9 13v2" />
+    </svg>
+  );
+}
+
+function ChannelsNavIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 9a2 2 0 0 1-2 2H6l-4 4V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2z" />
+      <path d="M18 9h2a2 2 0 0 1 2 2v11l-4-4h-6a2 2 0 0 1-2-2v-1" />
     </svg>
   );
 }
 
 function ToolsNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M6.2 3.2h3.6M8 1.8v2.8M4.4 6.2 2.5 4.3M11.6 6.2l1.9-1.9M4.4 9.8l-1.9 1.9M11.6 9.8l1.9 1.9M6.2 12.8h3.6M8 11.4v2.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
-      <rect x="5.1" y="5.1" width="5.8" height="5.8" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M7 8h2" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.2" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9" />
+      <path d="m18 15 4-4" />
+      <path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5" />
     </svg>
   );
 }
@@ -120,48 +221,60 @@ function SessionsNavIcon() {
 
 function SchedulesNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <rect x="2.8" y="3.4" width="10.4" height="9.8" rx="1.6" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M5.2 2.2v2.4M10.8 2.2v2.4M3.2 6.2h9.6" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <path d="M5.4 8.5h1.4M9.2 8.5h1.4M5.4 10.8h1.4M9.2 10.8h1.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="18" rx="2" />
+      <path d="M8 2v4" />
+      <path d="M16 2v4" />
+      <path d="M3 10h18" />
+      <path d="M8 15h.01" />
+      <path d="M12 15h.01" />
+      <path d="M16 15h.01" />
     </svg>
   );
 }
 
 function TasksNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M3.2 4.5h1.6L6 5.9l2-2.3M8.5 4.7h4.3M3.2 8h1.6L6 9.4l2-2.3M8.5 8.2h4.3M3.2 11.5h1.6l1.2 1.4 2-2.3M8.5 11.7h4.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="m3 17 2 2 4-4" />
+      <path d="m3 7 2 2 4-4" />
+      <path d="M13 6h8" />
+      <path d="M13 12h8" />
+      <path d="M13 18h8" />
     </svg>
   );
 }
 
 function RepositoriesNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M5 3.5h6a1.5 1.5 0 0 1 1.5 1.5v7a1 1 0 0 1-1 1H5A1.5 1.5 0 0 1 3.5 11.5v-6A2 2 0 0 1 5.5 3.5H11" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M5.5 2.5v2M7.8 2.5v2M10.1 2.5v2" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="6" x2="6" y1="3" y2="15" />
+      <circle cx="18" cy="6" r="3" />
+      <circle cx="6" cy="18" r="3" />
+      <path d="M18 9a9 9 0 0 1-9 9" />
     </svg>
   );
 }
 
 function KnowledgeNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <circle cx="4" cy="8" r="1.5" fill="currentColor" />
-      <circle cx="8.5" cy="4" r="1.5" fill="currentColor" />
-      <circle cx="12" cy="9.8" r="1.5" fill="currentColor" />
-      <path d="M5.2 7l2-2M9.3 5.2l1.9 3.2M5.4 8.5l5.1 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <path d="m8.6 13.5 6.8 4M15.4 6.5l-6.8 4" />
     </svg>
   );
 }
 
 function SkillsNavIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M3.2 3.2h6.5l3.1 3.1v6.5H3.2z" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinejoin="round" />
-      <path d="M9.7 3.4v3h3M5.4 8.9h5.2M5.4 11h3.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-      <path d="M5.4 6.4h1.8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
+      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+      <path d="M10 9H8" />
     </svg>
   );
 }
@@ -187,21 +300,6 @@ function InsightsIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
       <path d="M2 13h12M4 11V7M7 11V3M10 11V8M13 11V5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path
-        d="M6.4 2.4l.4-1.1h2.4l.4 1.1 1 .45 1.1-.35 1.7 1.7-.35 1.1.45 1 1.1.4v2.4l-1.1.4-.45 1 .35 1.1-1.7 1.7-1.1-.35-1 .45-.4 1.1H6.8l-.4-1.1-1-.45L4.3 13l-1.7-1.7.35-1.1-.45-1L1.4 8.8V6.4l1.1-.4.45-1L2.6 3.9l1.7-1.7 1.1.35z"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.2"
-        strokeLinejoin="round"
-      />
-      <circle cx="8" cy="8" r="2" fill="none" stroke="currentColor" strokeWidth="1.2" />
     </svg>
   );
 }
@@ -544,9 +642,71 @@ function SidebarCreateModal({
   );
 }
 
+function WorkspaceSwitcher() {
+  const [isOpen, setIsOpen] = useState(false);
+  const [selected, setSelected] = useState(workspaceOptions[0]);
+  const rootRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    const handlePointer = (event) => {
+      if (rootRef.current && !rootRef.current.contains(event.target)) {
+        setIsOpen(false);
+      }
+    };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') setIsOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [isOpen]);
+
+  return (
+    <div className="workspace-menu" ref={rootRef}>
+      <button
+        type="button"
+        className="workspace-menu__trigger"
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((current) => !current)}
+      >
+        <span className={`workspace-menu__chevron ${isOpen ? 'is-open' : ''}`} aria-hidden="true">
+          <ChevronDownIcon />
+        </span>
+        <span className="workspace-menu__label">{selected}</span>
+      </button>
+      {isOpen ? (
+        <ul className="workspace-menu__list" role="listbox" aria-label="Select workspace">
+          {workspaceOptions.map((name) => (
+            <li key={name} role="option" aria-selected={name === selected}>
+              <button
+                type="button"
+                className={`workspace-menu__item ${name === selected ? 'is-active' : ''}`}
+                onClick={() => {
+                  setSelected(name);
+                  setIsOpen(false);
+                }}
+              >
+                <span className="workspace-menu__item-label">{name}</span>
+                {name === selected ? <span className="workspace-menu__check" aria-hidden="true">✓</span> : null}
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
 function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNav }) {
   const { currentTheme, toggleTheme } = useTheme();
   const { unreadCount, markAllViewed } = useAlertCenter();
+  const location = useLocation();
+  const pageLabel = getPageLabel(location.pathname);
 
   const openPanel = useCallback((panel) => {
     setActivePanel((current) => (current === panel ? null : panel));
@@ -562,8 +722,11 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
         ☰
       </button>
       <div className="app-shell__brand">
-        <span className="app-shell__brand-mark">🧬</span>
-        <span>Progenitor</span>
+        <WorkspaceSwitcher />
+        <span className="app-shell__crumb-sep" aria-hidden="true">
+          <ChevronRightIcon />
+        </span>
+        <span className="app-shell__crumb">{pageLabel}</span>
       </div>
       <form className="app-shell__search" onSubmit={onSearch}>
         <SearchIcon />
@@ -577,10 +740,14 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
           onClick={() => openPanel('insights')}
         />
         <ChromeIconButton
-          label="Settings"
-          icon={<SettingsIcon />}
-          active={activePanel === 'settings'}
-          onClick={() => openPanel('settings')}
+          label="Toggle theme"
+          icon={(
+            <>
+              <MoonIcon className={currentTheme === 'dark' ? '' : 'chrome-icon-btn__theme-icon is-hidden'} />
+              <SunIcon className={currentTheme === 'dark' ? 'chrome-icon-btn__theme-icon is-hidden' : ''} />
+            </>
+          )}
+          onClick={toggleTheme}
         />
         <ChromeIconButton
           label="Quick chat"
@@ -595,26 +762,14 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
           badge={unreadCount > 0 ? (unreadCount > 99 ? '99+' : unreadCount) : ''}
           onClick={() => openPanel('alerts')}
         />
-        <ChromeIconButton
-          label="Toggle theme"
-          icon={(
-            <>
-              <MoonIcon className={currentTheme === 'dark' ? '' : 'chrome-icon-btn__theme-icon is-hidden'} />
-              <SunIcon className={currentTheme === 'dark' ? 'chrome-icon-btn__theme-icon is-hidden' : ''} />
-            </>
-          )}
-          onClick={toggleTheme}
-        />
       </div>
     </header>
   );
 }
 
-function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime }) {
+function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSettings, onOpenAccount, runtime }) {
   const navigate = useNavigate();
-  const location = useLocation();
   const [solutions, setSolutions] = useState(() => loadStoredSolutions());
-  const [expandedSolutionIds, setExpandedSolutionIds] = useState(() => new Set(['main']));
   const [createModal, setCreateModal] = useState(null);
   const chatIndicators = useSelector(selectChatIndicators);
   const counts = useMemo(() => {
@@ -647,7 +802,6 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
     ));
     saveStoredSolutions(nextSolutions);
     setSolutions(nextSolutions);
-    setExpandedSolutionIds((current) => new Set(current).add(solutionId));
     setCreateModal(null);
 
     onClose();
@@ -659,113 +813,79 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, runtime })
     const nextSolutions = [...solutions, createdSolution];
     saveStoredSolutions(nextSolutions);
     setSolutions(nextSolutions);
-    setExpandedSolutionIds((current) => new Set(current).add(createdSolution.id));
     setCreateModal(null);
   }, [solutions]);
 
   return (
     <aside className={`app-shell__sidebar ${isOpen ? 'is-open' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}>
-      <div className="workspace-switcher">
-        <span className="workspace-switcher__avatar" />
-        <span className="workspace-switcher__label">progenitor-main</span>
+      <div className="app-shell__rail-logo">
+        <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
+        <span className="app-shell__brand-name">Progenitor</span>
         <button
           type="button"
-          className="workspace-switcher__toggle"
-          aria-label={isCollapsed ? 'Show navigation pane' : 'Hide navigation pane'}
-          title={isCollapsed ? 'Show navigation pane' : 'Hide navigation pane'}
+          className="app-shell__rail-toggle"
+          aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
           onClick={onToggleCollapse}
         >
           {isCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </button>
       </div>
       <nav className="app-shell__nav" aria-label="Primary">
-        {navItems.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
-            onClick={onClose}
-          >
-            <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
-            <span className="app-shell__nav-label">{item.label}</span>
-            {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
-              <span
-                className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
-                aria-hidden="true"
-              />
-            ) : null}
-            {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
-          </NavLink>
-        ))}
-      </nav>
-      <div className="app-shell__sidebar-section">
-        <div className="app-shell__sidebar-title app-shell__sidebar-title--row">
-          <span>PROJECTS</span>
-          <button
-            type="button"
-            className="app-shell__tree-add"
-            aria-label="Add solution"
-            title="Add solution"
-            onClick={() => setCreateModal({ mode: 'solution' })}
-          >
-            +
-          </button>
-        </div>
-        {solutions.map((solution) => (
-          <details
-            key={solution.id}
-            open={expandedSolutionIds.has(solution.id)}
-            className="app-shell__tree"
-            onToggle={(event) => {
-              const isExpanded = event.currentTarget.open;
-              setExpandedSolutionIds((current) => {
-                const next = new Set(current);
-                if (isExpanded) {
-                  next.add(solution.id);
-                } else {
-                  next.delete(solution.id);
-                }
-                return next;
-              });
-            }}
-          >
-            <summary>
-              <span className="app-shell__tree-summary-main">
-                <span className="app-shell__tree-chevron" aria-hidden="true">›</span>
-                <span className="app-shell__tree-name">{solution.name}</span>
-              </span>
-              <button
-                type="button"
-                className="app-shell__tree-add"
-                aria-label={`Add project to ${solution.name}`}
-                title={`Add project to ${solution.name}`}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  setCreateModal({ mode: 'project', solutionId: solution.id });
-                }}
-              >
-                +
-              </button>
-            </summary>
-            {solution.projects.map((project) => {
-              const to = `/solutions/${solution.id}/projects/${project.id}`;
-              const isActive = location.pathname === to;
-              return (
+        {navGroups.map((group) => (
+          <div className="app-shell__nav-group" key={group.id} data-group={group.id}>
+            <div className="app-shell__nav-group-label">{group.label}</div>
+            <div className="app-shell__nav-group-items">
+              {group.items.map((item) => (
                 <NavLink
-                  key={project.id}
-                  to={to}
-                  className={`app-shell__tree-link ${isActive ? 'is-active' : ''}`}
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
                   onClick={onClose}
                 >
-                  <span className="app-shell__tree-dot" style={{ background: project.accent }} />
-                  <span>{project.name}</span>
+                  <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
+                  <span className="app-shell__nav-label">{item.label}</span>
+                  {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
+                    <span
+                      className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
                 </NavLink>
-              );
-            })}
-          </details>
+              ))}
+            </div>
+          </div>
         ))}
+      </nav>
+      <div className="app-shell__rail-foot">
+        <button
+          type="button"
+          className="app-shell__rail-icon-btn"
+          aria-label="Settings"
+          onClick={() => {
+            onClose();
+            onOpenSettings();
+          }}
+        >
+          <span className="app-shell__rail-glyph" aria-hidden="true"><RailSettingsIcon /></span>
+          <span className="app-shell__rail-label">Settings</span>
+          <span className="app-shell__rail-tip" aria-hidden="true">Settings</span>
+        </button>
+        <button
+          type="button"
+          className="app-shell__rail-user-btn"
+          aria-label="Account"
+          onClick={() => {
+            onClose();
+            onOpenAccount();
+          }}
+        >
+          <span className="app-shell__rail-glyph" aria-hidden="true"><UserAvatarIcon /></span>
+          <span className="app-shell__rail-label">Account</span>
+          <span className="app-shell__rail-tip" aria-hidden="true">Account</span>
+        </button>
       </div>
       {createModal ? (
         <SidebarCreateModal
@@ -1512,6 +1632,30 @@ function InsightsPanel({ runtime, onClose }) {
   );
 }
 
+function AccountPanel({ onClose }) {
+  return (
+    <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose}>
+      <div className="account-pane__id">
+        <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
+        <div className="account-pane__id-text">
+          <div className="account-pane__name">Tama Waddell</div>
+          <div className="account-pane__email">me@tama.id.au</div>
+        </div>
+      </div>
+      <dl className="account-pane__facts">
+        <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
+        <div className="account-pane__fact"><dt>Role</dt><dd>Owner</dd></div>
+        <div className="account-pane__fact"><dt>Workspace</dt><dd>progenitor-main</dd></div>
+        <div className="account-pane__fact"><dt>Member since</dt><dd>June 2026</dd></div>
+      </dl>
+      <div className="account-pane__foot">
+        <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
+        <button type="button" className="task-btn task-btn--secondary" disabled>Sign out</button>
+      </div>
+    </TopNavPane>
+  );
+}
+
 function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -1527,6 +1671,7 @@ function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
   if (activePanel === 'alerts') return <AlertsPanel onClose={closePanel} />;
   if (activePanel === 'quickChat') return <QuickChatPanel onClose={closePanel} />;
   if (activePanel === 'settings') return <SettingsPanel onClose={closePanel} />;
+  if (activePanel === 'account') return <AccountPanel onClose={closePanel} />;
   if (activePanel === 'search') {
     return <SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} />;
   }
@@ -1542,7 +1687,6 @@ function AppRuntimeShell() {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const runtime = useChromeRuntime();
-  const location = useLocation();
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -1574,7 +1718,16 @@ function AppRuntimeShell() {
   }, [runtime]);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isNavCollapsed ? 'is-nav-collapsed' : ''}`}>
+      <PrimaryNav
+        isCollapsed={isNavCollapsed}
+        isOpen={isNavOpen}
+        onClose={() => setIsNavOpen(false)}
+        onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
+        onOpenSettings={() => setActivePanel('settings')}
+        onOpenAccount={() => setActivePanel('account')}
+        runtime={runtime}
+      />
       <Header
         activePanel={activePanel}
         setActivePanel={setActivePanel}
@@ -1582,20 +1735,10 @@ function AppRuntimeShell() {
         onOpenPanel={handleOpenPanel}
         onToggleNav={() => setIsNavOpen((current) => !current)}
       />
-      <div className={`app-shell__grid ${isNavCollapsed ? 'is-nav-collapsed' : ''}`}>
-        <PrimaryNav
-          isCollapsed={isNavCollapsed}
-          isOpen={isNavOpen}
-          onClose={() => setIsNavOpen(false)}
-          onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
-          runtime={runtime}
-        />
-        <main className="app-shell__content">
-          <Outlet />
-        </main>
-      </div>
+      <main className="app-shell__content">
+        <Outlet />
+      </main>
       {isNavOpen ? <button type="button" className="app-shell__nav-scrim" aria-label="Close navigation" onClick={() => setIsNavOpen(false)} /> : null}
-      <AppStatusBar runtime={runtime} pathname={location.pathname} />
       <PanelHost
         activePanel={activePanel}
         searchQuery={searchQuery}

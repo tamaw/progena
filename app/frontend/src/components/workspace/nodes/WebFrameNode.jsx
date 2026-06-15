@@ -4,9 +4,10 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, ReconnectActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 function WebFrameNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, removeNodes } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const iframeRef = useRef(null);
@@ -37,6 +38,23 @@ function WebFrameNode({ id, data, selected }) {
   const onSourceTypeChange = useCallback((e) => {
     updateNodeData(id, { sourceType: e.target.value });
   }, [id, updateNodeData]);
+
+  const enabled = data.enabled !== false;
+
+  const onToggleEnabled = useCallback(() => {
+    updateNodeData(id, { enabled: data.enabled === false });
+  }, [data.enabled, id, updateNodeData]);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
+
+  const onDelete = useCallback(() => {
+    removeNodes([id]);
+  }, [id, removeNodes]);
 
   const reload = useCallback(() => {
     if (iframeRef.current) {
@@ -87,11 +105,14 @@ function WebFrameNode({ id, data, selected }) {
         lineClassName="react-flow__resize-control line"
         handleClassName="react-flow__resize-control handle"
       />
-      <div className={`workspace-node ${selected ? 'selected' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon webframe">W</div>
           <div className="node-title">{data.title}</div>
           <span className="webframe-source-badge">{sourceTypeLabel}</span>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           <button className="node-expand-btn" onClick={onToggle}>
             {expanded ? '\u25B2' : '\u25BC'}
           </button>
@@ -155,20 +176,48 @@ function WebFrameNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            <button className="node-action-btn" onClick={reload}>Reload</button>
-            <select
-              className="code-language-select nodrag"
-              value={data.sourceType || 'html'}
-              onChange={onSourceTypeChange}
-              style={{ marginLeft: 'auto' }}
-            >
-              <option value="html">HTML</option>
-              <option value="bundle">Bundle</option>
-              <option value="internal_url">Internal URL</option>
-              <option value="remote_url">Remote URL</option>
-            </select>
-            <NodeHelpButton description={helpText} title={data.title} />
+          <div className="node-actions node-actions--split">
+            <div className="node-actions__left">
+              <div
+                className="node-toggle nodrag"
+                role="switch"
+                aria-checked={enabled}
+                tabIndex={0}
+                onClick={onToggleEnabled}
+                onKeyDown={onToggleEnabledKeyDown}
+                title={enabled ? 'Disable frame' : 'Enable frame'}
+              >
+                <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              </div>
+              <select
+                className="nodrag app-select"
+                value={data.sourceType || 'html'}
+                onChange={onSourceTypeChange}
+              >
+                <option value="html">HTML</option>
+                <option value="bundle">Bundle</option>
+                <option value="internal_url">Internal URL</option>
+                <option value="remote_url">Remote URL</option>
+              </select>
+            </div>
+            <DetailHeaderActions>
+              <DetailHeaderAction
+                icon={<ReconnectActionIcon />}
+                ariaLabel="Reload frame"
+                tooltip="Reload"
+                onClick={reload}
+                disabled={!enabled}
+              />
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel="Delete frame"
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onDelete}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>

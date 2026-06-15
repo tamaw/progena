@@ -39,7 +39,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -54,9 +53,8 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped'];
-const AGENT_DETAIL_TABS = ['Details', 'Graph'];
-// A2A agents are read through from Progenitor and have no backend-editable graph.
-const A2A_DETAIL_TABS = ['Details'];
+// The agent graph now lives on the Sequences page; the Agents page shows only
+// Details, so the detail tab row is hidden in both views.
 
 // Chip tone per A2A task status (matches Progenitor's A2ATaskStatus enum).
 const TASK_TONE = {
@@ -1016,7 +1014,9 @@ function AgentGraphEditor({ graph, onSave, onClose }) {
   );
 }
 
-function AgentsPage() {
+function AgentsPage({ variant = 'agents' }) {
+  const isSequences = variant === 'sequences';
+  const basePath = isSequences ? '/sequences' : '/agents';
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
@@ -1024,17 +1024,16 @@ function AgentsPage() {
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
 
-  const { agentId: routeAgentId, tab: routeTab } = useParams();
+  const { agentId: routeAgentId } = useParams();
   const navigate = useNavigate();
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
 
-  // Selection and active tab are derived from the URL (/agents/<id>/<tab>) so the
+  // Selection is derived from the URL (/agents/<id> or /sequences/<id>) so the
   // view is refreshable and shareable; user actions navigate rather than setState.
   const selectedAgentId = routeAgentId ?? null;
-  const activeDetailTab = routeTab === 'graph' ? 'Graph' : 'Details';
 
   const agentsUrl = getApiUrl('agentProfiles');
   const requestedListRef = useRef(null);
@@ -1057,11 +1056,12 @@ function AgentsPage() {
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
 
   const selectAgent = useCallback((id) => {
-    navigate(`/agents/${encodeURIComponent(id)}/${activeDetailTab.toLowerCase()}`);
-  }, [navigate, activeDetailTab]);
-  const selectTab = useCallback((tab) => {
+    navigate(isSequences ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
+  }, [navigate, basePath, isSequences]);
+  // From a sequence graph, jump to that agent's profile on the Agents page.
+  const showProfile = useCallback(() => {
     if (!effectiveAgentId) return;
-    navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/${tab.toLowerCase()}`);
+    navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
   // Request the full profile (incl. graph) whenever the selection changes.
@@ -1082,21 +1082,23 @@ function AgentsPage() {
   );
   const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
-  // A2A agents are read-only (no editable graph), so they only get the Details tab.
   const isA2A = selectedAgent?.kind === 'a2a';
-  const detailTabs = isA2A ? A2A_DETAIL_TABS : AGENT_DETAIL_TABS;
-  const effectiveDetailTab = isA2A ? 'Details' : activeDetailTab;
+  // Sequences view always shows the graph; Agents view always shows Details.
+  // The tab row is hidden in both (single view per page).
+  const detailTabs = [];
+  const effectiveDetailTab = isSequences ? 'Graph' : 'Details';
 
-  // Reflect the active agent + tab in the URL so the view is refreshable and
-  // shareable (e.g. /agents/subagent-code-reviewer/graph).
+  // Reflect the active agent in the URL so the view is refreshable and shareable
+  // (e.g. /agents/subagent-code-reviewer/details or /sequences/subagent-...).
   useEffect(() => {
     if (!effectiveAgentId) return;
-    const tabSeg = effectiveDetailTab.toLowerCase();
-    const target = `/agents/${encodeURIComponent(effectiveAgentId)}/${tabSeg}`;
+    const target = isSequences
+      ? `${basePath}/${encodeURIComponent(effectiveAgentId)}`
+      : `${basePath}/${encodeURIComponent(effectiveAgentId)}/details`;
     if (`${window.location.pathname}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [effectiveAgentId, effectiveDetailTab, navigate]);
+  }, [effectiveAgentId, isSequences, basePath, navigate]);
 
   const visibleAgents = useMemo(
     () => agents.filter((agent) => matchesAgent(agent, activeFilter, search)),
@@ -1125,7 +1127,6 @@ function AgentsPage() {
   return (
     <div className="agents-page">
       <PaneList label="Agents" className="agents-pane">
-        <PaneListHeader title="Agents" count={agents.length} />
         <PaneListFilters filters={AGENT_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
@@ -1191,7 +1192,6 @@ function AgentsPage() {
             ]}
             tabs={detailTabs}
             activeTab={effectiveDetailTab}
-            onTabChange={selectTab}
             tabLabel="Agent detail tabs"
           />
 
@@ -1216,7 +1216,7 @@ function AgentsPage() {
                   agent={selectedAgent}
                   graph={selectedGraph}
                   onPersist={handleSaveGraph}
-                  onShowProfile={() => selectTab('Details')}
+                  onShowProfile={showProfile}
                   jsonOpen={graphEditorOpen}
                   onCloseJson={() => setGraphEditorOpen(false)}
                 />
