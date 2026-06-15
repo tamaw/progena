@@ -289,10 +289,10 @@ function WorkspaceInner() {
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
       >
-        {loading && <div className="workspace-loading">Loading workspace...</div>}
+        {loading && <div className="workspace-loading">Loading workflows...</div>}
         {error && (
           <div className="workspace-loading workspace-error">
-            Failed to load workspace.
+            Failed to load workflows.
             <button className="node-action-btn primary" onClick={refreshWorkspace}>Retry</button>
           </div>
         )}
@@ -352,7 +352,7 @@ function WorkspaceInner() {
   );
 }
 
-export default function WorkspacePage() {
+export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>
       <WorkspaceProvider>

@@ -96,7 +96,7 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
     const id = `workspace-${Date.now()}`;
     const nextWorkspace = {
       id,
-      name: 'Untitled workspace',
+      name: 'Untitled workflow',
       type: preferredType,
       updated: 'now',
       summary: 'New canvas ready for notes, widgets, and layout experiments.',
@@ -113,18 +113,6 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
     <aside
       className={`workspace-sidebar sess-list ${collapsed ? 'collapsed' : ''}`}
     >
-      <div className="chat-sessions-pane__head sess-list__head">
-        <div className="chat-sessions-pane__title sess-list__title">Workspaces <span className="muted">{workspaces.length}</span></div>
-        <button
-          className="chat-pane-action new-task"
-          onClick={collapsed ? onToggle : createWorkspace}
-          title={collapsed ? 'Expand sidebar' : 'Create workspace'}
-          type="button"
-        >
-          {collapsed ? 'Open' : '+ New'}
-        </button>
-      </div>
-
       {!collapsed ? (
         <>
           <div className="chat-pane-tabs sess-list__filters workspace-sidebar__filters">
@@ -146,7 +134,7 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
               <input
                 value={query}
                 type="text"
-                placeholder="Search workspaces"
+                placeholder="Search workflows"
                 onChange={(event) => setQuery(event.target.value)}
               />
             </label>
@@ -158,11 +146,19 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
             >
               Rename
             </button>
+            <button
+              type="button"
+              className="chat-pane-action new-task sess-list__tools-action"
+              onClick={createWorkspace}
+              title="Create workflow"
+            >
+              + New
+            </button>
           </div>
 
           <div className="workspace-sidebar__scroll sess-list__scroll">
             <div className="sess-group">
-              <div className="chat-pane-group__head sess-group__head">Workspace selector <span className="muted">· {filteredWorkspaces.length}</span></div>
+              <div className="chat-pane-group__head sess-group__head">Workflow selector <span className="muted">· {filteredWorkspaces.length}</span></div>
               {filteredWorkspaces.length ? filteredWorkspaces.map((workspace) => {
                 const isSelected = workspace.id === selectedWorkspaceId;
                 const isEditing = workspace.id === editingWorkspaceId;
@@ -217,13 +213,13 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
                   </div>
                 );
               }) : (
-                <div className="empty-state small">No workspaces match the current search.</div>
+                <div className="empty-state small">No workflows match the current search.</div>
               )}
             </div>
           </div>
 
           <div className="workspace-sidebar__footer sess-list__foot">
-            <span>{selectedWorkspace ? selectedWorkspace.type : 'No workspace'}</span>
+            <span>{selectedWorkspace ? selectedWorkspace.type : 'No workflow'}</span>
             <span>{selectedWorkspace ? selectedWorkspace.name : 'Create one'}</span>
           </div>
         </>

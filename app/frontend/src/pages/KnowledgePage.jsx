@@ -4,7 +4,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSortButton,
   PaneListToolbar,
@@ -180,9 +179,8 @@ export default function KnowledgePage() {
   return (
     <div className="knowledge-page">
       <PaneList className="knowledge-pane" label="Knowledge bases">
-        <PaneListHeader title="Knowledge" count={bases.length} actionLabel="+ Base" onAction={addBase} />
         <PaneListFilters filters={['All', 'Mine', 'Shared']} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar>
+        <PaneListToolbar actionLabel="+ Base" onAction={addBase}>
           <span className="knowledge-pane__hint">Graph sources</span>
           <PaneListSortButton title="Sort knowledge bases">Updated</PaneListSortButton>
         </PaneListToolbar>

@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react';
 import DetailHeader, { CopyActionIcon, DetailHeaderAction, DetailHeaderActions, EditActionIcon } from '../components/layout/DetailHeader';
+import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 
 const AGENTS = {
   Codex: { color: '#2f6ff6', initial: 'C' },
@@ -341,6 +343,7 @@ export default function SessionsPage() {
   const [selectedId, setSelectedId] = useState('f0d7c2');
   const [activeAgent, setActiveAgent] = useState('All');
   const [query, setQuery] = useState('');
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('sess-list');
   const [activeDetailFilter, setActiveDetailFilter] = useState('All');
   const [activeDetailTab, setActiveDetailTab] = useState('Session');
 
@@ -359,12 +362,12 @@ export default function SessionsPage() {
 
   return (
     <div className="sessions-page">
-      <section className="sess-list">
-        <div className="chat-sessions-pane__head sess-list__head">
-          <div className="chat-sessions-pane__title sess-list__title">Sessions <span className="muted">637</span></div>
-          <button type="button" className="chat-pane-action new-task">+ New</button>
-        </div>
-
+      <section className={paneClassName} aria-label="Sessions">
+        {collapsed ? (
+          <PaneExpandRail label="Sessions" onExpand={() => setCollapsed(false)} />
+        ) : (
+        <>
+        <PaneCollapseSeam label="Sessions" onCollapse={() => setCollapsed(true)} />
         <div className="chat-pane-tabs sess-list__filters">
           {SESSION_FILTERS.map((filter) => (
             <button
@@ -385,6 +388,7 @@ export default function SessionsPage() {
             <input value={query} type="text" placeholder="Search sessions" onChange={(event) => setQuery(event.target.value)} />
           </label>
           <button type="button" className="sess-sort" title="Sort">Recent <ChevronDownIcon /></button>
+          <button type="button" className="chat-pane-action new-task sess-list__tools-action">+ New</button>
         </div>
 
         <div className="sess-list__scroll">
@@ -423,6 +427,8 @@ export default function SessionsPage() {
           <span><span className="num">637</span> sessions</span>
           <span>Last <span className="num">18m</span> ago</span>
         </div>
+        </>
+        )}
       </section>
 
       <section className="sess-detail">

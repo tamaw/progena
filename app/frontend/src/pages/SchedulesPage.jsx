@@ -4,7 +4,6 @@ import {
   PaneListFilters,
   PaneListFooter,
   PaneListGroup,
-  PaneListHeader,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -343,9 +342,8 @@ function SchedulesPage() {
   return (
     <div className="schedules-page">
       <PaneList label="Schedules" className="schedules-pane">
-        <PaneListHeader title="Schedules" count={schedules.length} actionLabel="+ New schedule" onAction={handleNewSchedule} />
         <PaneListFilters filters={SCHEDULE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar>
+        <PaneListToolbar actionLabel="+ New schedule" onAction={handleNewSchedule}>
           <PaneListSearch value={search} placeholder="Search schedules..." onChange={setSearch} />
           <PaneListSortButton>Next</PaneListSortButton>
         </PaneListToolbar>

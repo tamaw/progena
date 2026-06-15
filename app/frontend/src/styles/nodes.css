@@ -83,6 +83,37 @@
   user-select: none;
 }
 
+.node-title-input {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  font-family: var(--font-family);
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--border-radius-sm);
+  padding: 2px 6px;
+  margin: -2px 0;
+  outline: none;
+  cursor: text;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.node-title-input::placeholder {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.node-title-input:hover {
+  border-color: var(--color-border);
+}
+
+.node-title-input:focus {
+  border-color: var(--color-accent);
+  background: var(--color-bg-primary);
+}
+
 .node-status-badge {
   font-size: var(--font-size-xs);
   padding: 1px 6px;
@@ -135,6 +166,29 @@
 .node-expand-btn:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
+}
+
+.node-remove-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--border-radius-sm);
+  font-size: 16px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.node-remove-btn:hover {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
 }
 
 .workspace-handle {
@@ -201,32 +255,52 @@
   padding: var(--spacing-sm) var(--spacing-md);
   overflow: auto;
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
+.node-body-expanded > .node-tab-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Tabs mirror the chat session filter tabs (.chat-pane-tab) for consistency. */
 .node-tabs {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 2px;
   margin-bottom: var(--spacing-sm);
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--color-border);
 }
 
 .node-tab {
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-primary);
-  color: var(--color-text-muted);
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: var(--font-size-xs);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast),
+    color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.node-tab:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .node-tab.active {
+  background: var(--color-bg-primary);
+  border-color: var(--color-border);
   color: var(--color-text-primary);
-  border-color: rgba(88, 166, 255, 0.35);
-  background: rgba(88, 166, 255, 0.12);
+  box-shadow: var(--shadow-sm);
 }
 
 .node-tab-panel,
@@ -249,12 +323,6 @@
   overflow: auto;
 }
 
-.node-output-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
 .node-section-label {
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
@@ -270,6 +338,117 @@
   border-top: 1px solid var(--color-border);
   background: var(--color-bg-tertiary);
   flex-shrink: 0;
+}
+
+/* Icon-only action row that reuses the site's DetailHeaderAction buttons,
+   aligned to the right edge of the node footer like the page detail headers. */
+.node-actions--icons {
+  justify-content: flex-end;
+}
+
+/* Footer with an enable/disable toggle on the left and the icon actions on the
+   right. */
+.node-actions--split {
+  justify-content: space-between;
+}
+
+/* Left-hand cluster in a split footer (e.g. toggle + a config select). */
+.node-actions__left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-width: 0;
+}
+
+/* Generic enable/disable switch. */
+.node-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.node-toggle:focus-visible {
+  outline: 2px solid color-mix(in oklab, var(--color-accent) 28%, transparent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.node-toggle-switch {
+  width: 32px;
+  height: 18px;
+  border-radius: 9px;
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border);
+  position: relative;
+  flex: none;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.node-toggle-switch.enabled {
+  background: rgba(63, 185, 80, 0.3);
+  border-color: #3fb950;
+}
+
+.node-toggle-switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  transition: transform var(--transition-fast), background var(--transition-fast);
+}
+
+.node-toggle-switch.enabled::after {
+  transform: translateX(14px);
+  background: #3fb950;
+}
+
+.node-toggle-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+/* A disabled node dims its body while keeping the footer controls usable. */
+.workspace-node.is-disabled .node-body {
+  opacity: 0.5;
+}
+
+/* The footer sits at the bottom of an overflow:hidden card, so flip the
+   DetailHeaderAction tooltip to render above the button (into the card body)
+   instead of below, where it would be clipped. */
+.node-actions .detail-header-action[data-tooltip]::before,
+.node-actions .detail-header-action[data-tooltip]::after {
+  top: auto;
+  transform: translate(-50%, 3px);
+}
+
+.node-actions .detail-header-action[data-tooltip]::before {
+  bottom: calc(100% + 2px);
+  border-color: color-mix(in oklab, var(--color-bg-primary) 96%, black 4%) transparent transparent transparent;
+}
+
+.node-actions .detail-header-action[data-tooltip]::after {
+  bottom: calc(100% + 11px);
+}
+
+/* The trash glyph draws taller than the play/refresh icons, so it reads as
+   larger in the row; shrink it slightly so the action icons share one size. */
+.node-actions .detail-header-action.node-delete-action .detail-header-action__svg {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2;
+}
+
+.node-actions .detail-header-action[data-tooltip]:hover::before,
+.node-actions .detail-header-action[data-tooltip]:hover::after,
+.node-actions .detail-header-action[data-tooltip]:focus-visible::before,
+.node-actions .detail-header-action[data-tooltip]:focus-visible::after {
+  transform: translate(-50%, 0);
 }
 
 .node-action-btn {
@@ -340,20 +519,20 @@
 }
 
 .node-help-btn {
-  width: 22px;
-  height: 22px;
+  width: 30px;
+  height: 30px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  border: 0;
   background: transparent;
   color: var(--color-text-muted);
   cursor: help;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
   line-height: 1;
-  transition: all var(--transition-fast);
+  transition: color var(--transition-fast), background var(--transition-fast);
 }
 
 .node-help-control:focus-visible {
@@ -407,6 +586,52 @@
   overflow-wrap: anywhere;
 }
 
+.prompt-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 6px;
+}
+
+.prompt-starters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.prompt-starters-label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.prompt-starter-chip {
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-primary);
+  color: var(--color-text-secondary);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.prompt-starter-chip:hover {
+  border-color: var(--color-accent);
+  color: var(--color-text-primary);
+  background: rgba(88, 166, 255, 0.12);
+}
+
+.prompt-editor-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
 .prompt-editor {
   width: 100%;
   flex: 1;
@@ -433,35 +658,15 @@
   margin-bottom: var(--spacing-sm);
 }
 
-.prompt-meta input,
-.prompt-meta select {
+.prompt-meta .app-select {
   flex: 1;
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--border-radius-sm);
-  padding: 4px 8px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family);
-  outline: none;
-}
-
-.prompt-meta input:focus,
-.prompt-meta select:focus {
-  border-color: var(--color-accent);
+  min-width: 0;
 }
 
 .prompt-run-note {
   margin-bottom: var(--spacing-sm);
   font-size: var(--font-size-xs);
   color: var(--color-text-muted);
-}
-
-.prompt-tags {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-  margin-top: var(--spacing-xs);
 }
 
 .prompt-source-meta {
@@ -473,50 +678,6 @@
 
 .prompt-source-meta.compact {
   margin-bottom: var(--spacing-xs);
-}
-
-.prompt-source-path {
-  font-size: 11px;
-  color: var(--color-text-muted);
-  font-family: var(--font-family-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.prompt-tag {
-  font-size: 10px;
-  padding: 1px 6px;
-  border-radius: 8px;
-  background: var(--color-bg-hover);
-  color: var(--color-text-muted);
-}
-
-.prompt-response {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin-top: var(--spacing-sm);
-  padding: var(--spacing-sm);
-  border: 1px solid var(--color-border);
-  border-radius: var(--border-radius-sm);
-  background: var(--color-bg-primary);
-}
-
-.prompt-response-label {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.3px;
-}
-
-.prompt-response-body {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-y: auto;
-  max-height: 140px;
 }
 
 .prompt-response-preview {
@@ -566,18 +727,6 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
-}
-
-.code-language-select {
-  background: var(--color-bg-primary);
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border);
-  border-radius: var(--border-radius-sm);
-  padding: 2px 6px;
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family);
-  outline: none;
-  cursor: pointer;
 }
 
 .code-editor {
@@ -777,23 +926,6 @@
   overflow-wrap: anywhere;
 }
 
-.schedule-enabled-badge {
-  font-size: var(--font-size-xs);
-  padding: 1px 6px;
-  border-radius: 8px;
-  flex-shrink: 0;
-}
-
-.schedule-enabled-badge.enabled {
-  background: rgba(63, 185, 80, 0.15);
-  color: #3fb950;
-}
-
-.schedule-enabled-badge.disabled {
-  background: var(--color-bg-hover);
-  color: var(--color-text-muted);
-}
-
 .schedule-form {
   display: flex;
   flex-direction: column;
@@ -836,45 +968,6 @@
   resize: vertical;
   min-height: 92px;
   line-height: 1.4;
-}
-
-.schedule-toggle {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-sm);
-  cursor: pointer;
-}
-
-.schedule-toggle-switch {
-  width: 32px;
-  height: 18px;
-  border-radius: 9px;
-  background: var(--color-bg-hover);
-  position: relative;
-  transition: background var(--transition-fast);
-  border: 1px solid var(--color-border);
-}
-
-.schedule-toggle-switch.enabled {
-  background: rgba(63, 185, 80, 0.3);
-  border-color: #3fb950;
-}
-
-.schedule-toggle-switch::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--color-text-muted);
-  transition: transform var(--transition-fast), background var(--transition-fast);
-}
-
-.schedule-toggle-switch.enabled::after {
-  transform: translateX(14px);
-  background: #3fb950;
 }
 
 .schedule-node-unsaved {

@@ -4,9 +4,10 @@ import { useWorkspaceActions, useWorkspaceMeta } from '../../../context/Workspac
 import WidgetTabs from './WidgetTabs';
 import NodeHelpButton from './NodeHelpButton';
 import { resolveWidgetDefaultTab } from './widgetTabUtils';
+import { DetailHeaderActions, DetailHeaderAction, PlayActionIcon, SaveActionIcon, DeleteActionIcon } from '../../layout/DetailHeader';
 
 function ScheduleNode({ id, data, selected }) {
-  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode } = useWorkspaceActions();
+  const { updateNodeData, toggleExpanded, runScheduleNode, saveScheduleNode, removeNodes } = useWorkspaceActions();
   const { getWidgetTabs, getWidgetDefaultTab, getWidgetHelpText } = useWorkspaceMeta();
   const { expanded } = data;
   const isUnsaved = Boolean(data.isUnsaved && !data.serverManaged);
@@ -35,6 +36,19 @@ function ScheduleNode({ id, data, selected }) {
     updateNodeData(id, { enabled: !data.enabled });
   }, [id, data.enabled, updateNodeData]);
 
+  const enabled = Boolean(data.enabled);
+
+  const onToggleEnabledKeyDown = useCallback((e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onToggleEnabled();
+    }
+  }, [onToggleEnabled]);
+
+  const onDelete = useCallback(() => {
+    removeNodes([id]);
+  }, [id, removeNodes]);
+
   const formatTime = (iso) => {
     if (!iso) return '--';
     try {
@@ -55,7 +69,7 @@ function ScheduleNode({ id, data, selected }) {
       />
       <Handle type="target" position={Position.Left} className="workspace-handle" />
       <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''}`}>
+      <div className={`workspace-node ${selected ? 'selected' : ''} ${isUnsaved ? 'schedule-node-unsaved' : ''} ${enabled ? '' : 'is-disabled'}`}>
         <div className="node-title-bar drag-handle">
           <div className="node-type-icon schedule">S</div>
           <div className="node-title">{data.title}</div>
@@ -64,9 +78,9 @@ function ScheduleNode({ id, data, selected }) {
               {isSaving ? 'saving' : 'unsaved'}
             </span>
           )}
-          <span className={`schedule-enabled-badge ${data.enabled ? 'enabled' : 'disabled'}`}>
-            {data.enabled ? 'ON' : 'OFF'}
-          </span>
+          {!enabled && (
+            <span className="node-status-badge disabled">disabled</span>
+          )}
           {data.lastRunStatus && data.lastRunStatus !== 'idle' && (
             <span className={`node-status-badge ${data.lastRunStatus}`}>
               {data.lastRunStatus}
@@ -111,7 +125,7 @@ function ScheduleNode({ id, data, selected }) {
                   <div className="schedule-form-field">
                     <label>Type</label>
                     <select
-                      className="nodrag"
+                      className="nodrag app-select"
                       value={data.scheduleType || 'cron'}
                       onChange={onFieldChange('scheduleType')}
                     >
@@ -139,13 +153,6 @@ function ScheduleNode({ id, data, selected }) {
                       onChange={onFieldChange('timezone')}
                       placeholder="UTC"
                     />
-                  </div>
-
-                  <div className="schedule-toggle" onClick={onToggleEnabled}>
-                    <div className={`schedule-toggle-switch ${data.enabled ? 'enabled' : ''}`} />
-                    <span style={{ fontSize: 'var(--font-size-sm)' }}>
-                      {data.enabled ? 'Enabled' : 'Disabled'}
-                    </span>
                   </div>
 
                   <div className="schedule-info">
@@ -192,19 +199,47 @@ function ScheduleNode({ id, data, selected }) {
         </div>
 
         {expanded && (
-          <div className="node-actions">
-            {isUnsaved ? (
-              <button
-                className="node-action-btn primary"
-                onClick={() => saveScheduleNode(id)}
-                disabled={isSaving}
-              >
-                {isSaving ? 'Saving...' : 'Save Schedule'}
-              </button>
-            ) : (
-              <button className="node-action-btn primary" onClick={() => runScheduleNode(id)}>Run Now</button>
-            )}
-            <NodeHelpButton description={helpText} title={data.title} alignRight />
+          <div className="node-actions node-actions--split">
+            <div
+              className="node-toggle nodrag"
+              role="switch"
+              aria-checked={enabled}
+              tabIndex={0}
+              onClick={onToggleEnabled}
+              onKeyDown={onToggleEnabledKeyDown}
+              title={enabled ? 'Disable schedule' : 'Enable schedule'}
+            >
+              <span className={`node-toggle-switch ${enabled ? 'enabled' : ''}`} />
+              <span className="node-toggle-label">{enabled ? 'Enabled' : 'Disabled'}</span>
+            </div>
+            <DetailHeaderActions>
+              {isUnsaved ? (
+                <DetailHeaderAction
+                  icon={<SaveActionIcon />}
+                  ariaLabel="Save schedule"
+                  tooltip={isSaving ? 'Saving…' : 'Save'}
+                  onClick={() => saveScheduleNode(id)}
+                  disabled={isSaving}
+                />
+              ) : (
+                <DetailHeaderAction
+                  icon={<PlayActionIcon />}
+                  ariaLabel="Run schedule now"
+                  tooltip="Run now"
+                  onClick={() => runScheduleNode(id)}
+                  disabled={!enabled}
+                />
+              )}
+              <DetailHeaderAction
+                icon={<DeleteActionIcon />}
+                ariaLabel="Delete schedule"
+                tooltip="Delete"
+                variant="danger"
+                className="node-delete-action"
+                onClick={onDelete}
+              />
+              <NodeHelpButton description={helpText} title={data.title} />
+            </DetailHeaderActions>
           </div>
         )}
       </div>
