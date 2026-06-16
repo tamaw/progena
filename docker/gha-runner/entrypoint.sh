@@ -8,6 +8,11 @@ RUNNER_NAME_PREFIX="${RUNNER_NAME_PREFIX:-gha-runner}"
 RUNNER_SCOPE="${RUNNER_SCOPE:-repo}"
 RUNNER_EPHEMERAL="${RUNNER_EPHEMERAL:-false}"
 RUNNER_REPLACE="${RUNNER_REPLACE:-true}"
+RUNNER_USER_HOME="/home/runner"
+
+run_as_runner() {
+    sudo -H -E -u runner env HOME="${RUNNER_USER_HOME}" USER=runner LOGNAME=runner "$@"
+}
 
 prune_stale_venvs() {
     find /home/runner/_probe/_work -path '*/.venv/bin/python' -type l 2>/dev/null | while read -r python_link; do
@@ -68,7 +73,7 @@ if [[ ! -f "${RUNNER_HOME}/.runner" ]]; then
         config_args+=(--disableupdate)
     fi
 
-    sudo -E -u runner "${RUNNER_HOME}/config.sh" "${config_args[@]}"
+    run_as_runner "${RUNNER_HOME}/config.sh" "${config_args[@]}"
 fi
 
 cleanup() {
@@ -81,9 +86,9 @@ cleanup() {
     if [[ -z "${RUNNER_TOKEN:-}" ]]; then
         return
     fi
-    sudo -E -u runner "${RUNNER_HOME}/config.sh" remove --unattended --token "${RUNNER_TOKEN}" || true
+    run_as_runner "${RUNNER_HOME}/config.sh" remove --unattended --token "${RUNNER_TOKEN}" || true
 }
 
 trap cleanup EXIT INT TERM
 
-exec sudo -E -u runner "${RUNNER_HOME}/run.sh"
+exec sudo -H -E -u runner env HOME="${RUNNER_USER_HOME}" USER=runner LOGNAME=runner "${RUNNER_HOME}/run.sh"
