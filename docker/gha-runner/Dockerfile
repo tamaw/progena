@@ -38,6 +38,7 @@ RUN apt-get update \
         docker-buildx-plugin \
         docker-ce-cli \
         git \
+        libatomic1 \
         nodejs \
         python3 \
         python3.12-venv \
