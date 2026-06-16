@@ -6,6 +6,7 @@ Profile:
 - Scoped filesystem mounts for self-inspection and runtime data access:
   - /memories/ -> configured data_dir/memories (read-write)
   - /self/ -> <project_root>/app (read-only)
+  - /repos/ -> configured repo/worktree directory (read-only)
   - /data/ -> configured data dir (read-only)
   - /logs/ -> configured log dir (read-only)
   - /prompts/ -> configured prompts dir (read-only)
@@ -46,6 +47,7 @@ def create_progenitor_backend(
     data_dir: str | Path | None = None,
     log_dir: str | Path | None = None,
     prompts_dir: str | Path | None = None,
+    worktree_dir: str | Path | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -54,6 +56,7 @@ def create_progenitor_backend(
         data_dir: Persistent data directory. Defaults to ``<project_root>/data``.
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
+        worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
@@ -61,6 +64,7 @@ def create_progenitor_backend(
     resolved_data_dir = Path(data_dir) if data_dir else root / "data"
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_prompts_dir = Path(prompts_dir) if prompts_dir else resolved_data_dir / "prompts"
+    resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "worktrees"
 
     def _route_backend(
         path: Path,
@@ -89,6 +93,7 @@ def create_progenitor_backend(
 
     mounts: list[tuple[str, Path, bool]] = [
         ("/self/", root / "app", True),
+        ("/repos/", resolved_worktree_dir, True),
         ("/data/", resolved_data_dir, True),
         ("/logs/", resolved_log_dir, True),
         ("/prompts/", resolved_prompts_dir, True),

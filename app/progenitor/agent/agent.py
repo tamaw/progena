@@ -171,6 +171,11 @@ def create_progenitor_agent(
     prompts_dir = (
         Path(getattr(config.storage, "prompts_dir", data_dir / "prompts")).expanduser().resolve()
     )
+    worktree_dir = (
+        Path(getattr(config.storage, "worktree_dir", resolved_project_root / "worktrees"))
+        .expanduser()
+        .resolve()
+    )
 
     # Create LangChain model routed through Azure endpoint
     model = create_langchain_model(config.llm)
@@ -185,6 +190,7 @@ def create_progenitor_agent(
         project_root=project_root,
         data_dir=data_dir,
         prompts_dir=prompts_dir,
+        worktree_dir=worktree_dir,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
