@@ -20,7 +20,7 @@ from typing import Any, Literal, Protocol
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from .agent_store import AgentStore, a2a_profiles_from_registry
+from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
 from .chat_sessions import UiEventEnvelope
 
 
@@ -212,15 +212,22 @@ def create_agent_profile_router(
         return store
 
     def _build_profiles(store: AgentStore) -> AgentProfilesResponse:
-        # Backend-owned subagents (editable) + A2A agents read through from
+        # Backend-owned subagents (editable) + A2A and ACP agents read through from
         # Progenitor's registry document (live status + card, no backend rows).
-        records = list(store.list_agents()) + a2a_profiles_from_registry()
+        records = (
+            list(store.list_agents()) + a2a_profiles_from_registry() + acp_profiles_from_registry()
+        )
         agents = [AgentProfile(**record) for record in records]
         return AgentProfilesResponse(agents=agents, total=len(agents))
 
     def _resolve_profile(store: AgentStore, agent_id: str) -> dict[str, Any] | None:
         if agent_id.startswith("a2a-"):
             for profile in a2a_profiles_from_registry():
+                if profile["id"] == agent_id:
+                    return profile
+            return None
+        if agent_id.startswith("acp-"):
+            for profile in acp_profiles_from_registry():
                 if profile["id"] == agent_id:
                     return profile
             return None
@@ -265,8 +272,8 @@ def create_agent_profile_router(
     async def update_agent_graph(agent_id: str, request: AgentGraphUpdateRequest):
         """Validate and persist an edited agent graph, then broadcast the update."""
         store = _require_store()
-        if agent_id.startswith("a2a-"):
-            raise HTTPException(status_code=409, detail="A2A agents are read-only")
+        if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
+            raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
         try:
             validate_agent_graph(request.nodes, request.edges)
         except ValueError as exc:

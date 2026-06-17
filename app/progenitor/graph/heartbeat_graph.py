@@ -102,6 +102,11 @@ from ..nodes.a2a import (
     notify_completed_tasks_node,
     poll_tracked_tasks_node,
 )
+from ..nodes.acp import (
+    apply_completed_acp_tasks_node,
+    collect_completed_acp_tasks_node,
+    notify_completed_acp_tasks_node,
+)
 from ..nodes.async_subagents import (
     apply_completed_tasks_node as apply_completed_async_subagent_tasks_node,
 )
@@ -238,6 +243,16 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
         ),
     )
     graph.add_node(
+        "acp_collect",
+        _guard_maintenance_node("acp_collect", collect_completed_acp_tasks_node),
+    )
+    graph.add_node(
+        "acp_apply", _guard_maintenance_node("acp_apply", apply_completed_acp_tasks_node)
+    )
+    graph.add_node(
+        "acp_notify", _guard_maintenance_node("acp_notify", notify_completed_acp_tasks_node)
+    )
+    graph.add_node(
         "registry_discover", _guard_maintenance_node("registry_discover", discover_agents_node)
     )
     graph.add_node(
@@ -278,7 +293,10 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_edge("a2a_notify", "async_subagent_poll")
     graph.add_edge("async_subagent_poll", "async_subagent_apply")
     graph.add_edge("async_subagent_apply", "async_subagent_notify")
-    graph.add_edge("async_subagent_notify", "registry_discover")
+    graph.add_edge("async_subagent_notify", "acp_collect")
+    graph.add_edge("acp_collect", "acp_apply")
+    graph.add_edge("acp_apply", "acp_notify")
+    graph.add_edge("acp_notify", "registry_discover")
     graph.add_edge("registry_discover", "registry_refresh")
     graph.add_edge("registry_refresh", "idle_health")
     graph.add_edge("idle_health", END)

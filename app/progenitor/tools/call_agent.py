@@ -11,6 +11,7 @@ from typing import Any, cast
 from pydantic import BaseModel, Field
 
 from ..a2a import build_task_response, dispatch_tracked_a2a_task
+from ..acp import build_acp_task_response, dispatch_tracked_acp_task
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,10 @@ class CallAgentTool(BaseSystemTool):
     @property
     def description(self) -> str:
         return (
-            "Call a deployed A2A agent by name or capability, or omit agent to auto-route. "
-            "Use for external/hosted agents only; prefer DeepAgent subagents for internal work. "
+            "Call a deployed agent by name or capability, or omit agent to auto-route. "
+            "Handles both remote A2A agents and local ACP agents (e.g. GitHub Copilot); "
+            "the registered agent's transport is dispatched automatically. "
+            "Use for external/hosted/CLI agents; prefer DeepAgent subagents for internal work. "
             "Defaults to async tracked dispatch; set blocking=true to wait for completion."
         )
 
@@ -139,17 +142,49 @@ class CallAgentTool(BaseSystemTool):
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent: {agent}")
 
+        resolved_name = str(cfg.get("name") or agent or "").strip() or agent
+        routing_mode = "explicit" if args.get("agent") or args.get("agent_name") else "auto"
+
+        # ACP agents are a peer protocol to A2A: a local stdio agent (e.g. Copilot)
+        # spawned and driven to completion, tracked separately from A2A tasks.
+        if str(cfg.get("transport") or "").lower() == "acp":
+            acp_response, acp_record = await dispatch_tracked_acp_task(
+                state_manager=context.state_manager,
+                agent_name=resolved_name,
+                agent_config=cfg,
+                request_text=request,
+                request_metadata={
+                    "caller": "progenitor",
+                    "dispatch_mode": "blocking" if blocking else "async",
+                    "routing_mode": routing_mode,
+                },
+                source="call_agent",
+                blocking=blocking,
+                notify_on_completion=not blocking,
+            )
+            if not acp_response.get("success", True):
+                return ToolResult.fail(
+                    str(acp_response.get("error") or f"ACP agent call failed: {agent}")
+                )
+            payload = build_acp_task_response(acp_record)
+            if not blocking:
+                payload["message"] = (
+                    f"ACP run started for '{agent}' (task_id: {acp_record.task_id}, "
+                    f"sandbox: {acp_record.cwd}). You'll be notified when it finishes."
+                )
+            elif acp_response.get("output") is not None:
+                payload["output"] = acp_response["output"]
+            return ToolResult.ok(payload)
+
         result, tracked_task = await dispatch_tracked_a2a_task(
             state_manager=context.state_manager,
-            agent_name=str(cfg.get("name") or agent or "").strip() or agent,
+            agent_name=resolved_name,
             agent_config=cfg,
             request_text=request,
             request_metadata={
                 "caller": "progenitor",
                 "dispatch_mode": "blocking" if blocking else "async",
-                "routing_mode": "explicit"
-                if args.get("agent") or args.get("agent_name")
-                else "auto",
+                "routing_mode": routing_mode,
             },
             source="call_agent",
             timeout=timeout_seconds,
