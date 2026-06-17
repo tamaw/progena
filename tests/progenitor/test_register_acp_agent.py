@@ -1,4 +1,4 @@
-"""Tests for the register_acp_agent tool and the default Copilot seed."""
+"""Tests for the register_acp_agent / register_a2a_agent / unregister tools."""
 
 from __future__ import annotations
 
@@ -93,6 +93,37 @@ async def test_register_acp_agent_writes_entry():
     assert entry.acp is not None
     assert entry.acp.command == "copilot"
     assert entry.acp.model == "gpt-5-mini"
+
+
+async def test_register_acp_agent_derives_profile_from_command():
+    """A non-copilot command without an explicit profile shouldn't inherit copilot flags."""
+    registry = _FakeRegistry()
+    tool = RegisterACPAgentTool()
+    context = ToolContext(
+        tool_registry=registry,
+        llm_client=None,
+        tool_args={"name": "claude_acp", "command": "claude-acp"},
+    )
+    result = await tool.execute(context)
+    assert result.success is True
+    entry = registry.entries[0]
+    assert entry.acp is not None
+    assert entry.acp.command == "claude-acp"
+    assert entry.acp.profile is None
+
+
+async def test_register_acp_agent_rejects_invalid_timeout():
+    registry = _FakeRegistry()
+    tool = RegisterACPAgentTool()
+    context = ToolContext(
+        tool_registry=registry,
+        llm_client=None,
+        tool_args={"name": "x", "command": "copilot", "timeout_seconds": "soon"},
+    )
+    result = await tool.execute(context)
+    assert result.success is False
+    assert "timeout" in (result.error or "").lower()
+    assert registry.entries == []
 
 
 async def test_register_acp_agent_requires_name():

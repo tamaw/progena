@@ -3,7 +3,8 @@
 ACP agents (Agent Client Protocol — local stdio CLIs such as ``copilot --acp``)
 live in the same registry as A2A agents, so once registered they are invocable
 through ``call_agent`` and visible on the Agents page. This tool writes an
-``acp_agent`` entry; GitHub Copilot is seeded by default at startup.
+``acp_agent`` entry; nothing is registered automatically — every ACP agent
+(including Copilot) must be added explicitly via this tool.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..acp.agents import parse_acp_connection
+from ..acp.agents import _profile_for_command, parse_acp_connection
 from ..state.models import ACPAgentConfig, AgentRegistryEntry
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -126,7 +127,13 @@ class RegisterACPAgentTool(BaseSystemTool):
             try:
                 cfg_kwargs["timeout_seconds"] = int(str(args["timeout_seconds"]))
             except ValueError:
-                cfg_kwargs["timeout_seconds"] = 1200
+                return ToolResult.fail(f"Invalid timeout_seconds: {args['timeout_seconds']!r}")
+
+        # When the caller didn't pin a profile (directly or via connection string),
+        # derive it from the resolved command so overriding `command` to a non-copilot
+        # CLI doesn't silently inherit Copilot-specific flags.
+        if not args.get("profile") and "profile" not in cfg_kwargs:
+            cfg_kwargs["profile"] = _profile_for_command(cfg_kwargs.get("command", "copilot"))
 
         capabilities = args.get("capabilities")
         if not isinstance(capabilities, list):
