@@ -83,6 +83,7 @@ logs/
 !logs/.gitkeep
 worktrees/
 tmp/
+.tmp/
 
 # Secrets
 .env

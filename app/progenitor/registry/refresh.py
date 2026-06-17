@@ -116,8 +116,31 @@ async def refresh_agent_health(
     async def _check_one(agent: dict[str, Any]) -> None:
         nonlocal healthy, unhealthy, changed_any
         name = str(agent.get("name") or "")
+        if not name:
+            return
+        # ACP agents are local stdio CLIs, not HTTP servers: derive status from
+        # whether the configured command resolves on PATH instead of hitting /health.
+        if str(agent.get("transport") or "").lower() == "acp":
+            import shutil
+
+            command = str((agent.get("acp") or {}).get("command") or "").strip()
+            available = bool(command) and shutil.which(command) is not None
+            new_status = AgentStatus.RUNNING.value if available else AgentStatus.FAILED.value
+            if agent.get("status") != new_status:
+                changed_any = True
+            agent["status"] = new_status
+            agent["status_message"] = (
+                f"ACP command {command!r} available"
+                if available
+                else f"ACP command {command!r} not found on PATH"
+            )
+            if available:
+                healthy += 1
+            else:
+                unhealthy += 1
+            return
         url = str(agent.get("url") or "").strip().rstrip("/")
-        if not name or not url:
+        if not url:
             return
         health_url = f"{url}/health"
 

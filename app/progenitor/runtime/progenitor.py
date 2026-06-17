@@ -88,6 +88,9 @@ class Progenitor:
             runtime_store=runtime_store,
         )
         await self.state_manager.initialize()
+        # Back the registry with the database (registry document); agents.json is
+        # only used to migrate any pre-existing entries on first load.
+        self.registry_runtime.bind_state_manager(self.state_manager)
         await self.registry_runtime.load()
 
         async def deferred_push_event(event_type: str, content: str, metadata=None):
