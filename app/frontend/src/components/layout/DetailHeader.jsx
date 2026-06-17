@@ -199,11 +199,17 @@ function DetailHeaderOverflowMenu({ items, label }) {
           {items.map((item, index) => {
             const props = item.props || {};
             const text = props.label || props.tooltip || props.ariaLabel || '';
+            // Toggle actions carry `aria-pressed` inline; preserve that checked
+            // state in the menu so screen readers still announce it when the
+            // header collapses (menuitem has no checked semantics).
+            const pressed = props['aria-pressed'];
+            const isToggle = pressed !== undefined && pressed !== null;
             return (
               <button
                 key={item.key ?? index}
                 type="button"
-                role="menuitem"
+                role={isToggle ? 'menuitemcheckbox' : 'menuitem'}
+                aria-checked={isToggle ? Boolean(pressed) : undefined}
                 className={`detail-header-menu__item ${props.variant === 'danger' ? 'is-danger' : ''}`.trim()}
                 disabled={props.disabled}
                 onClick={(event) => {

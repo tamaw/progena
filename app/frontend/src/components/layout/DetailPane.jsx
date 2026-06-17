@@ -4,14 +4,18 @@
 // a page-specific modifier via `className` for bespoke descendant rules, and
 // `flush` for canvas/graph/chat bodies that manage their own scrolling
 // (`overflow: hidden`).
+//
+// Rendered as a labelled <section> (a region landmark), not <main>: the app
+// shell already provides the single <main> (AppRuntimeShell), so a nested one
+// would be invalid landmark semantics.
 export default function DetailPane({ children, className = '', label, flush = false, ...props }) {
   return (
-    <main
+    <section
       className={`detail-pane ${flush ? 'detail-pane--flush' : ''} ${className}`.trim()}
       aria-label={label}
       {...props}
     >
       {children}
-    </main>
+    </section>
   );
 }
