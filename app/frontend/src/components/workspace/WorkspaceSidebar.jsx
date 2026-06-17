@@ -1,5 +1,8 @@
 import { memo, useMemo, useState } from 'react';
 
+import { PaneCollapseSeam, PaneExpandRail } from '../layout/PaneList';
+import { usePaneCollapse } from '../layout/usePaneCollapse';
+
 const WORKSPACE_TYPES = ['All', 'Squad', 'Flow', 'Research', 'Automation'];
 const INITIAL_WORKSPACES = [
   {
@@ -45,7 +48,8 @@ function SearchIcon() {
   );
 }
 
-function WorkspaceSidebar({ collapsed, onToggle }) {
+function WorkspaceSidebar() {
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workspace-sidebar sess-list');
   const [workspaces, setWorkspaces] = useState(INITIAL_WORKSPACES);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
   const [activeType, setActiveType] = useState('All');
@@ -110,11 +114,12 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
   };
 
   return (
-    <aside
-      className={`workspace-sidebar sess-list ${collapsed ? 'collapsed' : ''}`}
-    >
-      {!collapsed ? (
+    <aside className={paneClassName} aria-label="Workflows">
+      {collapsed ? (
+        <PaneExpandRail label="Workflows" onExpand={() => setCollapsed(false)} />
+      ) : (
         <>
+          <PaneCollapseSeam label="Workflows" onCollapse={() => setCollapsed(true)} />
           <div className="chat-pane-tabs sess-list__filters workspace-sidebar__filters">
             {WORKSPACE_TYPES.map((type) => (
               <button
@@ -223,17 +228,6 @@ function WorkspaceSidebar({ collapsed, onToggle }) {
             <span>{selectedWorkspace ? selectedWorkspace.name : 'Create one'}</span>
           </div>
         </>
-      ) : (
-        <div className="workspace-sidebar__collapsed">
-          <button
-          className="chat-pane-action new-task"
-            onClick={onToggle}
-            title="Expand sidebar"
-            type="button"
-          >
-            Open
-          </button>
-        </div>
       )}
     </aside>
   );

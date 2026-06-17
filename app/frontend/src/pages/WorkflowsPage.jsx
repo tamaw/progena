@@ -116,7 +116,6 @@ function WorkspaceInner() {
   const reactFlowWrapper = useRef(null);
   const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
   const lastAppliedViewportVersionRef = useRef(-1);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -289,11 +288,8 @@ function WorkspaceInner() {
   }, [handleKeyboardShortcut]);
 
   return (
-    <div className={`workspace-container ${sidebarCollapsed ? 'is-collapsed' : ''}`} tabIndex={-1}>
-      <WorkspaceSidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-      />
+    <div className="workspace-container" tabIndex={-1}>
+      <WorkspaceSidebar />
       <div
         className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
         ref={reactFlowWrapper}
