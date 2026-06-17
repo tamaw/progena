@@ -6,6 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from app.progenitor.acp import tasks as acp_tasks
 from app.progenitor.acp.runner import ACPRunResult
 from app.progenitor.state.models import ACPTaskRecord, ACPTaskStatus
@@ -58,6 +60,21 @@ async def test_blocking_dispatch_returns_terminal_record(monkeypatch, tmp_path):
     assert record.output == "all done"
     # A fresh per-run sandbox was provisioned.
     assert record.cwd and Path(record.cwd).is_dir()
+
+
+async def test_dispatch_fails_fast_when_acp_config_missing(monkeypatch, tmp_path):
+    """A registry entry without an 'acp' config must not silently spawn Copilot."""
+    monkeypatch.setenv("PROGENITOR_ACP_WORKSPACE", str(tmp_path / "ws"))
+    sm = _FakeStateManager()
+
+    with pytest.raises(ValueError, match="missing its 'acp' configuration"):
+        await acp_tasks.dispatch_tracked_acp_task(
+            state_manager=sm,
+            agent_name="github_copilot",
+            agent_config={"name": "github_copilot"},
+            request_text="do it",
+            blocking=True,
+        )
 
 
 async def test_background_dispatch_completes_via_task(monkeypatch, tmp_path):

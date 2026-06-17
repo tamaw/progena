@@ -110,15 +110,15 @@ async def notify_completed_acp_tasks_node(
 
     notified = 0
     for record in records:
-        if runtime.context.llm_client is not None:
-            sent = await send_acp_completion_notification(
-                runtime.context.state_manager,
-                runtime.context.llm_client,
-                record,
-            )
-            if sent:
-                notified += 1
+        if runtime.context.llm_client is not None and await send_acp_completion_notification(
+            runtime.context.state_manager,
+            runtime.context.llm_client,
+            record,
+        ):
+            notified += 1
             continue
+        # No llm_client, or the client can't push events: mark the record notified
+        # anyway so the heartbeat doesn't reprocess it forever.
         await runtime.context.state_manager.update_acp_task(
             record.task_id,
             {"notification_sent_at": utcnow(), "updated_at": utcnow()},

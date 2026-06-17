@@ -53,7 +53,10 @@ def _acp_config_from_dict(agent_config: dict[str, Any]) -> ACPAgentConfig:
         return raw
     if isinstance(raw, dict):
         return ACPAgentConfig(**raw)
-    return ACPAgentConfig()
+    # Fail fast rather than fall back to ACPAgentConfig() defaults, which would
+    # silently spawn Copilot for an entry that never declared an ACP config.
+    name = agent_config.get("name") or "<unknown>"
+    raise ValueError(f"ACP agent {name!r} is missing its 'acp' configuration")
 
 
 def _runner_for(acp_config: ACPAgentConfig, cwd: str) -> ACPRunner:
