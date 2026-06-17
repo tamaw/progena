@@ -83,6 +83,19 @@ def _color_for(agent_id: str) -> str:
     return _AGENT_COLORS[sum(ord(ch) for ch in agent_id) % len(_AGENT_COLORS)]
 
 
+def _is_acp_registry_entry(info: Any) -> bool:
+    transport = str(getattr(info, "transport", "") or "").strip().lower()
+    if transport == "acp":
+        return True
+
+    kind = str(getattr(info, "kind", "") or "").strip().lower()
+    if kind == "acp_agent":
+        return True
+
+    acp_cfg = getattr(info, "acp", None)
+    return isinstance(acp_cfg, dict) and bool(acp_cfg)
+
+
 def _empty_details(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     details: dict[str, Any] = {
         "tools": [],
@@ -407,6 +420,142 @@ def _agent_record_from_subagent(sub: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
+    """Shape a Progenitor ``ACPTaskRecord`` dict for the Agents-page detail pane."""
+    return {
+        "id": str(record.get("task_id") or ""),
+        "status": str(record.get("status") or "working"),
+        "source": str(record.get("source") or ""),
+        "title": str(record.get("request_text") or record.get("summary") or "").strip(),
+        "summary": str(record.get("summary") or record.get("output") or "").strip()[:400],
+        "created": record.get("created_at"),
+        "updated": record.get("updated_at"),
+        "completed": record.get("completed_at"),
+    }
+
+
+def _acp_tasks_by_agent() -> dict[str, list[dict[str, Any]]]:
+    """Read Progenitor's ACP run records and group recent ones by agent name."""
+    try:
+        from .state_reader import get_state_reader
+
+        records = get_state_reader().get_acp_tasks()
+    except Exception as exc:  # pragma: no cover - registry/state dependent
+        logger.warning("Could not read ACP run history: %s", exc)
+        return {}
+
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        agent = str(record.get("agent_name") or "")
+        if agent:
+            grouped.setdefault(agent, []).append(record)
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for agent, recs in grouped.items():
+        recs.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
+        result[agent] = [_acp_task_view(r) for r in recs[:_A2A_TASK_LIMIT]]
+    return result
+
+
+def acp_profile_from_info(
+    info: Any, tasks_by_agent: dict[str, list[dict[str, Any]]] | None = None
+) -> dict[str, Any]:
+    """Map a Progenitor registry ``AgentInfo`` (transport=="acp") to an AgentProfile.
+
+    Read-through: ACP agents are local stdio CLIs registered in the runtime
+    registry. Connection facts come from the entry's ``acp`` config; ``status`` is
+    the registry's PATH-availability check; runs come from the ACP task records.
+    ACP agents are read-only here (no editable graph).
+    """
+    acp_cfg = getattr(info, "acp", None)
+    acp_cfg = acp_cfg if isinstance(acp_cfg, dict) else {}
+    name = str(getattr(info, "name", "") or "acp-agent")
+    agent_id = f"acp-{_slug(name)}"
+    description = str(getattr(info, "description", "") or "")
+    command = str(acp_cfg.get("command") or "copilot")
+    model = str(acp_cfg.get("model") or "")
+    profile = acp_cfg.get("profile")
+    yolo = profile == "copilot"
+    port = acp_cfg.get("port")
+    is_tcp = port is not None
+    transport = "tcp" if is_tcp else "stdio"
+    if is_tcp:
+        endpoint = f"{acp_cfg.get('host') or '127.0.0.1'}:{port}"
+        command_display = f"{endpoint} (ACP/TCP)"
+    else:
+        command_display = f"{command} --acp" + (" --yolo" if yolo else "")
+
+    # ACP-specific metadata lives in the free-form ``card`` (mirrors how the A2A
+    # detail pane reads ``card``), so the AgentProfile model stays unchanged.
+    card = {
+        "protocol": "Agent Client Protocol",
+        "transport": transport,
+        "command": command_display,
+        "model": model,
+        "permissionMode": "auto-approve (--yolo)" if yolo else "prompt",
+        "timeoutSeconds": acp_cfg.get("timeout_seconds"),
+        "capabilities": {
+            "streaming": True,
+            "terminal": True,
+            "fileAccess": True,
+            "autoApprove": yolo,
+        },
+    }
+
+    if tasks_by_agent is None:
+        tasks_by_agent = _acp_tasks_by_agent()
+    tasks = tasks_by_agent.get(name, [])
+    metrics = dict(_EMPTY_METRICS)
+    metrics["tasks"] = str(len(tasks))
+
+    return {
+        "id": agent_id,
+        "kind": "acp",
+        "name": name.replace("_", " ").title() if "_" in name else name,
+        "handle": f"@{_slug(name).replace('-', '_')}",
+        "group": "ACP agents",
+        "color": _color_for(agent_id),
+        "model": model or command,
+        "role": _first_sentence(description) or "ACP agent",
+        "version": str(getattr(info, "version", "") or "v0.1.0"),
+        "summary": description,
+        "status": str(getattr(info, "status", "") or "unknown"),
+        "prompt": "",
+        "skills": [],
+        "tools": [
+            {"name": "terminal", "type": "acp", "calls": 0, "enabled": True},
+            {"name": "read_text_file", "type": "acp", "calls": 0, "enabled": True},
+            {"name": "write_text_file", "type": "acp", "calls": 0, "enabled": True},
+        ],
+        "tasks": tasks,
+        "transport": transport,
+        "url": None,
+        "card": card,
+        "metrics": metrics,
+        "updated": getattr(info, "updated_at", None) or None,
+        "graph": None,
+    }
+
+
+def acp_profiles_from_registry() -> list[dict[str, Any]]:
+    """Read Progenitor's registry document and map its ACP agents read-through."""
+    try:
+        from .state_reader import get_state_reader
+
+        agents, _ = get_state_reader().get_registry()
+    except Exception as exc:  # pragma: no cover - registry/state dependent
+        logger.warning("Could not read ACP registry: %s", exc)
+        return []
+    tasks_by_agent = _acp_tasks_by_agent()
+    return [
+        acp_profile_from_info(info, tasks_by_agent)
+        for info in agents
+        if _is_acp_registry_entry(info)
+    ]
+
+
 def _skills_from_card(card: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Extract a normalized skills list from an A2A agent card."""
     if not isinstance(card, dict):
@@ -610,7 +759,11 @@ def a2a_profiles_from_registry() -> list[dict[str, Any]]:
         logger.warning("Could not read A2A registry: %s", exc)
         return []
     tasks_by_agent = _a2a_tasks_by_agent()
-    return [a2a_profile_from_info(info, tasks_by_agent) for info in agents]
+    return [
+        a2a_profile_from_info(info, tasks_by_agent)
+        for info in agents
+        if not _is_acp_registry_entry(info)
+    ]
 
 
 def seed_default_agents(store: AgentStore) -> int:
@@ -665,11 +818,12 @@ def configure_agent_store(
 
     store = AgentStore(backend_url)
     store.open()
-    # A2A agents are now read through from Progenitor's registry; drop any legacy
-    # A2A rows left in the backend DB by the previous sync-based architecture.
-    purged = store.delete_agents_by_kind("a2a")
+    # A2A and ACP agents are read through from Progenitor's registry; drop any
+    # legacy rows left in the backend DB (A2A from the old sync architecture, ACP
+    # from the earlier hardcoded preview seed).
+    purged = store.delete_agents_by_kind("a2a") + store.delete_agents_by_kind("acp")
     if purged:
-        logger.info("Purged %d legacy A2A agent row(s) from the backend database", purged)
+        logger.info("Purged %d legacy A2A/ACP agent row(s) from the backend database", purged)
     seed_default_agents(store)
     # Refresh any graphs still using the legacy decorative node kinds so the dev
     # database reflects the executable workflow schema.
