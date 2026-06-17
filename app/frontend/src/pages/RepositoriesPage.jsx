@@ -9,10 +9,13 @@ import {
   PaneListSortButton,
   PaneListToolbar,
 } from '../components/layout/PaneList';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   CloneActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
+  DetailStatus,
   OpenActionIcon,
   PullActionIcon,
 } from '../components/layout/DetailHeader';
@@ -236,27 +239,20 @@ const WORKSPACE_METRICS = [
   { label: 'Coverage', value: '74.2%', detail: '+0.3% this week' },
 ];
 
-function RepoGlyph() {
-  return (
-    <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true">
-      <path
-        d="M5.2 3.1h6.9a1.7 1.7 0 0 1 1.7 1.7v9.1l-2.3-1.25-2.35 1.25-2.3-1.25-2.35 1.25V4.8a1.7 1.7 0 0 1 1.7-1.7Z"
-        fill="none"
-        stroke="currentColor"
-        strokeLinejoin="round"
-        strokeWidth="1.35"
-      />
-      <path d="M7.1 6.2h4.1M7.1 8.7h3.3" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
-    </svg>
-  );
-}
-
 function normalizeStatus(status) {
   if (status === 'warning') return 'warning';
   if (status === 'review') return 'review';
   if (status === 'active' || status === 'synced') return 'synced';
   return 'idle';
 }
+
+// Map repo status to a shared DetailStatus tone (coloured dot + label).
+const REPO_STATUS_TONE = {
+  synced: 'ok',
+  review: 'info',
+  warning: 'warning',
+  idle: 'muted',
+};
 
 function repositoryMatchesFilter(repository, activeFilter) {
   if (activeFilter === 'All sources') {
@@ -340,7 +336,7 @@ export default function RepositoriesPage() {
   };
 
   return (
-    <div className="repositories-page">
+    <PageShell className="repositories-page">
       <PaneList className="repositories-pane" label="Repositories">
         <PaneListFilters filters={SOURCE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar actionLabel="+ Source" onAction={connectRepository}>
@@ -381,12 +377,9 @@ export default function RepositoriesPage() {
         </PaneListFooter>
       </PaneList>
 
-      <main className="repositories-main repo-profile">
+      <DetailPane className="repositories-main repo-profile">
         <DetailHeader
-          eyebrow="Repositories"
           title={selectedRepository.name}
-          subtitle={selectedDetail.handle}
-          avatar={<span className="repo-profile__avatar"><RepoGlyph /></span>}
           actions={(
             <DetailHeaderActions>
               <DetailHeaderAction
@@ -414,11 +407,10 @@ export default function RepositoriesPage() {
             </DetailHeaderActions>
           )}
           meta={[
-            <span key="state" className={`repo-pill repo-pill--${normalizeStatus(selectedRepository.status)}`}>
-              <span className="repo-dot" />
+            <DetailStatus key="state" tone={REPO_STATUS_TONE[normalizeStatus(selectedRepository.status)]}>
               {selectedDetail.branchState}
-            </span>,
-            ...selectedDetail.badges.map((badge) => <span className="repo-badge" key={badge}>{badge}</span>),
+            </DetailStatus>,
+            ...selectedDetail.badges.map((badge) => <span className="muted" key={badge}>{badge}</span>),
             <span key="commits"><strong>{selectedDetail.commits}</strong> commits</span>,
             <span key="branches"><strong>{selectedDetail.branches}</strong> branches</span>,
             <span key="prs"><strong>{selectedDetail.openPullRequests}</strong> PRs open</span>,
@@ -513,7 +505,7 @@ export default function RepositoriesPage() {
             </div>
           </section>
         </div>
-      </main>
-    </div>
+      </DetailPane>
+    </PageShell>
   );
 }

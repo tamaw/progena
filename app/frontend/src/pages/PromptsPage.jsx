@@ -2,7 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useApi } from '../hooks/useApi';
 import { renderMarkdownToHtml } from '../lib/markdown';
-import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListGroup,
+  PaneListScroll,
+  PaneListSearch,
+  PaneListToolbar,
+} from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 
 function buildPromptTree(prompts) {
@@ -274,38 +282,21 @@ export default function PromptsPage() {
         ) : (
         <>
         <PaneCollapseSeam label="Prompts" onCollapse={() => setCollapsed(true)} />
-        <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Prompt groups">
-          {groupFilters.map((group) => (
-            <button
-              key={group}
-              type="button"
-              className={`chat-pane-tab sess-filter ${activeGroup === group ? 'is-active' : ''}`}
-              onClick={() => setActiveGroup(group)}
-            >
-              {group}
-            </button>
-          ))}
-        </div>
-
-        <div className="sess-list__tools">
-          <label className="sess-search">
-            <span aria-hidden="true">⌕</span>
-            <input
-              value={query}
-              type="text"
-              placeholder="Search prompts"
-              onChange={(event) => setQuery(event.target.value)}
-            />
-          </label>
+        <PaneListFilters
+          filters={groupFilters}
+          activeFilter={activeGroup}
+          onFilterChange={setActiveGroup}
+          actionLabel="Refresh"
+          onAction={handleRefreshList}
+        />
+        <PaneListToolbar>
+          <PaneListSearch value={query} placeholder="Search prompts" onChange={setQuery} />
           <button type="button" className="sess-sort" onClick={() => setExpandedNodes({})}>
             Reset
           </button>
-          <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={handleRefreshList}>
-            Refresh
-          </button>
-        </div>
+        </PaneListToolbar>
 
-        <div className="prompts-sidebar-body sess-list__scroll">
+        <PaneListScroll className="prompts-sidebar-body">
           {loading && <div className="prompts-empty-state">Loading prompts...</div>}
           {error && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
           {!loading && prompts.length === 0 && (
@@ -315,10 +306,7 @@ export default function PromptsPage() {
             <div className="prompts-empty-state">No prompts match the current filters.</div>
           )}
           {!loading && promptTree.map((group) => (
-            <div key={group.name} className="sess-group">
-              <div className="chat-pane-group__head sess-group__head">
-                {group.name} <span className="muted">· {groupCounts[group.name] || 0}</span>
-              </div>
+            <PaneListGroup key={group.name} title={group.name} count={groupCounts[group.name] || 0}>
               <PromptTreeBranch
                 label={group.name}
                 branchKey={group.name}
@@ -329,9 +317,9 @@ export default function PromptsPage() {
                 onToggle={toggleBranch}
                 onSelectPrompt={handleSelectPrompt}
               />
-            </div>
+            </PaneListGroup>
           ))}
-        </div>
+        </PaneListScroll>
         </>
         )}
       </aside>

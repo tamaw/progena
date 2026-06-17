@@ -1119,14 +1119,6 @@
     padding: 12px 14px 8px;
 }
 
-.chat-sessions-pane__search {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-    padding: 0 10px 8px;
-    border-bottom: 1px solid var(--color-border);
-}
-
 .chat-sessions-pane__title {
     font-size: 14px;
     font-weight: 600;
@@ -1142,24 +1134,8 @@
     font-size: 11px;
 }
 
-.chat-pane-action {
-    padding: 3px 6px;
-    border: 0;
-    border-radius: 5px;
-    background: transparent;
-    color: var(--color-accent);
-    font-size: 11.5px;
-    font-weight: 500;
-}
-
-.chat-pane-action:hover {
-    background: var(--color-accent-soft);
-}
-
-.chat-pane-action:disabled {
-    cursor: not-allowed;
-    opacity: 0.55;
-}
+/* .chat-pane-action base/hover/disabled live in chrome-frame.css (shared with
+   .new-task) so the rule isn't duplicated across files. */
 
 .chat-pane-tabs {
     display: flex;
@@ -1205,24 +1181,10 @@
     background: #22c55e;
 }
 
-.chat-sessions-pane__scroll {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 6px 10px 12px;
-}
-
+/* .chat-pane-group is still used by the workspace sidebar; its __head styling
+   is shared with .task-group__head / .sess-group__head in chrome-frame.css. */
 .chat-pane-group {
     margin-top: 10px;
-}
-
-.chat-pane-group__head {
-    padding: 4px 4px 6px;
-    color: var(--color-text-secondary);
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    text-transform: none;
 }
 
 .chat-pane-empty {
@@ -1364,50 +1326,8 @@
     background: #a78bfa;
 }
 
-.chat-container {
-    min-width: 0;
-    min-height: 0;
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    overflow: hidden;
-    background: var(--chat-pane-bg);
-}
-
-.chat-page-header {
-    flex: none;
-    padding: 14px var(--chat-content-gutter) 0;
-    border-bottom: 1px solid var(--color-border);
-    background: var(--chat-pane-bg);
-}
-
-.chat-page-header__inner {
-    width: min(100%, var(--chat-content-max-width));
-    min-width: 0;
-    margin: 0;
-}
-
-.chat-page-header__title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-}
-
-.chat-page-header__title {
-    min-width: 0;
-    margin: 0;
-    overflow: hidden;
-    color: var(--color-text-primary);
-    font-family: var(--font-family-mono);
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    line-height: 1.3;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
+/* The chat header is the shared DetailHeader; only the editable title input and
+   the model/session meta items keep chat-specific styling below. */
 .chat-page-header__title-input {
     flex: 0 1 460px;
     min-width: 0;
@@ -1429,20 +1349,6 @@
     outline: none;
     border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 24%, transparent);
-}
-
-.chat-page-header__spacer {
-    flex: 1;
-}
-
-.chat-page-header__meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    margin-top: 8px;
-    color: var(--color-text-tertiary);
-    font-size: 11.5px;
 }
 
 .chat-page-header__model {
@@ -1468,6 +1374,7 @@
 }
 
 .chat-icon-button {
+    position: relative;
     width: 22px;
     height: 22px;
     display: inline-flex;
@@ -1479,6 +1386,60 @@
     background: transparent;
     color: var(--color-text-secondary);
     transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+/* Styled tooltip matching the detail-header actions, nav rail and top-bar
+   chrome buttons. Drops below the button; left-anchored by default (the
+   title-edit button sits toward the left). Resetting left/bottom overrides the
+   global [data-tooltip]::after (dashboard.css). */
+.chat-icon-button[data-tooltip]::before,
+.chat-icon-button[data-tooltip]::after {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+    z-index: 60;
+}
+
+.chat-icon-button[data-tooltip]::before {
+    content: '';
+    left: 50%;
+    top: calc(100% + 2px);
+    border-width: 5px;
+    border-style: solid;
+    border-color: transparent transparent var(--color-bg-tertiary);
+    transform: translate(-50%, -3px);
+}
+
+.chat-icon-button[data-tooltip]::after {
+    content: attr(data-tooltip);
+    left: 0;
+    right: auto;
+    bottom: auto;
+    top: calc(100% + 11px);
+    padding: 6px 10px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: var(--color-bg-tertiary);
+    box-shadow: var(--shadow-md);
+    color: var(--color-text-primary);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    transform: translate(0, -3px);
+}
+
+.chat-icon-button[data-tooltip]:hover::before,
+.chat-icon-button[data-tooltip]:focus-visible::before {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.chat-icon-button[data-tooltip]:hover::after,
+.chat-icon-button[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translate(0, 0);
 }
 
 .chat-icon-button:hover {
@@ -1502,96 +1463,6 @@
 
 .chat-icon-button.is-active {
     color: var(--color-accent);
-}
-
-/* Slightly larger affordance for the inline conversation-action icons. */
-.chat-icon-button--lg {
-    width: 30px;
-    height: 30px;
-    border-radius: 7px;
-}
-
-.chat-icon-button--danger:not(:disabled):hover {
-    background: rgba(180, 35, 24, 0.1);
-    color: #b42318;
-}
-
-/* Inline action row (desktop). Collapses into the "⋮" menu on narrow widths. */
-.chat-header-actions {
-    display: inline-flex;
-    flex: none;
-    align-items: center;
-    gap: 4px;
-}
-
-.chat-options-menu {
-    position: relative;
-    /* Hidden by default; revealed only when the header collapses (mobile). */
-    display: none;
-}
-
-.chat-options-dropdown {
-    position: absolute;
-    top: calc(100% + 6px);
-    right: 0;
-    z-index: 55;
-    min-width: 148px;
-    padding: 6px;
-    border: 1px solid var(--color-border);
-    border-radius: 10px;
-    background: var(--color-bg-primary);
-    box-shadow: var(--shadow-lg);
-}
-
-.chat-options-item {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-    padding: 7px 9px;
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--color-text-secondary);
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    text-align: left;
-    cursor: pointer;
-}
-
-.chat-options-item__icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    flex: 0 0 16px;
-    width: 16px;
-    height: 16px;
-}
-
-.chat-options-item:hover {
-    background: var(--color-bg-hover);
-    color: var(--color-text-primary);
-}
-
-.chat-options-item--danger {
-    color: #b42318;
-}
-
-.chat-options-item--danger:hover {
-    background: rgba(180, 35, 24, 0.08);
-    color: #912018;
-}
-
-.chat-options-item:disabled {
-    cursor: not-allowed;
-    opacity: 0.45;
-}
-
-.chat-options-item:disabled:hover {
-    background: transparent;
-    color: var(--color-text-secondary);
 }
 
 .chat-chip {
@@ -2092,31 +1963,6 @@
 }
 
 @media (max-width: 720px) {
-    .chat-page-header {
-        padding: 12px 16px 0;
-    }
-
-    .chat-page-header__title-row {
-        flex-wrap: wrap;
-    }
-
-    .chat-page-header__spacer {
-        display: none;
-    }
-
-    /* Tight header: collapse the inline action icons back into the "⋮" menu. */
-    .chat-header-actions {
-        display: none;
-    }
-
-    .chat-options-menu {
-        display: inline-flex;
-    }
-
-    .chat-page-header__meta {
-        flex-wrap: wrap;
-    }
-
     .chat-messages {
         padding: 18px 18px 26px;
     }

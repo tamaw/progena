@@ -578,7 +578,7 @@ function ChromeIconButton({ label, icon, active, badge, onClick }) {
       type="button"
       className={`chrome-icon-btn ${active ? 'is-active' : ''} ${badge ? 'has-badge' : ''}`}
       aria-label={label}
-      title={label}
+      data-tooltip={label}
       onClick={onClick}
     >
       <span aria-hidden="true">{icon}</span>
