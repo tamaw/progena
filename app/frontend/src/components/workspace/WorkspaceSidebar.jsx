@@ -1,9 +1,17 @@
 import { memo, useMemo, useState } from 'react';
 
-import { PaneCollapseSeam, PaneExpandRail } from '../layout/PaneList';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListToolbar,
+  PaneListSearch,
+  PaneListScroll,
+  PaneListGroup,
+  PaneListFooter,
+} from '../layout/PaneList';
 import { usePaneCollapse } from '../layout/usePaneCollapse';
 
-const WORKSPACE_TYPES = ['All', 'Squad', 'Flow', 'Research', 'Automation'];
 const INITIAL_WORKSPACES = [
   {
     id: 'workspace-release',
@@ -39,32 +47,20 @@ const INITIAL_WORKSPACES = [
   },
 ];
 
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function WorkspaceSidebar() {
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workspace-sidebar sess-list');
   const [workspaces, setWorkspaces] = useState(INITIAL_WORKSPACES);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
-  const [activeType, setActiveType] = useState('All');
   const [query, setQuery] = useState('');
   const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
   const [draftName, setDraftName] = useState('');
 
   const filteredWorkspaces = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return workspaces.filter((workspace) => {
-      const matchesType = activeType === 'All' || workspace.type === activeType;
-      const matchesQuery = !normalizedQuery || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery);
-      return matchesType && matchesQuery;
-    });
-  }, [activeType, query, workspaces]);
+    return workspaces.filter((workspace) => (
+      !normalizedQuery || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery)
+    ));
+  }, [query, workspaces]);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0] || null;
 
@@ -96,12 +92,11 @@ function WorkspaceSidebar() {
   };
 
   const createWorkspace = () => {
-    const preferredType = activeType === 'All' ? 'Squad' : activeType;
     const id = `workspace-${Date.now()}`;
     const nextWorkspace = {
       id,
       name: 'Untitled workflow',
-      type: preferredType,
+      type: 'Squad',
       updated: 'now',
       summary: 'New canvas ready for notes, widgets, and layout experiments.',
       items: 0,
@@ -120,29 +115,16 @@ function WorkspaceSidebar() {
       ) : (
         <>
           <PaneCollapseSeam label="Workflows" onCollapse={() => setCollapsed(true)} />
-          <div className="chat-pane-tabs sess-list__filters workspace-sidebar__filters">
-            {WORKSPACE_TYPES.map((type) => (
-              <button
-                key={type}
-                type="button"
-                className={`chat-pane-tab sess-filter ${activeType === type ? 'is-active' : ''}`}
-                onClick={() => setActiveType(type)}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
+          <PaneListFilters
+            filters={[]}
+            activeFilter={null}
+            onFilterChange={() => {}}
+            actionLabel="+ New"
+            onAction={createWorkspace}
+          />
 
-          <div className="sess-list__tools">
-            <label className="sess-search">
-              <SearchIcon />
-              <input
-                value={query}
-                type="text"
-                placeholder="Search workflows"
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
+          <PaneListToolbar>
+            <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
             <button
               type="button"
               className="sess-sort"
@@ -151,19 +133,10 @@ function WorkspaceSidebar() {
             >
               Rename
             </button>
-            <button
-              type="button"
-              className="chat-pane-action new-task sess-list__tools-action"
-              onClick={createWorkspace}
-              title="Create workflow"
-            >
-              + New
-            </button>
-          </div>
+          </PaneListToolbar>
 
-          <div className="workspace-sidebar__scroll sess-list__scroll">
-            <div className="sess-group">
-              <div className="chat-pane-group__head sess-group__head">Workflow selector <span className="muted">· {filteredWorkspaces.length}</span></div>
+          <PaneListScroll className="workspace-sidebar__scroll">
+            <PaneListGroup title="Workflow selector" count={filteredWorkspaces.length}>
               {filteredWorkspaces.length ? filteredWorkspaces.map((workspace) => {
                 const isSelected = workspace.id === selectedWorkspaceId;
                 const isEditing = workspace.id === editingWorkspaceId;
@@ -220,13 +193,13 @@ function WorkspaceSidebar() {
               }) : (
                 <div className="empty-state small">No workflows match the current search.</div>
               )}
-            </div>
-          </div>
+            </PaneListGroup>
+          </PaneListScroll>
 
-          <div className="workspace-sidebar__footer sess-list__foot">
+          <PaneListFooter>
             <span>{selectedWorkspace ? selectedWorkspace.type : 'No workflow'}</span>
             <span>{selectedWorkspace ? selectedWorkspace.name : 'Create one'}</span>
-          </div>
+          </PaneListFooter>
         </>
       )}
     </aside>

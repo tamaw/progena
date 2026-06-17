@@ -31,10 +31,6 @@
   padding: 6px 6px 0;
 }
 
-.workspace-sidebar__filters {
-  padding-bottom: 8px;
-}
-
 .workspace-selector-row {
   margin-bottom: 1px;
 }
@@ -313,10 +309,6 @@
 .workspace-dock-item:hover .workspace-dock-tooltip {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
-}
-
-.workspace-sidebar__footer {
-  margin: auto -6px 0;
 }
 
 .prompt-library-panel {
