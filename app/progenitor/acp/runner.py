@@ -181,15 +181,6 @@ class ACPRunner:
                     "Ensure the agent CLI is installed and on PATH."
                 ),
             )
-        except (ConnectionError, OSError) as exc:
-            elapsed = time.perf_counter() - start
-            logger.error("ACP [%s]: connection failed: %s", run_id, exc)
-            return ACPRunResult(
-                success=False,
-                stop_reason="error",
-                elapsed_seconds=elapsed,
-                error=f"ACP connection failed ({self.host}:{self.port}): {exc}",
-            )
         except TimeoutError:
             elapsed = time.perf_counter() - start
             logger.error("ACP [%s]: timed out after %.0fs", run_id, self.timeout)
@@ -200,6 +191,15 @@ class ACPRunner:
                 tool_calls=client.tool_calls,
                 elapsed_seconds=elapsed,
                 error=f"Timed out after {self.timeout}s",
+            )
+        except (ConnectionError, OSError) as exc:
+            elapsed = time.perf_counter() - start
+            logger.error("ACP [%s]: connection failed: %s", run_id, exc)
+            return ACPRunResult(
+                success=False,
+                stop_reason="error",
+                elapsed_seconds=elapsed,
+                error=f"ACP connection failed ({self.host}:{self.port}): {exc}",
             )
         except Exception as exc:  # pragma: no cover - defensive
             elapsed = time.perf_counter() - start
