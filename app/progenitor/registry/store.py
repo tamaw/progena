@@ -5,12 +5,18 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any, TypedDict
 
 from ..state.models import AgentRegistryEntry, AgentStatus
 from ..tools.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..utils import utcnow
+
+# A store-backed registry uses these to read/write the canonical document; when
+# unset (e.g. tests), the registry falls back to the JSON file at registry_path.
+RegistryLoader = Callable[[], Awaitable[dict[str, Any]]]
+RegistrySaver = Callable[[dict[str, Any]], Awaitable[None]]
 
 logger = logging.getLogger(__name__)
 
@@ -40,54 +46,114 @@ class ToolRegistry:
     def __init__(self, registry_path: Path | str) -> None:
         self.registry_path: Path = Path(registry_path)
         self._registry: RegistryData = {"agents": [], "tools": []}
+        self._loader: RegistryLoader | None = None
+        self._saver: RegistrySaver | None = None
+
+    def bind_store(self, loader: RegistryLoader, saver: RegistrySaver) -> None:
+        """Back the registry with a document store (DB) instead of the JSON file.
+
+        When bound, :meth:`load`/:meth:`save` read/write the canonical registry
+        document; the JSON file is only consulted once to migrate pre-existing
+        entries into the store. Unbound, the registry uses the file directly.
+        """
+        self._loader = loader
+        self._saver = saver
+
+    @property
+    def store_backed(self) -> bool:
+        return self._saver is not None
+
+    @staticmethod
+    def _parse_agents(loaded: Any) -> list[dict[str, Any]]:
+        """Normalize a registry document/file into a list of agent dicts.
+
+        Accepts both the ``{"agents": [...]}`` shape and the legacy top-level
+        ``{name: cfg}`` map shape.
+        """
+        agents: list[dict[str, Any]] = []
+        if not isinstance(loaded, dict):
+            return agents
+        raw_agents = loaded.get("agents")
+        if isinstance(raw_agents, list):
+            agents = [agent for agent in raw_agents if isinstance(agent, dict)]
+        agent_map = {
+            str(name): cfg
+            for name, cfg in loaded.items()
+            if name not in {"agents", "tools"} and isinstance(cfg, dict)
+        }
+        if agent_map:
+            seen = set(agent_map)
+            agents = [a for a in agents if str(a.get("name") or "") not in seen]
+            for name, cfg in agent_map.items():
+                agents.append({"name": name, **cfg})
+        return agents
+
+    def _serialize(self) -> dict[str, Any]:
+        """Registry document shape: agents (named) + runtime tools."""
+        agents: list[dict[str, Any]] = []
+        for agent in self._registry.get("agents", []):
+            if isinstance(agent, dict) and str(agent.get("name") or "").strip():
+                agents.append(agent)
+        return {"agents": agents, "tools": list(self._registry.get("tools", []))}
 
     async def load(self) -> None:
-        """Load registry from disk."""
+        """Load the registry from the bound store, else the JSON file.
+
+        When store-backed and the store is empty, a pre-existing JSON file is
+        imported once so existing agents.json entries carry over to the database.
+        """
         runtime_tools = list(self._registry.get("tools", []))
-        if self.registry_path.exists():
+
+        if self._loader is not None:
             try:
-                with open(self.registry_path) as handle:
-                    loaded = json.load(handle)
-                agents: list[dict[str, Any]] = []
-                if isinstance(loaded, dict):
-                    raw_agents = loaded.get("agents")
-                    if isinstance(raw_agents, list):
-                        agents = [agent for agent in raw_agents if isinstance(agent, dict)]
-                    agent_map = {
-                        str(name): cfg
-                        for name, cfg in loaded.items()
-                        if name != "agents" and isinstance(cfg, dict)
-                    }
-                    if agent_map:
-                        filtered = []
-                        seen_names = set(agent_map)
-                        for agent in agents:
-                            name = str(agent.get("name") or "")
-                            if name and name in seen_names:
-                                continue
-                            filtered.append(agent)
-                        agents = filtered
-                        for name, cfg in agent_map.items():
-                            agents.append({"name": name, **cfg})
-                self._registry = {
-                    "agents": agents if isinstance(agents, list) else [],
-                    "tools": runtime_tools,
-                }
-            except (OSError, json.JSONDecodeError) as exc:
-                logger.error("Failed to load registry: %s. Starting fresh.", exc)
-                self._registry = {"agents": [], "tools": runtime_tools}
+                document = await self._loader()
+            except Exception as exc:  # pragma: no cover - store dependent
+                logger.error("Failed to load registry from store: %s. Starting fresh.", exc)
+                document = {}
+            agents = self._parse_agents(document)
+            doc_tools = document.get("tools") if isinstance(document, dict) else None
+            tools = doc_tools if isinstance(doc_tools, list) and doc_tools else runtime_tools
+            if not agents:
+                file_agents = self._load_agents_from_file()
+                if file_agents:
+                    logger.info(
+                        "Migrating %d agent(s) from %s into the registry store",
+                        len(file_agents),
+                        self.registry_path,
+                    )
+                    agents = file_agents
+                    self._registry = {"agents": agents, "tools": tools}
+                    await self.save()
+            self._registry = {"agents": agents, "tools": tools}
         else:
-            logger.info("No existing registry found, creating new one")
-            self._registry = {"agents": [], "tools": runtime_tools}
+            self._registry = {
+                "agents": self._load_agents_from_file(),
+                "tools": runtime_tools,
+            }
 
         logger.info(
-            "Loaded registry with %d agents and %d runtime tools",
+            "Loaded registry with %d agents and %d runtime tools (%s-backed)",
             len(self._registry.get("agents", [])),
             len(self._registry.get("tools", [])),
+            "store" if self.store_backed else "file",
         )
 
+    def _load_agents_from_file(self) -> list[dict[str, Any]]:
+        if not self.registry_path.exists():
+            return []
+        try:
+            with open(self.registry_path) as handle:
+                return self._parse_agents(json.load(handle))
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.error("Failed to read registry file %s: %s", self.registry_path, exc)
+            return []
+
     async def save(self) -> None:
-        """Save registry to disk."""
+        """Persist the registry to the bound store, else the JSON file."""
+        if self._saver is not None:
+            await self._saver(self._serialize())
+            logger.debug("Saved registry to store (%d agents)", len(self._registry["agents"]))
+            return
         self.registry_path.parent.mkdir(parents=True, exist_ok=True)
         agent_map: dict[str, dict[str, Any]] = {}
         for agent in self._registry.get("agents", []):
@@ -232,10 +298,12 @@ class ToolRegistry:
         return None
 
     async def register_agent(self, entry: AgentRegistryEntry) -> None:
+        # JSON mode so datetimes are ISO strings — the store-backed save serializes
+        # to JSON without a default encoder (the file path used default=str).
         self._registry["agents"] = [
             agent for agent in self._registry.get("agents", []) if agent.get("name") != entry.name
         ]
-        self._registry["agents"].append(entry.model_dump())
+        self._registry["agents"].append(entry.model_dump(mode="json"))
         await self.save()
 
     async def register_tool(self, entry: dict[str, Any]) -> None:

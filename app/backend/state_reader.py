@@ -150,6 +150,7 @@ class AgentInfo:
     startup_time: str | None = None
     last_heartbeat: str | None = None
     last_error: str | None = None
+    acp: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> AgentInfo:
@@ -176,6 +177,7 @@ class AgentInfo:
             startup_time=data.get("startup_time"),
             last_heartbeat=data.get("last_heartbeat"),
             last_error=data.get("last_error"),
+            acp=data.get("acp") if isinstance(data.get("acp"), dict) else None,
         )
 
 
@@ -594,6 +596,19 @@ class StateReader:
             doc = document.payload if document is not None else []
         else:
             doc = self._read_json_from_path(self.state_dir / "a2a_tasks.json")
+        return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
+
+    def get_acp_tasks(self) -> list[dict[str, Any]]:
+        """Read Progenitor's tracked ACP run records (read-through).
+
+        Peer of :meth:`get_a2a_tasks`; Progenitor persists ACP runs to its
+        ``("progenitor","state","acp_tasks")`` document.
+        """
+        if self.document_store is not None:
+            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", [])
+            doc = document.payload if document is not None else []
+        else:
+            doc = self._read_json_from_path(self.state_dir / "acp_tasks.json")
         return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
 
     def _registry_tools(self, agents: list[AgentInfo]) -> tuple[list[AgentInfo], list[ToolInfo]]:

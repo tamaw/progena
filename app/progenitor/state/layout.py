@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 CORE_FILES: dict[str, str] = {
     "current_state": "current_state.json",
     "a2a_tasks": "a2a_tasks.json",
+    "acp_tasks": "acp_tasks.json",
     "async_subagent_tasks": "async_subagent_tasks.json",
     "background_tasks": "background_tasks.json",
     "registry": "agents.json",
@@ -75,6 +76,7 @@ async def ensure_initial_state(
             "pending_response": None,
         },
         "a2a_tasks": [],
+        "acp_tasks": [],
         "async_subagent_tasks": [],
         "background_tasks": [],
         "registry": {},

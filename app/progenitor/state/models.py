@@ -103,6 +103,31 @@ class AgentStatus(StrEnum):
     STOPPING = "stopping"
 
 
+class ACPAgentConfig(BaseModel):
+    """Invocation config for an Agent Client Protocol (ACP) agent.
+
+    Carried on an ``AgentRegistryEntry`` with ``transport="acp"``. ACP agents are
+    spawned as local stdio subprocesses (e.g. ``copilot --acp``), so they have a
+    ``command`` and CLI ``args`` rather than a URL. ``profile`` names a known agent
+    whose flag builder lives in ``app/progenitor/acp/agents.py``; ``args`` (when
+    set) overrides the profile builder with raw arguments.
+    """
+
+    command: str = "copilot"
+    profile: str | None = "copilot"
+    args: list[str] = Field(default_factory=list)
+    model: str | None = None
+    flags: list[str] = Field(default_factory=list)
+    timeout_seconds: int = 1200
+    # TCP mode: connect to an already-running ACP server (e.g. ``copilot --acp
+    # --port 3000``) instead of spawning a local stdio subprocess. ``host``/``port``
+    # select the server; ``model`` is applied per session via set_session_model;
+    # ``cwd`` is the server-side working directory passed to new_session.
+    host: str | None = None
+    port: int | None = None
+    cwd: str | None = None
+
+
 class AgentRegistryEntry(BaseModel):
     """An agent or MCP server in the registry."""
 
@@ -119,6 +144,9 @@ class AgentRegistryEntry(BaseModel):
     headers: dict[str, str] | None = None
     endpoint: str | None = None
     agent_card_url: str | None = None
+
+    # Set for ACP agents (transport == "acp"); None for A2A/MCP entries.
+    acp: ACPAgentConfig | None = None
 
     status: AgentStatus = AgentStatus.STOPPED
     status_message: str | None = None
@@ -208,6 +236,89 @@ class A2ATaskRecord(BaseModel):
     def is_terminal(self) -> bool:
         """Return whether the task reached a terminal lifecycle state."""
         return self.status_value in TERMINAL_A2A_TASK_STATUSES
+
+
+class ACPTaskStatus(StrEnum):
+    """Lifecycle states for a tracked ACP agent run.
+
+    ACP runs are local subprocesses that Progenitor drives to completion, so the
+    vocabulary is simpler than A2A's: there is no remote ``submitted``/``working``
+    distinction to poll — a run is ``working`` until it finishes or the process
+    fails/is cancelled.
+    """
+
+    WORKING = "working"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
+TERMINAL_ACP_TASK_STATUSES = frozenset(
+    {
+        ACPTaskStatus.COMPLETED.value,
+        ACPTaskStatus.FAILED.value,
+        ACPTaskStatus.CANCELED.value,
+    }
+)
+
+
+class ACPTaskRecord(BaseModel):
+    """Persisted metadata for an ACP agent run tracked by Progenitor.
+
+    Peer to :class:`A2ATaskRecord` but for the ACP protocol: a local stdio agent
+    run rather than a remote A2A task. There is no poll-refresh — the background
+    run updates this record and enqueues a completion when it finishes.
+    """
+
+    model_config = {"use_enum_values": True}
+
+    task_id: str
+    agent_name: str
+    command: str = ""
+    cwd: str | None = None
+    session_id: str | None = None
+    source: str = "call_agent"
+    request_text: str = ""
+    request_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: ACPTaskStatus = ACPTaskStatus.WORKING
+    summary: str | None = None
+    output: str | None = None
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    stop_reason: str | None = None
+    last_error: str | None = None
+    notify_on_completion: bool = True
+    notification_sent_at: datetime | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+    completed_at: datetime | None = None
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def validate_status(cls, v: Any) -> ACPTaskStatus:
+        """Convert raw status strings into the normalized enum."""
+        if isinstance(v, ACPTaskStatus):
+            return v
+        if isinstance(v, str):
+            try:
+                return ACPTaskStatus(v.strip().lower())
+            except ValueError:
+                logger.warning("Unknown ACPTaskStatus %r, defaulting to WORKING", v)
+                return ACPTaskStatus.WORKING
+        logger.warning(
+            "Unexpected ACPTaskRecord status type %s, defaulting to WORKING",
+            type(v).__name__,
+        )
+        return ACPTaskStatus.WORKING
+
+    @property
+    def status_value(self) -> str:
+        """Return the current status value as a string."""
+        return self.status
+
+    @property
+    def is_terminal(self) -> bool:
+        """Return whether the run reached a terminal lifecycle state."""
+        return self.status_value in TERMINAL_ACP_TASK_STATUSES
 
 
 class AsyncSubagentTaskStatus(StrEnum):
@@ -336,6 +447,8 @@ class SchedulingState(TypedDict, total=False):
     a2a_completed_tasks: list[A2ATaskRecord]
     last_a2a_poll_at: str | None
     a2a_poll_ran: bool
+    acp_completed_task: ACPTaskRecord | None
+    acp_completed_tasks: list[ACPTaskRecord]
     async_subagent_completed_task: AsyncSubagentTaskRecord | None
     async_subagent_completed_tasks: list[AsyncSubagentTaskRecord]
     last_async_subagent_poll_at: str | None

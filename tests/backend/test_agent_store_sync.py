@@ -30,6 +30,7 @@ class _Info:
     status: str = "running"
     updated_at: str = "2026-06-08T00:00:00Z"
     agent_card: dict[str, Any] | None = field(default=None)
+    acp: dict[str, Any] | None = field(default=None)
 
 
 def test_skills_from_card_normalizes():
@@ -86,6 +87,90 @@ def test_a2a_card_details_tolerates_snake_case_and_empty():
     )
     assert details["protocolVersion"] == "0.3.0"
     assert details["inputModes"] == ["text/plain"]
+
+
+def test_acp_profile_from_info_maps_config():
+    info = _Info(
+        name="github_copilot",
+        kind="acp_agent",
+        description="Copilot over ACP.",
+        transport="acp",
+        url=None,
+        status="running",
+        acp={"command": "copilot", "profile": "copilot", "model": "gpt-5-mini"},
+    )
+    profile = agent_store.acp_profile_from_info(info, {})
+    assert profile["id"] == "acp-github-copilot"
+    assert profile["kind"] == "acp"
+    assert profile["group"] == "ACP agents"
+    assert profile["transport"] == "stdio"
+    assert profile["status"] == "running"
+    card = profile["card"]
+    assert "--acp" in card["command"]
+    assert card["model"] == "gpt-5-mini"
+    # copilot profile runs with --yolo -> auto-approve capability on.
+    assert card["capabilities"]["autoApprove"] is True
+    # Exposed tools mirror the ACP client callbacks (terminal + file access).
+    assert {t["name"] for t in profile["tools"]} == {
+        "terminal",
+        "read_text_file",
+        "write_text_file",
+    }
+    # ACP agents are read-only: no editable graph.
+    assert profile["graph"] is None
+
+
+def test_acp_profiles_from_registry_filters_by_transport(monkeypatch):
+    acp_info = _Info(name="github_copilot", transport="acp", acp={"command": "copilot"})
+    http_info = _Info(name="Observe Agent", transport="http")
+    fake_reader = type(
+        "R",
+        (),
+        {
+            "get_registry": lambda self: ([acp_info, http_info], []),
+            "get_acp_tasks": lambda self: [],
+        },
+    )()
+    import app.backend.state_reader as state_reader
+
+    monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
+
+    # ACP read-through returns only the acp-transport entry...
+    acp_profiles = agent_store.acp_profiles_from_registry()
+    assert [p["id"] for p in acp_profiles] == ["acp-github-copilot"]
+    # ...and A2A read-through excludes it.
+    a2a_profiles = agent_store.a2a_profiles_from_registry()
+    assert all(p["kind"] == "a2a" for p in a2a_profiles)
+    assert "acp-github-copilot" not in {p["id"] for p in a2a_profiles}
+
+
+def test_acp_profiles_from_registry_detects_acp_kind_without_transport(monkeypatch):
+    acp_info = _Info(
+        name="cronix_copilot",
+        kind="acp_agent",
+        transport="http",
+        acp={"command": "copilot", "port": 4173},
+    )
+    http_info = _Info(name="Observe Agent", transport="http")
+    fake_reader = type(
+        "R",
+        (),
+        {
+            "get_registry": lambda self: ([acp_info, http_info], []),
+            "get_acp_tasks": lambda self: [],
+            "get_a2a_tasks": lambda self: [],
+        },
+    )()
+    import app.backend.state_reader as state_reader
+
+    monkeypatch.setattr(state_reader, "get_state_reader", lambda: fake_reader)
+
+    acp_profiles = agent_store.acp_profiles_from_registry()
+    assert [p["id"] for p in acp_profiles] == ["acp-cronix-copilot"]
+    assert acp_profiles[0]["transport"] == "tcp"
+
+    a2a_profiles = agent_store.a2a_profiles_from_registry()
+    assert [p["id"] for p in a2a_profiles] == ["a2a-observe-agent"]
 
 
 def test_a2a_profile_from_info_maps_card():

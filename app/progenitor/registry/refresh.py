@@ -3,12 +3,26 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import logging
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+
+async def _tcp_reachable(host: str, port: int, timeout: float) -> bool:
+    """Return True if a TCP connection to ``host:port`` opens within ``timeout``."""
+    try:
+        fut = asyncio.open_connection(host, port)
+        _reader, writer = await asyncio.wait_for(fut, timeout=max(0.1, timeout))
+    except OSError:  # connection refused/unreachable, or TimeoutError (an OSError subclass)
+        return False
+    writer.close()
+    with contextlib.suppress(Exception):
+        await writer.wait_closed()
+    return True
 
 
 async def discover_local_agents(
@@ -116,8 +130,46 @@ async def refresh_agent_health(
     async def _check_one(agent: dict[str, Any]) -> None:
         nonlocal healthy, unhealthy, changed_any
         name = str(agent.get("name") or "")
+        if not name:
+            return
+        # ACP agents are not HTTP servers. TCP-mode agents (host/port) connect to an
+        # already-running server, so probe reachability; stdio agents are local CLIs,
+        # so derive status from whether the command resolves on PATH.
+        if str(agent.get("transport") or "").lower() == "acp":
+            acp_cfg = agent.get("acp") or {}
+            port = acp_cfg.get("port")
+            if port is not None:
+                host = str(acp_cfg.get("host") or "127.0.0.1").strip() or "127.0.0.1"
+                endpoint = f"{host}:{port}"
+                reachable = await _tcp_reachable(host, int(port), timeout)
+                new_status = AgentStatus.RUNNING.value if reachable else AgentStatus.FAILED.value
+                status_message = (
+                    f"ACP server {endpoint} reachable"
+                    if reachable
+                    else f"ACP server {endpoint} not reachable"
+                )
+            else:
+                import shutil
+
+                command = str(acp_cfg.get("command") or "").strip()
+                reachable = bool(command) and shutil.which(command) is not None
+                new_status = AgentStatus.RUNNING.value if reachable else AgentStatus.FAILED.value
+                status_message = (
+                    f"ACP command {command!r} available"
+                    if reachable
+                    else f"ACP command {command!r} not found on PATH"
+                )
+            if agent.get("status") != new_status:
+                changed_any = True
+            agent["status"] = new_status
+            agent["status_message"] = status_message
+            if reachable:
+                healthy += 1
+            else:
+                unhealthy += 1
+            return
         url = str(agent.get("url") or "").strip().rstrip("/")
-        if not name or not url:
+        if not url:
             return
         health_url = f"{url}/health"
 

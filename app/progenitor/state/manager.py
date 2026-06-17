@@ -9,6 +9,7 @@ from typing import Any
 from ..utils import utcnow_isoformat
 from . import (
     a2a_store,
+    acp_store,
     async_subagent_store,
     background_store,
     config_store,
@@ -19,6 +20,7 @@ from .langgraph_store import LangGraphRuntimeStore
 from .layout import CORE_FILES, LOG_FILES, core_file_path, ensure_initial_state
 from .models import (
     A2ATaskRecord,
+    ACPTaskRecord,
     AsyncSubagentTaskRecord,
     BackgroundTaskEntry,
     ConversationMessage,
@@ -167,6 +169,7 @@ class StateManager:
                 "pending_response": None,
             },
             "a2a_tasks": [],
+            "acp_tasks": [],
             "async_subagent_tasks": [],
             "background_tasks": [],
             "registry": {},
@@ -393,6 +396,54 @@ class StateManager:
             updates=updates,
             get_a2a_tasks_fn=self.get_a2a_tasks,
             save_a2a_tasks_fn=self.save_a2a_tasks,
+        )
+
+    # ==========================================================================
+    # ACP Task Tracking (stored in acp_tasks.json)
+    # ==========================================================================
+
+    async def get_acp_tasks(self) -> list[ACPTaskRecord]:
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("acp_tasks")
+            return [ACPTaskRecord.model_validate(item) for item in payload]
+        return await acp_store.get_acp_tasks(
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            read_json=self._read_json,
+            acp_tasks_path=self._core_file_path("acp_tasks"),
+        )
+
+    async def save_acp_tasks(self, tasks: list[ACPTaskRecord]) -> None:
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
+                "acp_tasks",
+                [task.model_dump(mode="json") for task in tasks],
+            )
+            return
+        await acp_store.save_acp_tasks(
+            tasks=tasks,
+            state_cache=self._state_cache,
+            file_lock=self._file_lock,
+            atomic_write_json=self._atomic_write_json,
+            acp_tasks_path=self._core_file_path("acp_tasks"),
+        )
+
+    async def get_acp_task(self, task_id: str) -> ACPTaskRecord | None:
+        return await acp_store.get_acp_task(task_id=task_id, get_acp_tasks_fn=self.get_acp_tasks)
+
+    async def upsert_acp_task(self, task: ACPTaskRecord) -> None:
+        await acp_store.upsert_acp_task(
+            task=task,
+            get_acp_tasks_fn=self.get_acp_tasks,
+            save_acp_tasks_fn=self.save_acp_tasks,
+        )
+
+    async def update_acp_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        return await acp_store.update_acp_task(
+            task_id=task_id,
+            updates=updates,
+            get_acp_tasks_fn=self.get_acp_tasks,
+            save_acp_tasks_fn=self.save_acp_tasks,
         )
 
     # ==========================================================================
