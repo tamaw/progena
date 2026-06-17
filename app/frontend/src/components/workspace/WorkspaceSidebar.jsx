@@ -12,6 +12,7 @@ import {
 } from '../layout/PaneList';
 import { usePaneCollapse } from '../layout/usePaneCollapse';
 
+const WORKSPACE_FILTERS = ['All', 'Flow', 'Research'];
 const INITIAL_WORKSPACES = [
   {
     id: 'workspace-release',
@@ -51,16 +52,20 @@ function WorkspaceSidebar() {
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workspace-sidebar sess-list');
   const [workspaces, setWorkspaces] = useState(INITIAL_WORKSPACES);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
+  const [activeType, setActiveType] = useState('All');
   const [query, setQuery] = useState('');
   const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
   const [draftName, setDraftName] = useState('');
 
   const filteredWorkspaces = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return workspaces.filter((workspace) => (
-      !normalizedQuery || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery)
-    ));
-  }, [query, workspaces]);
+    return workspaces.filter((workspace) => {
+      const matchesType = activeType === 'All' || workspace.type === activeType;
+      const matchesQuery = !normalizedQuery
+        || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery);
+      return matchesType && matchesQuery;
+    });
+  }, [activeType, query, workspaces]);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0] || null;
 
@@ -96,7 +101,7 @@ function WorkspaceSidebar() {
     const nextWorkspace = {
       id,
       name: 'Untitled workflow',
-      type: 'Squad',
+      type: activeType === 'All' ? 'Squad' : activeType,
       updated: 'now',
       summary: 'New canvas ready for notes, widgets, and layout experiments.',
       items: 0,
@@ -116,9 +121,9 @@ function WorkspaceSidebar() {
         <>
           <PaneCollapseSeam label="Workflows" onCollapse={() => setCollapsed(true)} />
           <PaneListFilters
-            filters={[]}
-            activeFilter={null}
-            onFilterChange={() => {}}
+            filters={WORKSPACE_FILTERS}
+            activeFilter={activeType}
+            onFilterChange={setActiveType}
             actionLabel="+ New"
             onAction={createWorkspace}
           />
