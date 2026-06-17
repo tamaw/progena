@@ -6,6 +6,7 @@ import {
   PaneListFilters,
   PaneListToolbar,
   PaneListSearch,
+  PaneListSortButton,
   PaneListScroll,
   PaneListGroup,
   PaneListFooter,
@@ -13,6 +14,7 @@ import {
 import { usePaneCollapse } from '../layout/usePaneCollapse';
 
 const WORKSPACE_FILTERS = ['All', 'Flow', 'Research'];
+const WORKSPACE_SORT_MODES = ['Recent', 'Name', 'Items'];
 const INITIAL_WORKSPACES = [
   {
     id: 'workspace-release',
@@ -54,18 +56,26 @@ function WorkspaceSidebar() {
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(INITIAL_WORKSPACES[0]?.id || null);
   const [activeType, setActiveType] = useState('All');
   const [query, setQuery] = useState('');
+  const [sort, setSort] = useState('Recent');
   const [editingWorkspaceId, setEditingWorkspaceId] = useState(null);
   const [draftName, setDraftName] = useState('');
 
   const filteredWorkspaces = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return workspaces.filter((workspace) => {
+    const result = workspaces.filter((workspace) => {
       const matchesType = activeType === 'All' || workspace.type === activeType;
       const matchesQuery = !normalizedQuery
         || `${workspace.name} ${workspace.summary}`.toLowerCase().includes(normalizedQuery);
       return matchesType && matchesQuery;
     });
-  }, [activeType, query, workspaces]);
+    if (sort === 'Name') {
+      result.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sort === 'Items') {
+      result.sort((a, b) => b.items - a.items);
+    }
+    // 'Recent' keeps the existing insertion order (newest first).
+    return result;
+  }, [activeType, query, sort, workspaces]);
 
   const selectedWorkspace = workspaces.find((workspace) => workspace.id === selectedWorkspaceId) || workspaces[0] || null;
 
@@ -130,14 +140,12 @@ function WorkspaceSidebar() {
 
           <PaneListToolbar>
             <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
-            <button
-              type="button"
-              className="sess-sort"
-              onClick={() => startEditing(selectedWorkspace)}
-              disabled={!selectedWorkspace}
-            >
-              Rename
-            </button>
+            <PaneListSortButton
+              title="Sort workflows"
+              options={WORKSPACE_SORT_MODES}
+              value={sort}
+              onSelect={setSort}
+            />
           </PaneListToolbar>
 
           <PaneListScroll className="workspace-sidebar__scroll">
