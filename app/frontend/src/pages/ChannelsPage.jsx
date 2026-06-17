@@ -8,9 +8,12 @@ import {
   PaneListScroll,
   PaneListGroup,
 } from '../components/layout/PaneList';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   DetailHeaderActions,
   DetailHeaderAction,
+  DetailStatus,
   ConfigureActionIcon,
   ReconnectActionIcon,
   PlayActionIcon,
@@ -231,7 +234,7 @@ export default function ChannelsPage() {
   const selected = CHANNELS.find((channel) => channel.id === selectedId) || visibleChannels[0] || null;
 
   return (
-    <div className="agents-page">
+    <PageShell>
       <PaneList label="Channels" className="agents-pane">
         <PaneListFilters filters={CHANNEL_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
@@ -259,10 +262,9 @@ export default function ChannelsPage() {
       </PaneList>
 
       {selected ? (
-        <main className="agents-detail" aria-label={`${selected.name} channel`}>
+        <DetailPane className="detail-pane--dense" label={`${selected.name} channel`}>
           <DetailHeader
             title={selected.name}
-            subtitle={`${selected.category} · ${selected.handle}`}
             actions={(
               <DetailHeaderActions>
                 <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure channel" ariaLabel="Configure channel" />
@@ -271,19 +273,14 @@ export default function ChannelsPage() {
               </DetailHeaderActions>
             )}
             meta={[
-              <span
-                key="status"
-                className={`agents-chip ${selected.status === 'connected' ? 'agents-chip--ok' : selected.status === 'error' ? 'agents-chip--error' : 'agents-chip--muted'}`}
-              >
-                {STATUS_LABEL[selected.status]}
-              </span>,
+              <DetailStatus key="status" tone={selected.status === 'connected' ? 'ok' : selected.status === 'error' ? 'error' : 'muted'}>{STATUS_LABEL[selected.status]}</DetailStatus>,
               <span key="cat" className="muted">{selected.category}</span>,
               <span key="handle" className="muted">{selected.handle}</span>,
               <span key="act" className="muted">last activity {selected.lastActivity}</span>,
             ]}
           />
 
-          <div className="agents-detail__body">
+          <div className="detail-pane__body">
             <div className="agents-metrics">
               <MetricCard label="Inbound" value={selected.inbound.toLocaleString()} detail="messages received" />
               <MetricCard label="Outbound" value={selected.outbound.toLocaleString()} detail="messages sent" />
@@ -330,12 +327,12 @@ export default function ChannelsPage() {
               )}
             </section>
           </div>
-        </main>
+        </DetailPane>
       ) : (
-        <main className="agents-detail" aria-label="Channel">
+        <DetailPane className="detail-pane--dense" label="Channel">
           <div className="agents-empty-state agents-empty-state--detail">Select a channel to view its details.</div>
-        </main>
+        </DetailPane>
       )}
-    </div>
+    </PageShell>
   );
 }

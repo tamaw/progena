@@ -713,16 +713,6 @@
 }
 
 /* Prototype-inspired Tasks page inside the shared app chrome. */
-.tasks-page {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) 280px;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--color-bg-secondary);
-}
-
 .project-page {
   height: 100%;
   min-height: 0;
@@ -958,14 +948,6 @@
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);
   border: 1px dashed var(--color-border-light);
-}
-
-.task-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--color-bg-secondary);
 }
 
 .taskid {

@@ -9,6 +9,8 @@ import {
   PaneListSortButton,
   PaneListToolbar,
 } from '../components/layout/PaneList';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   ConfigureActionIcon,
   DetailHeaderAction,
@@ -340,7 +342,7 @@ function SchedulesPage() {
   }
 
   return (
-    <div className="schedules-page">
+    <PageShell className="schedules-page">
       <PaneList label="Schedules" className="schedules-pane">
         <PaneListFilters filters={SCHEDULE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar actionLabel="+ New schedule" onAction={handleNewSchedule}>
@@ -374,7 +376,7 @@ function SchedulesPage() {
         </PaneListFooter>
       </PaneList>
 
-      <main className="agents-detail schedules-detail" aria-label={`${selectedSchedule.name} schedule`}>
+      <DetailPane className="detail-pane--dense schedules-detail" label={`${selectedSchedule.name} schedule`}>
         <DetailHeader
           title={selectedSchedule.name}
           subtitle={`${selectedSchedule.owner} - ${selectedSchedule.timezone}`}
@@ -393,7 +395,7 @@ function SchedulesPage() {
           )}
         />
 
-        <div className="agents-detail__body">
+        <div className="detail-pane__body">
           <div className="agents-metrics">
             <MetricCard label="Runs" value={selectedSchedule.metrics.runs} detail="last 30 days" />
             <MetricCard label="Success" value={selectedSchedule.metrics.success} detail="completed runs" />
@@ -471,8 +473,8 @@ function SchedulesPage() {
             </Section>
           </div>
         </div>
-      </main>
-    </div>
+      </DetailPane>
+    </PageShell>
   );
 }
 
