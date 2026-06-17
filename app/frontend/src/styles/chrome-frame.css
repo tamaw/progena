@@ -89,6 +89,24 @@ body,
   background: var(--color-bg-hover);
 }
 
+/* Branding links to the home page: pointer cursor, but otherwise inert — no
+   hover/focus background, colour shift, or underline. */
+.app-shell__brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell__brand-link:hover,
+.app-shell__brand-link:focus {
+  color: inherit;
+  background: transparent;
+  text-decoration: none;
+}
+
 .app-shell__brand-mark {
   font-size: 16px;
   line-height: 1;

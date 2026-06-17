@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { selectChatIndicators } from '../../store/uiDataSlice';
 import { useAlertCenter } from '../../context/AlertCenterContext';
 import { useChromeRuntime } from '../../context/ChromeRuntimeContext';
@@ -819,8 +819,10 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
   return (
     <aside className={`app-shell__sidebar ${isOpen ? 'is-open' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}>
       <div className="app-shell__rail-logo">
-        <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
-        <span className="app-shell__brand-name">Progenitor</span>
+        <Link to="/" className="app-shell__brand-link" aria-label="Progenitor home">
+          <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
+          <span className="app-shell__brand-name">Progenitor</span>
+        </Link>
         <button
           type="button"
           className="app-shell__rail-toggle"
