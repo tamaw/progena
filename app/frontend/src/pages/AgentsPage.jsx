@@ -1616,7 +1616,7 @@ function AgentsPage({ variant = 'agents' }) {
               )}
               meta={[
                 <StatusPill key="status" status={selectedAgent.status} />,
-                <span key="model" className="sess-detail__model" style={{ '--agent-color': selectedAgent.color }}>{selectedAgent.model}</span>,
+                <span key="model" className="sess-detail__model">{selectedAgent.model}</span>,
                 <span key="role" className="muted">{selectedAgent.role}</span>,
                 selectedAgent.url ? (
                   <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
