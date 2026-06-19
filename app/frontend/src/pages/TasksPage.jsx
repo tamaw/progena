@@ -5,11 +5,30 @@ import DetailHeader, {
   DetailHeaderActions,
   EditActionIcon,
 } from '../components/layout/DetailHeader';
-import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListFooter,
+  PaneListGroup,
+  PaneListScroll,
+  PaneListSearch,
+  PaneListSortButton,
+  PaneListToolbar,
+} from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import { useApi } from '../hooks/useApi';
 
 const priorityOrder = { high: 0, medium: 1, med: 1, low: 2 };
+// Sort modes offered by the toolbar sort menu (mirrors the Agents page dropdown).
+const SORT_MODES = ['Priority', 'Recent', 'Name'];
+const TASK_FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'mine', label: 'My tasks' },
+  { value: 'watching', label: 'Watching' },
+];
 const agentColors = ['#2f6ff6', '#a78bfa', '#22a06b', '#ef6c2a', '#6f86c4'];
 
 function formatTimestamp(value) {
@@ -133,12 +152,29 @@ function buildCardBadges(card) {
   ].filter(Boolean);
 }
 
-function groupVisibleCards(board, filter, query) {
+function sortCards(sortMode) {
+  const byRecent = (a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || ''));
+  const byName = (a, b) => String(a.title || '').localeCompare(String(b.title || ''));
+  if (sortMode === 'Recent') {
+    return (a, b) => byRecent(a, b) || byName(a, b);
+  }
+  if (sortMode === 'Name') {
+    return byName;
+  }
+  // Priority (default): high → low, then most-recently updated.
+  return (a, b) => {
+    const rank = (priorityOrder[normalizePriority(a)] ?? 3) - (priorityOrder[normalizePriority(b)] ?? 3);
+    return rank || byRecent(a, b);
+  };
+}
+
+function groupVisibleCards(board, filter, query, sortMode) {
   if (!board) {
     return [];
   }
 
   const normalizedQuery = query.trim().toLowerCase();
+  const comparator = sortCards(sortMode);
   return board.columns.map((column) => {
     const cards = board.cards
       .filter((card) => card.column_id === column.id && !isArchivedCard(card))
@@ -163,34 +199,10 @@ function groupVisibleCards(board, filter, query) {
         ].filter(Boolean).join(' ').toLowerCase();
         return haystack.includes(normalizedQuery);
       })
-      .sort((left, right) => {
-        const leftPriority = priorityOrder[normalizePriority(left)] ?? 3;
-        const rightPriority = priorityOrder[normalizePriority(right)] ?? 3;
-        if (leftPriority !== rightPriority) {
-          return leftPriority - rightPriority;
-        }
-        return String(right.updated_at || '').localeCompare(String(left.updated_at || ''));
-      });
+      .sort(comparator);
 
     return { ...column, cards };
   });
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-      <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
 }
 
 function ChevronRightIcon() {
@@ -375,6 +387,7 @@ export default function TasksPage({ context = null }) {
   const [taskFilter, setTaskFilter] = useState('all');
   const [detailTab, setDetailTab] = useState('Task');
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortMode, setSortMode] = useState('Priority');
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
   const loadBoard = useCallback(async () => {
@@ -401,8 +414,8 @@ export default function TasksPage({ context = null }) {
   }, [loadBoard]);
 
   const groupedColumns = useMemo(
-    () => groupVisibleCards(board, taskFilter, searchQuery),
-    [board, searchQuery, taskFilter],
+    () => groupVisibleCards(board, taskFilter, searchQuery, sortMode),
+    [board, searchQuery, taskFilter, sortMode],
   );
 
   const visibleCards = useMemo(
@@ -545,42 +558,37 @@ export default function TasksPage({ context = null }) {
   }, [deleteKanbanCard, getKanbanBoard, selectedCard]);
 
   return (
-    <div className={`tasks-page ${context ? 'tasks-page--project' : ''}`}>
+    <PageShell className={`pane-page--rail tasks-page ${context ? 'tasks-page--project' : ''}`}>
       <section className={paneClassName} aria-label="Tasks">
         {collapsed ? (
           <PaneExpandRail label={context?.listTitle || 'Tasks'} onExpand={() => setCollapsed(false)} />
         ) : (
         <>
         <PaneCollapseSeam label={context?.listTitle || 'Tasks'} onCollapse={() => setCollapsed(true)} />
-        <div className="chat-pane-tabs sess-list__filters">
-          {[
-            ['all', 'All'],
-            ['mine', 'My tasks'],
-            ['watching', 'Watching'],
-          ].map(([value, label]) => (
-            <button key={value} type="button" className={`chat-pane-tab sess-filter ${taskFilter === value ? 'is-active' : ''}`} onClick={() => setTaskFilter(value)}>
-              {label}
-            </button>
-          ))}
-          <button type="button" className="chat-pane-action new-task tasks-list__new" onClick={openCreateModal}>{context?.newCardLabel || '+ New'}</button>
-        </div>
+        <PaneListFilters
+          filters={TASK_FILTERS}
+          activeFilter={taskFilter}
+          onFilterChange={setTaskFilter}
+          actionLabel={context?.newCardLabel || '+ New'}
+          onAction={openCreateModal}
+        />
+        <PaneListToolbar>
+          <PaneListSearch value={searchQuery} placeholder="Search tasks" onChange={setSearchQuery} />
+          <PaneListSortButton
+            title="Sort tasks"
+            options={SORT_MODES}
+            value={sortMode}
+            onSelect={setSortMode}
+          />
+        </PaneListToolbar>
 
-        <div className="sess-list__tools">
-          <label className="sess-search">
-            <SearchIcon />
-            <input value={searchQuery} type="text" placeholder="Search tasks" onChange={(event) => setSearchQuery(event.target.value)} />
-          </label>
-          <button type="button" className="sess-sort" title="Sorted by priority">Priority <ChevronDownIcon /></button>
-        </div>
-
-        <div className="sess-list__scroll">
+        <PaneListScroll>
           {loading ? <div className="task-empty">Loading tasks...</div> : null}
           {error ? <div className="task-alert">{error}</div> : null}
           {!loading && !visibleCards.length ? <div className="task-empty">No matching tasks.</div> : null}
           {!loading && groupedColumns.map((column) => (
             column.cards.length ? (
-              <div className="task-group" key={column.id}>
-                <div className="task-group__head">{column.label} <span className="muted">({column.cards.length})</span></div>
+              <PaneListGroup key={column.id} title={column.label} count={column.cards.length}>
                 {column.cards.map((card, index) => (
                   <TaskRow
                     key={card.id}
@@ -591,19 +599,19 @@ export default function TasksPage({ context = null }) {
                     onSelect={setSelectedCardId}
                   />
                 ))}
-              </div>
+              </PaneListGroup>
             ) : null
           ))}
-        </div>
+        </PaneListScroll>
 
-        <div className="sess-list__foot">
+        <PaneListFooter>
           <span><span className="num">{board?.cards.filter((card) => !isArchivedCard(card)).length ?? 0}</span> tasks</span>
-        </div>
+        </PaneListFooter>
         </>
         )}
       </section>
 
-      <section className="task-detail">
+      <DetailPane flush className="task-detail">
         {selectedCard ? (
           <>
             <DetailHeader
@@ -713,7 +721,7 @@ export default function TasksPage({ context = null }) {
         ) : (
           <div className="task-detail__empty">Select a task to inspect details.</div>
         )}
-      </section>
+      </DetailPane>
 
       <aside className="task-meta">
         {selectedCard ? (
@@ -793,6 +801,6 @@ export default function TasksPage({ context = null }) {
         onClose={closeModal}
         onSave={saveDraft}
       />
-    </div>
+    </PageShell>
   );
 }

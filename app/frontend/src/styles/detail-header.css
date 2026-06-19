@@ -1,8 +1,20 @@
 .detail-header {
+    position: relative;
+    /* container-type makes this a stacking context; lift it above the sibling
+       body so the overflow-menu dropdown isn't painted under the body content. */
+    z-index: 5;
     flex: none;
+    /* Match the left list pane's header strip so both panes share one bottom
+       divider and their content starts on the same line. */
+    min-height: var(--pane-header-height);
     padding: 14px 28px 0;
     background: var(--color-bg-secondary);
     border-bottom: 1px solid var(--color-border);
+    /* Establish a size container so the action row can collapse into the "⋮"
+       overflow menu based on the header's own width, independent of viewport or
+       which page it is. */
+    container-type: inline-size;
+    container-name: detail-header;
 }
 
 .detail-header__eyebrow {
@@ -26,7 +38,10 @@
 
 .detail-header__title-row {
     gap: 9px;
-    flex-wrap: wrap;
+    /* Keep the actions pinned on one line; the title shrinks/truncates instead
+       of pushing them onto a second row. Narrow widths collapse the actions
+       into the "⋮" overflow menu via the container query below. */
+    flex-wrap: nowrap;
 }
 
 .detail-header__avatar {
@@ -76,6 +91,7 @@
 }
 
 .detail-header-actions,
+.detail-header-actions__inline,
 .detail-header-action,
 .detail-header-action__icon {
     display: inline-flex;
@@ -84,7 +100,17 @@
 
 .detail-header-actions {
     gap: 6px;
+}
+
+.detail-header-actions__inline {
+    gap: 6px;
     flex-wrap: wrap;
+}
+
+/* The overflow trigger is hidden until the container query below reveals it. */
+.detail-header-menu {
+    display: none;
+    position: relative;
 }
 
 .detail-header-action {
@@ -93,7 +119,7 @@
     width: 30px;
     height: 30px;
     padding: 0;
-    color: var(--color-text-muted);
+    color: var(--color-text-secondary);
     background: transparent;
     border: 0;
     border-radius: 6px;
@@ -135,22 +161,25 @@
 }
 
 .detail-header-action__svg {
-    width: 19px;
-    height: 19px;
+    width: 17px;
+    height: 17px;
     stroke: currentColor;
     fill: none;
-    stroke-width: 1.55;
+    stroke-width: 1.3;
     stroke-linecap: round;
     stroke-linejoin: round;
 }
 
+/* Tooltip styling mirrors the collapsed nav-rail tooltips (tertiary surface,
+   shared shadow, 12px label) for one consistent tooltip look across the app.
+   The label box is right-anchored to the action so it grows leftward and stays
+   inside the detail pane (whose overflow would otherwise clip a centred box at
+   the right edge); the caret stays centred under the icon. */
 .detail-header-action[data-tooltip]::before,
 .detail-header-action[data-tooltip]::after {
     position: absolute;
-    left: 50%;
     opacity: 0;
     pointer-events: none;
-    transform: translate(-50%, -3px);
     transition:
         opacity 120ms ease,
         transform 120ms ease;
@@ -159,33 +188,45 @@
 
 .detail-header-action[data-tooltip]::before {
     content: '';
+    left: 50%;
     top: calc(100% + 2px);
     border-width: 5px;
     border-style: solid;
-    border-color: transparent transparent color-mix(in oklab, var(--color-bg-primary) 96%, black 4%);
+    border-color: transparent transparent var(--color-bg-tertiary);
+    transform: translate(-50%, -3px);
 }
 
 .detail-header-action[data-tooltip]::after {
     content: attr(data-tooltip);
+    /* Reset the global [data-tooltip]::after anchors (dashboard.css) so only our
+       right/top placement applies; otherwise a leaked left:50% pins the box. */
+    left: auto;
+    bottom: auto;
+    right: 0;
     top: calc(100% + 11px);
-    padding: 6px 8px;
+    padding: 6px 10px;
     border: 1px solid var(--color-border);
     border-radius: 8px;
-    background: color-mix(in oklab, var(--color-bg-primary) 96%, black 4%);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+    background: var(--color-bg-tertiary);
+    box-shadow: var(--shadow-md);
     color: var(--color-text-primary);
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 500;
-    line-height: 1.1;
+    line-height: 1;
     white-space: nowrap;
+    transform: translate(0, -3px);
 }
 
 .detail-header-action[data-tooltip]:hover::before,
-.detail-header-action[data-tooltip]:hover::after,
-.detail-header-action[data-tooltip]:focus-visible::before,
-.detail-header-action[data-tooltip]:focus-visible::after {
+.detail-header-action[data-tooltip]:focus-visible::before {
     opacity: 1;
     transform: translate(-50%, 0);
+}
+
+.detail-header-action[data-tooltip]:hover::after,
+.detail-header-action[data-tooltip]:focus-visible::after {
+    opacity: 1;
+    transform: translate(0, 0);
 }
 
 .detail-header__meta {
@@ -244,15 +285,142 @@
     border-bottom-color: var(--color-accent);
 }
 
+/* Overflow "⋮" menu (revealed by the container query below). */
+.detail-header-menu__dropdown {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 55;
+    min-width: 168px;
+    padding: 6px;
+    border: 1px solid var(--color-border);
+    border-radius: 10px;
+    background: var(--color-bg-primary);
+    box-shadow: var(--shadow-lg);
+}
+
+.detail-header-menu__item {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 7px 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--color-text-secondary);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+
+.detail-header-menu__item:hover {
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.detail-header-menu__item.is-danger {
+    color: var(--color-error);
+}
+
+.detail-header-menu__item.is-danger:hover {
+    background: color-mix(in oklab, var(--color-error) 10%, transparent);
+}
+
+.detail-header-menu__item:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+
+.detail-header-menu__item-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 17px;
+    width: 17px;
+    height: 17px;
+}
+
+/* Toggled (pinned/shared) header actions keep the accent colour. */
+.detail-header-action.is-active {
+    color: var(--color-accent);
+}
+
+/* Status (dot + label) in the meta row — coloured by tone, no bubble. */
+.detail-status {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+    font-weight: 600;
+}
+
+.detail-status__dot {
+    flex: 0 0 auto;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.detail-status--ok {
+    color: var(--color-success);
+}
+
+.detail-status--info {
+    color: var(--color-info);
+}
+
+.detail-status--warning {
+    color: var(--color-warning);
+}
+
+.detail-status--error {
+    color: var(--color-error);
+}
+
+.detail-status--muted {
+    color: var(--color-text-muted);
+}
+
+/* Chat detail header: the title hosts an editable input/text plus a rename
+   button, so lay it out as a row. */
+.detail-header__title.chat-detail-header__title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.chat-detail-header__title-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-detail-header__rename {
+    flex: none;
+}
+
+/* When the header gets narrow, collapse the inline action row into the menu.
+   Container-relative, so it triggers per page based on the detail pane width. */
+@container detail-header (max-width: 560px) {
+    .detail-header-actions__inline {
+        display: none;
+    }
+
+    .detail-header-menu {
+        display: inline-flex;
+    }
+}
+
 @media (max-width: 1080px) {
     .detail-header {
         padding-right: 20px;
         padding-left: 20px;
-    }
-
-    .detail-header__actions {
-        width: 100%;
-        justify-content: space-between;
     }
 }
 

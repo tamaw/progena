@@ -9,10 +9,13 @@ import {
   PaneListSortButton,
   PaneListToolbar,
 } from '../components/layout/PaneList';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   ConfigureActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
+  DetailStatus,
   LogsActionIcon,
   ReconnectActionIcon,
 } from '../components/layout/DetailHeader';
@@ -439,7 +442,7 @@ export default function ToolsPage() {
   };
 
   return (
-    <div className="tools-page">
+    <PageShell className="tools-page">
       <PaneList className="tools-pane" label="MCP servers">
         <PaneListFilters filters={SERVER_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar actionLabel="+ Add server" onAction={addServer}>
@@ -483,10 +486,9 @@ export default function ToolsPage() {
         </PaneListFooter>
       </PaneList>
 
-      <main className="tools-detail">
+      <DetailPane className="tools-detail">
         <DetailHeader
           title={selectedServer.name}
-          subtitle={`${selectedServer.packageName} · ${selectedServer.version}`}
           actions={(
             <DetailHeaderActions>
               <DetailHeaderAction
@@ -514,10 +516,9 @@ export default function ToolsPage() {
             </DetailHeaderActions>
           )}
           meta={[
-            <span key="status" className={`tools-status-pill tools-status-pill--${selectedServer.status}`}>
-              <span className={`tools-status-dot tools-status-dot--${selectedServer.status}`} />
+            <DetailStatus key="status" tone={selectedServer.status === 'connected' ? 'ok' : selectedServer.status === 'error' ? 'error' : 'muted'}>
               {statusLabel(selectedServer.status)}
-            </span>,
+            </DetailStatus>,
             <span key="counts">{selectedServer.tools} tools · {selectedServer.resources} resources</span>,
             <span key="endpoint">endpoint: <code>{selectedServer.endpoint}</code></span>,
             <span key="auth">auth: {selectedServer.auth}</span>,
@@ -608,7 +609,7 @@ export default function ToolsPage() {
             </div>
           </section>
         </div>
-      </main>
-    </div>
+      </DetailPane>
+    </PageShell>
   );
 }

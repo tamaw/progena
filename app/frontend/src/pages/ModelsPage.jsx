@@ -8,9 +8,12 @@ import {
   PaneListScroll,
   PaneListGroup,
 } from '../components/layout/PaneList';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   DetailHeaderActions,
   DetailHeaderAction,
+  DetailStatus,
   ConfigureActionIcon,
   DuplicateActionIcon,
   PlayActionIcon,
@@ -206,7 +209,7 @@ export default function ModelsPage() {
   const selected = MODELS.find((model) => model.id === selectedId) || visibleModels[0] || null;
 
   return (
-    <div className="agents-page">
+    <PageShell>
       <PaneList label="Models" className="agents-pane">
         <PaneListFilters filters={MODEL_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
         <PaneListToolbar>
@@ -234,10 +237,9 @@ export default function ModelsPage() {
       </PaneList>
 
       {selected ? (
-        <main className="agents-detail" aria-label={`${selected.name} model`}>
+        <DetailPane className="detail-pane--dense" label={`${selected.name} model`}>
           <DetailHeader
             title={selected.name}
-            subtitle={`${selected.provider} · ${selected.family}`}
             actions={(
               <DetailHeaderActions>
                 <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure model" ariaLabel="Configure model" />
@@ -246,17 +248,15 @@ export default function ModelsPage() {
               </DetailHeaderActions>
             )}
             meta={[
-              <span key="status" className={`agents-chip ${selected.status === 'available' ? 'agents-chip--ok' : 'agents-chip--info'}`}>
-                {selected.status === 'available' ? 'Available' : 'Preview'}
-              </span>,
-              selected.isDefault ? <span key="default" className="agents-chip agents-chip--info">Default</span> : null,
+              <DetailStatus key="status" tone={selected.status === 'available' ? 'ok' : 'info'}>{selected.status === 'available' ? 'Available' : 'Preview'}</DetailStatus>,
+              selected.isDefault ? <span key="default" className="muted">Default</span> : null,
               <span key="ctx" className="muted">{selected.context} context</span>,
               <span key="mode" className="muted">{selected.modality.join(' · ')}</span>,
               <code key="id" className="muted">{selected.id}</code>,
             ]}
           />
 
-          <div className="agents-detail__body">
+          <div className="detail-pane__body">
             <div className="agents-metrics">
               <MetricCard label="Context" value={selected.context} detail="input tokens" />
               <MetricCard label="Max output" value={selected.maxOutput} detail="tokens" />
@@ -305,12 +305,12 @@ export default function ModelsPage() {
               )}
             </section>
           </div>
-        </main>
+        </DetailPane>
       ) : (
-        <main className="agents-detail" aria-label="Model">
+        <DetailPane className="detail-pane--dense" label="Model">
           <div className="agents-empty-state agents-empty-state--detail">Select a model to view its details.</div>
-        </main>
+        </DetailPane>
       )}
-    </div>
+    </PageShell>
   );
 }

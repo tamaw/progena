@@ -89,6 +89,24 @@ body,
   background: var(--color-bg-hover);
 }
 
+/* Branding links to the home page: pointer cursor, but otherwise inert — no
+   hover/focus background, colour shift, or underline. */
+.app-shell__brand-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: inherit;
+  text-decoration: none;
+}
+
+.app-shell__brand-link:hover,
+.app-shell__brand-link:focus {
+  color: inherit;
+  background: transparent;
+  text-decoration: none;
+}
+
 .app-shell__brand-mark {
   font-size: 16px;
   line-height: 1;
@@ -198,6 +216,60 @@ body,
 
 .chrome-icon-btn__theme-icon.is-hidden {
   display: none;
+}
+
+/* Styled tooltip matching the detail-header actions and collapsed nav rail.
+   The label box is right-anchored (these buttons sit at the top-right corner)
+   and drops below the button; resetting left/bottom overrides the global
+   [data-tooltip]::after (dashboard.css) that would otherwise pin it above. */
+.chrome-icon-btn[data-tooltip]::before,
+.chrome-icon-btn[data-tooltip]::after {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 60;
+}
+
+.chrome-icon-btn[data-tooltip]::before {
+  content: '';
+  left: 50%;
+  top: calc(100% + 2px);
+  border-width: 5px;
+  border-style: solid;
+  border-color: transparent transparent var(--color-bg-tertiary);
+  transform: translate(-50%, -3px);
+}
+
+.chrome-icon-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  left: auto;
+  bottom: auto;
+  right: 0;
+  top: calc(100% + 11px);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translate(0, -3px);
+}
+
+.chrome-icon-btn[data-tooltip]:hover::before,
+.chrome-icon-btn[data-tooltip]:focus-visible::before {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.chrome-icon-btn[data-tooltip]:hover::after,
+.chrome-icon-btn[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, 0);
 }
 
 .app-shell__sidebar {
@@ -2877,16 +2949,6 @@ body,
   border-radius: inherit;
 }
 
-.sessions-page {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--color-bg-secondary);
-}
-
 .sess-list {
   display: flex;
   flex-direction: column;
@@ -3017,6 +3079,12 @@ body,
   background: var(--color-accent-soft);
 }
 
+.chat-pane-action:disabled,
+.new-task:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .sess-list__filters {
   display: flex;
   gap: 2px;
@@ -3024,6 +3092,13 @@ body,
   padding: 12px 8px 8px;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+/* Pin the row's action (e.g. "+ New agent") to the right, matching the Tasks list. */
+.sess-list__filters-action {
+  margin-left: auto;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .sess-list__filters::-webkit-scrollbar,
@@ -3152,6 +3227,51 @@ body,
   font: inherit;
   font-size: 11.5px;
   font-weight: 500;
+}
+
+.sess-sort-wrap {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.sess-sort-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 104px;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.sess-sort-menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: 5px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+.sess-sort-menu__item:hover {
+  background: var(--color-bg-hover);
+}
+
+.sess-sort-menu__item.is-active {
+  color: var(--color-accent);
+  font-weight: 600;
 }
 
 .sess-list__scroll {
@@ -3347,14 +3467,6 @@ body,
   color: var(--color-text-muted);
   border-top: 1px solid var(--color-border);
   font-size: 11px;
-}
-
-.sess-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  background: var(--color-bg-secondary);
 }
 
 .sess-detail__model,
@@ -4157,13 +4269,9 @@ body,
   line-height: 1.5;
 }
 
-.repositories-page {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
+/* Layout from .pane-page; the compound selector keeps the gradient surface
+   winning over the generic secondary background regardless of source order. */
+.pane-page.repositories-page {
   background:
     radial-gradient(circle at 18% 4%, rgba(91, 214, 159, 0.1), transparent 30%),
     radial-gradient(circle at 84% 0%, rgba(111, 150, 255, 0.12), transparent 28%),
@@ -4612,23 +4720,12 @@ body,
   white-space: nowrap;
 }
 
-.repo-profile {
+/* Detail pane from .detail-pane; compound selector keeps the primary surface
+   winning over the generic secondary background regardless of source order. */
+.detail-pane.repo-profile {
   gap: 0;
   padding: 0;
   background: var(--color-bg-primary);
-}
-
-.repo-profile__avatar {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 44px;
-  height: 44px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-tertiary);
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
 }
 
 .repo-btn {
@@ -4670,45 +4767,6 @@ body,
 .repo-btn--ghost {
   background: transparent;
   border-color: transparent;
-}
-
-.repo-pill,
-.repo-badge {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  padding: 3px 8px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.repo-pill--synced {
-  color: var(--color-success);
-  background: color-mix(in oklab, var(--color-success) 11%, var(--color-bg-secondary));
-  border-color: transparent;
-}
-
-.repo-pill--review {
-  color: var(--color-info);
-  background: color-mix(in oklab, var(--color-info) 11%, var(--color-bg-secondary));
-  border-color: transparent;
-}
-
-.repo-pill--warning {
-  color: var(--color-warning);
-  background: color-mix(in oklab, var(--color-warning) 13%, var(--color-bg-secondary));
-  border-color: transparent;
-}
-
-.repo-dot {
-  width: 6px;
-  height: 6px;
-  background: currentColor;
-  border-radius: 50%;
 }
 
 .repo-profile__body {
@@ -4971,16 +5029,6 @@ body,
   white-space: nowrap;
 }
 
-.tools-page {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  background: var(--color-bg-primary);
-}
-
 .tools-pane {
   min-width: 0;
 }
@@ -5230,38 +5278,10 @@ body,
   font-size: 11px;
 }
 
-.tools-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
+/* Tools detail keeps the primary surface (generic .detail-pane is secondary).
+   Compound selector so it wins regardless of source order vs .detail-pane. */
+.detail-pane.tools-detail {
   background: var(--color-bg-primary);
-}
-
-.tools-status-pill {
-  display: inline-flex;
-  gap: 6px;
-  align-items: center;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.tools-status-pill--connected {
-  color: var(--color-success);
-  background: color-mix(in oklab, var(--color-success) 18%, transparent);
-}
-
-.tools-status-pill--disabled {
-  color: var(--color-text-muted);
-  background: var(--color-bg-tertiary);
-}
-
-.tools-status-pill--error {
-  color: var(--color-error);
-  background: color-mix(in oklab, var(--color-error) 14%, transparent);
 }
 
 .tools-detail__body {
@@ -5505,14 +5525,65 @@ body,
   font-size: 12px;
 }
 
-.agents-page,
-.schedules-page {
+/* Shared two-pane page skeleton (PageShell) and detail pane (DetailPane). The
+   grid is identical across every list page; only the background differs, so the
+   generic class defaults to the lighter secondary surface and the few
+   primary/gradient pages override it via their own modifier class. */
+.pane-page {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   height: 100%;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  background: var(--color-bg-secondary);
+}
+
+/* Third column for boards with a right rail (e.g. Tasks). */
+.pane-page--rail {
+  grid-template-columns: auto minmax(0, 1fr) 280px;
+}
+
+.detail-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  background: var(--color-bg-secondary);
+}
+
+/* For panes whose body scrolls internally (chat, sessions, tasks) or that host
+   a canvas (graph mode) — the pane itself does not scroll. */
+.detail-pane--flush {
+  overflow: hidden;
+}
+
+.detail-pane__body {
+  width: 100%;
+  max-width: none;
+  padding: 20px 28px 34px;
+}
+
+.detail-pane__body--graph {
+  flex: 1;
+  min-height: 0;
+  max-width: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
+   widen the gap vs the wrapping chat/tasks rows. */
+.detail-pane--dense .detail-header__meta,
+.detail-pane--dense .detail-header__meta-group {
+  gap: 12px;
+}
+
+/* Migrated pages whose surface stays on the primary background. */
+.schedules-page,
+.tools-page {
   background: var(--color-bg-primary);
 }
 
@@ -5616,41 +5687,49 @@ body,
   font-weight: 700;
 }
 
-.agents-detail {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow-y: auto;
-  background: var(--color-bg-primary);
-}
-
+/* Agents-only: graph mode swaps the scrolling body for a full-height canvas. */
 .agents-detail.is-graph-mode {
   overflow: hidden;
 }
 
-.agents-detail__body {
-  width: 100%;
-  max-width: none;
-  padding: 20px 28px 34px;
-}
-
-.agents-detail__body--graph {
-  flex: 1;
-  min-height: 0;
-  max-width: none;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.agents-graph-toolbar {
+/* Collapsed right-edge tools dock for the sequences canvas — mirrors the left
+   pane's collapse rail. Holds one item (JSON) today; more can be added. */
+.agents-graph-side {
   flex: none;
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 8px var(--chat-content-gutter, 16px);
+  flex-direction: column;
+  width: 40px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.agents-graph-side__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
   border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.agents-graph-side__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.agents-graph-side__label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
 }
 
 .agents-graph-layout {
@@ -5666,6 +5745,7 @@ body,
 
 /* JSON graph editor — schema-aware editing surface beside the canvas. */
 .agents-graph-editor {
+  position: relative;
   flex: none;
   width: min(420px, 42vw);
   display: flex;
@@ -5674,6 +5754,34 @@ body,
   padding: 12px;
   border-left: 1px solid var(--color-border);
   background: var(--color-bg-secondary);
+}
+
+/* Collapse seam on the panel's left edge (mirrors .sess-list__collapse, but on
+   the right pane so the chevron points away to collapse). */
+.agents-graph-editor__collapse {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translate(-100%, -50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 48px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.agents-graph-editor__collapse:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
 }
 
 .agents-graph-editor__head {
@@ -5784,6 +5892,14 @@ body,
 
 .agents-status-pill .adot {
   background: currentColor;
+}
+
+/* In the detail header meta, show status as just its coloured circle + label —
+   no surrounding pill box/border (the dot is kept). */
+.detail-header__meta .agents-status-pill {
+  padding: 0;
+  background: transparent;
+  border: 0;
 }
 
 .agents-status-pill--running,
@@ -6359,6 +6475,173 @@ body,
   font-size: 12px;
 }
 
+/* New-agent type picker (modal) */
+.agents-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+}
+
+.agents-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: min(460px, 100%);
+  padding: 20px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+}
+
+.agents-modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.agents-modal__head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agents-modal__close {
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.agents-modal__close:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.agents-modal__lead {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+
+.agents-modal__types {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agents-type-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  text-align: left;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.agents-type-card:hover {
+  border-color: var(--color-accent);
+  background: var(--color-bg-hover);
+}
+
+.agents-type-card strong {
+  font-size: 14px;
+}
+
+.agents-type-card span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+/* Editable draft agent detail */
+.agents-draft__note {
+  margin-bottom: 22px;
+  padding: 10px 12px;
+  color: var(--color-text-secondary);
+  background: color-mix(in oklab, var(--color-accent) 8%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-accent) 30%, transparent);
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.agents-draft-title {
+  width: 100%;
+  padding: 2px 0;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  font: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.agents-draft-title:focus {
+  outline: none;
+  border-bottom-color: var(--color-accent);
+}
+
+.agents-draft-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.agents-draft-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agents-draft-field__label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agents-draft-field__hint {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.agents-draft input,
+.agents-draft textarea,
+.agents-draft select {
+  width: 100%;
+  padding: 9px 11px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  font: inherit;
+  resize: vertical;
+}
+
+.agents-draft input:focus,
+.agents-draft textarea:focus,
+.agents-draft select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
 .schedules-summary p {
   margin: 0;
   padding: 14px 16px;
@@ -6388,21 +6671,10 @@ body,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .sessions-page,
-  .knowledge-page {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-
+  /* Narrower list pane on small screens (shared by all non-rail two-pane pages). */
+  .pane-page:not(.pane-page--rail),
+  .knowledge-page,
   .repositories-page {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-
-  .tools-page {
-    grid-template-columns: 280px minmax(0, 1fr);
-  }
-
-  .agents-page,
-  .schedules-page {
     grid-template-columns: 280px minmax(0, 1fr);
   }
 
@@ -6417,7 +6689,7 @@ body,
     padding-left: 20px;
   }
 
-  .agents-detail__body {
+  .detail-pane__body {
     max-width: none;
     padding-right: 20px;
     padding-left: 20px;
@@ -6530,21 +6802,9 @@ body,
     grid-template-columns: 1fr;
   }
 
-  .sessions-page,
-  .knowledge-page {
-    grid-template-columns: 1fr;
-  }
-
+  .pane-page:not(.pane-page--rail),
+  .knowledge-page,
   .repositories-page {
-    grid-template-columns: 1fr;
-  }
-
-  .tools-page {
-    grid-template-columns: 1fr;
-  }
-
-  .agents-page,
-  .schedules-page {
     grid-template-columns: 1fr;
   }
 
@@ -6599,11 +6859,11 @@ body,
     padding: 16px;
   }
 
-  .agents-detail__body {
+  .detail-pane__body {
     padding: 16px;
   }
 
-  .agents-detail__body--graph {
+  .detail-pane__body--graph {
     padding: 0;
   }
 

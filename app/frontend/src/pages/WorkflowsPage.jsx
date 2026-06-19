@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow,
   Background,
@@ -18,7 +18,9 @@ import {
   WorkspaceProvider,
   useWorkspaceActions,
   useWorkspaceGraph,
+  createPersistedGraph,
 } from '../context/WorkspaceContext';
+import { WorkflowJsonDock, WorkflowJsonEditor } from '../components/workspace/WorkflowJsonPanel';
 
 import PromptNode from '../components/workspace/nodes/PromptNode';
 import CodeNode from '../components/workspace/nodes/CodeNode';
@@ -97,14 +99,23 @@ function WorkspaceInner() {
     toggleExpanded,
     refreshWorkspace,
     syncWidgets,
+    replaceGraph,
   } = useWorkspaceActions();
   const workspaceReady = !loading && !error;
+
+  const [jsonOpen, setJsonOpen] = useState(false);
+  const graphJson = useMemo(
+    () => JSON.stringify(createPersistedGraph(nodes, edges), null, 2),
+    [nodes, edges],
+  );
+  const handleJsonApply = useCallback((parsed) => {
+    replaceGraph(parsed.nodes, parsed.edges);
+  }, [replaceGraph]);
 
   const reactFlowInstance = useReactFlow();
   const reactFlowWrapper = useRef(null);
   const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
   const lastAppliedViewportVersionRef = useRef(-1);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [dragOver, setDragOver] = useState(false);
 
@@ -277,11 +288,8 @@ function WorkspaceInner() {
   }, [handleKeyboardShortcut]);
 
   return (
-    <div className={`workspace-container ${sidebarCollapsed ? 'is-collapsed' : ''}`} tabIndex={-1}>
-      <WorkspaceSidebar
-        collapsed={sidebarCollapsed}
-        onToggle={() => setSidebarCollapsed(!sidebarCollapsed)}
-      />
+    <div className="workspace-container" tabIndex={-1}>
+      <WorkspaceSidebar />
       <div
         className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
         ref={reactFlowWrapper}
@@ -347,6 +355,15 @@ function WorkspaceInner() {
           />
         )}
         <WorkspaceDock disabled={!workspaceReady} />
+        {jsonOpen ? (
+          <WorkflowJsonEditor
+            value={graphJson}
+            onApply={handleJsonApply}
+            onClose={() => setJsonOpen(false)}
+          />
+        ) : (
+          <WorkflowJsonDock onOpen={() => setJsonOpen(true)} />
+        )}
       </div>
     </div>
   );

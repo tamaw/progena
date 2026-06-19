@@ -494,7 +494,7 @@ function extractAgentOptions(nodes) {
   return [...values];
 }
 
-function createPersistedGraph(nodes, edges) {
+export function createPersistedGraph(nodes, edges) {
   return {
     nodes: nodes.map((node) => {
       const {
@@ -971,6 +971,32 @@ export function WorkspaceProvider({ children }) {
       latestNodesRef.current = mergedNodes;
       return mergedNodes;
     });
+  }, []);
+
+  // Replace the entire graph from an external source (e.g. the JSON editor on the
+  // Workflows page). Nodes/edges are sanitized so a hand-edited payload can't crash
+  // React Flow; the nodes/edges effects below persist the result automatically.
+  const replaceGraph = useCallback((nextNodes, nextEdges) => {
+    const safeNodes = (Array.isArray(nextNodes) ? nextNodes : [])
+      .filter((node) => node && typeof node.id === 'string')
+      .map((node) => ({
+        ...node,
+        type: node.type || 'label',
+        position: node.position && typeof node.position === 'object'
+          ? { x: Number(node.position.x) || 0, y: Number(node.position.y) || 0 }
+          : { x: 0, y: 0 },
+        data: node.data && typeof node.data === 'object' ? node.data : {},
+      }));
+    const nodeIds = new Set(safeNodes.map((node) => node.id));
+    const safeEdges = (Array.isArray(nextEdges) ? nextEdges : [])
+      .filter((edge) => (
+        edge && typeof edge.id === 'string'
+        && nodeIds.has(edge.source) && nodeIds.has(edge.target)
+      ));
+    latestNodesRef.current = safeNodes;
+    latestEdgesRef.current = safeEdges;
+    setNodes(safeNodes);
+    setEdges(safeEdges);
   }, []);
 
   useEffect(() => {
@@ -2159,6 +2185,7 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
+    replaceGraph,
     removeNodes,
     dismissWidget,
     removeEdges,
@@ -2186,6 +2213,7 @@ export function WorkspaceProvider({ children }) {
     addPromptFromLibrary,
     updateNodeData,
     connectPromptToAgent,
+    replaceGraph,
     removeNodes,
     dismissWidget,
     removeEdges,

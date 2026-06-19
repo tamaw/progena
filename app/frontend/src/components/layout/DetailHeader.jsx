@@ -1,3 +1,5 @@
+import { Children, useEffect, useRef, useState } from 'react';
+
 function normalizeTab(tab) {
   return typeof tab === 'string' ? { id: tab, label: tab } : tab;
 }
@@ -142,8 +144,98 @@ export function PullActionIcon() {
   );
 }
 
-export function DetailHeaderActions({ children, className = '' }) {
-  return <div className={`detail-header-actions ${className}`.trim()}>{children}</div>;
+export function MoreActionIcon() {
+  return (
+    <ActionSvg>
+      <circle cx="8" cy="3.5" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="8" r="1.3" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="12.5" r="1.3" fill="currentColor" stroke="none" />
+    </ActionSvg>
+  );
+}
+
+// Overflow "⋮" menu rendered alongside the inline action row. CSS (a container
+// query on .detail-header) hides the inline row and reveals this trigger when
+// the header is too narrow, so every page collapses its actions the same way.
+// Menu items are derived from the same DetailHeaderAction children, so pages
+// only declare their actions once.
+function DetailHeaderOverflowMenu({ items, label }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointer = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="detail-header-menu" ref={wrapRef}>
+      <button
+        type="button"
+        className="detail-header-action detail-header-menu__trigger is-icon-only"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={label}
+        data-tooltip={label}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className="detail-header-action__icon" aria-hidden="true"><MoreActionIcon /></span>
+      </button>
+      {open ? (
+        <div className="detail-header-menu__dropdown" role="menu" aria-label={label}>
+          {items.map((item, index) => {
+            const props = item.props || {};
+            const text = props.label || props.tooltip || props.ariaLabel || '';
+            // Toggle actions carry `aria-pressed` inline; preserve that checked
+            // state in the menu so screen readers still announce it when the
+            // header collapses (menuitem has no checked semantics).
+            const pressed = props['aria-pressed'];
+            const isToggle = pressed !== undefined && pressed !== null;
+            return (
+              <button
+                key={item.key ?? index}
+                type="button"
+                role={isToggle ? 'menuitemcheckbox' : 'menuitem'}
+                aria-checked={isToggle ? Boolean(pressed) : undefined}
+                className={`detail-header-menu__item ${props.variant === 'danger' ? 'is-danger' : ''}`.trim()}
+                disabled={props.disabled}
+                onClick={(event) => {
+                  props.onClick?.(event);
+                  setOpen(false);
+                }}
+              >
+                <span className="detail-header-menu__item-icon" aria-hidden="true">{props.icon}</span>
+                <span>{text}</span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function DetailHeaderActions({ children, className = '', menuLabel = 'More actions' }) {
+  const items = Children.toArray(children).filter(Boolean);
+  return (
+    <div className={`detail-header-actions ${className}`.trim()}>
+      <div className="detail-header-actions__inline">{children}</div>
+      {items.length ? <DetailHeaderOverflowMenu items={items} label={menuLabel} /> : null}
+    </div>
+  );
 }
 
 export function DetailHeaderAction({
@@ -164,7 +256,6 @@ export function DetailHeaderAction({
       type={type}
       className={`detail-header-action detail-header-action--${variant} ${iconOnly ? 'is-icon-only' : ''} ${className}`.trim()}
       aria-label={iconOnly ? ariaLabel || description : ariaLabel}
-      title={description}
       data-tooltip={description}
       {...props}
     >
@@ -197,6 +288,17 @@ export function DetailTabs({ tabs = [], activeTab, onTabChange, className = '', 
         );
       })}
     </nav>
+  );
+}
+
+// Status indicator for a detail-header meta row: a coloured dot + coloured
+// label, no surrounding bubble. `tone` picks the colour (ok/info/error/muted).
+export function DetailStatus({ tone = 'muted', children, className = '' }) {
+  return (
+    <span className={`detail-status detail-status--${tone} ${className}`.trim()}>
+      <span className="detail-status__dot" aria-hidden="true" />
+      {children}
+    </span>
   );
 }
 

@@ -20,9 +20,20 @@ import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
-import { DetailTabs } from '../components/layout/DetailHeader';
-import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListGroup,
+  PaneListScroll,
+  PaneListSearch,
+  PaneListSortButton,
+  PaneListToolbar,
+} from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 import {
   CHAT_AGENT_NAME,
   countToolInvocations,
@@ -134,6 +145,15 @@ const NICK_COLORS = [
 // Your own nick gets a fixed warm signature colour (IRC clients highlight your
 // own nick); everyone else hashes to a palette entry.
 const OWN_NICK_COLOR = '#f5b942';
+// Sort modes for the chat sidebar dropdown (mirrors the Agents/Tasks dropdown).
+// "Recent" keeps the recency-bucketed grouping; "Name" is a flat A→Z list.
+const SIDEBAR_SORT_MODES = ['Recent', 'Name'];
+const CHAT_FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'unread', label: 'Unread' },
+  { value: 'shared', label: 'Shared' },
+  { value: 'archived', label: 'Archived' },
+];
 
 function nickColor(name) {
   if (name === 'You') {
@@ -240,7 +260,6 @@ function ConversationPage() {
   const [sessionId, setSessionId] = useState(() => (
     typeof initialQuickChatHandoff?.sessionId === 'string' ? initialQuickChatHandoff.sessionId : null
   ));
-  const [chatMenuOpen, setChatMenuOpen] = useState(false);
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
@@ -248,12 +267,12 @@ function ConversationPage() {
   const [customChatTitleSessionId, setCustomChatTitleSessionId] = useState(() => initialStoredCustomTitle.sessionId);
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
+  const [sidebarSort, setSidebarSort] = useState('Recent');
   const [activeDetailTab, setActiveDetailTab] = useState('Chat');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const messagesEndRef = useRef(null);
-  const chatMenuRef = useRef(null);
   const titleInputRef = useRef(null);
   const lastProcessedUiEventIdRef = useRef(null);
   const lastAppliedBackendChatIdRef = useRef(null);
@@ -389,7 +408,6 @@ function ConversationPage() {
   }, [chatTitle]);
 
   const startTitleEdit = useCallback(() => {
-    setChatMenuOpen(false);
     setTitleDraft(chatTitle);
     setIsEditingTitle(true);
   }, [chatTitle]);
@@ -413,28 +431,6 @@ function ConversationPage() {
       localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
     }
   }, [cancelTitleEdit, derivedChatTitle, sessionId, titleDraft]);
-
-  useEffect(() => {
-    if (!chatMenuOpen) return undefined;
-
-    const handlePointerDown = (event) => {
-      if (chatMenuRef.current && !chatMenuRef.current.contains(event.target)) {
-        setChatMenuOpen(false);
-      }
-    };
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        setChatMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handlePointerDown);
-    document.addEventListener('keydown', handleKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', handlePointerDown);
-      document.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [chatMenuOpen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -656,7 +652,6 @@ function ConversationPage() {
     const previousSessionId = sessionId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
-    setChatMenuOpen(false);
     activeAssistantIdRef.current = null;
     recentScheduledContent.current.clear();
     cancelStream();
@@ -793,7 +788,6 @@ function ConversationPage() {
     activeAssistantIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
-    setChatMenuOpen(false);
     setSelectedBackendChatId(sessionItem.chatSessionId);
     setBackgroundGeneratingChatIds((prev) => {
       if (!prev.has(sessionItem.chatSessionId)) return prev;
@@ -920,8 +914,17 @@ function ConversationPage() {
     const filtered = normalizedQuery
       ? sessionItems.filter((item) => `${item.title} ${item.summary ?? ''}`.toLowerCase().includes(normalizedQuery))
       : sessionItems;
-    return visibleGroupsForFilter({ sessionItems: filtered, sidebarFilter, groupSessionItems });
-  }, [sessionItems, sidebarFilter, sidebarQuery]);
+    const groups = visibleGroupsForFilter({ sessionItems: filtered, sidebarFilter, groupSessionItems });
+    // "Name" collapses the recency buckets into a single flat A→Z list (no header),
+    // keeping whatever the active filter already selected.
+    if (sidebarSort === 'Name') {
+      const items = groups
+        .flatMap((group) => group.items)
+        .sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
+      return items.length ? [{ key: 'name', label: null, items }] : [];
+    }
+    return groups;
+  }, [sessionItems, sidebarFilter, sidebarQuery, sidebarSort]);
   const sidebarEmptyMessageText = useMemo(
     () => sidebarEmptyMessage({
       sidebarFilter,
@@ -1069,129 +1072,102 @@ function ConversationPage() {
   ];
 
   return (
-    <div className="chat-page">
+    <PageShell className="chat-page">
       <aside className={sessionsPaneClassName} aria-label="Conversation sessions">
         {sessionsCollapsed ? (
           <PaneExpandRail label="Chats" onExpand={() => setSessionsCollapsed(false)} />
         ) : (
         <>
         <PaneCollapseSeam label="Chats" onCollapse={() => setSessionsCollapsed(true)} />
-        <div className="chat-pane-tabs sess-list__filters" role="tablist" aria-label="Session filters">
-          <button
-            type="button"
-            className={`chat-pane-tab sess-filter${sidebarFilter === 'all' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('all')}
-          >
-            All
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab sess-filter${sidebarFilter === 'unread' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('unread')}
-          >
-            {hasUnreadChats && <span className="chat-pane-tab__dot" aria-hidden="true" />}
-            Unread
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab sess-filter${sidebarFilter === 'shared' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('shared')}
-          >
-            Shared
-          </button>
-          <button
-            type="button"
-            className={`chat-pane-tab sess-filter${sidebarFilter === 'archived' ? ' is-active' : ''}`}
-            onClick={() => setSidebarFilter('archived')}
-          >
-            Archived
-          </button>
-        </div>
-        <div className="chat-sessions-pane__search">
-          <label className="sess-search">
-            <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-              <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-              <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-            </svg>
-            <input
-              value={sidebarQuery}
-              type="text"
-              placeholder="Search chats"
-              onChange={(e) => setSidebarQuery(e.target.value)}
-            />
-          </label>
-          <button
-            type="button"
-            className="chat-pane-action new-task sess-list__tools-action"
-            onClick={() => startNewChatSession()}
-            disabled={isClearingSession}
-          >
-            + New chat
-          </button>
-        </div>
-        <div className="chat-sessions-pane__scroll">
+        <PaneListFilters
+          filters={CHAT_FILTERS}
+          activeFilter={sidebarFilter}
+          onFilterChange={setSidebarFilter}
+          renderFilter={(item) => (
+            <>
+              {item.value === 'unread' && hasUnreadChats ? <span className="chat-pane-tab__dot" aria-hidden="true" /> : null}
+              {item.label}
+            </>
+          )}
+          actionLabel="+ New"
+          onAction={() => startNewChatSession()}
+          actionDisabled={isClearingSession}
+        />
+        <PaneListToolbar>
+          <PaneListSearch value={sidebarQuery} placeholder="Search chats" onChange={setSidebarQuery} />
+          <PaneListSortButton
+            title="Sort chats"
+            options={SIDEBAR_SORT_MODES}
+            value={sidebarSort}
+            onSelect={setSidebarSort}
+          />
+        </PaneListToolbar>
+        <PaneListScroll>
           {visibleSessionGroups.length === 0 ? (
             <div className="chat-pane-empty">{sidebarEmptyMessageText}</div>
           ) : (
-            visibleSessionGroups.map((group) => (
-              <div className="chat-pane-group" key={group.key}>
-                <div className="chat-pane-group__head">
-                  {group.label}
-                  <span className="muted">· {group.items.length}</span>
-                </div>
-                {group.items.map((item) => (
-                  <article
-                    key={item.id}
-                    className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
-                    role="button"
-                    tabIndex={0}
-                    aria-current={item.selected ? 'true' : undefined}
-                    onClick={() => selectSessionItem(item)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        selectSessionItem(item);
-                      }
-                    }}
-                  >
-                    <span
-                      className={`chat-session-card__dot${
-                        item.generating
-                          ? ' chat-session-card__dot--generating'
-                          : item.erroredInBackground
-                            ? ' chat-session-card__dot--error'
-                            : item.unread
-                              ? ' chat-session-card__dot--unread'
-                              : ''
-                      }`}
-                      aria-hidden="true"
-                    />
-                    <div className="chat-session-card__top">
-                      <span className="chat-session-card__title">{item.title}</span>
-                      <span className="chat-session-card__age">{item.meta}</span>
+            visibleSessionGroups.map((group) => {
+              const cards = group.items.map((item) => (
+                <article
+                  key={item.id}
+                  className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={item.selected ? 'true' : undefined}
+                  onClick={() => selectSessionItem(item)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      selectSessionItem(item);
+                    }
+                  }}
+                >
+                  <span
+                    className={`chat-session-card__dot${
+                      item.generating
+                        ? ' chat-session-card__dot--generating'
+                        : item.erroredInBackground
+                          ? ' chat-session-card__dot--error'
+                          : item.unread
+                            ? ' chat-session-card__dot--unread'
+                            : ''
+                    }`}
+                    aria-hidden="true"
+                  />
+                  <div className="chat-session-card__top">
+                    <span className="chat-session-card__title">{item.title}</span>
+                    <span className="chat-session-card__age">{item.meta}</span>
+                  </div>
+                  {(item.preview || item.detail) && (
+                    <div className="chat-session-card__preview">
+                      {item.detail && (
+                        <span className="chat-session-card__state">{item.detail}</span>
+                      )}
+                      {item.preview}
                     </div>
-                    {(item.preview || item.detail) && (
-                      <div className="chat-session-card__preview">
-                        {item.detail && (
-                          <span className="chat-session-card__state">{item.detail}</span>
-                        )}
-                        {item.preview}
-                      </div>
-                    )}
-                  </article>
-                ))}
-              </div>
-            ))
+                  )}
+                </article>
+              ));
+              return group.label ? (
+                <PaneListGroup key={group.key} title={group.label} count={group.items.length}>
+                  {cards}
+                </PaneListGroup>
+              ) : (
+                <div key={group.key}>{cards}</div>
+              );
+            })
           )}
-        </div>
+        </PaneListScroll>
         </>
         )}
       </aside>
 
-      <section className="chat-container" aria-label="Chat conversation">
-        <header className="chat-page-header">
-          <div className="chat-page-header__inner">
-            <div className="chat-page-header__title-row">
+      <DetailPane flush className="chat-detail" label="Chat conversation">
+        <DetailHeader
+          className="chat-detail-header"
+          titleClassName="chat-detail-header__title"
+          title={(
+            <>
               {isEditingTitle ? (
                 <input
                   ref={titleInputRef}
@@ -1213,12 +1189,12 @@ function ConversationPage() {
                   }}
                 />
               ) : (
-                <h1 className="chat-page-header__title">{isContentLoading ? '' : chatTitle}</h1>
+                <span className="chat-detail-header__title-text">{isContentLoading ? '' : chatTitle}</span>
               )}
               <button
                 type="button"
-                className="chat-icon-button"
-                title={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+                className="chat-icon-button chat-detail-header__rename"
+                data-tooltip={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
                 aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
                 onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
                 onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
@@ -1233,93 +1209,42 @@ function ConversationPage() {
                   </svg>
                 )}
               </button>
-              <span className="chat-page-header__spacer" />
-              <div className="chat-header-actions" role="group" aria-label="Conversation actions">
-                {chatActions.map((action) => (
-                  <button
-                    key={action.key}
-                    type="button"
-                    className={`chat-icon-button chat-icon-button--lg${action.danger ? ' chat-icon-button--danger' : ''}${action.active ? ' is-active' : ''}`}
-                    title={action.label}
-                    aria-label={action.label}
-                    aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
-                    disabled={action.disabled}
-                    onClick={action.onClick}
-                  >
-                    {action.icon}
-                  </button>
-                ))}
-              </div>
-              <div className="chat-options-menu" ref={chatMenuRef}>
-                <button
-                  type="button"
-                  className="chat-icon-button"
-                  title="More options"
-                  aria-haspopup="menu"
-                  aria-expanded={chatMenuOpen}
-                  onClick={() => setChatMenuOpen((open) => !open)}
-                >
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                    <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
-                    <circle cx="8" cy="8" r="1.2" fill="currentColor" />
-                    <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
-                  </svg>
-                </button>
-                {chatMenuOpen && (
-                  <div className="chat-options-dropdown" role="menu" aria-label="Conversation options">
-                    {chatActions.map((action) => (
-                      <button
-                        key={action.key}
-                        type="button"
-                        className={`chat-options-item${action.danger ? ' chat-options-item--danger' : ''}`}
-                        role={action.role}
-                        aria-checked={action.role === 'menuitemcheckbox' ? action.checked : undefined}
-                        disabled={action.disabled}
-                        onClick={() => {
-                          action.onClick();
-                          setChatMenuOpen(false);
-                        }}
-                      >
-                        <span className="chat-options-item__icon" aria-hidden="true">{action.icon}</span>
-                        <span>{action.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            {!isContentLoading && (
-              <div className="chat-page-header__meta">
-                <span className="chat-page-header__model">
-                  <span className="agent-dot agent-dot--purple" />
-                  {CHAT_AGENT_NAME}
-                </span>
-                <span className="chat-separator">·</span>
-                <span className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>
-                <span className="chat-separator">·</span>
-                <span className="muted">{messages.length} messages</span>
-                <span className="chat-separator">·</span>
-                <span className="muted">{totalToolCount} tools</span>
-                <span className="chat-separator">·</span>
-                <span className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>
-                {sessionId && (
-                  <>
-                    <span className="chat-separator">·</span>
-                    <span className="chat-session-id">{sessionId}</span>
-                  </>
-                )}
-              </div>
-            )}
-            {!isContentLoading && (
-              <DetailTabs
-                tabs={['Chat', 'Text']}
-                activeTab={activeDetailTab}
-                onTabChange={setActiveDetailTab}
-                tabLabel="Conversation detail tabs"
-              />
-            )}
-          </div>
-        </header>
+            </>
+          )}
+          actions={(
+            <DetailHeaderActions menuLabel="Conversation actions">
+              {chatActions.map((action) => (
+                <DetailHeaderAction
+                  key={action.key}
+                  icon={action.icon}
+                  label={action.label}
+                  tooltip={action.label}
+                  ariaLabel={action.label}
+                  variant={action.danger ? 'danger' : 'default'}
+                  className={action.active ? 'is-active' : ''}
+                  disabled={action.disabled}
+                  aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
+                  onClick={action.onClick}
+                />
+              ))}
+            </DetailHeaderActions>
+          )}
+          meta={isContentLoading ? [] : [
+            <span key="model" className="chat-page-header__model">
+              <span className="agent-dot agent-dot--purple" />
+              {CHAT_AGENT_NAME}
+            </span>,
+            <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
+            <span key="msgs" className="muted">{messages.length} messages</span>,
+            <span key="tools" className="muted">{totalToolCount} tools</span>,
+            <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
+            sessionId ? <span key="id" className="chat-session-id">{sessionId}</span> : null,
+          ]}
+          tabs={isContentLoading ? [] : ['Chat', 'Text']}
+          activeTab={activeDetailTab}
+          onTabChange={setActiveDetailTab}
+          tabLabel="Conversation detail tabs"
+        />
         {!isContentLoading && activeDetailTab === 'Chat' && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
@@ -1380,8 +1305,8 @@ function ConversationPage() {
           focusToken={sessionId}
           keepFocusAfterSend
         />
-      </section>
-    </div>
+      </DetailPane>
+    </PageShell>
   );
 }
 
