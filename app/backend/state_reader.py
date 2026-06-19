@@ -1350,6 +1350,18 @@ class StateReader:
             )
 
         for schedule_item in schedule:
+            is_completed_one_off = (
+                bool(schedule_item.raw.get("scheduled_at"))
+                and not schedule_item.enabled
+                and (
+                    schedule_item.raw.get("last_run_status") == "completed"
+                    or (
+                        schedule_item.raw.get("last_run")
+                        and not schedule_item.raw.get("next_run_at")
+                        and not schedule_item.next_run
+                    )
+                )
+            )
             widgets.append(
                 {
                     "id": f"schedule:{schedule_item.id}",
@@ -1357,7 +1369,13 @@ class StateReader:
                     "name": schedule_item.name,
                     "title": schedule_item.name or schedule_item.id,
                     "description": schedule_item.raw.get("user_request") or schedule_item.name,
-                    "status": "enabled" if schedule_item.enabled else "disabled",
+                    "status": (
+                        "completed"
+                        if is_completed_one_off
+                        else "enabled"
+                        if schedule_item.enabled
+                        else "disabled"
+                    ),
                     "summary": schedule_item.raw.get("message") or schedule_item.name,
                     "instruction": schedule_item.raw.get("instruction")
                     or schedule_item.raw.get("message")

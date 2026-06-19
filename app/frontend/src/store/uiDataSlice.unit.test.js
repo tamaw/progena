@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import reducer, {
   applyUiEvent,
+  clearActiveChatSession,
   requestAgentDetail,
   requestChatSessionDetail,
   selectActiveAgentProfile,
   selectAgentProfiles,
   selectChatIndicators,
   selectChatSessions,
+  selectSchedules,
+  scheduleSnapshotReceived,
   setChatIndicators,
 } from './uiDataSlice';
 
@@ -57,6 +60,27 @@ describe('applyUiEvent reducer', () => {
     // matching request id applies
     s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
     expect(s.chats.active.detail).toEqual({ chat_session_id: 'a' });
+  });
+
+  it('clearActiveChatSession resets the active backend selection', () => {
+    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
+      chatsUrl: '/x', chatSessionId: 'a', requestId: 'REQ1',
+    }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
+    s = reducer(s, clearActiveChatSession());
+    expect(s.chats.active).toEqual({
+      chatSessionId: null,
+      detail: null,
+      loading: false,
+      error: null,
+      requestId: null,
+    });
+  });
+
+  it('schedule.snapshot replaces the schedules list', () => {
+    const items = [{ id: 'sched-a', name: 'A' }, { id: 'sched-b', name: 'B', paused: true }];
+    const s = reducer(undefined, applyUiEvent({ type: 'schedule.snapshot', payload: { items } }));
+    expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 });
 
@@ -163,5 +187,13 @@ describe('chat indicators (nav dot)', () => {
     expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: true });
     s = reducer(s, setChatIndicators({ hasUnread: true, isGenerating: false }));
     expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: false });
+  });
+});
+
+describe('scheduleSnapshotReceived', () => {
+  it('stores the provided schedule list directly', () => {
+    const items = [{ id: 'sched-live', name: 'Live schedule' }];
+    const s = reducer(undefined, scheduleSnapshotReceived(items));
+    expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 });

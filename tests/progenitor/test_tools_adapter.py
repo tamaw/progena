@@ -318,7 +318,7 @@ async def test_schedule_task_accepts_structured_arguments_without_llm_extraction
     )
 
     assert result["success"] is True
-    assert result["schedule_id"].startswith("sched_")
+    assert result["schedule_id"].startswith("cron_")
     state_manager.add_schedule_entry.assert_awaited_once()
 
 

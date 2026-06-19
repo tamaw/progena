@@ -108,6 +108,9 @@ class ScheduleTaskTool(BaseSystemTool):
                         "Persisted schedule entry %s",
                         entry_data.get("id"),
                     )
+                    from .schedule import emit_schedule_changed_event
+
+                    await emit_schedule_changed_event(context, str(entry_data.get("id") or ""))
 
             return ToolResult.ok(tool_data, state_updates=state_updates)
         except Exception as e:
