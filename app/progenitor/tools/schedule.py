@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
-_SCHEDULE_ID_PATTERN = re.compile(r"\b(sched_[A-Za-z0-9]+)\b")
+_SCHEDULE_ID_PATTERN = re.compile(r"\b((?:sched|cron)_[A-Za-z0-9]+)\b")
 
 
 class ScheduleRequest(BaseModel):
@@ -52,7 +52,7 @@ class DeleteScheduleArgs(BaseModel):
     """Arguments for deleting a scheduled task."""
 
     schedule_id: str = Field(
-        description="The ID of the scheduled task to delete (e.g. 'sched_abc123')"
+        description="The ID of the scheduled task to delete (e.g. 'sched_abc123' or 'cron_abc123')"
     )
 
 
@@ -60,7 +60,7 @@ class UpdateScheduleArgs(BaseModel):
     """Arguments for updating a scheduled task."""
 
     schedule_id: str = Field(
-        description="The ID of the scheduled task to update (e.g. 'sched_abc123')"
+        description="The ID of the scheduled task to update (e.g. 'sched_abc123' or 'cron_abc123')"
     )
     message: str | None = Field(
         default=None,
@@ -80,7 +80,7 @@ class PauseScheduleArgs(BaseModel):
     """Arguments for pausing a scheduled task."""
 
     schedule_id: str = Field(
-        description="The ID of the scheduled task to pause (e.g. 'sched_abc123')"
+        description="The ID of the scheduled task to pause (e.g. 'sched_abc123' or 'cron_abc123')"
     )
 
 
@@ -88,7 +88,7 @@ class ResumeScheduleArgs(BaseModel):
     """Arguments for resuming a scheduled task."""
 
     schedule_id: str = Field(
-        description="The ID of the scheduled task to resume (e.g. 'sched_abc123')"
+        description="The ID of the scheduled task to resume (e.g. 'sched_abc123' or 'cron_abc123')"
     )
 
 
@@ -136,6 +136,23 @@ def _extract_schedule_id(args: dict[str, Any], user_input: str) -> str:
     return match.group(1) if match else ""
 
 
+async def emit_schedule_changed_event(context: ToolContext, schedule_id: str = "") -> None:
+    """Best-effort notify subscribers that the schedule changed.
+
+    The event is forwarded over IPC to the backend, which rebroadcasts a
+    ``schedule.snapshot`` on ``/api/ui/stream`` so the Schedules page updates
+    live when schedules are created/edited from a chat. Fires are signalled
+    separately by the dispatcher's ``scheduled_task_triggered`` event.
+    """
+    push = getattr(context.llm_client, "_push_event", None)
+    if push is None:
+        return
+    try:
+        await push("schedule_updated", "Schedule updated", {"schedule_id": schedule_id})
+    except Exception:  # pragma: no cover - notification is best-effort
+        logger.debug("Failed to emit schedule_updated event", exc_info=True)
+
+
 class DeleteScheduleTool(BaseSystemTool):
     """Delete a scheduled task from persistent schedule state."""
 
@@ -164,6 +181,7 @@ class DeleteScheduleTool(BaseSystemTool):
         if not result.success:
             return ToolResult.fail(result.message)
 
+        await emit_schedule_changed_event(context, schedule_id)
         return ToolResult.ok(
             {
                 "success": True,
@@ -214,6 +232,7 @@ class UpdateScheduleTool(BaseSystemTool):
         if not result.success:
             return ToolResult.fail(result.message)
 
+        await emit_schedule_changed_event(context, schedule_id)
         return ToolResult.ok(
             {
                 "success": True,
@@ -252,6 +271,7 @@ class PauseScheduleTool(BaseSystemTool):
         if not result.success:
             return ToolResult.fail(result.message)
 
+        await emit_schedule_changed_event(context, schedule_id)
         return ToolResult.ok(
             {
                 "success": True,
@@ -289,6 +309,7 @@ class ResumeScheduleTool(BaseSystemTool):
         if not result.success:
             return ToolResult.fail(result.message)
 
+        await emit_schedule_changed_event(context, schedule_id)
         return ToolResult.ok(
             {
                 "success": True,

@@ -264,7 +264,12 @@ class StateManager:
     # Schedule management (stored in data/config/schedule.json)
     async def get_schedule(self) -> list[ScheduleEntry]:
         if self._runtime_store is not None:
-            payload = await self._get_runtime_document("schedule")
+            # Read straight from the shared store rather than the in-memory
+            # cache: schedules are also created/paused/deleted by the backend
+            # (UI) writing the same Postgres document, so a cached copy would
+            # hide those cross-process changes from the runtime scheduler.
+            payload = await self._runtime_store.get_document("schedule", [])
+            self._state_cache["schedule"] = payload
             return [ScheduleEntry.model_validate(item) for item in payload]
         return await config_store.get_schedule(
             file_lock=self._file_lock,
@@ -274,10 +279,11 @@ class StateManager:
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
         if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "schedule",
-                [entry.model_dump(mode="json") for entry in schedule],
-            )
+            # Write straight through to the shared store (and refresh the cache)
+            # so backend reads and the runtime stay coherent. See get_schedule.
+            payload = [entry.model_dump(mode="json") for entry in schedule]
+            self._state_cache["schedule"] = payload
+            await self._runtime_store.save_document("schedule", payload)
             return
         await config_store.save_schedule(
             schedule=schedule,

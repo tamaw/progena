@@ -143,6 +143,9 @@ const initialState = {
   status: null,
   alerts: null,
   widgets: [],
+  // Schedule list, kept live by `schedule.snapshot` events on /api/ui/stream
+  // and seeded once via REST when the Schedules page mounts.
+  schedule: [],
   // Lightweight chat signals surfaced to the primary nav dot. Owned by the
   // chat page while it is mounted; reset on unmount.
   chatIndicators: {
@@ -279,6 +282,18 @@ const uiDataSlice = createSlice({
     setChatIndicators(state, action) {
       state.chatIndicators = { ...state.chatIndicators, ...action.payload };
     },
+    clearActiveChatSession(state) {
+      state.chats.active = {
+        chatSessionId: null,
+        detail: null,
+        loading: false,
+        error: null,
+        requestId: null,
+      };
+    },
+    scheduleSnapshotReceived(state, action) {
+      state.schedule = Array.isArray(action.payload) ? action.payload : [];
+    },
     applyUiEvent(state, action) {
       const event = action.payload;
       const payload = event?.payload || {};
@@ -304,6 +319,10 @@ const uiDataSlice = createSlice({
       }
       if (event?.type === 'widgets.updated') {
         state.widgets = Array.isArray(payload.items) ? payload.items : [];
+        return;
+      }
+      if (event?.type === 'schedule.snapshot') {
+        state.schedule = Array.isArray(payload.items) ? payload.items : [];
         return;
       }
       if (event?.type === 'chat.sessions.snapshot') {
@@ -456,11 +475,17 @@ const uiDataSlice = createSlice({
   },
 });
 
-export const { applyUiEvent, setChatIndicators } = uiDataSlice.actions;
+export const {
+  applyUiEvent,
+  clearActiveChatSession,
+  setChatIndicators,
+  scheduleSnapshotReceived,
+} = uiDataSlice.actions;
 
 export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
 export const selectUiWidgets = (state) => state.uiData.widgets;
+export const selectSchedules = (state) => state.uiData.schedule;
 export const selectChatSessions = createSelector(
   [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
   (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),

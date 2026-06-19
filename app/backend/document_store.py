@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
@@ -11,7 +12,7 @@ from typing import Any, Protocol, cast
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
-from psycopg_pool import ConnectionPool
+from psycopg_pool import ConnectionPool, PoolClosed
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
 PROGENITOR_LOG_PREFIX = "progenitor.logs"
@@ -177,8 +178,12 @@ class PostgresDocumentStore:
     """Synchronous Postgres client for the LangGraph ``store`` table."""
 
     def __init__(self, database_url: str) -> None:
-        self._pool = ConnectionPool(
-            conninfo=database_url,
+        self._database_url = database_url
+        self._pool = self._create_pool()
+
+    def _create_pool(self) -> ConnectionPool:
+        return ConnectionPool(
+            conninfo=self._database_url,
             kwargs={"autocommit": True, "row_factory": dict_row},
             open=False,
         )
@@ -190,9 +195,27 @@ class PostgresDocumentStore:
     def close(self) -> None:
         self._pool.close()
 
+    def _recreate_pool(self) -> None:
+        self._pool = self._create_pool()
+        self._pool.open()
+
+    @contextmanager
+    def _cursor(self):
+        """Yield a cursor, reopening the pool once if it was unexpectedly closed."""
+        try:
+            with self._pool.connection() as conn, conn.cursor() as cur:
+                yield cur
+                return
+        except PoolClosed:
+            logger.warning("Backend document store pool was closed; recreating it")
+            self._recreate_pool()
+            self._ensure_store_table()
+            with self._pool.connection() as conn, conn.cursor() as cur:
+                yield cur
+
     def _ensure_store_table(self) -> None:
         """Create the LangGraph-compatible store table when running in a fresh DB."""
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS store (
@@ -211,7 +234,7 @@ class PostgresDocumentStore:
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
     ) -> StoredDocument | None:
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 "SELECT value, updated_at FROM store WHERE prefix = %s AND key = %s",
                 (prefix, key),
@@ -227,7 +250,7 @@ class PostgresDocumentStore:
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         value = {"payload": payload}
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO store (prefix, key, value, created_at, updated_at)
@@ -258,7 +281,7 @@ class PostgresDocumentStore:
             params.append(limit)
         where_clause = sql.SQL(" AND ").join(clauses)
         limit_clause = sql.SQL("LIMIT %s") if limit > 0 else sql.SQL("")
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 sql.SQL(
                     """
@@ -275,7 +298,7 @@ class PostgresDocumentStore:
         return [_log_row_to_entry(row) for row in reversed(rows)]
 
     def get_log_sources(self) -> list[dict[str, Any]]:
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """
                 SELECT
@@ -294,7 +317,7 @@ class PostgresDocumentStore:
 
     def inspect_schema(self) -> list[dict[str, Any]]:
         """Return table/column metadata for backend and LangGraph persistence tables."""
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """
                 SELECT table_name, column_name, data_type, is_nullable
@@ -329,7 +352,7 @@ class PostgresDocumentStore:
         self, *, limit: int = 50
     ) -> list[CheckpointThreadSnapshot]:
         """Return latest decoded message snapshots for LangGraph threads."""
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 """
                 WITH ranked AS (
@@ -384,7 +407,7 @@ class PostgresDocumentStore:
             clauses.append(sql.SQL("c.checkpoint_id = %s"))
             params.append(checkpoint_id)
         where_clause = sql.SQL(" AND ").join(clauses)
-        with self._pool.connection() as conn, conn.cursor() as cur:
+        with self._cursor() as cur:
             cur.execute(
                 sql.SQL(
                     """

@@ -34,6 +34,7 @@ from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.progenitor.schedule import Scheduler
+from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 
 from .agent_profile_routes import create_agent_profile_router
@@ -181,6 +182,15 @@ class ScheduleItemInfo(BaseModel):
     schedule: str
     next_run: str | None
     enabled: bool
+    paused: bool = False
+    last_run: str | None = None
+    created_at: str | None = None
+    message: str | None = None
+    last_run_status: str | None = None
+    cron_expression: str | None = None
+    scheduled_at: str | None = None
+    schedule_type: str | None = None
+    timezone: str | None = None
 
 
 class ScheduleResponse(BaseModel):
@@ -766,6 +776,49 @@ async def get_backlog():
     )
 
 
+def _schedule_item_to_info(item) -> ScheduleItemInfo:
+    """Build a schedule response with a freshly computed next_run.
+
+    ``ScheduleItem.next_run`` falls back to ``last_run`` because the stored entry
+    carries no ``next_run`` field. Recompute it here with the same scheduler the
+    runtime uses so the UI shows the actual next fire time.
+    """
+    raw = item.raw if isinstance(item.raw, dict) else {}
+    next_run_dt = Scheduler().next_run_for_entry(raw)
+    paused = bool(raw.get("paused", not raw.get("enabled", item.enabled)))
+    cron_expression = raw.get("cron_expression") or None
+    scheduled_at = raw.get("scheduled_at") or None
+    schedule_type = raw.get("schedule_type") or (
+        "once" if scheduled_at else "cron" if cron_expression else None
+    )
+    last_run = raw.get("last_run")
+    last_run_status = raw.get("last_run_status")
+    if (
+        last_run_status in {None, "", "idle"}
+        and schedule_type == "once"
+        and paused
+        and last_run
+        and next_run_dt is None
+    ):
+        last_run_status = "completed"
+    return ScheduleItemInfo(
+        id=item.id,
+        name=item.name,
+        schedule=item.schedule or cron_expression or scheduled_at or "",
+        next_run=next_run_dt.isoformat() if next_run_dt else None,
+        enabled=not paused,
+        paused=paused,
+        last_run=last_run,
+        created_at=raw.get("created_at"),
+        message=raw.get("message") or item.name,
+        cron_expression=cron_expression,
+        scheduled_at=scheduled_at,
+        schedule_type=schedule_type,
+        timezone=raw.get("timezone"),
+        last_run_status=last_run_status,
+    )
+
+
 @router.get("/schedule", response_model=ScheduleResponse)
 async def get_schedule():
     """
@@ -775,16 +828,7 @@ async def get_schedule():
     schedule = state_reader.get_schedule()
 
     return ScheduleResponse(
-        items=[
-            ScheduleItemInfo(
-                id=s.id,
-                name=s.name,
-                schedule=s.schedule,
-                next_run=s.next_run,
-                enabled=s.enabled,
-            )
-            for s in schedule
-        ],
+        items=[_schedule_item_to_info(s) for s in schedule],
         total=len(schedule),
     )
 
@@ -2110,7 +2154,10 @@ def _interval_to_cron(expression: str) -> str:
     return f"0 0 */{value} * *"
 
 
-def _resolve_schedule_expression(schedule_type: str, expression: str) -> tuple[str, str]:
+def _resolve_schedule_expression(
+    schedule_type: str,
+    expression: str,
+) -> tuple[str, str | None, str | None]:
     normalized_type = (schedule_type or "cron").strip().lower()
     normalized_expression = expression.strip()
     if not normalized_expression:
@@ -2121,15 +2168,14 @@ def _resolve_schedule_expression(schedule_type: str, expression: str) -> tuple[s
             croniter(normalized_expression, utcnow())
         except Exception as exc:
             raise HTTPException(status_code=400, detail="Invalid cron expression") from exc
-        return normalized_type, normalized_expression
+        return normalized_type, normalized_expression, None
 
     if normalized_type == "interval":
-        return normalized_type, _interval_to_cron(normalized_expression)
+        return normalized_type, _interval_to_cron(normalized_expression), None
 
     if normalized_type == "once":
         run_at = _parse_once_datetime(normalized_expression)
-        cron_expression = f"{run_at.minute} {run_at.hour} {run_at.day} {run_at.month} *"
-        return normalized_type, cron_expression
+        return normalized_type, None, run_at.isoformat()
 
     raise HTTPException(status_code=400, detail=f"Unsupported schedule type: {schedule_type}")
 
@@ -2145,7 +2191,10 @@ def _build_schedule_entry(
     enabled: bool,
     created_at: str,
 ) -> dict:
-    normalized_type, cron_expression = _resolve_schedule_expression(schedule_type, expression)
+    normalized_type, cron_expression, scheduled_at = _resolve_schedule_expression(
+        schedule_type,
+        expression,
+    )
     entry = {
         "id": schedule_id,
         "name": name,
@@ -2154,13 +2203,20 @@ def _build_schedule_entry(
         "user_request": name,
         "schedule": expression,
         "schedule_type": normalized_type,
-        "cron_expression": cron_expression,
         "timezone": timezone_name or "UTC",
         "enabled": enabled,
+        # The runtime scheduler only honours ``paused``; keep it in sync with the
+        # UI's ``enabled`` flag so a paused schedule actually stops firing.
+        "paused": not enabled,
         "last_run": None,
+        "last_run_status": "idle",
         "created_at": created_at,
         "updated_at": created_at,
     }
+    if cron_expression is not None:
+        entry["cron_expression"] = cron_expression
+    if scheduled_at is not None:
+        entry["scheduled_at"] = scheduled_at
     next_run = Scheduler().next_run_for_entry(entry)
     if next_run:
         entry["next_run"] = next_run.isoformat()
@@ -2242,6 +2298,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             )
             if body.enabled is not None:
                 entry["enabled"] = body.enabled
+                # Mirror into ``paused`` so the runtime scheduler honours the change.
+                entry["paused"] = not body.enabled
             if body.name is not None:
                 entry["name"] = body.name
                 entry["user_request"] = body.name
@@ -2249,12 +2307,20 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 entry["message"] = body.instruction
                 entry["instruction"] = body.instruction
             if body.expression is not None or body.schedule_type is not None:
-                normalized_type, cron_expression = _resolve_schedule_expression(
-                    current_schedule_type, current_expression
+                normalized_type, cron_expression, scheduled_at = _resolve_schedule_expression(
+                    current_schedule_type,
+                    current_expression,
                 )
                 entry["schedule_type"] = normalized_type
                 entry["schedule"] = current_expression
-                entry["cron_expression"] = cron_expression
+                if cron_expression is None:
+                    entry.pop("cron_expression", None)
+                else:
+                    entry["cron_expression"] = cron_expression
+                if scheduled_at is None:
+                    entry.pop("scheduled_at", None)
+                else:
+                    entry["scheduled_at"] = scheduled_at
             if body.timezone is not None:
                 entry["timezone"] = body.timezone
             entry["updated_at"] = utcnow().isoformat()
@@ -2287,6 +2353,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             }
 
         _broadcast_widget_refresh(state_reader)
+        broadcast_schedule_snapshot()
         return _widget_to_response(refreshed)
 
     if widget_id.startswith("event:"):
@@ -2422,6 +2489,7 @@ async def delete_widget(widget_id: str):
         )
 
     _broadcast_widget_refresh(state_reader)
+    broadcast_schedule_snapshot()
     return WidgetDeleteResponse(widget_id=widget_id, removed=True)
 
 
@@ -2445,7 +2513,7 @@ async def create_schedule(body: ScheduleCreateRequest):
     schedule_path, schedule_data = _read_schedule_config(state_reader)
 
     created_at = utcnow().isoformat()
-    schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    schedule_id = generate_schedule_id(is_one_off=body.schedule_type.strip().lower() == "once")
     entry = _build_schedule_entry(
         schedule_id=schedule_id,
         name=name,
@@ -2483,6 +2551,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         }
 
     _broadcast_widget_refresh(state_reader)
+    broadcast_schedule_snapshot()
     return _widget_to_response(refreshed)
 
 
@@ -4136,6 +4205,20 @@ def broadcast_ui_event(
         except asyncio.QueueFull:
             logger.warning("Event queue full for UI stream subscriber")
     return envelope
+
+
+def broadcast_schedule_snapshot() -> UiEventEnvelope:
+    """Broadcast the current schedule list to canonical /api/ui/stream subscribers.
+
+    Emitted after backend-side schedule mutations and whenever the runtime
+    reports a schedule change (fire / chat-driven CRUD) via the IPC event
+    bridge, so the Schedules page reflects changes live.
+    """
+    state_reader = get_state_reader()
+    items = [
+        _schedule_item_to_info(item).model_dump(mode="json") for item in state_reader.get_schedule()
+    ]
+    return broadcast_ui_event("schedule.snapshot", {"items": items})
 
 
 def _broadcast_chat_sessions_snapshot(include_archived: bool = True):

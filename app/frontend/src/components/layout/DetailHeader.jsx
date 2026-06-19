@@ -68,6 +68,15 @@ export function StopActionIcon() {
   );
 }
 
+export function PauseActionIcon() {
+  return (
+    <ActionSvg>
+      <rect x="4.5" y="3.75" width="2.5" height="8.5" rx="1" fill="currentColor" stroke="none" />
+      <rect x="9" y="3.75" width="2.5" height="8.5" rx="1" fill="currentColor" stroke="none" />
+    </ActionSvg>
+  );
+}
+
 export function SaveActionIcon() {
   return (
     <ActionSvg>

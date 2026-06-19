@@ -15,6 +15,11 @@ from .engine import Scheduler, parse_schedule_datetime
 logger = logging.getLogger(__name__)
 
 
+def generate_schedule_id(*, is_one_off: bool) -> str:
+    prefix = "cron_" if is_one_off else "sched_"
+    return f"{prefix}{uuid.uuid4().hex[:12]}"
+
+
 class ScheduleResult(BaseModel):
     """Result of a schedule operation."""
 
@@ -40,7 +45,7 @@ async def add_scheduled_task(
             message="Provide exactly one of cron_expression or scheduled_at",
         ), None
 
-    schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    schedule_id = generate_schedule_id(is_one_off=scheduled_at is not None)
     task_message = instruction.strip() or f"Scheduled: {user_request[:100]}"
     if description:
         task_message = f"{description.strip()} — {task_message}"

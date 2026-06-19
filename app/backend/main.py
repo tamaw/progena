@@ -681,8 +681,13 @@ async def lifespan(app: FastAPI):
         broadcast_alert,
         broadcast_alerts_state,
         broadcast_chat_event,
+        broadcast_schedule_snapshot,
         create_alert,
     )
+
+    # Runtime events that imply the schedule document changed (a task fired and
+    # was removed/restamped, or a schedule was created/edited from a chat).
+    schedule_change_events = {"scheduled_task_triggered", "schedule_updated"}
 
     # Create a combined event callback that handles both SSE and Telegram
     def combined_event_callback(event_type: str, data: dict) -> None:
@@ -717,6 +722,15 @@ async def lifespan(app: FastAPI):
 
         # Always broadcast to SSE
         broadcast_chat_event(event_type, data)
+
+        # Reflect runtime-driven schedule changes on the canonical UI stream so
+        # the Schedules page updates live (e.g. a one-off firing and removing
+        # itself, or a schedule created from a chat).
+        if event_type in schedule_change_events:
+            try:
+                broadcast_schedule_snapshot()
+            except Exception:  # pragma: no cover - best-effort live update
+                logger.debug("Failed to broadcast schedule snapshot", exc_info=True)
 
         # Check if we should also send to Telegram
         telegram = get_telegram_client()

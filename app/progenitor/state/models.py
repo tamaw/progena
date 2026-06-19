@@ -79,7 +79,10 @@ class ScheduleEntry(BaseModel):
     Use ``paused=True`` to suspend execution without deleting the entry.
     """
 
-    model_config = {"use_enum_values": True}
+    # ``extra="allow"`` preserves backend/UI-authored fields (name, enabled,
+    # schedule_type, timezone, next_run, ...) through runtime read/modify/write
+    # cycles so a scheduled fire does not strip the document's display metadata.
+    model_config = {"use_enum_values": True, "extra": "allow"}
 
     id: str
     message: str

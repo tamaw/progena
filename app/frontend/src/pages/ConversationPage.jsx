@@ -7,6 +7,7 @@ import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { selectLastUiEvent } from '../store/realtimeSlice';
 import {
+  clearActiveChatSession,
   createChatSession,
   deleteChatSession,
   requestChatSessionDetail,
@@ -328,6 +329,7 @@ function ConversationPage() {
     messages,
     setMessages,
     activeBackendChat,
+    selectedBackendChatId,
     sessionId,
     sendMessageStream,
     cancelStream,
@@ -647,6 +649,12 @@ function ConversationPage() {
     handleSend(message);
   }, [handleSend]);
 
+  const clearBackendSelection = useCallback(() => {
+    setSelectedBackendChatId(null);
+    dispatch(clearActiveChatSession());
+    lastAppliedBackendChatIdRef.current = null;
+  }, [dispatch]);
+
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     const previousAssistantId = activeAssistantIdRef.current;
     const previousSessionId = sessionId;
@@ -712,8 +720,7 @@ function ConversationPage() {
       }
       setMessages([]);
       setIsGenerating(false);
-      setSelectedBackendChatId(null);
-      lastAppliedBackendChatIdRef.current = null;
+      clearBackendSelection();
       setCustomChatTitle('');
       setCustomChatTitleSessionId(session.session_id);
       setTitleDraft('');
@@ -745,6 +752,7 @@ function ConversationPage() {
     backendChatSessions,
     cancelStream,
     chatTitle,
+    clearBackendSelection,
     config.storage.chatHistory,
     dispatch,
     getApiUrl,
@@ -769,9 +777,30 @@ function ConversationPage() {
       return;
     }
     if (sessionItem.source !== 'backend' || !sessionItem.chatSessionId) {
-      setSelectedBackendChatId(null);
-      lastAppliedBackendChatIdRef.current = null;
+      clearBackendSelection();
       return;
+    }
+
+    // If we're leaving a local-only conversation, materialize it first so it
+    // remains a distinct sidebar card instead of disappearing on selection.
+    if (!selectedBackendChatId && sessionId && messages.length > 0) {
+      const existingBackendCard = backendChatSessions.some((chat) => (
+        chat.progenitor_session_id === sessionId
+        || chat.thread_id === sessionId
+        || chat.chat_session_id === sessionId
+      ));
+      if (!existingBackendCard) {
+        try {
+          await dispatch(createChatSession({
+            chatsUrl: getApiUrl('chats'),
+            title: chatTitle || 'Untitled chat',
+            progenitorSessionId: sessionId,
+          })).unwrap();
+        } catch (error) {
+          show('error', 'Chat save failed', error.message);
+          return;
+        }
+      }
     }
 
     // If a stream is in progress for the chat we're leaving, keep it running
@@ -821,9 +850,14 @@ function ConversationPage() {
   }, [
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
+    clearBackendSelection,
     dispatch,
     getApiUrl,
+    backendChatSessions,
+    chatTitle,
     messages.length,
+    selectedBackendChatId,
+    sessionId,
     setBackgroundErrorChatIds,
     setBackgroundGeneratingChatIds,
     setIsGenerating,
@@ -974,15 +1008,14 @@ function ConversationPage() {
       })).unwrap()
         .catch((error) => show('error', 'Archive failed', error.message));
       if (sessionItem.selected) {
-        setSelectedBackendChatId(null);
-        lastAppliedBackendChatIdRef.current = null;
+        clearBackendSelection();
         setMessages([]);
         localStorage.removeItem(config.storage.chatHistory);
       }
       return;
     }
     startNewChatSession({ archive: true });
-  }, [config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
 
   const deleteSession = useCallback((sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
@@ -992,15 +1025,14 @@ function ConversationPage() {
       })).unwrap()
         .catch((error) => show('error', 'Delete failed', error.message));
       if (sessionItem.selected) {
-        setSelectedBackendChatId(null);
-        lastAppliedBackendChatIdRef.current = null;
+        clearBackendSelection();
         setMessages([]);
         localStorage.removeItem(config.storage.chatHistory);
       }
       return;
     }
     startNewChatSession();
-  }, [config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
 
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).

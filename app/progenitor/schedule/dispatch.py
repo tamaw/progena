@@ -62,10 +62,55 @@ async def enqueue_due_schedule_entries(
         scheduled_at = str(entry.get("scheduled_at") or "")
         cron_expression = str(entry.get("cron_expression") or "")
         is_one_shot = bool(scheduled_at) or scheduler.is_one_shot_expression(cron_expression)
+        next_entry = dict(entry)
+        next_entry["last_run"] = now.isoformat()
         if is_one_shot:
-            await state_manager.remove_schedule_entry(schedule_id)
+            next_entry.update(
+                {
+                    "paused": True,
+                    "enabled": False,
+                    "last_run_status": "completed",
+                    "completed_at": now.isoformat(),
+                    "updated_at": now.isoformat(),
+                }
+            )
         else:
-            await state_manager.update_schedule_entry(schedule_id, {"last_run": now.isoformat()})
+            next_entry.update(
+                {
+                    "last_run_status": "completed",
+                    "updated_at": now.isoformat(),
+                }
+            )
+        next_run = scheduler.next_run_for_entry(next_entry)
+        next_entry["next_run"] = next_run.isoformat() if next_run else None
+        next_entry["next_run_at"] = next_run.isoformat() if next_run else None
+        updates = {
+            key: next_entry.get(key)
+            for key in (
+                "last_run",
+                "last_run_status",
+                "updated_at",
+                "paused",
+                "enabled",
+                "completed_at",
+                "next_run",
+                "next_run_at",
+            )
+            if key in next_entry
+        }
+        await state_manager.update_schedule_entry(schedule_id, updates)
+        await state_manager.log_schedule_event(
+            {
+                "message": (
+                    f"Schedule {schedule_id} fired and was marked completed"
+                    if is_one_shot
+                    else f"Schedule {schedule_id} fired"
+                ),
+                "schedule_id": schedule_id,
+                "event": "schedule_fired",
+                "one_shot": is_one_shot,
+            }
+        )
 
         await queues.push_event(
             "scheduled_task_triggered",

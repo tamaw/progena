@@ -5,6 +5,7 @@ Note: The backend is now API-only and does not serve static files.
 The frontend runs separately via npm/Vite.
 """
 
+import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
@@ -148,6 +149,7 @@ class TestUIRoutes:
 
         assert create_response.status_code == 200
         chat_id = create_response.json()["session"]["chat_session_id"]
+        assert chat_id.startswith("conv_")
         stored = document_store.get_document("backend.chat.sessions", chat_id)
         assert stored is not None
         assert stored.payload["title"] == "Backend chat"
@@ -174,6 +176,7 @@ class TestUIRoutes:
         )
         assert create_response.status_code == 200
         chat_id = create_response.json()["session"]["chat_session_id"]
+        assert chat_id.startswith("conv_")
 
         detail_response = client.get(f"/api/ui/chats/{chat_id}?request_id=request-123")
 
@@ -221,6 +224,7 @@ class TestUIRoutes:
         )
         assert create_response.status_code == 200
         chat_id = create_response.json()["session"]["chat_session_id"]
+        assert chat_id.startswith("conv_")
 
         list_response = client.get("/api/ui/chats?include_archived=true")
         detail_response = client.get(f"/api/ui/chats/{chat_id}?request_id=request-history")
@@ -246,6 +250,67 @@ class TestUIRoutes:
         assert detail["messages"][1]["reasoning_text"] == "Need to count down."
         assert detail["messages"][1]["reasoning_token_count"] == 3
         assert detail["messages"][1]["token_count"] == 12
+
+    def test_chat_detail_loads_checkpoint_only_thread_ids_without_sess_prefix(
+        self,
+        client,
+        document_store,
+    ):
+        thread_id = "2026-06-06T09:53:08.888313+00:00"
+        document_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id=thread_id,
+                checkpoint_id="checkpoint-legacy-thread",
+                checkpoint_ts="2026-06-06T09:53:08.888313+00:00",
+                messages=[
+                    {"id": "m1", "type": "human", "content": "legacy hello"},
+                    {"id": "m2", "type": "ai", "content": "legacy reply"},
+                ],
+            )
+        )
+
+        list_response = client.get("/api/ui/chats?include_archived=true")
+        assert list_response.status_code == 200
+        listed = next(
+            session
+            for session in list_response.json()["sessions"]
+            if session["chat_session_id"] == thread_id
+        )
+        assert listed["thread_id"] == thread_id
+
+        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-legacy-thread")
+        assert detail_response.status_code == 200
+        detail = detail_response.json()
+        assert detail["chat_session_id"] == thread_id
+        assert detail["thread_id"] == thread_id
+        assert [message["content"] for message in detail["messages"]] == [
+            "legacy hello",
+            "legacy reply",
+        ]
+
+    def test_chat_list_hides_schedule_activity_threads(self, client, document_store):
+        document_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="2026-06-19T09:00:00+00:00",
+                checkpoint_id="checkpoint-scheduled-thread",
+                checkpoint_ts="2026-06-19T09:00:00+00:00",
+                messages=[
+                    {
+                        "id": "m1",
+                        "type": "human",
+                        "content": "[Scheduled Task]\n<original_message>Morning brief</original_message>\n\nRun it",
+                    },
+                    {"id": "m2", "type": "ai", "content": "Completed scheduled work."},
+                ],
+            )
+        )
+
+        list_response = client.get("/api/ui/chats?include_archived=true")
+        assert list_response.status_code == 200
+        assert all(
+            session["thread_id"] != "2026-06-19T09:00:00+00:00"
+            for session in list_response.json()["sessions"]
+        )
 
     def test_chat_delete_sets_soft_delete_flag_and_hides_from_list(self, client, document_store):
         create_response = client.post(
@@ -1010,6 +1075,106 @@ class TestScheduleEndpoint:
         assert isinstance(data["items"], list)
         assert isinstance(data["total"], int)
 
+    def test_schedule_computes_future_next_run(self, client, monkeypatch):
+        """next_run is recomputed from cron, not the stale last_run fallback."""
+        recent = datetime.now(UTC).isoformat()
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "schedule",
+            [
+                {
+                    "id": "sched-future",
+                    "name": "Hourly ping",
+                    "message": "ping",
+                    "cron_expression": "0 * * * *",
+                    "last_run": recent,
+                    "created_at": recent,
+                    "paused": False,
+                }
+            ],
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        item = client.get("/api/ui/schedule").json()["items"][0]
+        assert item["next_run"] is not None
+        assert datetime.fromisoformat(item["next_run"]) > datetime.now(UTC)
+        assert item["next_run"] != item["last_run"]
+        assert item["message"] == "ping"
+        assert item["paused"] is False
+        assert item["enabled"] is True
+
+    def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
+        """enabled drives the runtime-honoured paused flag on create and patch."""
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        created = client.post(
+            "/api/ui/schedules",
+            json={
+                "name": "Sync check",
+                "instruction": "do the thing",
+                "schedule_type": "interval",
+                "expression": "15m",
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 200
+        schedule_id = created.json()["id"].split(":", 1)[1]
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        assert entry["paused"] is False
+
+        patched = client.patch(
+            f"/api/ui/widgets/schedule:{schedule_id}",
+            json={"enabled": False},
+        )
+        assert patched.status_code == 200
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        assert entry["paused"] is True
+        assert entry["enabled"] is False
+
+    def test_broadcast_schedule_snapshot_emits_ui_event(self, monkeypatch):
+        """Schedule snapshot broadcasts on the canonical UI event stream."""
+        from app.backend import ui_routes
+
+        store = InMemoryDocumentStore()
+        created_at = datetime.now(UTC).isoformat()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "schedule",
+            [
+                {
+                    "id": "sched-live",
+                    "name": "Live schedule",
+                    "message": "ping",
+                    "cron_expression": "0 * * * *",
+                    "created_at": created_at,
+                    "paused": False,
+                }
+            ],
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.append(queue)
+        try:
+            envelope = ui_routes.broadcast_schedule_snapshot()
+        finally:
+            ui_routes._ui_stream_subscribers.remove(queue)
+
+        assert envelope.type == "schedule.snapshot"
+        assert envelope.payload["items"][0]["id"] == "sched-live"
+        assert ui_routes._ui_event_replay[-1].type == "schedule.snapshot"
+
+        streamed = queue.get_nowait()
+        assert streamed["type"] == "ui.event"
+        assert streamed["envelope"].type == "schedule.snapshot"
+        assert streamed["envelope"].payload["items"][0]["message"] == "ping"
+
 
 class TestLoopsEndpoint:
     """Tests for /api/ui/loops endpoint."""
@@ -1500,7 +1665,39 @@ class TestWorkspaceBridgeActions:
         updated = document.payload
         assert updated[0]["name"] == "Morning Check-in"
         assert updated[0]["message"] == "Summarize overnight alerts and prep the inbox."
+        assert updated[0]["id"].startswith("sched_")
         assert updated[0]["cron_expression"] == "*/15 * * * *"
+
+    def test_create_once_schedule_uses_cron_prefix_and_persists_scheduled_at(
+        self, client, monkeypatch
+    ):
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        response = client.post(
+            "/api/ui/schedules",
+            json={
+                "name": "One-off reminder",
+                "instruction": "Reply once.",
+                "schedule_type": "once",
+                "expression": "2026-06-19T09:47:00Z",
+                "timezone": "UTC",
+                "enabled": True,
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["id"].startswith("schedule:cron_")
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        assert document is not None
+        updated = document.payload
+        assert updated[0]["id"].startswith("cron_")
+        assert updated[0]["schedule_type"] == "once"
+        assert updated[0]["scheduled_at"] == "2026-06-19T09:47:00+00:00"
+        assert "cron_expression" not in updated[0]
 
     def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
         response = client.post(

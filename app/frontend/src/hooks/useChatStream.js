@@ -8,6 +8,16 @@ import {
   finalizeSupersededAssistant,
 } from '../components/chat/streamEventsModel';
 
+function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
+  if (!selectedBackendChatId) {
+    return null;
+  }
+  if (activeBackendChat?.chat_session_id !== selectedBackendChatId) {
+    return null;
+  }
+  return activeBackendChat;
+}
+
 // Owns the streaming-send lifecycle and the background generation/unread
 // indicators. The `messages` state stays in the page (it is shared with the
 // backend-load, scheduled-message, and archive flows); this hook receives it
@@ -17,6 +27,7 @@ export function useChatStream({
   messages,
   setMessages,
   activeBackendChat,
+  selectedBackendChatId,
   sessionId,
   sendMessageStream,
   cancelStream,
@@ -85,15 +96,17 @@ export function useChatStream({
 
     // When continuing a backend chat, route to its original LangGraph thread so
     // the full conversation history is preserved rather than starting a new thread.
-    const threadMetadata = activeBackendChat?.thread_id
-      ? { thread_id: activeBackendChat.thread_id }
+    const selectedBackendChat = resolveSelectedBackendChat(
+      activeBackendChat,
+      selectedBackendChatId,
+    );
+    const threadMetadata = selectedBackendChat?.thread_id
+      ? { thread_id: selectedBackendChat.thread_id }
       : null;
 
-    // The chat this stream belongs to, captured as a closure-local so that
-    // concurrent background streams don't clobber each other through the shared
-    // ref. Use activeBackendChat (in deps) not selectedBackendChatId to avoid a
-    // stale closure.
-    const originChatId = activeBackendChat?.chat_session_id ?? null;
+    // The chat this stream belongs to, captured as a closure-local so
+    // background completion can update the right sidebar card later.
+    const originChatId = selectedBackendChat?.chat_session_id ?? null;
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).
     backgroundOriginChatIdRef.current = originChatId;
@@ -234,6 +247,7 @@ export function useChatStream({
     getApiUrl,
     messages,
     reloadOpenChat,
+    selectedBackendChatId,
     selectedBackendChatIdRef,
     sendMessageStream,
     sessionId,

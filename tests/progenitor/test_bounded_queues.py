@@ -65,6 +65,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager.get_schedule = AsyncMock(return_value=[])
         self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
+        self.state_manager.log_schedule_event = AsyncMock(return_value=None)
         self.state_manager.state_dir = Path(tempfile.mkdtemp())
 
         self.graph = MagicMock()
@@ -223,9 +224,12 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         assert count == 2
         assert self.loop.queues.input_queue.qsize() == 2
-        self.state_manager.update_schedule_entry.assert_not_awaited()
-        self.state_manager.remove_schedule_entry.assert_any_await("sched-1")
-        self.state_manager.remove_schedule_entry.assert_any_await("sched-2")
+        assert self.state_manager.update_schedule_entry.await_count == 2
+        updated_ids = [
+            call.args[0] for call in self.state_manager.update_schedule_entry.await_args_list
+        ]
+        assert updated_ids == ["sched-1", "sched-2"]
+        self.state_manager.remove_schedule_entry.assert_not_awaited()
 
     async def test_enqueue_input_none_timeout_waits_forever(self):
         """Test that timeout=None waits indefinitely (until space available)."""
@@ -256,7 +260,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         assert result is True
 
     async def test_scheduler_dispatches_one_off_task(self):
-        """Due one-off-like cron tasks should enqueue input and be removed."""
+        """Due one-off tasks should enqueue input and be marked completed."""
         from datetime import timedelta
 
         from app.progenitor.nodes.schedule import scheduler_tick_node
@@ -267,9 +271,9 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         self.state_manager.get_schedule = AsyncMock(
             return_value=[
                 {
-                    "id": "sched_one_off",
+                    "id": "cron_one_off",
                     "message": "say hello",
-                    "cron_expression": f"{now.minute} {now.hour} {now.day} {now.month} *",
+                    "scheduled_at": due_time,
                     "created_at": due_time,
                     "last_run": None,
                 }
@@ -289,7 +293,13 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         assert fired == 1
         enqueue_input.assert_awaited_once()
-        self.state_manager.remove_schedule_entry.assert_awaited_once_with("sched_one_off")
+        self.state_manager.update_schedule_entry.assert_awaited_once()
+        update_args = self.state_manager.update_schedule_entry.await_args.args
+        assert update_args[0] == "cron_one_off"
+        assert update_args[1]["paused"] is True
+        assert update_args[1]["enabled"] is False
+        assert update_args[1]["last_run_status"] == "completed"
+        self.state_manager.log_schedule_event.assert_awaited_once()
 
     async def test_scheduler_dispatches_recurring_task(self):
         """Due recurring tasks should enqueue input and advance schedule."""
