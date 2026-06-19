@@ -1,7 +1,19 @@
 import { useMemo, useState } from 'react';
 import DetailHeader, { CopyActionIcon, DetailHeaderAction, DetailHeaderActions, EditActionIcon } from '../components/layout/DetailHeader';
-import { PaneCollapseSeam, PaneExpandRail } from '../components/layout/PaneList';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListFooter,
+  PaneListGroup,
+  PaneListScroll,
+  PaneListSearch,
+  PaneListSortButton,
+  PaneListToolbar,
+} from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 
 const AGENTS = {
   Codex: { color: '#2f6ff6', initial: 'C' },
@@ -274,23 +286,6 @@ function groupSessions(sessions) {
   }, new Map());
 }
 
-function SearchIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
-      <circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M11 11l3 3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function ChevronDownIcon() {
-  return (
-    <svg viewBox="0 0 12 12" width="9" height="9" aria-hidden="true">
-      <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function AgentDot({ agent }) {
   return <span className="adot" style={{ background: AGENTS[agent]?.color || 'var(--color-text-muted)' }} />;
 }
@@ -361,40 +356,34 @@ export default function SessionsPage() {
   const selectedAgent = AGENTS[selected.agent] || AGENTS.OpenCode;
 
   return (
-    <div className="sessions-page">
+    <PageShell>
       <section className={paneClassName} aria-label="Sessions">
         {collapsed ? (
           <PaneExpandRail label="Sessions" onExpand={() => setCollapsed(false)} />
         ) : (
         <>
         <PaneCollapseSeam label="Sessions" onCollapse={() => setCollapsed(true)} />
-        <div className="chat-pane-tabs sess-list__filters">
-          {SESSION_FILTERS.map((filter) => (
-            <button
-              key={filter}
-              type="button"
-              className={`chat-pane-tab sess-filter ${activeAgent === filter ? 'is-active' : ''}`}
-              onClick={() => setActiveAgent(filter)}
-            >
+        <PaneListFilters
+          filters={SESSION_FILTERS}
+          activeFilter={activeAgent}
+          onFilterChange={setActiveAgent}
+          renderFilter={(filter) => (
+            <>
               {filter !== 'All' ? <AgentDot agent={filter} /> : null}
               {filter}
-            </button>
-          ))}
-        </div>
+            </>
+          )}
+          actionLabel="+ New"
+          onAction={() => {}}
+        />
+        <PaneListToolbar>
+          <PaneListSearch value={query} placeholder="Search sessions" onChange={setQuery} />
+          <PaneListSortButton title="Sort">Recent</PaneListSortButton>
+        </PaneListToolbar>
 
-        <div className="sess-list__tools">
-          <label className="sess-search">
-            <SearchIcon />
-            <input value={query} type="text" placeholder="Search sessions" onChange={(event) => setQuery(event.target.value)} />
-          </label>
-          <button type="button" className="sess-sort" title="Sort">Recent <ChevronDownIcon /></button>
-          <button type="button" className="chat-pane-action new-task sess-list__tools-action">+ New</button>
-        </div>
-
-        <div className="sess-list__scroll">
+        <PaneListScroll>
           {Array.from(groupedSessions.entries()).map(([group, sessions]) => (
-            <div className="sess-group" key={group}>
-              <div className="sess-group__head">{group} <span className="muted">· {sessions.length}</span></div>
+            <PaneListGroup key={group} title={group} count={sessions.length}>
               {sessions.map((session) => {
                 const agent = AGENTS[session.agent] || AGENTS.OpenCode;
                 return (
@@ -419,19 +408,19 @@ export default function SessionsPage() {
                   </button>
                 );
               })}
-            </div>
+            </PaneListGroup>
           ))}
-        </div>
+        </PaneListScroll>
 
-        <div className="sess-list__foot">
+        <PaneListFooter>
           <span><span className="num">637</span> sessions</span>
           <span>Last <span className="num">18m</span> ago</span>
-        </div>
+        </PaneListFooter>
         </>
         )}
       </section>
 
-      <section className="sess-detail">
+      <DetailPane flush className="sess-detail">
         <DetailHeader
           title={selected.title}
           actions={(
@@ -489,7 +478,7 @@ export default function SessionsPage() {
             </div>
           )}
         </div>
-      </section>
-    </div>
+      </DetailPane>
+    </PageShell>
   );
 }
