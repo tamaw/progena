@@ -7,13 +7,17 @@ import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { selectLastUiEvent } from '../store/realtimeSlice';
 import {
+  clearChatErrored,
+  clearChatGenerating,
+  clearChatUnread,
+  clearActiveChatSession,
   createChatSession,
   deleteChatSession,
+  markChatGenerating,
   requestChatSessionDetail,
   selectActiveChatSession,
   selectChatSessions,
   selectChatSessionsState,
-  setChatIndicators,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
@@ -315,11 +319,8 @@ function ConversationPage() {
     isGenerating,
     setIsGenerating,
     unreadChatIds,
-    setUnreadChatIds,
     backgroundGeneratingChatIds,
-    setBackgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    setBackgroundErrorChatIds,
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
     handleSend,
@@ -328,6 +329,7 @@ function ConversationPage() {
     messages,
     setMessages,
     activeBackendChat,
+    selectedBackendChatId,
     sessionId,
     sendMessageStream,
     cancelStream,
@@ -345,17 +347,7 @@ function ConversationPage() {
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
-
-  // Surface unread / generating state to the primary nav dot (rendered outside
-  // this page). Green when there are unread chats, orange while generating.
   const hasUnreadChats = unreadChatIds.size > 0;
-  const isAnyChatGenerating = isGenerating || backgroundGeneratingChatIds.size > 0;
-  useEffect(() => {
-    dispatch(setChatIndicators({ hasUnread: hasUnreadChats, isGenerating: isAnyChatGenerating }));
-  }, [dispatch, hasUnreadChats, isAnyChatGenerating]);
-  useEffect(() => () => {
-    dispatch(setChatIndicators({ hasUnread: false, isGenerating: false }));
-  }, [dispatch]);
 
   const updateStreamFilters = useCallback(
     (nextFilters) => {
@@ -647,6 +639,12 @@ function ConversationPage() {
     handleSend(message);
   }, [handleSend]);
 
+  const clearBackendSelection = useCallback(() => {
+    setSelectedBackendChatId(null);
+    dispatch(clearActiveChatSession());
+    lastAppliedBackendChatIdRef.current = null;
+  }, [dispatch]);
+
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     const previousAssistantId = activeAssistantIdRef.current;
     const previousSessionId = sessionId;
@@ -712,8 +710,7 @@ function ConversationPage() {
       }
       setMessages([]);
       setIsGenerating(false);
-      setSelectedBackendChatId(null);
-      lastAppliedBackendChatIdRef.current = null;
+      clearBackendSelection();
       setCustomChatTitle('');
       setCustomChatTitleSessionId(session.session_id);
       setTitleDraft('');
@@ -745,6 +742,7 @@ function ConversationPage() {
     backendChatSessions,
     cancelStream,
     chatTitle,
+    clearBackendSelection,
     config.storage.chatHistory,
     dispatch,
     getApiUrl,
@@ -769,44 +767,45 @@ function ConversationPage() {
       return;
     }
     if (sessionItem.source !== 'backend' || !sessionItem.chatSessionId) {
-      setSelectedBackendChatId(null);
-      lastAppliedBackendChatIdRef.current = null;
+      clearBackendSelection();
       return;
+    }
+
+    // If we're leaving a local-only conversation, materialize it first so it
+    // remains a distinct sidebar card instead of disappearing on selection.
+    if (!selectedBackendChatId && sessionId && messages.length > 0) {
+      const existingBackendCard = backendChatSessions.some((chat) => (
+        chat.progenitor_session_id === sessionId
+        || chat.thread_id === sessionId
+        || chat.chat_session_id === sessionId
+      ));
+      if (!existingBackendCard) {
+        try {
+          await dispatch(createChatSession({
+            chatsUrl: getApiUrl('chats'),
+            title: chatTitle || 'Untitled chat',
+            progenitorSessionId: sessionId,
+          })).unwrap();
+        } catch (error) {
+          show('error', 'Chat save failed', error.message);
+          return;
+        }
+      }
     }
 
     // If a stream is in progress for the chat we're leaving, keep it running
     // in the background and show an orange dot on that card.
     const streamingOriginId = backgroundOriginChatIdRef.current;
     if (streamingOriginId && activeAssistantIdRef.current !== null) {
-      setBackgroundGeneratingChatIds((prev) => {
-        if (prev.has(streamingOriginId)) return prev;
-        const next = new Set(prev);
-        next.add(streamingOriginId);
-        return next;
-      });
+      dispatch(markChatGenerating(streamingOriginId));
     }
     activeAssistantIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
     setSelectedBackendChatId(sessionItem.chatSessionId);
-    setBackgroundGeneratingChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
-    setUnreadChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
-    setBackgroundErrorChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
+    dispatch(clearChatGenerating(sessionItem.chatSessionId));
+    dispatch(clearChatUnread(sessionItem.chatSessionId));
+    dispatch(clearChatErrored(sessionItem.chatSessionId));
     lastAppliedBackendChatIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -821,13 +820,15 @@ function ConversationPage() {
   }, [
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
+    clearBackendSelection,
     dispatch,
     getApiUrl,
+    backendChatSessions,
+    chatTitle,
     messages.length,
-    setBackgroundErrorChatIds,
-    setBackgroundGeneratingChatIds,
+    selectedBackendChatId,
+    sessionId,
     setIsGenerating,
-    setUnreadChatIds,
     show,
   ]);
 
@@ -974,15 +975,14 @@ function ConversationPage() {
       })).unwrap()
         .catch((error) => show('error', 'Archive failed', error.message));
       if (sessionItem.selected) {
-        setSelectedBackendChatId(null);
-        lastAppliedBackendChatIdRef.current = null;
+        clearBackendSelection();
         setMessages([]);
         localStorage.removeItem(config.storage.chatHistory);
       }
       return;
     }
     startNewChatSession({ archive: true });
-  }, [config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
 
   const deleteSession = useCallback((sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
@@ -992,15 +992,14 @@ function ConversationPage() {
       })).unwrap()
         .catch((error) => show('error', 'Delete failed', error.message));
       if (sessionItem.selected) {
-        setSelectedBackendChatId(null);
-        lastAppliedBackendChatIdRef.current = null;
+        clearBackendSelection();
         setMessages([]);
         localStorage.removeItem(config.storage.chatHistory);
       }
       return;
     }
     startNewChatSession();
-  }, [config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
 
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).

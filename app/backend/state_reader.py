@@ -680,8 +680,6 @@ class StateReader:
 
     def get_schedule(self) -> list[ScheduleItem]:
         data = self._read_json_from_path(self.schedule_config_path)
-        if self.document_store is None and data is None and not self.schedule_config_path.exists():
-            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
@@ -1350,6 +1348,18 @@ class StateReader:
             )
 
         for schedule_item in schedule:
+            is_completed_one_off = (
+                bool(schedule_item.raw.get("scheduled_at"))
+                and not schedule_item.enabled
+                and (
+                    schedule_item.raw.get("last_run_status") == "completed"
+                    or (
+                        schedule_item.raw.get("last_run")
+                        and not schedule_item.raw.get("next_run_at")
+                        and not schedule_item.next_run
+                    )
+                )
+            )
             widgets.append(
                 {
                     "id": f"schedule:{schedule_item.id}",
@@ -1357,7 +1367,13 @@ class StateReader:
                     "name": schedule_item.name,
                     "title": schedule_item.name or schedule_item.id,
                     "description": schedule_item.raw.get("user_request") or schedule_item.name,
-                    "status": "enabled" if schedule_item.enabled else "disabled",
+                    "status": (
+                        "completed"
+                        if is_completed_one_off
+                        else "enabled"
+                        if schedule_item.enabled
+                        else "disabled"
+                    ),
                     "summary": schedule_item.raw.get("message") or schedule_item.name,
                     "instruction": schedule_item.raw.get("instruction")
                     or schedule_item.raw.get("message")

@@ -9,6 +9,7 @@ from langgraph.runtime import Runtime
 
 from ..schedule import SCHEDULED_INPUT_PREFIX
 from ..state.models import BackgroundTaskEntry, ProgenitorState
+from ..utils import utcnow
 from .context import HeartbeatContext
 
 
@@ -67,6 +68,8 @@ async def cycle_setup_node(
             "requested_thread_id": None,
             "is_isolated_thread": False,
             "is_scheduled_input": False,
+            "scheduled_schedule_id": None,
+            "scheduled_run_id": None,
             "scheduled_message": None,
         }
 
@@ -77,11 +80,31 @@ async def cycle_setup_node(
         }
 
     requested_thread_id = str((input_metadata or {}).get("thread_id") or "").strip() or None
+    scheduled_schedule_id = str((input_metadata or {}).get("schedule_id") or "").strip() or None
+    scheduled_run_id = str((input_metadata or {}).get("schedule_run_id") or "").strip() or None
     current_thread_id = str(state.get("thread_id") or "").strip()
     is_scheduled_input = user_input.startswith(SCHEDULED_INPUT_PREFIX)
     scheduled_message = (
         user_input[len(SCHEDULED_INPUT_PREFIX) :].strip() if is_scheduled_input else None
     )
+    if scheduled_run_id:
+        now = utcnow().isoformat()
+        await runtime.context.state_manager.update_schedule_run(
+            scheduled_run_id,
+            {
+                "status": "running",
+                "updated_at": now,
+                "started_at": now,
+            },
+        )
+        if scheduled_schedule_id:
+            await runtime.context.state_manager.update_schedule_entry(
+                scheduled_schedule_id,
+                {
+                    "last_run_status": "running",
+                    "updated_at": now,
+                },
+            )
     input_wait_seconds = runtime.context.queues.current_input_wait_seconds
     pending_messages = runtime.context.queues.current_input_pending_count
 
@@ -95,6 +118,8 @@ async def cycle_setup_node(
             requested_thread_id and requested_thread_id != current_thread_id
         ),
         "is_scheduled_input": is_scheduled_input,
+        "scheduled_schedule_id": scheduled_schedule_id,
+        "scheduled_run_id": scheduled_run_id,
         "scheduled_message": scheduled_message,
         "cycle_count": int(state.get("cycle_count", 0) or 0) + 1,
         "actions_this_cycle": 0,

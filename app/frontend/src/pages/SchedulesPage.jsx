@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   PaneList,
   PaneListFilters,
@@ -12,269 +13,246 @@ import {
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
-  ConfigureActionIcon,
+  DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
-  DuplicateActionIcon,
+  PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
+import { useApi } from '../hooks/useApi';
+import { scheduleSnapshotReceived, selectSchedules } from '../store/uiDataSlice';
 
-const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Failed'];
+const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
+const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
 
-const SCHEDULE_TEMPLATES = [
-  {
-    id: 'morning-brief',
-    group: 'Daily',
-    name: 'Morning workspace brief',
-    status: 'active',
-    cadence: 'Every day at 08:30',
-    nextRun: 'tomorrow 08:30',
-    owner: 'Planner',
-    timezone: 'Australia/Brisbane',
-    summary: 'Summarize new sessions, active tasks, repository drift, and overnight alerts.',
-    tools: ['sessions', 'todos', 'github', 'knowledge'],
-    repositories: ['progenitor', 'agent-runtime'],
-    knowledge: ['Project roadmap', 'Runtime incidents'],
-    tasks: [
-      { title: 'Collect changed sessions', state: 'ready', age: 'next run' },
-      { title: 'Rank open tasks by priority', state: 'ready', age: 'next run' },
-      { title: 'Draft brief into chat', state: 'ready', age: 'next run' },
-    ],
-    recentRuns: [
-      { title: 'Morning workspace brief', outcome: 'success', detail: '6 sections - 11 sources', age: 'today 08:30' },
-      { title: 'Morning workspace brief', outcome: 'success', detail: '5 sections - 9 sources', age: 'yesterday' },
-      { title: 'Morning workspace brief', outcome: 'partial', detail: 'GitHub rate limited', age: '2d ago' },
-    ],
-    metrics: {
-      runs: '31',
-      success: '96.7%',
-      tasks: '3',
-      latency: '18s',
-    },
-  },
-  {
-    id: 'repo-sweep',
-    group: 'Daily',
-    name: 'Repository sweep',
-    status: 'active',
-    cadence: 'Every 6 hours',
-    nextRun: 'in 42m',
-    owner: 'Observer',
-    timezone: 'Local workspace',
-    summary: 'Scan connected repositories for changed branches, stale worktrees, and pending reviews.',
-    tools: ['filesystem', 'git', 'github'],
-    repositories: ['progenitor', 'progenitor-mcp', 'planning-playground'],
-    knowledge: ['Repository symbols', 'Code review rubric'],
-    tasks: [
-      { title: 'List active branches', state: 'ready', age: '42m' },
-      { title: 'Check stale workspace locks', state: 'ready', age: '42m' },
-      { title: 'Notify Reviewer for risky diffs', state: 'waiting', age: '42m' },
-    ],
-    recentRuns: [
-      { title: 'Repository sweep', outcome: 'success', detail: '3 repos - 9 branches', age: '5h ago' },
-      { title: 'Repository sweep', outcome: 'success', detail: '3 repos - 8 branches', age: '11h ago' },
-      { title: 'Repository sweep', outcome: 'success', detail: '2 repos - 5 branches', age: '17h ago' },
-    ],
-    metrics: {
-      runs: '118',
-      success: '99.1%',
-      tasks: '3',
-      latency: '9s',
-    },
-  },
-  {
-    id: 'knowledge-refresh',
-    group: 'Background',
-    name: 'Knowledge refresh',
-    status: 'active',
-    cadence: 'Every 30 minutes',
-    nextRun: 'in 12m',
-    owner: 'Indexer',
-    timezone: 'Local workspace',
-    summary: 'Refresh indexed files, memory snapshots, and session artifacts for agent retrieval.',
-    tools: ['filesystem', 'embeddings', 'knowledge'],
-    repositories: ['progenitor', 'progenitor-docs'],
-    knowledge: ['Repository symbols', 'Session artifacts', 'Design reference captures'],
-    tasks: [
-      { title: 'Hash changed files', state: 'active', age: 'now' },
-      { title: 'Embed updated documents', state: 'queued', age: '12m' },
-      { title: 'Compact old session snippets', state: 'queued', age: '12m' },
-    ],
-    recentRuns: [
-      { title: 'Knowledge refresh', outcome: 'success', detail: '249 artifacts indexed', age: '18m ago' },
-      { title: 'Knowledge refresh', outcome: 'success', detail: '241 artifacts indexed', age: '48m ago' },
-      { title: 'Knowledge refresh', outcome: 'success', detail: '238 artifacts indexed', age: '1h ago' },
-    ],
-    metrics: {
-      runs: '422',
-      success: '98.8%',
-      tasks: '3',
-      latency: '41s',
-    },
-  },
-  {
-    id: 'health-watch',
-    group: 'Background',
-    name: 'Health watch',
-    status: 'paused',
-    cadence: 'Every 5 minutes',
-    nextRun: 'paused',
-    owner: 'Watchdog',
-    timezone: 'Local workspace',
-    summary: 'Watch long-running dev servers, stale background agents, and failed frontend checks.',
-    tools: ['processes', 'logs', 'alerts'],
-    repositories: ['progenitor'],
-    knowledge: ['Operational runbooks', 'Known flaky checks'],
-    tasks: [
-      { title: 'Check frontend preview server', state: 'paused', age: 'paused' },
-      { title: 'Inspect long-running shells', state: 'paused', age: 'paused' },
-      { title: 'Prepare alert note', state: 'paused', age: 'paused' },
-    ],
-    recentRuns: [
-      { title: 'Health watch', outcome: 'success', detail: 'all clear', age: '36m ago' },
-      { title: 'Health watch', outcome: 'success', detail: 'one stale shell noted', age: '41m ago' },
-      { title: 'Health watch', outcome: 'success', detail: 'all clear', age: '46m ago' },
-    ],
-    metrics: {
-      runs: '204',
-      success: '97.5%',
-      tasks: '3',
-      latency: '3s',
-    },
-  },
-  {
-    id: 'release-notes',
-    group: 'Weekly',
-    name: 'Release note draft',
-    status: 'active',
-    cadence: 'Fridays at 15:00',
-    nextRun: 'Fri 15:00',
-    owner: 'Builder',
-    timezone: 'Australia/Brisbane',
-    summary: 'Draft release notes from merged tasks, repository changes, and session summaries.',
-    tools: ['github', 'git', 'knowledge', 'chat'],
-    repositories: ['progenitor', 'progenitor-mcp'],
-    knowledge: ['Architecture decisions', 'Project roadmap', 'Code review rubric'],
-    tasks: [
-      { title: 'Collect merged PRs', state: 'ready', age: 'Fri' },
-      { title: 'Group changes by feature area', state: 'ready', age: 'Fri' },
-      { title: 'Generate human review draft', state: 'ready', age: 'Fri' },
-    ],
-    recentRuns: [
-      { title: 'Release note draft', outcome: 'success', detail: '12 changes grouped', age: 'last Fri' },
-      { title: 'Release note draft', outcome: 'success', detail: '8 changes grouped', age: '2w ago' },
-      { title: 'Release note draft', outcome: 'partial', detail: 'missing labels', age: '3w ago' },
-    ],
-    metrics: {
-      runs: '9',
-      success: '88.9%',
-      tasks: '3',
-      latency: '1m 22s',
-    },
-  },
-  {
-    id: 'incident-digest',
-    group: 'Weekly',
-    name: 'Incident digest',
-    status: 'failed',
-    cadence: 'Mondays at 09:00',
-    nextRun: 'retry pending',
-    owner: 'Observer',
-    timezone: 'Australia/Brisbane',
-    summary: 'Compile production and local runtime incidents into a short learning digest.',
-    tools: ['logs', 'sentry', 'knowledge'],
-    repositories: ['progenitor'],
-    knowledge: ['Runtime incidents', 'Operational runbooks'],
-    tasks: [
-      { title: 'Fetch incident list', state: 'failed', age: 'today' },
-      { title: 'Classify incident themes', state: 'blocked', age: 'today' },
-      { title: 'Publish digest', state: 'blocked', age: 'today' },
-    ],
-    recentRuns: [
-      { title: 'Incident digest', outcome: 'failed', detail: 'Sentry token expired', age: 'today 09:00' },
-      { title: 'Incident digest', outcome: 'success', detail: '4 incidents summarized', age: 'last Mon' },
-      { title: 'Incident digest', outcome: 'success', detail: '2 incidents summarized', age: '2w ago' },
-    ],
-    metrics: {
-      runs: '14',
-      success: '85.7%',
-      tasks: '3',
-      latency: '-',
-    },
-  },
-];
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-function createDraftSchedule(index) {
-  return {
-    id: `draft-schedule-${index}`,
-    group: 'Drafts',
-    name: `New schedule ${index}`,
-    status: 'paused',
-    cadence: 'Choose trigger',
-    nextRun: 'not scheduled',
-    owner: 'Planner',
-    timezone: 'Local workspace',
-    summary: 'A mocked schedule ready to connect to agents, tools, repositories, and knowledge.',
-    tools: ['todos', 'knowledge'],
-    repositories: ['progenitor'],
-    knowledge: ['Workspace starter pack'],
-    tasks: [
-      { title: 'Choose cadence and trigger', state: 'draft', age: 'now' },
-      { title: 'Attach the target agent', state: 'draft', age: 'now' },
-    ],
-    recentRuns: [],
-    metrics: {
-      runs: '0',
-      success: '-',
-      tasks: '2',
-      latency: '-',
-    },
-  };
+function pad2(value) {
+  return String(value).padStart(2, '0');
 }
 
-function normalizeStatus(status) {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function isOneShotCron(cron) {
+  if (!cron) return false;
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return false;
+  return parts[2] !== '*' && parts[3] !== '*';
+}
+
+// Best-effort human cadence from a cron expression. Falls back to the raw
+// expression for shapes we do not special-case.
+function cronToCadence(cron) {
+  if (!cron) return '';
+  const parts = cron.trim().split(/\s+/);
+  if (parts.length !== 5) return cron;
+  const [minute, hour, dom, month, dow] = parts;
+
+  const everyN = (field) => {
+    const match = /^\*\/(\d+)$/.exec(field);
+    return match ? Number(match[1]) : null;
+  };
+
+  const minutesStep = everyN(minute);
+  if (minutesStep && hour === '*' && dom === '*' && month === '*' && dow === '*') {
+    return minutesStep === 1 ? 'Every minute' : `Every ${minutesStep} minutes`;
+  }
+  const hoursStep = everyN(hour);
+  if (minute === '0' && hoursStep && dom === '*' && month === '*' && dow === '*') {
+    return hoursStep === 1 ? 'Every hour' : `Every ${hoursStep} hours`;
+  }
+  const daysStep = everyN(dom);
+  if (minute === '0' && hour === '0' && daysStep && month === '*' && dow === '*') {
+    return daysStep === 1 ? 'Every day' : `Every ${daysStep} days`;
+  }
+
+  const isNum = (value) => /^\d+$/.test(value);
+  if (isNum(minute) && isNum(hour)) {
+    const time = `${pad2(hour)}:${pad2(minute)}`;
+    if (dow !== '*' && isNum(dow)) {
+      return `${WEEKDAYS[Number(dow) % 7]}s at ${time}`;
+    }
+    if (dom === '*' && month === '*' && dow === '*') {
+      return `Every day at ${time}`;
+    }
+    if (isOneShotCron(cron)) {
+      return `Once at ${time}`;
+    }
+  }
+  return cron;
+}
+
+function cadenceFor(schedule) {
+  if (schedule.scheduled_at) {
+    return `Once · ${formatAbsolute(schedule.scheduled_at, schedule.timezone)}`;
+  }
+  return cronToCadence(schedule.cron_expression || schedule.schedule);
+}
+
+function isOneOff(schedule) {
+  return Boolean(schedule.scheduled_at) || isOneShotCron(schedule.cron_expression || schedule.schedule);
+}
+
+const KIND_ORDER = ['Scheduled', 'Recurring', 'One-off'];
+
+// Human label for the trigger kind: Scheduled (cron), Recurring (interval),
+// One-off (once). Derived from the entry's schedule_type, with a one-shot cron
+// or an explicit datetime always counting as a one-off.
+function scheduleKind(schedule) {
+  if (isOneOff(schedule) || (schedule.schedule_type || '').toLowerCase() === 'once') {
+    return 'One-off';
+  }
+  if ((schedule.schedule_type || '').toLowerCase() === 'interval') {
+    return 'Recurring';
+  }
+  return 'Scheduled';
+}
+
+function isCompleted(schedule) {
+  return (
+    isOneOff(schedule)
+    && !schedule.next_run
+    && Boolean(schedule.last_run)
+    && (
+      schedule.last_run_status === 'completed'
+      || schedule.paused
+    )
+  );
+}
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+// Absolute date/time rendered in the schedule's own timezone when given, so the
+// displayed wall-clock matches when the schedule actually fires. Falls back to
+// the browser's local zone if the timezone is missing or invalid.
+function formatAbsolute(value, timeZone) {
+  const date = parseDate(value);
+  if (!date) return '—';
+  const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (timeZone) {
+    try {
+      return date.toLocaleString(undefined, { ...opts, timeZone, timeZoneName: 'short' });
+    } catch {
+      // Invalid IANA zone — fall through to local time.
+    }
+  }
+  return date.toLocaleString(undefined, opts);
+}
+
+// Compact relative label, e.g. "in 42m", "5h ago", or an absolute date (in the
+// schedule's timezone) for anything beyond a few days out.
+function formatRelative(value, timeZone) {
+  const date = parseDate(value);
+  if (!date) return '—';
+  const diffMs = date.getTime() - Date.now();
+  const future = diffMs >= 0;
+  const absSec = Math.abs(diffMs) / 1000;
+
+  let label;
+  if (absSec < 60) {
+    label = 'just now';
+    return label;
+  }
+  if (absSec < 3600) {
+    label = `${Math.round(absSec / 60)}m`;
+  } else if (absSec < 86400) {
+    label = `${Math.round(absSec / 3600)}h`;
+  } else if (absSec < 86400 * 6) {
+    label = `${Math.round(absSec / 86400)}d`;
+  } else {
+    return formatAbsolute(value, timeZone);
+  }
+  return future ? `in ${label}` : `${label} ago`;
+}
+
+function statusOf(schedule) {
+  if (isCompleted(schedule)) return 'completed';
+  return schedule.paused ? 'paused' : 'active';
+}
+
+function formatLogTime(value) {
+  const date = parseDate(value);
+  if (!date) return '';
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function matchesSchedule(schedule, filter, search) {
-  const matchesFilter = filter === 'All' || normalizeStatus(schedule.status) === filter;
-  const haystack = [
-    schedule.name,
-    schedule.owner,
-    schedule.cadence,
-    schedule.summary,
-    ...schedule.tools,
-    ...schedule.repositories,
-    ...schedule.knowledge,
-  ].join(' ').toLowerCase();
+  const status = statusOf(schedule);
+  const matchesFilter =
+    filter === 'All'
+    || (filter === 'Active' && status === 'active')
+    || (filter === 'Paused' && status === 'paused')
+    || (filter === 'Completed' && status === 'completed');
+  const haystack = [schedule.name, schedule.message, cadenceFor(schedule)].join(' ').toLowerCase();
   return matchesFilter && (!search || haystack.includes(search.toLowerCase()));
 }
 
-function groupSchedules(schedules) {
-  return schedules.reduce((groups, schedule) => {
-    if (!groups[schedule.group]) {
-      groups[schedule.group] = [];
-    }
-    groups[schedule.group].push(schedule);
-    return groups;
-  }, {});
+function nextRunSortValue(schedule) {
+  const nextRun = parseDate(schedule.next_run)?.getTime();
+  if (Number.isFinite(nextRun)) return nextRun;
+  const lastRun = parseDate(schedule.last_run)?.getTime();
+  if (Number.isFinite(lastRun)) return lastRun + (365 * 24 * 60 * 60 * 1000);
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function statusRank(schedule) {
+  const status = statusOf(schedule);
+  if (status === 'active') return 0;
+  if (status === 'paused') return 1;
+  return 2;
+}
+
+function compareSchedules(a, b, sortMode) {
+  if (sortMode === 'Next') {
+    const nextDelta = nextRunSortValue(a) - nextRunSortValue(b);
+    if (nextDelta !== 0) return nextDelta;
+  } else if (sortMode === 'Status') {
+    const rankDelta = statusRank(a) - statusRank(b);
+    if (rankDelta !== 0) return rankDelta;
+    const nextDelta = nextRunSortValue(a) - nextRunSortValue(b);
+    if (nextDelta !== 0) return nextDelta;
+  } else {
+    const typeDelta = KIND_ORDER.indexOf(scheduleKind(a)) - KIND_ORDER.indexOf(scheduleKind(b));
+    if (typeDelta !== 0) return typeDelta;
+    const nextDelta = nextRunSortValue(a) - nextRunSortValue(b);
+    if (nextDelta !== 0) return nextDelta;
+  }
+  return String(a.name || '').localeCompare(String(b.name || ''));
 }
 
 function ScheduleRow({ schedule, selected, onSelect }) {
+  const status = statusOf(schedule);
   return (
     <button
       type="button"
-      className={`sess-row schedule-row schedule-row--${schedule.status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row schedule-pane-row schedule-pane-row--${status} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(schedule.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot schedule-row__status schedule-row__status--${schedule.status}`} />
-        <span className="sess-row__agent schedule-row__name">{schedule.name}</span>
-        <span className="sess-row__project">{schedule.owner}</span>
+        <span className={`sess-row__dot schedule-pane-row__status schedule-pane-row__status--${status}`} />
+        <span className="sess-row__agent schedule-pane-row__name">{schedule.name || 'Untitled schedule'}</span>
       </span>
-      <span className="sess-row__age">{schedule.nextRun}</span>
-      <span className="sess-row__title">{schedule.cadence}</span>
+      <span className="sess-row__age">
+        {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, schedule.timezone)}
+      </span>
+      <span className="sess-row__title">{cadenceFor(schedule) || '—'}</span>
     </button>
+  );
+}
+
+function ScheduleStatusPill({ status }) {
+  return (
+    <span className={`agents-status-pill agents-status-pill--${status}`}>
+      <span className="adot" />
+      {status}
+    </span>
   );
 }
 
@@ -288,191 +266,632 @@ function MetricCard({ label, value, detail }) {
   );
 }
 
-function Section({ title, count, children, action }) {
-  return (
-    <section className="agents-section">
-      <header className="agents-section__head">
-        <h2>{title} <span>{count}</span></h2>
-        {action ? <button type="button" className="repo-btn repo-btn--ghost">{action}</button> : null}
-      </header>
-      {children}
-    </section>
-  );
-}
-
-function ResourceList({ items, icon, meta }) {
-  return (
-    <div className="agents-connection-list">
-      {items.map((item) => (
-        <div key={item} className="agents-connection-row">
-          <span className="agents-connection-row__icon">{icon}</span>
-          <div className="agents-connection-row__body">
-            <strong>{item}</strong>
-            <p>{meta}</p>
-          </div>
-          <span className="agents-chip agents-chip--info">linked</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function SchedulesPage() {
-  const [customSchedules, setCustomSchedules] = useState([]);
+  const { getSchedules, getWidgets, updateWidget, deleteWidget, retriggerSchedule } = useApi();
+  const dispatch = useDispatch();
+  // The list is owned by the Redux store and kept live by `schedule.snapshot`
+  // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
+  // seed it once via REST on mount; every change after that arrives as an event.
+  const schedules = useSelector(selectSchedules);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
-  const [selectedScheduleId, setSelectedScheduleId] = useState(SCHEDULE_TEMPLATES[0].id);
+  const [sortMode, setSortMode] = useState('Type');
+  const [selectedScheduleId, setSelectedScheduleId] = useState(null);
+  const [mutating, setMutating] = useState(false);
+  const [scheduleWidgets, setScheduleWidgets] = useState({});
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const titleInputRef = useRef(null);
+  const [isEditingIntent, setIsEditingIntent] = useState(false);
+  const [intentDraft, setIntentDraft] = useState('');
+  const intentInputRef = useRef(null);
+  const [isEditingTrigger, setIsEditingTrigger] = useState(false);
+  const [triggerText, setTriggerText] = useState('');
+  const triggerInputRef = useRef(null);
+  const scheduleIdsKey = useMemo(() => schedules.map((schedule) => schedule.id).join('|'), [schedules]);
 
-  const schedules = useMemo(() => [...SCHEDULE_TEMPLATES, ...customSchedules], [customSchedules]);
-  const selectedSchedule = schedules.find((schedule) => schedule.id === selectedScheduleId) || schedules[0];
-  const visibleSchedules = useMemo(
-    () => schedules.filter((schedule) => matchesSchedule(schedule, activeFilter, search)),
-    [activeFilter, schedules, search],
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getSchedules()
+      .then((data) => {
+        if (cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        dispatch(scheduleSnapshotReceived(items));
+        setError(null);
+        setSelectedScheduleId((current) => current ?? items[0]?.id ?? null);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err.message || 'Failed to load schedules.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [getSchedules, dispatch]);
+
+  useEffect(() => {
+    let cancelled = false;
+    getWidgets()
+      .then((data) => {
+        if (cancelled) return;
+        const items = Array.isArray(data?.items) ? data.items : [];
+        const widgetMap = {};
+        for (const item of items) {
+          const scheduleId = item?.data?.schedule_id;
+          if (item?.type !== 'schedule' || typeof scheduleId !== 'string') continue;
+          widgetMap[scheduleId] = item;
+        }
+        setScheduleWidgets(widgetMap);
+      })
+      .catch(() => {
+        if (!cancelled) setScheduleWidgets({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [getWidgets, scheduleIdsKey]);
+
+  const visibleSchedules = useMemo(() => {
+    const filtered = schedules.filter((schedule) => matchesSchedule(schedule, activeFilter, search));
+    return [...filtered].sort((a, b) => compareSchedules(a, b, sortMode));
+  }, [activeFilter, schedules, search, sortMode]);
+
+  const groupedSchedules = useMemo(() => {
+    if (sortMode === 'Type') {
+      return visibleSchedules.reduce(
+        (groups, schedule) => {
+          groups[scheduleKind(schedule)].push(schedule);
+          return groups;
+        },
+        { Scheduled: [], Recurring: [], 'One-off': [] },
+      );
+    }
+    if (sortMode === 'Status') {
+      return visibleSchedules.reduce(
+        (groups, schedule) => {
+          const key = statusOf(schedule)[0].toUpperCase() + statusOf(schedule).slice(1);
+          groups[key].push(schedule);
+          return groups;
+        },
+        { Active: [], Paused: [], Completed: [] },
+      );
+    }
+    return visibleSchedules.reduce(
+      (groups, schedule) => {
+        groups.Next.push(schedule);
+        return groups;
+      },
+      { Next: [] },
+    );
+  }, [sortMode, visibleSchedules]);
+
+  const selectedSchedule =
+    schedules.find((schedule) => schedule.id === selectedScheduleId) || visibleSchedules[0] || null;
+  const activeCount = schedules.filter((schedule) => !schedule.paused).length;
+  const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;
+  const completedCount = schedules.filter((schedule) => statusOf(schedule) === 'completed').length;
+  const order = sortMode === 'Type'
+    ? KIND_ORDER
+    : sortMode === 'Status'
+      ? ['Active', 'Paused', 'Completed']
+      : ['Next'];
+  const selectedScheduleWidget = selectedSchedule ? scheduleWidgets[selectedSchedule.id] || null : null;
+  const selectedScheduleLogs = Array.isArray(selectedScheduleWidget?.logs) ? selectedScheduleWidget.logs : [];
+  // Logs arrive newest-first; cap to the latest few so the list stays bounded.
+  const recentScheduleLogs = selectedScheduleLogs.slice(0, 5);
+  const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
+
+  // Mutations don't refetch — the backend emits a `schedule.snapshot` event as
+  // part of handling each request, which updates the store (and any other open
+  // tab) live. We only manage local selection here.
+  const handleTogglePause = useCallback(
+    async (schedule) => {
+      setMutating(true);
+      setError(null);
+      try {
+        await updateWidget(`schedule:${schedule.id}`, { enabled: schedule.paused });
+      } catch (err) {
+        setError(err.message || 'Failed to update schedule.');
+      } finally {
+        setMutating(false);
+      }
+    },
+    [updateWidget],
   );
-  const groupedSchedules = useMemo(() => groupSchedules(visibleSchedules), [visibleSchedules]);
-  const activeCount = schedules.filter((schedule) => schedule.status === 'active').length;
-  const taskCount = schedules.reduce((total, schedule) => total + schedule.tasks.length, 0);
-  const order = ['Daily', 'Background', 'Weekly', 'Drafts'];
 
-  function handleNewSchedule() {
-    const nextSchedule = createDraftSchedule(customSchedules.length + 1);
-    setCustomSchedules((current) => [...current, nextSchedule]);
-    setSelectedScheduleId(nextSchedule.id);
-    setActiveFilter('All');
-  }
+  const handleDelete = useCallback(
+    async (schedule) => {
+      const confirmed = window.confirm(
+        `Delete schedule "${schedule.name || 'Untitled schedule'}"? This can't be undone.`,
+      );
+      if (!confirmed) return;
+      setMutating(true);
+      setError(null);
+      try {
+        await deleteWidget(`schedule:${schedule.id}`);
+        if (selectedScheduleId === schedule.id) setSelectedScheduleId(null);
+      } catch (err) {
+        setError(err.message || 'Failed to delete schedule.');
+      } finally {
+        setMutating(false);
+      }
+    },
+    [deleteWidget, selectedScheduleId],
+  );
+
+  // Leave edit mode whenever the selected schedule changes so a stale draft
+  // never leaks across selections.
+  useEffect(() => {
+    setIsEditingTitle(false);
+    setTitleDraft('');
+    setIsEditingIntent(false);
+    setIntentDraft('');
+    setIsEditingTrigger(false);
+  }, [selectedScheduleId]);
+
+  useEffect(() => {
+    if (!isEditingTitle) return undefined;
+    titleInputRef.current?.focus();
+    titleInputRef.current?.select();
+    return undefined;
+  }, [isEditingTitle]);
+
+  const cancelTitleEdit = useCallback(() => {
+    setTitleDraft(scheduleTitle);
+    setIsEditingTitle(false);
+  }, [scheduleTitle]);
+
+  const startTitleEdit = useCallback(() => {
+    setTitleDraft(selectedSchedule?.name || '');
+    setIsEditingTitle(true);
+  }, [selectedSchedule]);
+
+  const saveTitleEdit = useCallback(async () => {
+    if (!selectedSchedule) return;
+    const normalizedTitle = titleDraft.replace(/\s+/g, ' ').trim();
+    if (!normalizedTitle || normalizedTitle === (selectedSchedule.name || '')) {
+      cancelTitleEdit();
+      return;
+    }
+    setIsEditingTitle(false);
+    setMutating(true);
+    setError(null);
+    try {
+      // The backend emits a `schedule.snapshot` event, so the store (and any
+      // other open tab) picks up the new name live — no local mutation needed.
+      await updateWidget(`schedule:${selectedSchedule.id}`, { name: normalizedTitle });
+    } catch (err) {
+      setError(err.message || 'Failed to rename schedule.');
+    } finally {
+      setMutating(false);
+    }
+  }, [cancelTitleEdit, selectedSchedule, titleDraft, updateWidget]);
+
+  useEffect(() => {
+    if (!isEditingIntent) return undefined;
+    intentInputRef.current?.focus();
+    return undefined;
+  }, [isEditingIntent]);
+
+  const startIntentEdit = useCallback(() => {
+    setIntentDraft(selectedSchedule?.message || '');
+    setIsEditingIntent(true);
+  }, [selectedSchedule]);
+
+  const cancelIntentEdit = useCallback(() => {
+    setIsEditingIntent(false);
+    setIntentDraft('');
+  }, []);
+
+  const saveIntentEdit = useCallback(async () => {
+    if (!selectedSchedule) return;
+    const normalizedIntent = intentDraft.trim();
+    if (!normalizedIntent || normalizedIntent === (selectedSchedule.message || '')) {
+      cancelIntentEdit();
+      return;
+    }
+    setIsEditingIntent(false);
+    setMutating(true);
+    setError(null);
+    try {
+      // The backend mirrors `instruction` into the schedule's message and emits
+      // a `schedule.snapshot` event, so the store updates live.
+      await updateWidget(`schedule:${selectedSchedule.id}`, { instruction: normalizedIntent });
+    } catch (err) {
+      setError(err.message || 'Failed to update schedule intent.');
+    } finally {
+      setMutating(false);
+    }
+  }, [cancelIntentEdit, intentDraft, selectedSchedule, updateWidget]);
+
+  useEffect(() => {
+    if (!isEditingTrigger) return undefined;
+    triggerInputRef.current?.focus();
+    triggerInputRef.current?.select();
+    return undefined;
+  }, [isEditingTrigger]);
+
+  const startTriggerEdit = useCallback(() => {
+    if (!selectedSchedule) return;
+    setTriggerText(cadenceFor(selectedSchedule));
+    setIsEditingTrigger(true);
+  }, [selectedSchedule]);
+
+  const cancelTriggerEdit = useCallback(() => {
+    setIsEditingTrigger(false);
+  }, []);
+
+  const saveTriggerEdit = useCallback(async () => {
+    if (!selectedSchedule) return;
+    const text = triggerText.trim();
+    if (!text) {
+      setError('Describe when the schedule should run.');
+      return;
+    }
+    setMutating(true);
+    setError(null);
+    try {
+      // The backend hands this phrase to the Progenitor agent, which converts
+      // it to cron/datetime and updates the schedule; the resulting
+      // `schedule.snapshot` refreshes the trigger, cadence, and next-run live.
+      await retriggerSchedule(selectedSchedule.id, text);
+      setIsEditingTrigger(false);
+    } catch (err) {
+      setError(err.message || 'Failed to update trigger.');
+    } finally {
+      setMutating(false);
+    }
+  }, [retriggerSchedule, selectedSchedule, triggerText]);
 
   return (
     <PageShell className="schedules-page">
       <PaneList label="Schedules" className="schedules-pane">
-        <PaneListFilters filters={SCHEDULE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar actionLabel="+ New schedule" onAction={handleNewSchedule}>
+        <PaneListFilters
+          filters={SCHEDULE_FILTERS}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+          actionLabel="+ New"
+          onAction={() => {
+            window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+              detail: { mode: 'schedule-create' },
+            }));
+          }}
+        />
+        <PaneListToolbar>
           <PaneListSearch value={search} placeholder="Search schedules..." onChange={setSearch} />
-          <PaneListSortButton>Next</PaneListSortButton>
+          <PaneListSortButton
+            title="Sort schedules"
+            options={SCHEDULE_SORTS}
+            value={sortMode}
+            onSelect={setSortMode}
+          />
         </PaneListToolbar>
         <PaneListScroll>
-          {visibleSchedules.length ? (
-            order.map((group) => (
+          {loading ? (
+            <div className="agents-empty-state">Loading schedules…</div>
+          ) : error && !schedules.length ? (
+            <div className="agents-empty-state">{error}</div>
+          ) : visibleSchedules.length ? (
+            order.map((group) =>
               groupedSchedules[group]?.length ? (
                 <PaneListGroup key={group} title={group} count={groupedSchedules[group].length}>
                   {groupedSchedules[group].map((schedule) => (
                     <ScheduleRow
                       key={schedule.id}
                       schedule={schedule}
-                      selected={selectedSchedule.id === schedule.id}
-                      onSelect={setSelectedScheduleId}
+                      selected={selectedSchedule?.id === schedule.id}
+                      onSelect={(id) => {
+                        setSelectedScheduleId(id);
+                      }}
                     />
                   ))}
                 </PaneListGroup>
-              ) : null
-            ))
+              ) : null,
+            )
           ) : (
             <div className="agents-empty-state">No schedules match this view.</div>
           )}
         </PaneListScroll>
         <PaneListFooter>
-          <span><span className="num">{activeCount}</span> active</span>
-          <span><span className="num">{taskCount}</span> tasks</span>
-          <span><span className="num">{schedules.length}</span> schedules</span>
+          <span>
+            <span className="num">{activeCount}</span> active
+          </span>
+          <span>
+            <span className="num">{pausedCount}</span> paused
+          </span>
+          <span>
+            <span className="num">{completedCount}</span> completed
+          </span>
         </PaneListFooter>
       </PaneList>
 
-      <DetailPane className="detail-pane--dense schedules-detail" label={`${selectedSchedule.name} schedule`}>
-        <DetailHeader
-          title={selectedSchedule.name}
-          subtitle={`${selectedSchedule.owner} - ${selectedSchedule.timezone}`}
-          actions={(
-            <DetailHeaderActions>
-              <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure schedule" ariaLabel="Configure schedule" />
-              <DetailHeaderAction icon={<DuplicateActionIcon />} label="Duplicate" tooltip="Duplicate schedule" ariaLabel="Duplicate schedule" />
-              <DetailHeaderAction
-                icon={<PlayActionIcon />}
-                label="Run now"
-                tooltip="Run schedule now"
-                ariaLabel="Run schedule now"
-                variant="primary"
-              />
-            </DetailHeaderActions>
-          )}
-        />
-
-        <div className="detail-pane__body">
-          <div className="agents-metrics">
-            <MetricCard label="Runs" value={selectedSchedule.metrics.runs} detail="last 30 days" />
-            <MetricCard label="Success" value={selectedSchedule.metrics.success} detail="completed runs" />
-            <MetricCard label="Tasks" value={selectedSchedule.metrics.tasks} detail="per schedule run" />
-            <MetricCard label="Latency" value={selectedSchedule.metrics.latency} detail="average runtime" />
+      <DetailPane className="detail-pane--dense schedules-detail" label="Schedule detail">
+        {!selectedSchedule ? (
+          <div className="detail-pane__body">
+            <div className="agents-empty-state">Select a schedule, or use New to ask Progenitor to create one.</div>
           </div>
+        ) : (
+          <>
+            <DetailHeader
+              titleClassName="chat-detail-header__title"
+              title={(
+                <>
+                  {isEditingTitle ? (
+                    <input
+                      ref={titleInputRef}
+                      type="text"
+                      className="chat-page-header__title-input"
+                      value={titleDraft}
+                      maxLength={120}
+                      aria-label="Schedule name"
+                      onChange={(event) => setTitleDraft(event.target.value)}
+                      onBlur={cancelTitleEdit}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.preventDefault();
+                          saveTitleEdit();
+                        } else if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelTitleEdit();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <span className="chat-detail-header__title-text">{scheduleTitle}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="chat-icon-button chat-detail-header__rename"
+                    data-tooltip={isEditingTitle ? 'Save schedule name' : 'Rename schedule'}
+                    aria-label={isEditingTitle ? 'Save schedule name' : 'Rename schedule'}
+                    onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
+                    onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
+                  >
+                    {isEditingTitle ? (
+                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                        <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    ) : (
+                      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                        <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                      </svg>
+                    )}
+                  </button>
+                </>
+              )}
+              meta={[
+                <ScheduleStatusPill key="status" status={statusOf(selectedSchedule)} />,
+                <span key="type" className="muted">{scheduleKind(selectedSchedule)}</span>,
+                <span key="cadence" className="muted">{cadenceFor(selectedSchedule)}</span>,
+                <span key="next" className="muted">
+                  {statusOf(selectedSchedule) === 'completed'
+                    ? 'completed'
+                    : selectedSchedule.paused ? 'paused' : `Next ${formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)}`}
+                </span>,
+                selectedSchedule.timezone ? (
+                  <span key="tz" className="muted">{selectedSchedule.timezone}</span>
+                ) : null,
+                <span key="id" className="muted">{selectedSchedule.id}</span>,
+              ]}
+              actions={
+                <DetailHeaderActions>
+                  {statusOf(selectedSchedule) !== 'completed' ? (
+                    <DetailHeaderAction
+                      icon={selectedSchedule.paused ? <PlayActionIcon /> : <PauseActionIcon />}
+                      label={selectedSchedule.paused ? 'Resume' : 'Pause'}
+                      tooltip={selectedSchedule.paused ? 'Resume schedule' : 'Pause schedule'}
+                      ariaLabel={selectedSchedule.paused ? 'Resume schedule' : 'Pause schedule'}
+                      variant="primary"
+                      disabled={mutating}
+                      onClick={() => handleTogglePause(selectedSchedule)}
+                    />
+                  ) : null}
+                  <DetailHeaderAction
+                    icon={<DeleteActionIcon />}
+                    label="Delete"
+                    tooltip="Delete schedule"
+                    ariaLabel="Delete schedule"
+                    disabled={mutating}
+                    onClick={() => handleDelete(selectedSchedule)}
+                  />
+                </DetailHeaderActions>
+              }
+            />
 
-          <section className="agents-section schedules-summary">
-            <header className="agents-section__head">
-              <h2>Schedule intent <span>{selectedSchedule.status}</span></h2>
-              <div>
-                <button type="button" className="repo-btn repo-btn--ghost">Edit</button>
-                <button type="button" className="repo-btn repo-btn--ghost">Pause</button>
+            <div className="detail-pane__body">
+              {error ? <div className="agents-empty-state">{error}</div> : null}
+              <div className="agents-metrics">
+                <MetricCard
+                  label="Next run"
+                  value={
+                    statusOf(selectedSchedule) === 'completed'
+                      ? 'completed'
+                      : selectedSchedule.paused ? 'paused' : formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)
+                  }
+                  detail={selectedSchedule.next_run ? formatAbsolute(selectedSchedule.next_run, selectedSchedule.timezone) : 'not scheduled'}
+                />
+                <MetricCard
+                  label="Last run"
+                  value={selectedSchedule.last_run ? formatRelative(selectedSchedule.last_run, selectedSchedule.timezone) : 'never'}
+                  detail={selectedSchedule.last_run ? formatAbsolute(selectedSchedule.last_run, selectedSchedule.timezone) : 'no runs yet'}
+                />
+                <MetricCard label="Cadence" value={cadenceFor(selectedSchedule)} detail="trigger" />
+                <MetricCard label="Status" value={statusOf(selectedSchedule)} detail="schedule state" />
               </div>
-            </header>
-            <p>{selectedSchedule.summary}</p>
-          </section>
 
-          <div className="agents-detail-grid">
-            <Section title="Assigned agent" count={selectedSchedule.owner} action="Change">
-              <div className="agents-connection-list">
-                <div className="agents-connection-row">
-                  <span className="agents-connection-row__icon">{selectedSchedule.owner.slice(0, 2)}</span>
-                  <div className="agents-connection-row__body">
-                    <strong>{selectedSchedule.owner}</strong>
-                    <p>receives each scheduled run as a tracked task</p>
+              <section className="agents-section schedules-summary">
+                <header className="agents-section__head">
+                  <h2>Schedule intent</h2>
+                  <div>
+                    {isEditingIntent ? (
+                      <>
+                        <button
+                          type="button"
+                          className="repo-btn repo-btn--ghost"
+                          onClick={cancelIntentEdit}
+                          disabled={mutating}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-btn"
+                          onClick={saveIntentEdit}
+                          disabled={mutating}
+                        >
+                          Save
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="repo-btn repo-btn--ghost"
+                        onClick={startIntentEdit}
+                      >
+                        Edit
+                      </button>
+                    )}
                   </div>
-                  <span className="agents-chip agents-chip--ok">owner</span>
+                </header>
+                {isEditingIntent ? (
+                  <textarea
+                    ref={intentInputRef}
+                    className="schedules-summary__editor"
+                    value={intentDraft}
+                    rows={4}
+                    aria-label="Schedule intent"
+                    placeholder="What should the agent do when this runs?"
+                    onChange={(event) => setIntentDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        cancelIntentEdit();
+                      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault();
+                        saveIntentEdit();
+                      }
+                    }}
+                  />
+                ) : (
+                  <p>{selectedSchedule.message || selectedSchedule.name || 'No instruction set.'}</p>
+                )}
+              </section>
+
+              <section className="agents-section">
+                <header className="agents-section__head">
+                  <h2>Trigger</h2>
+                  <div>
+                    {isEditingTrigger ? (
+                      <>
+                        <button
+                          type="button"
+                          className="repo-btn repo-btn--ghost"
+                          onClick={cancelTriggerEdit}
+                          disabled={mutating}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-btn"
+                          onClick={saveTriggerEdit}
+                          disabled={mutating}
+                        >
+                          Save
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="repo-btn repo-btn--ghost"
+                        onClick={startTriggerEdit}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
+                </header>
+                {isEditingTrigger ? (
+                  <div className="schedules-trigger-edit">
+                    <textarea
+                      ref={triggerInputRef}
+                      className="schedules-summary__editor"
+                      value={triggerText}
+                      rows={2}
+                      aria-label="Schedule timing"
+                      placeholder="e.g. every weekday at 9am, or Friday at 15:00"
+                      disabled={mutating}
+                      onChange={(event) => setTriggerText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelTriggerEdit();
+                        } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                          event.preventDefault();
+                          saveTriggerEdit();
+                        }
+                      }}
+                    />
+                    <p className="schedules-trigger-edit__hint">
+                      {mutating
+                        ? 'Processing…'
+                        : 'Describe the timing in plain language — Progenitor converts it for you.'}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="agents-connection-list">
+                    <div className="agents-connection-row">
+                      <span className="agents-connection-row__icon">cr</span>
+                      <div className="agents-connection-row__body">
+                        <strong>{cadenceFor(selectedSchedule)}</strong>
+                        <p>{selectedSchedule.cron_expression || selectedSchedule.scheduled_at || selectedSchedule.schedule || '—'}</p>
+                      </div>
+                      <span className="agents-chip agents-chip--info">
+                        {selectedSchedule.scheduled_at ? 'datetime' : 'cron'}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </section>
+
+              <section className="agents-section">
+                <header className="agents-section__head">
+                  <h2>Latest activity</h2>
+                </header>
+                <div className="agents-mini-list">
+                  {recentScheduleLogs.map((entry, index) => (
+                    <div
+                      key={`${entry.id || entry.timestamp || entry.time || index}`}
+                      className="agents-mini-row"
+                    >
+                      <span className="agents-mini-row__icon">log</span>
+                      <div>
+                        <strong>{entry.message || entry.event || entry.level || 'Schedule activity'}</strong>
+                        <p>{formatLogTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
+                      </div>
+                      <span className="agents-chip agents-chip--info">
+                        {String(entry.level || entry.source || 'info').toLowerCase()}
+                      </span>
+                    </div>
+                  ))}
+                  <div className="agents-mini-row">
+                    <span className="agents-mini-row__icon">cd</span>
+                    <div>
+                      <strong>Created</strong>
+                      <p>{formatAbsolute(selectedSchedule.created_at, selectedSchedule.timezone)}</p>
+                    </div>
+                    <span className="agents-chip agents-chip--info">{selectedSchedule.id}</span>
+                  </div>
                 </div>
-              </div>
-            </Section>
-
-            <Section title="Tools" count={`${selectedSchedule.tools.length} attached`} action="+ Add tool">
-              <ResourceList items={selectedSchedule.tools} icon="tl" meta="available during run" />
-            </Section>
-
-            <Section title="Repositories" count={`${selectedSchedule.repositories.length} connected`} action="+ Attach repo">
-              <ResourceList items={selectedSchedule.repositories} icon="rp" meta="workspace context" />
-            </Section>
-
-            <Section title="Knowledge" count={`${selectedSchedule.knowledge.length} sources`} action="+ Link source">
-              <ResourceList items={selectedSchedule.knowledge} icon="kb" meta="retrieval context" />
-            </Section>
-          </div>
-
-          <div className="agents-activity-grid">
-            <Section title="Run tasks" count={`${selectedSchedule.tasks.length} steps`}>
-              <div className="agents-mini-list">
-                {selectedSchedule.tasks.map((task) => (
-                  <div key={task.title} className="agents-mini-row">
-                    <span className="agents-mini-row__icon">tsk</span>
-                    <div>
-                      <strong>{task.title}</strong>
-                      <p>{task.state} - {task.age}</p>
-                    </div>
-                    <span className={`agents-chip agents-chip--${task.state === 'active' || task.state === 'ready' ? 'ok' : 'info'}`}>{task.state}</span>
-                  </div>
-                ))}
-              </div>
-            </Section>
-
-            <Section title="Recent runs" count={`${selectedSchedule.recentRuns.length} shown`}>
-              <div className="agents-mini-list">
-                {selectedSchedule.recentRuns.length ? selectedSchedule.recentRuns.map((run) => (
-                  <div key={`${run.title}-${run.age}`} className="agents-mini-row">
-                    <span className="agents-mini-row__icon">run</span>
-                    <div>
-                      <strong>{run.title}</strong>
-                      <p>{run.detail} - {run.age}</p>
-                    </div>
-                    <span className={`agents-chip agents-chip--${run.outcome === 'success' ? 'ok' : 'info'}`}>{run.outcome}</span>
-                  </div>
-                )) : <div className="agents-empty-state">No runs yet.</div>}
-              </div>
-            </Section>
-          </div>
-        </div>
+              </section>
+            </div>
+          </>
+        )}
       </DetailPane>
     </PageShell>
   );

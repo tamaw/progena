@@ -53,6 +53,8 @@ class TestAddScheduledTask:
         )
 
         assert result.success is True
+        assert result.schedule_id is not None
+        assert result.schedule_id.startswith("cron_")
         assert entry_data is not None
         assert "scheduled_at" in entry_data
         assert (

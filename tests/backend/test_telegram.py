@@ -432,33 +432,39 @@ class TestTelegramClientIntegration:
 class TestSubscriberTracking:
     """Tests for SSE subscriber tracking used by Telegram integration."""
 
-    def test_has_active_chat_subscribers_empty(self):
+    def test_has_active_ui_stream_subscribers_empty(self):
         """Test when no subscribers are connected."""
-        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
+        from app.backend.ui_routes import (
+            _ui_stream_subscribers,
+            has_active_ui_stream_subscribers,
+        )
 
         # Clear subscribers for test
-        original = _chat_subscribers.copy()
-        _chat_subscribers.clear()
+        original = _ui_stream_subscribers.copy()
+        _ui_stream_subscribers.clear()
 
         try:
-            assert has_active_chat_subscribers() is False
+            assert has_active_ui_stream_subscribers() is False
         finally:
-            _chat_subscribers.extend(original)
+            _ui_stream_subscribers.extend(original)
 
-    def test_has_active_chat_subscribers_with_subscriber(self):
+    def test_has_active_ui_stream_subscribers_with_subscriber(self):
         """Test when subscribers are connected."""
-        from app.backend.ui_routes import _chat_subscribers, has_active_chat_subscribers
+        from app.backend.ui_routes import (
+            _ui_stream_subscribers,
+            has_active_ui_stream_subscribers,
+        )
 
         # Add a mock subscriber
-        original = _chat_subscribers.copy()
-        _chat_subscribers.clear()
-        _chat_subscribers.append(asyncio.Queue())
+        original = _ui_stream_subscribers.copy()
+        _ui_stream_subscribers.clear()
+        _ui_stream_subscribers.append(asyncio.Queue())
 
         try:
-            assert has_active_chat_subscribers() is True
+            assert has_active_ui_stream_subscribers() is True
         finally:
-            _chat_subscribers.clear()
-            _chat_subscribers.extend(original)
+            _ui_stream_subscribers.clear()
+            _ui_stream_subscribers.extend(original)
 
     def test_get_subscriber_counts(self):
         """Test getting subscriber counts."""
@@ -467,6 +473,8 @@ class TestSubscriberTracking:
         counts = get_subscriber_counts()
         assert "chat" in counts
         assert "status" in counts
+        assert "stream" in counts
+        assert "web" in counts
         assert "total" in counts
 
 
