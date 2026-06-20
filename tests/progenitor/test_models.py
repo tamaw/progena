@@ -6,6 +6,8 @@ from app.progenitor.state.models import (
     AgentRegistryEntry,
     ConversationMessage,
     ScheduleEntry,
+    ScheduleRunRecord,
+    generate_schedule_thread_id,
     redact_secrets,
 )
 
@@ -31,6 +33,24 @@ class TestScheduleEntry:
         )
 
         assert entry.last_run == run_time
+
+
+class TestScheduleRunRecord:
+    def test_create_schedule_run_record(self):
+        record = ScheduleRunRecord(
+            run_id="schedrun_123",
+            schedule_id="cron_schedule123",
+            thread_id="cron_schedule123_abcd1234",
+            message="Say hello",
+        )
+
+        assert record.status == "queued"
+        assert record.schedule_id == "cron_schedule123"
+
+    def test_generate_schedule_thread_id_derives_from_schedule(self):
+        thread_id = generate_schedule_thread_id("sched_daily-report")
+
+        assert thread_id.startswith("sched_daily_report_")
 
 
 class TestAgentRegistryEntry:

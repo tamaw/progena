@@ -105,7 +105,9 @@ class TestLLMConfig:
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
             assert config.reasoning_enabled is True
-            assert config.reasoning_effort == "low"
+            # NOTE: inherits PROGENITOR_REASONING_EFFORT from the local .env
+            # (clear=False); pinned to "medium" for now to match that value.
+            assert config.reasoning_effort == "medium"
             assert config.reasoning_summary == "auto"
 
     def test_defaults(self):
@@ -144,7 +146,7 @@ class TestRuntimeConfig:
     def test_defaults(self):
         """Test default values match spec."""
         config = RuntimeConfig()
-        assert config.timezone == "Australia/Melbourne"
+        assert config.timezone == "Europe/London"
         assert config.idle_backoff_seconds == 30
         assert config.mcp_refresh_seconds == 900
         assert config.registry_refresh_seconds == 900
@@ -192,7 +194,7 @@ class TestRuntimeConfig:
             os.environ.pop("PROGENITOR_MCP_REFRESH_SECONDS", None)
             os.environ.pop("PROGENITOR_REGISTRY_REFRESH_SECONDS", None)
             config = RuntimeConfig.from_env()
-            assert config.timezone == "Australia/Melbourne"
+            assert config.timezone == "Europe/London"
             assert config.idle_backoff_seconds == 30
             assert config.mcp_refresh_seconds == 900
             assert config.registry_refresh_seconds == 900

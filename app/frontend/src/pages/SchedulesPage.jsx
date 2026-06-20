@@ -25,12 +25,6 @@ import { scheduleSnapshotReceived, selectSchedules } from '../store/uiDataSlice'
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
 
-const SCHEDULE_TYPES = [
-  { value: 'cron', label: 'Cron', placeholder: '0 9 * * *' },
-  { value: 'interval', label: 'Interval', placeholder: '30m' },
-  { value: 'once', label: 'Once', placeholder: '2026-06-20T09:00' },
-];
-
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 function pad2(value) {
@@ -88,13 +82,28 @@ function cronToCadence(cron) {
 
 function cadenceFor(schedule) {
   if (schedule.scheduled_at) {
-    return `Once · ${formatAbsolute(schedule.scheduled_at)}`;
+    return `Once · ${formatAbsolute(schedule.scheduled_at, schedule.timezone)}`;
   }
   return cronToCadence(schedule.cron_expression || schedule.schedule);
 }
 
 function isOneOff(schedule) {
   return Boolean(schedule.scheduled_at) || isOneShotCron(schedule.cron_expression || schedule.schedule);
+}
+
+const KIND_ORDER = ['Scheduled', 'Recurring', 'One-off'];
+
+// Human label for the trigger kind: Scheduled (cron), Recurring (interval),
+// One-off (once). Derived from the entry's schedule_type, with a one-shot cron
+// or an explicit datetime always counting as a one-off.
+function scheduleKind(schedule) {
+  if (isOneOff(schedule) || (schedule.schedule_type || '').toLowerCase() === 'once') {
+    return 'One-off';
+  }
+  if ((schedule.schedule_type || '').toLowerCase() === 'interval') {
+    return 'Recurring';
+  }
+  return 'Scheduled';
 }
 
 function isCompleted(schedule) {
@@ -115,20 +124,26 @@ function parseDate(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
-function formatAbsolute(value) {
+// Absolute date/time rendered in the schedule's own timezone when given, so the
+// displayed wall-clock matches when the schedule actually fires. Falls back to
+// the browser's local zone if the timezone is missing or invalid.
+function formatAbsolute(value, timeZone) {
   const date = parseDate(value);
   if (!date) return '—';
-  return date.toLocaleString(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+  const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' };
+  if (timeZone) {
+    try {
+      return date.toLocaleString(undefined, { ...opts, timeZone, timeZoneName: 'short' });
+    } catch {
+      // Invalid IANA zone — fall through to local time.
+    }
+  }
+  return date.toLocaleString(undefined, opts);
 }
 
-// Compact relative label, e.g. "in 42m", "5h ago", or an absolute date for
-// anything beyond a few days out.
-function formatRelative(value) {
+// Compact relative label, e.g. "in 42m", "5h ago", or an absolute date (in the
+// schedule's timezone) for anything beyond a few days out.
+function formatRelative(value, timeZone) {
   const date = parseDate(value);
   if (!date) return '—';
   const diffMs = date.getTime() - Date.now();
@@ -147,7 +162,7 @@ function formatRelative(value) {
   } else if (absSec < 86400 * 6) {
     label = `${Math.round(absSec / 86400)}d`;
   } else {
-    return formatAbsolute(value);
+    return formatAbsolute(value, timeZone);
   }
   return future ? `in ${label}` : `${label} ago`;
 }
@@ -204,7 +219,7 @@ function compareSchedules(a, b, sortMode) {
     const nextDelta = nextRunSortValue(a) - nextRunSortValue(b);
     if (nextDelta !== 0) return nextDelta;
   } else {
-    const typeDelta = Number(isOneOff(a)) - Number(isOneOff(b));
+    const typeDelta = KIND_ORDER.indexOf(scheduleKind(a)) - KIND_ORDER.indexOf(scheduleKind(b));
     if (typeDelta !== 0) return typeDelta;
     const nextDelta = nextRunSortValue(a) - nextRunSortValue(b);
     if (nextDelta !== 0) return nextDelta;
@@ -217,18 +232,17 @@ function ScheduleRow({ schedule, selected, onSelect }) {
   return (
     <button
       type="button"
-      className={`sess-row schedule-row schedule-row--${status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row schedule-pane-row schedule-pane-row--${status} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(schedule.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot schedule-row__status schedule-row__status--${status}`} />
-        <span className="sess-row__agent schedule-row__name">{schedule.name || 'Untitled schedule'}</span>
-        <span className="sess-row__project">{status}</span>
+        <span className={`sess-row__dot schedule-pane-row__status schedule-pane-row__status--${status}`} />
+        <span className="sess-row__agent schedule-pane-row__name">{schedule.name || 'Untitled schedule'}</span>
       </span>
       <span className="sess-row__age">
-        {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run)}
+        {status === 'completed' ? 'completed' : schedule.paused ? 'paused' : formatRelative(schedule.next_run, schedule.timezone)}
       </span>
-      <span className="sess-row__title">{cadenceFor(schedule)}</span>
+      <span className="sess-row__title">{cadenceFor(schedule) || '—'}</span>
     </button>
   );
 }
@@ -252,86 +266,8 @@ function MetricCard({ label, value, detail }) {
   );
 }
 
-function CreateScheduleForm({ onCancel, onCreate, busy }) {
-  const [name, setName] = useState('');
-  const [instruction, setInstruction] = useState('');
-  const [scheduleType, setScheduleType] = useState('cron');
-  const [expression, setExpression] = useState('');
-  const [error, setError] = useState(null);
-
-  const typeMeta = SCHEDULE_TYPES.find((entry) => entry.value === scheduleType) || SCHEDULE_TYPES[0];
-
-  async function handleSubmit(event) {
-    event.preventDefault();
-    setError(null);
-    if (!name.trim() || !instruction.trim() || !expression.trim()) {
-      setError('Name, instruction, and trigger are all required.');
-      return;
-    }
-    try {
-      await onCreate({
-        name: name.trim(),
-        instruction: instruction.trim(),
-        schedule_type: scheduleType,
-        expression: expression.trim(),
-        enabled: true,
-      });
-    } catch (err) {
-      setError(err.message || 'Failed to create schedule.');
-    }
-  }
-
-  return (
-    <form className="schedule-form" onSubmit={handleSubmit}>
-      <h2>New schedule</h2>
-      <label className="schedule-form__field">
-        <span>Name</span>
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Morning brief" />
-      </label>
-      <label className="schedule-form__field">
-        <span>Instruction</span>
-        <textarea
-          value={instruction}
-          onChange={(e) => setInstruction(e.target.value)}
-          placeholder="What should the agent do when this runs?"
-          rows={3}
-        />
-      </label>
-      <div className="schedule-form__row">
-        <label className="schedule-form__field">
-          <span>Trigger type</span>
-          <select value={scheduleType} onChange={(e) => setScheduleType(e.target.value)}>
-            {SCHEDULE_TYPES.map((entry) => (
-              <option key={entry.value} value={entry.value}>
-                {entry.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="schedule-form__field">
-          <span>Expression</span>
-          <input
-            value={expression}
-            onChange={(e) => setExpression(e.target.value)}
-            placeholder={typeMeta.placeholder}
-          />
-        </label>
-      </div>
-      {error ? <p className="schedule-form__error">{error}</p> : null}
-      <div className="schedule-form__actions">
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={onCancel} disabled={busy}>
-          Cancel
-        </button>
-        <button type="submit" className="repo-btn" disabled={busy}>
-          {busy ? 'Creating…' : 'Create schedule'}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function SchedulesPage() {
-  const { getSchedules, getWidgets, createSchedule, updateWidget, deleteWidget } = useApi();
+  const { getSchedules, getWidgets, updateWidget, deleteWidget, retriggerSchedule } = useApi();
   const dispatch = useDispatch();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
@@ -343,12 +279,17 @@ function SchedulesPage() {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [selectedScheduleId, setSelectedScheduleId] = useState(null);
-  const [creating, setCreating] = useState(false);
   const [mutating, setMutating] = useState(false);
   const [scheduleWidgets, setScheduleWidgets] = useState({});
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef(null);
+  const [isEditingIntent, setIsEditingIntent] = useState(false);
+  const [intentDraft, setIntentDraft] = useState('');
+  const intentInputRef = useRef(null);
+  const [isEditingTrigger, setIsEditingTrigger] = useState(false);
+  const [triggerText, setTriggerText] = useState('');
+  const triggerInputRef = useRef(null);
   const scheduleIdsKey = useMemo(() => schedules.map((schedule) => schedule.id).join('|'), [schedules]);
 
   useEffect(() => {
@@ -404,11 +345,10 @@ function SchedulesPage() {
     if (sortMode === 'Type') {
       return visibleSchedules.reduce(
         (groups, schedule) => {
-          const key = isOneOff(schedule) ? 'One-off' : 'Recurring';
-          groups[key].push(schedule);
+          groups[scheduleKind(schedule)].push(schedule);
           return groups;
         },
-        { Recurring: [], 'One-off': [] },
+        { Scheduled: [], Recurring: [], 'One-off': [] },
       );
     }
     if (sortMode === 'Status') {
@@ -436,33 +376,19 @@ function SchedulesPage() {
   const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;
   const completedCount = schedules.filter((schedule) => statusOf(schedule) === 'completed').length;
   const order = sortMode === 'Type'
-    ? ['Recurring', 'One-off']
+    ? KIND_ORDER
     : sortMode === 'Status'
       ? ['Active', 'Paused', 'Completed']
       : ['Next'];
   const selectedScheduleWidget = selectedSchedule ? scheduleWidgets[selectedSchedule.id] || null : null;
   const selectedScheduleLogs = Array.isArray(selectedScheduleWidget?.logs) ? selectedScheduleWidget.logs : [];
+  // Logs arrive newest-first; cap to the latest few so the list stays bounded.
+  const recentScheduleLogs = selectedScheduleLogs.slice(0, 5);
   const scheduleTitle = selectedSchedule?.name || 'Untitled schedule';
 
   // Mutations don't refetch — the backend emits a `schedule.snapshot` event as
   // part of handling each request, which updates the store (and any other open
   // tab) live. We only manage local selection here.
-  const handleCreate = useCallback(
-    async (payload) => {
-      setMutating(true);
-      try {
-        const widget = await createSchedule(payload);
-        const newId = String(widget?.id || '').replace(/^schedule:/, '');
-        if (newId) setSelectedScheduleId(newId);
-        setActiveFilter('All');
-        setCreating(false);
-      } finally {
-        setMutating(false);
-      }
-    },
-    [createSchedule],
-  );
-
   const handleTogglePause = useCallback(
     async (schedule) => {
       setMutating(true);
@@ -480,6 +406,10 @@ function SchedulesPage() {
 
   const handleDelete = useCallback(
     async (schedule) => {
+      const confirmed = window.confirm(
+        `Delete schedule "${schedule.name || 'Untitled schedule'}"? This can't be undone.`,
+      );
+      if (!confirmed) return;
       setMutating(true);
       setError(null);
       try {
@@ -499,6 +429,9 @@ function SchedulesPage() {
   useEffect(() => {
     setIsEditingTitle(false);
     setTitleDraft('');
+    setIsEditingIntent(false);
+    setIntentDraft('');
+    setIsEditingTrigger(false);
   }, [selectedScheduleId]);
 
   useEffect(() => {
@@ -539,6 +472,82 @@ function SchedulesPage() {
     }
   }, [cancelTitleEdit, selectedSchedule, titleDraft, updateWidget]);
 
+  useEffect(() => {
+    if (!isEditingIntent) return undefined;
+    intentInputRef.current?.focus();
+    return undefined;
+  }, [isEditingIntent]);
+
+  const startIntentEdit = useCallback(() => {
+    setIntentDraft(selectedSchedule?.message || '');
+    setIsEditingIntent(true);
+  }, [selectedSchedule]);
+
+  const cancelIntentEdit = useCallback(() => {
+    setIsEditingIntent(false);
+    setIntentDraft('');
+  }, []);
+
+  const saveIntentEdit = useCallback(async () => {
+    if (!selectedSchedule) return;
+    const normalizedIntent = intentDraft.trim();
+    if (!normalizedIntent || normalizedIntent === (selectedSchedule.message || '')) {
+      cancelIntentEdit();
+      return;
+    }
+    setIsEditingIntent(false);
+    setMutating(true);
+    setError(null);
+    try {
+      // The backend mirrors `instruction` into the schedule's message and emits
+      // a `schedule.snapshot` event, so the store updates live.
+      await updateWidget(`schedule:${selectedSchedule.id}`, { instruction: normalizedIntent });
+    } catch (err) {
+      setError(err.message || 'Failed to update schedule intent.');
+    } finally {
+      setMutating(false);
+    }
+  }, [cancelIntentEdit, intentDraft, selectedSchedule, updateWidget]);
+
+  useEffect(() => {
+    if (!isEditingTrigger) return undefined;
+    triggerInputRef.current?.focus();
+    triggerInputRef.current?.select();
+    return undefined;
+  }, [isEditingTrigger]);
+
+  const startTriggerEdit = useCallback(() => {
+    if (!selectedSchedule) return;
+    setTriggerText(cadenceFor(selectedSchedule));
+    setIsEditingTrigger(true);
+  }, [selectedSchedule]);
+
+  const cancelTriggerEdit = useCallback(() => {
+    setIsEditingTrigger(false);
+  }, []);
+
+  const saveTriggerEdit = useCallback(async () => {
+    if (!selectedSchedule) return;
+    const text = triggerText.trim();
+    if (!text) {
+      setError('Describe when the schedule should run.');
+      return;
+    }
+    setMutating(true);
+    setError(null);
+    try {
+      // The backend hands this phrase to the Progenitor agent, which converts
+      // it to cron/datetime and updates the schedule; the resulting
+      // `schedule.snapshot` refreshes the trigger, cadence, and next-run live.
+      await retriggerSchedule(selectedSchedule.id, text);
+      setIsEditingTrigger(false);
+    } catch (err) {
+      setError(err.message || 'Failed to update trigger.');
+    } finally {
+      setMutating(false);
+    }
+  }, [retriggerSchedule, selectedSchedule, triggerText]);
+
   return (
     <PageShell className="schedules-page">
       <PaneList label="Schedules" className="schedules-pane">
@@ -548,8 +557,9 @@ function SchedulesPage() {
           onFilterChange={setActiveFilter}
           actionLabel="+ New"
           onAction={() => {
-            setCreating(true);
-            setSelectedScheduleId(null);
+            window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+              detail: { mode: 'schedule-create' },
+            }));
           }}
         />
         <PaneListToolbar>
@@ -577,7 +587,6 @@ function SchedulesPage() {
                       selected={selectedSchedule?.id === schedule.id}
                       onSelect={(id) => {
                         setSelectedScheduleId(id);
-                        setCreating(false);
                       }}
                     />
                   ))}
@@ -602,13 +611,9 @@ function SchedulesPage() {
       </PaneList>
 
       <DetailPane className="detail-pane--dense schedules-detail" label="Schedule detail">
-        {creating ? (
+        {!selectedSchedule ? (
           <div className="detail-pane__body">
-            <CreateScheduleForm onCancel={() => setCreating(false)} onCreate={handleCreate} busy={mutating} />
-          </div>
-        ) : !selectedSchedule ? (
-          <div className="detail-pane__body">
-            <div className="agents-empty-state">Select a schedule, or create one to get started.</div>
+            <div className="agents-empty-state">Select a schedule, or use New to ask Progenitor to create one.</div>
           </div>
         ) : (
           <>
@@ -661,16 +666,17 @@ function SchedulesPage() {
               )}
               meta={[
                 <ScheduleStatusPill key="status" status={statusOf(selectedSchedule)} />,
-                <span key="type" className="muted">{isOneOff(selectedSchedule) ? 'One-off' : 'Recurring'}</span>,
+                <span key="type" className="muted">{scheduleKind(selectedSchedule)}</span>,
                 <span key="cadence" className="muted">{cadenceFor(selectedSchedule)}</span>,
                 <span key="next" className="muted">
                   {statusOf(selectedSchedule) === 'completed'
                     ? 'completed'
-                    : selectedSchedule.paused ? 'paused' : `Next ${formatRelative(selectedSchedule.next_run)}`}
+                    : selectedSchedule.paused ? 'paused' : `Next ${formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)}`}
                 </span>,
                 selectedSchedule.timezone ? (
                   <span key="tz" className="muted">{selectedSchedule.timezone}</span>
                 ) : null,
+                <span key="id" className="muted">{selectedSchedule.id}</span>,
               ]}
               actions={
                 <DetailHeaderActions>
@@ -705,14 +711,14 @@ function SchedulesPage() {
                   value={
                     statusOf(selectedSchedule) === 'completed'
                       ? 'completed'
-                      : selectedSchedule.paused ? 'paused' : formatRelative(selectedSchedule.next_run)
+                      : selectedSchedule.paused ? 'paused' : formatRelative(selectedSchedule.next_run, selectedSchedule.timezone)
                   }
-                  detail={selectedSchedule.next_run ? formatAbsolute(selectedSchedule.next_run) : 'not scheduled'}
+                  detail={selectedSchedule.next_run ? formatAbsolute(selectedSchedule.next_run, selectedSchedule.timezone) : 'not scheduled'}
                 />
                 <MetricCard
                   label="Last run"
-                  value={selectedSchedule.last_run ? formatRelative(selectedSchedule.last_run) : 'never'}
-                  detail={selectedSchedule.last_run ? formatAbsolute(selectedSchedule.last_run) : 'no runs yet'}
+                  value={selectedSchedule.last_run ? formatRelative(selectedSchedule.last_run, selectedSchedule.timezone) : 'never'}
+                  detail={selectedSchedule.last_run ? formatAbsolute(selectedSchedule.last_run, selectedSchedule.timezone) : 'no runs yet'}
                 />
                 <MetricCard label="Cadence" value={cadenceFor(selectedSchedule)} detail="trigger" />
                 <MetricCard label="Status" value={statusOf(selectedSchedule)} detail="schedule state" />
@@ -720,45 +726,145 @@ function SchedulesPage() {
 
               <section className="agents-section schedules-summary">
                 <header className="agents-section__head">
-                  <h2>
-                    Schedule intent <span>{statusOf(selectedSchedule)}</span>
-                  </h2>
+                  <h2>Schedule intent</h2>
+                  <div>
+                    {isEditingIntent ? (
+                      <>
+                        <button
+                          type="button"
+                          className="repo-btn repo-btn--ghost"
+                          onClick={cancelIntentEdit}
+                          disabled={mutating}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-btn"
+                          onClick={saveIntentEdit}
+                          disabled={mutating}
+                        >
+                          Save
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="repo-btn repo-btn--ghost"
+                        onClick={startIntentEdit}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </header>
-                <p>{selectedSchedule.message || selectedSchedule.name || 'No instruction set.'}</p>
+                {isEditingIntent ? (
+                  <textarea
+                    ref={intentInputRef}
+                    className="schedules-summary__editor"
+                    value={intentDraft}
+                    rows={4}
+                    aria-label="Schedule intent"
+                    placeholder="What should the agent do when this runs?"
+                    onChange={(event) => setIntentDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        event.preventDefault();
+                        cancelIntentEdit();
+                      } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                        event.preventDefault();
+                        saveIntentEdit();
+                      }
+                    }}
+                  />
+                ) : (
+                  <p>{selectedSchedule.message || selectedSchedule.name || 'No instruction set.'}</p>
+                )}
               </section>
 
               <section className="agents-section">
                 <header className="agents-section__head">
                   <h2>Trigger</h2>
+                  <div>
+                    {isEditingTrigger ? (
+                      <>
+                        <button
+                          type="button"
+                          className="repo-btn repo-btn--ghost"
+                          onClick={cancelTriggerEdit}
+                          disabled={mutating}
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          className="repo-btn"
+                          onClick={saveTriggerEdit}
+                          disabled={mutating}
+                        >
+                          Save
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="repo-btn repo-btn--ghost"
+                        onClick={startTriggerEdit}
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                 </header>
-                <div className="agents-connection-list">
-                  <div className="agents-connection-row">
-                    <span className="agents-connection-row__icon">cr</span>
-                    <div className="agents-connection-row__body">
-                      <strong>{cadenceFor(selectedSchedule)}</strong>
-                      <p>{selectedSchedule.cron_expression || selectedSchedule.scheduled_at || selectedSchedule.schedule || '—'}</p>
-                    </div>
-                    <span className="agents-chip agents-chip--info">
-                      {selectedSchedule.scheduled_at ? 'datetime' : 'cron'}
-                    </span>
+                {isEditingTrigger ? (
+                  <div className="schedules-trigger-edit">
+                    <textarea
+                      ref={triggerInputRef}
+                      className="schedules-summary__editor"
+                      value={triggerText}
+                      rows={2}
+                      aria-label="Schedule timing"
+                      placeholder="e.g. every weekday at 9am, or Friday at 15:00"
+                      disabled={mutating}
+                      onChange={(event) => setTriggerText(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Escape') {
+                          event.preventDefault();
+                          cancelTriggerEdit();
+                        } else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                          event.preventDefault();
+                          saveTriggerEdit();
+                        }
+                      }}
+                    />
+                    <p className="schedules-trigger-edit__hint">
+                      {mutating
+                        ? 'Processing…'
+                        : 'Describe the timing in plain language — Progenitor converts it for you.'}
+                    </p>
                   </div>
-                  <div className="agents-connection-row">
-                    <span className="agents-connection-row__icon">cd</span>
-                    <div className="agents-connection-row__body">
-                      <strong>Created</strong>
-                      <p>{formatAbsolute(selectedSchedule.created_at)}</p>
+                ) : (
+                  <div className="agents-connection-list">
+                    <div className="agents-connection-row">
+                      <span className="agents-connection-row__icon">cr</span>
+                      <div className="agents-connection-row__body">
+                        <strong>{cadenceFor(selectedSchedule)}</strong>
+                        <p>{selectedSchedule.cron_expression || selectedSchedule.scheduled_at || selectedSchedule.schedule || '—'}</p>
+                      </div>
+                      <span className="agents-chip agents-chip--info">
+                        {selectedSchedule.scheduled_at ? 'datetime' : 'cron'}
+                      </span>
                     </div>
-                    <span className="agents-chip agents-chip--info">{selectedSchedule.id}</span>
                   </div>
-                </div>
+                )}
               </section>
 
               <section className="agents-section">
                 <header className="agents-section__head">
-                  <h2>Activity</h2>
+                  <h2>Latest activity</h2>
                 </header>
                 <div className="agents-mini-list">
-                  {selectedScheduleLogs.length ? selectedScheduleLogs.map((entry, index) => (
+                  {recentScheduleLogs.map((entry, index) => (
                     <div
                       key={`${entry.id || entry.timestamp || entry.time || index}`}
                       className="agents-mini-row"
@@ -772,7 +878,15 @@ function SchedulesPage() {
                         {String(entry.level || entry.source || 'info').toLowerCase()}
                       </span>
                     </div>
-                  )) : <div className="agents-empty-state">No schedule activity yet.</div>}
+                  ))}
+                  <div className="agents-mini-row">
+                    <span className="agents-mini-row__icon">cd</span>
+                    <div>
+                      <strong>Created</strong>
+                      <p>{formatAbsolute(selectedSchedule.created_at, selectedSchedule.timezone)}</p>
+                    </div>
+                    <span className="agents-chip agents-chip--info">{selectedSchedule.id}</span>
+                  </div>
                 </div>
               </section>
             </div>

@@ -46,6 +46,7 @@ class ScheduleTaskTool(BaseSystemTool):
         cron_expression = str(args.get("cron_expression") or "").strip()
         scheduled_at = str(args.get("scheduled_at") or "").strip()
         description = str(args.get("description") or "").strip()
+        timezone = str(args.get("timezone") or "").strip()
         if not user_input:
             return ToolResult.fail("No user input provided for scheduling.")
         if not instruction:
@@ -63,6 +64,7 @@ class ScheduleTaskTool(BaseSystemTool):
                 description=description,
                 cron_expression=cron_expression,
                 scheduled_at=scheduled_at,
+                timezone=timezone,
             )
 
             if not result.success:

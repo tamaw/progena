@@ -21,6 +21,7 @@ from app.progenitor.state.models import (
     BackgroundTaskEntry,
     ConversationMessage,
     ScheduleEntry,
+    ScheduleRunRecord,
 )
 
 
@@ -82,7 +83,6 @@ class TestStateManager:
         assert (state_dir / "background_tasks.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
         assert (state_dir.parent / "config" / "mcp.json").exists()
-        assert (state_dir.parent / "config" / "schedule.json").exists()
         assert not (state_dir / "build_state.json").exists()
 
     @pytest.mark.asyncio
@@ -161,6 +161,39 @@ class TestStateManager:
         assert dequeued is not None
         assert dequeued.content == "Reply exactly BG_TOKEN"
         assert await manager.get_background_tasks() == []
+
+    @pytest.mark.asyncio
+    async def test_schedule_run_persistence(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        manager = StateManager(state_dir, logs_dir)
+        await manager.initialize()
+
+        record = ScheduleRunRecord(
+            run_id="schedrun_123",
+            schedule_id="cron_test123",
+            thread_id="cron_test123_abcd1234",
+            message="Reply exactly TEST",
+        )
+
+        await manager.upsert_schedule_run(record)
+        loaded = await manager.get_schedule_run("schedrun_123")
+        assert loaded is not None
+        assert loaded.status == "queued"
+        assert loaded.thread_id == "cron_test123_abcd1234"
+
+        updated = await manager.update_schedule_run(
+            "schedrun_123",
+            {
+                "status": "completed",
+                "result_status": "completed",
+                "response": "TEST",
+            },
+        )
+        assert updated is True
+        refreshed = await manager.get_schedule_run("schedrun_123")
+        assert refreshed is not None
+        assert refreshed.status == "completed"
+        assert refreshed.response == "TEST"
 
     @pytest.mark.asyncio
     async def test_native_runtime_store_replaces_file_documents(self, temp_dirs):
@@ -278,28 +311,18 @@ class TestStateManager:
         assert native_store.search_queries == [None]
         assert next(iter(native_store.items))[0][:3] == (*LOG_NAMESPACE_PREFIX, "tool")
 
-    async def test_initialize_migrates_legacy_schedule_file(self, tmp_path):
+    async def test_initialize_keeps_schedule_only_in_memory_without_runtime_store(self, tmp_path):
         state_dir = tmp_path / "data" / "state"
         logs_dir = tmp_path / "logs"
         state_dir.mkdir(parents=True)
         logs_dir.mkdir()
-        legacy_schedule = [
-            {
-                "id": "legacy-schedule",
-                "message": "Carry forward existing schedule",
-                "cron_expression": "0 9 * * *",
-                "created_at": "2024-01-01T00:00:00Z",
-            }
-        ]
-        (state_dir / "schedule.json").write_text(json.dumps(legacy_schedule), encoding="utf-8")
 
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        migrated = json.loads(
-            (state_dir.parent / "config" / "schedule.json").read_text(encoding="utf-8")
-        )
-        assert migrated == legacy_schedule
+        assert await manager.get_schedule() == []
+        assert not (state_dir / "schedule.json").exists()
+        assert not (state_dir.parent / "config" / "schedule.json").exists()
 
     @pytest.mark.asyncio
     async def test_append_jsonl(self, temp_dirs):

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from ..state.models import ScheduleEntry
 from ..utils import utcnow
-from .engine import Scheduler, parse_schedule_datetime
+from .engine import Scheduler, default_timezone_name, parse_schedule_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ async def add_scheduled_task(
     description: str | None = None,
     cron_expression: str | None = None,
     scheduled_at: str | None = None,
+    timezone: str | None = None,
 ) -> tuple[ScheduleResult, dict | None]:
     scheduler = Scheduler()
     cron_expression = (cron_expression or "").strip() or None
@@ -49,12 +50,15 @@ async def add_scheduled_task(
     task_message = instruction.strip() or f"Scheduled: {user_request[:100]}"
     if description:
         task_message = f"{description.strip()} — {task_message}"
+    # Stamp the resolved timezone onto the entry so the engine evaluates cron
+    # fields in the right zone. Caller may override; otherwise use the default.
     entry = {
         "id": schedule_id,
         "message": task_message,
         "user_request": user_request,
         "last_run": None,
         "created_at": utcnow().isoformat(),
+        "timezone": (timezone or "").strip() or default_timezone_name(),
     }
 
     if scheduled_at:

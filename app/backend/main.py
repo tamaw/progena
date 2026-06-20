@@ -81,7 +81,7 @@ from .telegram_client import (
 )
 from .ui_routes import (
     close_all_sse_connections,
-    has_active_chat_subscribers,
+    has_active_ui_stream_subscribers,
     start_state_status_watcher,
     stop_state_status_watcher,
 )
@@ -734,7 +734,7 @@ async def lifespan(app: FastAPI):
 
         # Check if we should also send to Telegram
         telegram = get_telegram_client()
-        if telegram and not has_active_chat_subscribers():
+        if telegram and not has_active_ui_stream_subscribers():
             # Only send actual message content to Telegram
             # Skip status updates, heartbeats, etc.
             telegram_event_types = {

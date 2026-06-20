@@ -19,6 +19,10 @@ from .utils import env_bool, env_float, env_int
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+# Default timezone for schedule evaluation when ``PROGENITOR_TIMEZONE`` is unset
+# and an individual schedule entry does not override it.
+DEFAULT_TIMEZONE = "Europe/London"
+
 # ---------------------------------------------------------------------------
 # Default project paths.
 # ---------------------------------------------------------------------------
@@ -76,7 +80,13 @@ def resolve_mcp_config_path(config_dir: Path | str | None = None) -> Path:
 
 
 def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
-    """Resolve the live schedule config path from the active config directory."""
+    """Resolve the logical schedule document identifier.
+
+    The returned value is a routing key for the state document store (which
+    persists to Postgres), not a file that is read or written in normal
+    operation. The path shape is retained only so the StateReader bridge can map
+    it to the ``("progenitor", "state")`` / ``schedule`` document.
+    """
     base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
     return base_dir / "schedule.json"
 
@@ -87,7 +97,7 @@ def default_mcp_config_payload() -> dict[str, Any]:
 
 
 def default_schedule_config_payload() -> list[Any]:
-    """Return the default schedule configuration written to data/config/schedule.json."""
+    """Return the default (empty) schedule document persisted in Postgres."""
     return []
 
 
@@ -130,7 +140,7 @@ class LLMConfig:
 class RuntimeConfig:
     """Runtime configuration."""
 
-    timezone: str = "Australia/Melbourne"
+    timezone: str = DEFAULT_TIMEZONE
     idle_backoff_seconds: int = 30
     mcp_refresh_seconds: int = 900
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
@@ -167,7 +177,7 @@ class RuntimeConfig:
     def from_env(cls) -> "RuntimeConfig":
         """Load runtime config from environment."""
         return cls(
-            timezone=os.getenv("PROGENITOR_TIMEZONE", "Australia/Melbourne"),
+            timezone=os.getenv("PROGENITOR_TIMEZONE", DEFAULT_TIMEZONE),
             idle_backoff_seconds=env_int("PROGENITOR_IDLE_BACKOFF_SECONDS", 30),
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),

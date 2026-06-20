@@ -8,7 +8,8 @@ Reads real state data from data/state/, data/config/, and live backend-managed c
 - agents.json + data/config/mcp.json: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- data/config/schedule.json: Scheduled tasks (system feature, persists beyond user sessions)
+- schedules: scheduled tasks, persisted in the shared Postgres document store
+  (system feature, persists beyond user sessions)
 """
 
 import asyncio
@@ -33,7 +34,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.progenitor.schedule import Scheduler
+from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 
@@ -387,6 +388,12 @@ class ScheduleCreateRequest(BaseModel):
     expression: str
     timezone: str | None = None
     enabled: bool = True
+
+
+class ScheduleTriggerRequest(BaseModel):
+    """Natural-language re-trigger request for an existing schedule."""
+
+    text: str
 
 
 class EventWidgetCreateRequest(BaseModel):
@@ -822,7 +829,7 @@ def _schedule_item_to_info(item) -> ScheduleItemInfo:
 @router.get("/schedule", response_model=ScheduleResponse)
 async def get_schedule():
     """
-    Get scheduled items from schedule.json.
+    Get scheduled items from the shared Postgres-backed schedule document.
     """
     state_reader = get_state_reader()
     schedule = state_reader.get_schedule()
@@ -1757,8 +1764,6 @@ def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
     """Read the live schedule config."""
     schedule_path = state_reader.schedule_config_path
     raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    if state_reader.document_store is None and raw is None and not schedule_path.exists():
-        raw = state_reader._read_json("schedule.json")  # noqa: SLF001 - shared helper
     if raw is None:
         return schedule_path, []
     if not isinstance(raw, list):
@@ -2203,7 +2208,7 @@ def _build_schedule_entry(
         "user_request": name,
         "schedule": expression,
         "schedule_type": normalized_type,
-        "timezone": timezone_name or "UTC",
+        "timezone": timezone_name or default_timezone_name(),
         "enabled": enabled,
         # The runtime scheduler only honours ``paused``; keep it in sync with the
         # UI's ``enabled`` flag so a paused schedule actually stops firing.
@@ -2552,6 +2557,110 @@ async def create_schedule(body: ScheduleCreateRequest):
 
     _broadcast_widget_refresh(state_reader)
     broadcast_schedule_snapshot()
+    return _widget_to_response(refreshed)
+
+
+@router.post("/schedules/{schedule_id}/trigger", response_model=WidgetResponse)
+async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
+    """Reschedule a task from a natural-language description.
+
+    Rather than editing cron fields by hand, the user describes the timing in
+    plain language ("friday at 15:00"). We hand that to the Progenitor agent on
+    a dedicated (non-chat) thread; it interprets the phrase and calls its
+    ``update_schedule`` tool, which writes the shared schedule document. We then
+    recompute ``next_run`` (the tool does not) and rebroadcast a snapshot.
+    """
+    from . import main as chat_main
+
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Trigger description is required")
+    if not chat_main.client:
+        raise HTTPException(status_code=503, detail="Progenitor client not initialized")
+
+    state_reader = get_state_reader()
+    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    entry = next(
+        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
+        None,
+    )
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
+
+    tz = entry.get("timezone") or default_timezone_name()
+    current = (
+        entry.get("schedule")
+        or entry.get("cron_expression")
+        or entry.get("scheduled_at")
+        or "unset"
+    )
+    instruction = (
+        f'Reschedule the existing scheduled task with id "{schedule_id}". Its current '
+        f'trigger is "{current}" in timezone {tz}. The user wants it to run: "{text}". '
+        f"Interpret any clock times in the {tz} timezone. Convert the request into a cron "
+        "expression (for anything recurring) or an ISO8601 datetime (for a one-off), then "
+        f'call the update_schedule tool with schedule_id "{schedule_id}" and the new '
+        "cron_expression or scheduled_at. Do not change the task's instruction and do not "
+        "create a new task. Reply with one short sentence confirming the new timing."
+    )
+
+    thread_id = _resolve_action_thread_id(None)
+    metadata = _build_action_metadata(
+        thread_id=thread_id,
+        invocation_type="system",
+        invocation_source="schedule.trigger",
+        widget_id=f"schedule:{schedule_id}",
+        root_widget_id=f"schedule:{schedule_id}",
+        action="schedule.trigger",
+    )
+    upsert_thread(
+        thread_id,
+        invocation_type="system",
+        invocation_source="schedule.trigger",
+        root_widget_id=f"schedule:{schedule_id}",
+        widget_id=f"schedule:{schedule_id}",
+    )
+    try:
+        await chat_main.client.send_message(instruction, metadata=metadata)
+    except Exception as exc:
+        fail_thread(thread_id, str(exc), widget_id=f"schedule:{schedule_id}")
+        raise HTTPException(status_code=502, detail=f"Agent reschedule failed: {exc}") from exc
+    complete_thread(thread_id, "schedule updated", widget_id=f"schedule:{schedule_id}")
+
+    # The agent merged the new cron via update_schedule but does not recompute
+    # next_run; do it here so the UI's next-run/cadence reflect the change.
+    state_reader.invalidate(schedule_path)
+    _, schedule_data = _read_schedule_config(state_reader)
+    updated = next(
+        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
+        None,
+    )
+    if updated is not None:
+        updated["updated_at"] = utcnow().isoformat()
+        # update_schedule sets cron_expression/scheduled_at but leaves the
+        # display fields (schedule, schedule_type) and next_run stale, so
+        # reconcile them here to keep the stored entry coherent.
+        if updated.get("scheduled_at"):
+            updated["schedule_type"] = "once"
+            updated["schedule"] = updated["scheduled_at"]
+            updated.pop("cron_expression", None)
+        elif updated.get("cron_expression"):
+            updated["schedule_type"] = "cron"
+            updated["schedule"] = updated["cron_expression"]
+        next_run = Scheduler().next_run_for_entry(updated)
+        updated["next_run"] = next_run.isoformat() if next_run else None
+        updated["next_run_at"] = next_run.isoformat() if next_run else None
+        _atomic_write_json(schedule_path, schedule_data, state_reader)
+        state_reader.invalidate(schedule_path)
+
+    _broadcast_widget_refresh(state_reader)
+    broadcast_schedule_snapshot()
+    refreshed = next(
+        (w for w in state_reader.get_widgets() if w["id"] == f"schedule:{schedule_id}"),
+        None,
+    )
+    if refreshed is None:
+        raise HTTPException(status_code=404, detail="Schedule not found")
     return _widget_to_response(refreshed)
 
 
@@ -3017,9 +3126,9 @@ async def get_telegram_status():
         enabled=config.telegram_enabled,
         connected=telegram is not None and telegram._started,
         chat_id=masked_chat_id if config.telegram_enabled else "",
-        web_clients_active=subscriber_counts["chat"],
+        web_clients_active=subscriber_counts["stream"],
         will_forward_to_telegram=(
-            telegram is not None and telegram._started and subscriber_counts["chat"] == 0
+            telegram is not None and telegram._started and subscriber_counts["stream"] == 0
         ),
         rate_limit_per_minute=config.telegram_rate_limit_per_minute,
     )
@@ -3551,16 +3660,13 @@ _active_status_tasks: list[asyncio.Task] = []
 _active_ui_stream_tasks: list[asyncio.Task] = []
 
 
-def has_active_chat_subscribers() -> bool:
-    """Check if there are any active SSE chat subscribers (web UI connected).
+def has_active_ui_stream_subscribers() -> bool:
+    """Check if there are any active canonical UI stream subscribers.
 
-    Used by Telegram integration to determine whether to send messages to Telegram.
-    If there are active chat subscribers, messages go to web UI and not Telegram.
-
-    Returns:
-        True if at least one chat subscriber is connected.
+    Telegram fallback should follow the modern ``/api/ui/stream`` connection,
+    not the legacy ``/api/ui/events`` subscriber list.
     """
-    return len(_chat_subscribers) > 0
+    return len(_ui_stream_subscribers) > 0
 
 
 def get_subscriber_counts() -> dict[str, int]:
@@ -3573,6 +3679,7 @@ def get_subscriber_counts() -> dict[str, int]:
         "chat": len(_chat_subscribers),
         "status": len(_status_subscribers),
         "stream": len(_ui_stream_subscribers),
+        "web": len(_ui_stream_subscribers),
         "total": len(_chat_subscribers) + len(_status_subscribers) + len(_ui_stream_subscribers),
     }
 

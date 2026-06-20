@@ -7,14 +7,17 @@ import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { selectLastUiEvent } from '../store/realtimeSlice';
 import {
+  clearChatErrored,
+  clearChatGenerating,
+  clearChatUnread,
   clearActiveChatSession,
   createChatSession,
   deleteChatSession,
+  markChatGenerating,
   requestChatSessionDetail,
   selectActiveChatSession,
   selectChatSessions,
   selectChatSessionsState,
-  setChatIndicators,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
@@ -316,11 +319,8 @@ function ConversationPage() {
     isGenerating,
     setIsGenerating,
     unreadChatIds,
-    setUnreadChatIds,
     backgroundGeneratingChatIds,
-    setBackgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    setBackgroundErrorChatIds,
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
     handleSend,
@@ -347,17 +347,7 @@ function ConversationPage() {
     (event) => isEventVisible(event, streamFilters),
     [streamFilters],
   );
-
-  // Surface unread / generating state to the primary nav dot (rendered outside
-  // this page). Green when there are unread chats, orange while generating.
   const hasUnreadChats = unreadChatIds.size > 0;
-  const isAnyChatGenerating = isGenerating || backgroundGeneratingChatIds.size > 0;
-  useEffect(() => {
-    dispatch(setChatIndicators({ hasUnread: hasUnreadChats, isGenerating: isAnyChatGenerating }));
-  }, [dispatch, hasUnreadChats, isAnyChatGenerating]);
-  useEffect(() => () => {
-    dispatch(setChatIndicators({ hasUnread: false, isGenerating: false }));
-  }, [dispatch]);
 
   const updateStreamFilters = useCallback(
     (nextFilters) => {
@@ -807,35 +797,15 @@ function ConversationPage() {
     // in the background and show an orange dot on that card.
     const streamingOriginId = backgroundOriginChatIdRef.current;
     if (streamingOriginId && activeAssistantIdRef.current !== null) {
-      setBackgroundGeneratingChatIds((prev) => {
-        if (prev.has(streamingOriginId)) return prev;
-        const next = new Set(prev);
-        next.add(streamingOriginId);
-        return next;
-      });
+      dispatch(markChatGenerating(streamingOriginId));
     }
     activeAssistantIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
     setSelectedBackendChatId(sessionItem.chatSessionId);
-    setBackgroundGeneratingChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
-    setUnreadChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
-    setBackgroundErrorChatIds((prev) => {
-      if (!prev.has(sessionItem.chatSessionId)) return prev;
-      const next = new Set(prev);
-      next.delete(sessionItem.chatSessionId);
-      return next;
-    });
+    dispatch(clearChatGenerating(sessionItem.chatSessionId));
+    dispatch(clearChatUnread(sessionItem.chatSessionId));
+    dispatch(clearChatErrored(sessionItem.chatSessionId));
     lastAppliedBackendChatIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
@@ -858,10 +828,7 @@ function ConversationPage() {
     messages.length,
     selectedBackendChatId,
     sessionId,
-    setBackgroundErrorChatIds,
-    setBackgroundGeneratingChatIds,
     setIsGenerating,
-    setUnreadChatIds,
     show,
   ]);
 

@@ -5650,39 +5650,42 @@ body,
   color: var(--color-text-primary);
 }
 
-.schedule-row {
+.schedule-pane-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
-.schedule-row .sess-row__top {
+.schedule-pane-row .sess-row__top {
   grid-column: 1;
 }
 
-.schedule-row .sess-row__age {
+.schedule-pane-row .sess-row__age {
   grid-column: 2;
 }
 
-.schedule-row .sess-row__title {
+.schedule-pane-row .sess-row__title {
   grid-column: 1 / span 2;
+  /* Reserve the second line so the card height stays stable as the cadence
+     resolves — otherwise an empty/late cadence collapses the row to one line. */
+  min-height: 1.35em;
 }
 
-.schedule-row__status {
+.schedule-pane-row__status {
   background: var(--color-text-muted);
 }
 
-.schedule-row__status--active {
+.schedule-pane-row__status--active {
   background: var(--color-success);
 }
 
-.schedule-row__status--paused {
+.schedule-pane-row__status--paused {
   background: var(--color-warning);
 }
 
-.schedule-row__status--failed {
+.schedule-pane-row__status--failed {
   background: var(--color-error);
 }
 
-.schedule-row__name {
+.schedule-pane-row__name {
   color: var(--color-text-secondary);
   font-weight: 700;
 }
@@ -6651,6 +6654,42 @@ body,
   border-radius: 8px;
   font-size: 13px;
   line-height: 1.55;
+}
+
+.schedules-summary__editor {
+  width: 100%;
+  margin: 0;
+  padding: 14px 16px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 13px;
+  line-height: 1.55;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.schedules-summary__editor:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.schedules-summary__editor:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.schedules-trigger-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedules-trigger-edit__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
 }
 
 .schedule-form {

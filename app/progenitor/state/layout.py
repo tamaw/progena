@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ..config import default_mcp_config_payload, default_schedule_config_payload
+from ..config import default_mcp_config_payload
 from ..utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -20,7 +20,6 @@ CORE_FILES: dict[str, str] = {
     "background_tasks": "background_tasks.json",
     "registry": "agents.json",
     "mcp": "mcp.json",
-    "schedule": "schedule.json",
 }
 
 LOG_FILES: dict[str, str] = {
@@ -28,7 +27,7 @@ LOG_FILES: dict[str, str] = {
     "schedule": "schedule.jsonl",
 }
 
-CONFIG_BACKED_CORE_FILES = {"registry", "mcp", "schedule"}
+CONFIG_BACKED_CORE_FILES = {"registry", "mcp"}
 
 
 def core_file_path(name: str, state_dir: Path, config_dir: Path) -> Path:
@@ -48,19 +47,6 @@ async def ensure_initial_state(
     atomic_write_json: Callable[[Path, Any], Awaitable[None]],
 ) -> None:
     """Ensure all core state/config files exist and are cached."""
-    schedule_default = default_schedule_config_payload()
-    legacy_schedule_path = state_dir / CORE_FILES["schedule"]
-    schedule_path = core_file_path("schedule", state_dir, config_dir)
-    if not schedule_path.exists() and legacy_schedule_path.exists():
-        legacy_schedule = await read_json(legacy_schedule_path)
-        if isinstance(legacy_schedule, list):
-            logger.info(
-                "Migrating legacy schedule config from %s to %s",
-                legacy_schedule_path,
-                schedule_path,
-            )
-            schedule_default = legacy_schedule
-
     conversation_thread_id = utcnow_isoformat()
     defaults = {
         "current_state": {
@@ -81,7 +67,6 @@ async def ensure_initial_state(
         "background_tasks": [],
         "registry": {},
         "mcp": default_mcp_config_payload(),
-        "schedule": schedule_default,
     }
 
     for name, filename in CORE_FILES.items():
