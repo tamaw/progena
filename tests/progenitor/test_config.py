@@ -98,6 +98,10 @@ class TestLLMConfig:
             "AZURE_OPENAI_BASE_URL": "https://example.openai.azure.com/openai/v1",
             "AZURE_OPENAI_API_KEY": "sk-test-key",
             "PROGENITOR_MODEL_DEFAULT": "gpt-4o",
+            # Set explicitly so the test is hermetic: a local .env sets this to
+            # "medium" but CI leaves it unset (code default "low"). Pinning the
+            # env value keeps the assertion stable in both.
+            "PROGENITOR_REASONING_EFFORT": "medium",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()
@@ -105,8 +109,6 @@ class TestLLMConfig:
             assert config.api_key == "sk-test-key"
             assert config.model_default == "gpt-4o"
             assert config.reasoning_enabled is True
-            # NOTE: inherits PROGENITOR_REASONING_EFFORT from the local .env
-            # (clear=False); pinned to "medium" for now to match that value.
             assert config.reasoning_effort == "medium"
             assert config.reasoning_summary == "auto"
 
