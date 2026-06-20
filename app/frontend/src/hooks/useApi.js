@@ -254,6 +254,16 @@ export function useApi() {
     return response.json();
   }, [fetchWithRetry]);
 
+  const retriggerSchedule = useCallback(async (scheduleId, text) => {
+    // Use the full path: getApiUrl only maps exact endpoint keys (e.g.
+    // "schedules"), so a sub-path must include the /api/ui prefix itself.
+    const response = await fetchWithRetry(`/api/ui/schedules/${scheduleId}/trigger`, {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const createEvent = useCallback(async (payload) => {
     const response = await fetchWithRetry('events', {
       method: 'POST',
@@ -472,6 +482,7 @@ export function useApi() {
     deleteWidget,
     getSchedules,
     createSchedule,
+    retriggerSchedule,
     createEvent,
     getLogs,
     getLogSources,

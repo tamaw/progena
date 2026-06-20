@@ -1,13 +1,27 @@
 import { describe, it, expect } from 'vitest';
 import reducer, {
   applyUiEvent,
+  clearChatErrored,
+  clearChatGenerating,
+  clearChatUnread,
+  clearActiveChatSession,
+  markChatErrored,
+  markChatGenerating,
+  markChatUnread,
   requestAgentDetail,
   requestChatSessionDetail,
   selectActiveAgentProfile,
   selectAgentProfiles,
   selectChatIndicators,
+  selectErroredChatIds,
+  selectGeneratingChatIds,
   selectChatSessions,
-  setChatIndicators,
+  selectUnreadChatIds,
+  selectSchedules,
+  scheduleSnapshotReceived,
+  setErroredChatIds,
+  setGeneratingChatIds,
+  setUnreadChatIds,
 } from './uiDataSlice';
 
 const snapshot = (ids) => applyUiEvent({
@@ -57,6 +71,27 @@ describe('applyUiEvent reducer', () => {
     // matching request id applies
     s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
     expect(s.chats.active.detail).toEqual({ chat_session_id: 'a' });
+  });
+
+  it('clearActiveChatSession resets the active backend selection', () => {
+    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
+      chatsUrl: '/x', chatSessionId: 'a', requestId: 'REQ1',
+    }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
+    s = reducer(s, clearActiveChatSession());
+    expect(s.chats.active).toEqual({
+      chatSessionId: null,
+      detail: null,
+      loading: false,
+      error: null,
+      requestId: null,
+    });
+  });
+
+  it('schedule.snapshot replaces the schedules list', () => {
+    const items = [{ id: 'sched-a', name: 'A' }, { id: 'sched-b', name: 'B', paused: true }];
+    const s = reducer(undefined, applyUiEvent({ type: 'schedule.snapshot', payload: { items } }));
+    expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 });
 
@@ -158,10 +193,55 @@ describe('chat indicators (nav dot)', () => {
     expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: false });
   });
 
-  it('setChatIndicators patches the fields it is given', () => {
-    let s = reducer(undefined, setChatIndicators({ isGenerating: true }));
+  it('derives the nav dot from shared unread and generating chat ids', () => {
+    let s = reducer(undefined, setGeneratingChatIds(['c1']));
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['c1']);
     expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: true });
-    s = reducer(s, setChatIndicators({ hasUnread: true, isGenerating: false }));
+
+    s = reducer(s, setUnreadChatIds(['c2']));
+    expect(selectUnreadChatIds({ uiData: s })).toEqual(['c2']);
+    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: true });
+
+    s = reducer(s, clearChatGenerating('c1'));
     expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: false });
+  });
+
+  it('adds, clears, and dedupes chat runtime ids', () => {
+    let s = reducer(undefined, markChatUnread('c2'));
+    s = reducer(s, markChatUnread('c2'));
+    s = reducer(s, markChatGenerating('c1'));
+    s = reducer(s, markChatGenerating('c1'));
+    s = reducer(s, markChatErrored('c3'));
+    s = reducer(s, markChatErrored('c3'));
+
+    expect(selectUnreadChatIds({ uiData: s })).toEqual(['c2']);
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['c1']);
+    expect(selectErroredChatIds({ uiData: s })).toEqual(['c3']);
+
+    s = reducer(s, clearChatUnread('c2'));
+    s = reducer(s, clearChatGenerating('c1'));
+    s = reducer(s, clearChatErrored('c3'));
+
+    expect(selectUnreadChatIds({ uiData: s })).toEqual([]);
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    expect(selectErroredChatIds({ uiData: s })).toEqual([]);
+  });
+
+  it('normalizes full replacement id lists', () => {
+    let s = reducer(undefined, setUnreadChatIds(['c2', '', 'c2', null]));
+    s = reducer(s, setGeneratingChatIds(['c1', 'c1']));
+    s = reducer(s, setErroredChatIds(['c3', undefined, 'c3']));
+
+    expect(selectUnreadChatIds({ uiData: s })).toEqual(['c2']);
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['c1']);
+    expect(selectErroredChatIds({ uiData: s })).toEqual(['c3']);
+  });
+});
+
+describe('scheduleSnapshotReceived', () => {
+  it('stores the provided schedule list directly', () => {
+    const items = [{ id: 'sched-live', name: 'Live schedule' }];
+    const s = reducer(undefined, scheduleSnapshotReceived(items));
+    expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 });

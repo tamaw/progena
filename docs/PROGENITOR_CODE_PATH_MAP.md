@@ -395,10 +395,10 @@ Runtime:
   -> get_a2a_tasks()/save_a2a_tasks()/upsert/update
 ```
 
-State files managed:
+State documents managed (persisted in the Postgres document store):
 
 - `current_state.json`
-- `schedule.json`
+- `schedule` (Postgres document, not a file)
 - `registry.json`
 - `a2a_tasks.json`
 

@@ -32,7 +32,7 @@ User → Frontend → Backend (/v1/chat) → IPC → ProgenitorLoop → LangGrap
                         State persistence:
                         - current_state.json (user session: messages, tool calls)
                         - build_state.json (build state: backlog, verification)
-                        - data/config/schedule.json (system feature: scheduled tasks)
+                        - schedule document, Postgres-backed (system feature: scheduled tasks)
 ```
 
 ## Developer Workflow

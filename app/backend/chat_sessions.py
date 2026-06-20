@@ -18,6 +18,9 @@ from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
 
 CHAT_METADATA_PREFIX = "backend.chat.sessions"
 CHAT_INDEX_KEY = "__index__"
+CONVERSATION_ID_PREFIX = "conv_"
+SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
+BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
 
 
 def _now_iso() -> str:
@@ -130,7 +133,7 @@ def create_chat_metadata(
     request: ChatCreateRequest,
 ) -> dict[str, Any]:
     now = _now_iso()
-    chat_session_id = f"chat_{uuid.uuid4().hex[:12]}"
+    chat_session_id = f"{CONVERSATION_ID_PREFIX}{uuid.uuid4().hex[:12]}"
     thread_id = request.thread_id or _thread_id_from_session_id(request.progenitor_session_id)
     metadata = {
         "chat_session_id": chat_session_id,
@@ -231,6 +234,19 @@ def _session_id_from_thread_id(thread_id: str | None) -> str | None:
     return thread_id.removeprefix("thread_")
 
 
+def _thread_id_candidates_for_chat_id(chat_session_id: str) -> list[str]:
+    candidates = [chat_session_id]
+    if chat_session_id.startswith(CONVERSATION_ID_PREFIX):
+        derived_session_id = chat_session_id.removeprefix(CONVERSATION_ID_PREFIX)
+        normalized = _thread_id_from_session_id(derived_session_id)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    normalized_thread_id = _thread_id_from_session_id(chat_session_id)
+    if normalized_thread_id and normalized_thread_id not in candidates:
+        candidates.append(normalized_thread_id)
+    return candidates
+
+
 def _thread_id_for_metadata(metadata: dict[str, Any]) -> str | None:
     thread_id = metadata.get("thread_id")
     if isinstance(thread_id, str) and thread_id:
@@ -239,9 +255,35 @@ def _thread_id_for_metadata(metadata: dict[str, Any]) -> str | None:
     if isinstance(progenitor_session_id, str) and progenitor_session_id:
         return _thread_id_from_session_id(progenitor_session_id)
     chat_session_id = metadata.get("chat_session_id")
-    if isinstance(chat_session_id, str) and chat_session_id.startswith(("sess_", "thread_")):
+    if isinstance(chat_session_id, str) and chat_session_id.startswith(
+        ("sess_", "thread_", CONVERSATION_ID_PREFIX)
+    ):
         return _thread_id_from_session_id(chat_session_id)
     return None
+
+
+def _is_activity_message(message: ChatMessage) -> bool:
+    if message.role != "user":
+        return False
+    content = (message.content or "").strip()
+    return content.startswith(SCHEDULED_TASK_PREFIX) or content.startswith(BACKEND_ALERT_PREFIX)
+
+
+def _is_activity_only_session(
+    metadata: dict[str, Any],
+    messages: list[ChatMessage],
+) -> bool:
+    if not messages:
+        return False
+    first_user_message = next((message for message in messages if message.role == "user"), None)
+    if first_user_message is None:
+        return False
+    if not _is_activity_message(first_user_message):
+        return False
+    # Explicit UI chat cards should stay visible even if the first message looks
+    # system-generated; this keeps user-created cards in the main chat surface.
+    chat_session_id = str(metadata.get("chat_session_id") or "")
+    return not chat_session_id.startswith(CONVERSATION_ID_PREFIX)
 
 
 def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
@@ -538,7 +580,11 @@ def _metadata_with_checkpoint(
 def _checkpoint_metadata(snapshot: CheckpointThreadSnapshot) -> dict[str, Any]:
     session_id = _session_id_from_thread_id(snapshot.thread_id)
     return {
-        "chat_session_id": session_id or snapshot.thread_id,
+        "chat_session_id": (
+            f"{CONVERSATION_ID_PREFIX}{session_id}"
+            if isinstance(session_id, str) and session_id.startswith("sess_")
+            else session_id or snapshot.thread_id
+        ),
         "title": "New chat",
         "thread_id": snapshot.thread_id,
         "progenitor_session_id": session_id,
@@ -577,6 +623,10 @@ def list_chat_sessions(
         if snapshot is not None:
             covered_threads.add(snapshot.thread_id)
             metadata = _metadata_with_checkpoint(metadata, snapshot)
+        if _is_activity_only_session(metadata, fallback_messages):
+            if metadata_thread_id:
+                hidden_threads.add(metadata_thread_id)
+            continue
         sessions.append(_summary_from_metadata(metadata, fallback_messages=fallback_messages))
 
     for snapshot in checkpoint_snapshots:
@@ -585,7 +635,10 @@ def list_chat_sessions(
         messages = _messages_from_checkpoint(snapshot)
         if not messages:
             continue
-        summary = _summary_from_metadata(_checkpoint_metadata(snapshot), fallback_messages=messages)
+        metadata = _checkpoint_metadata(snapshot)
+        if _is_activity_only_session(metadata, messages):
+            continue
+        summary = _summary_from_metadata(metadata, fallback_messages=messages)
         if include_archived or not summary.archived:
             sessions.append(summary)
 
@@ -607,8 +660,13 @@ def get_chat_detail(
         messages = _messages_from_checkpoint(snapshot)
         metadata = _metadata_with_checkpoint(metadata, snapshot)
     else:
-        thread_id = _thread_id_from_session_id(chat_session_id)
-        snapshot = store.get_checkpoint_thread_snapshot(thread_id) if thread_id else None
+        # Checkpoint-derived sidebar cards can use the raw thread id as their
+        # chat_session_id (for example legacy timestamp-like thread ids). Try an
+        # exact lookup first, then the normalized ``thread_<session>`` form.
+        for thread_id in _thread_id_candidates_for_chat_id(chat_session_id):
+            snapshot = store.get_checkpoint_thread_snapshot(thread_id) if thread_id else None
+            if snapshot is not None:
+                break
         if snapshot is not None:
             messages = _messages_from_checkpoint(snapshot)
             metadata = _checkpoint_metadata(snapshot)

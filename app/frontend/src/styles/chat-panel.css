@@ -1236,7 +1236,7 @@
 }
 
 .chat-session-card__dot--unread {
-    background: var(--color-accent);
+    background: var(--color-success);
 }
 
 .chat-session-card__dot--error {
@@ -1971,4 +1971,3 @@
         max-width: 92%;
     }
 }
-

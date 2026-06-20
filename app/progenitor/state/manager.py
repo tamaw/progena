@@ -25,6 +25,7 @@ from .models import (
     BackgroundTaskEntry,
     ConversationMessage,
     ScheduleEntry,
+    ScheduleRunRecord,
 )
 from .persistence import StatePersistence
 
@@ -45,7 +46,7 @@ class StateManager:
 
     Core runtime data is split across state and config files:
     - current_state.json: Progenitor agent operational state (chat, tool calls)
-    - schedule.json: Scheduled tasks stored in data/config
+    - registry/mcp config files for backend-managed metadata
 
     Provides:
     - Atomic writes for crash safety
@@ -148,6 +149,8 @@ class StateManager:
             read_json=self._read_json,
             atomic_write_json=self._atomic_write_json,
         )
+        self._state_cache.setdefault("schedule", [])
+        self._state_cache.setdefault("schedule_runs", [])
 
     async def _ensure_runtime_store_initial_state(self) -> None:
         """Ensure all state documents exist in the native runtime store."""
@@ -172,6 +175,7 @@ class StateManager:
             "acp_tasks": [],
             "async_subagent_tasks": [],
             "background_tasks": [],
+            "schedule_runs": [],
             "registry": {},
             "mcp": default_mcp_config_payload(),
             "schedule": default_schedule_config_payload(),
@@ -261,31 +265,29 @@ class StateManager:
         """Log a schedule event."""
         await log_store.log_schedule_event(event=event, append_jsonl_fn=self.append_jsonl)
 
-    # Schedule management (stored in data/config/schedule.json)
+    # Schedule management (database-backed in production runtime)
     async def get_schedule(self) -> list[ScheduleEntry]:
         if self._runtime_store is not None:
-            payload = await self._get_runtime_document("schedule")
+            # Read straight from the shared store rather than the in-memory
+            # cache: schedules are also created/paused/deleted by the backend
+            # (UI) writing the same Postgres document, so a cached copy would
+            # hide those cross-process changes from the runtime scheduler.
+            payload = await self._runtime_store.get_document("schedule", [])
+            self._state_cache["schedule"] = payload
             return [ScheduleEntry.model_validate(item) for item in payload]
-        return await config_store.get_schedule(
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            schedule_path=self._core_file_path("schedule"),
-        )
+        payload = self._state_cache.get("schedule", [])
+        rows = payload if isinstance(payload, list) else []
+        return [ScheduleEntry.model_validate(item) for item in rows]
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
         if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "schedule",
-                [entry.model_dump(mode="json") for entry in schedule],
-            )
+            # Write straight through to the shared store (and refresh the cache)
+            # so backend reads and the runtime stay coherent. See get_schedule.
+            payload = [entry.model_dump(mode="json") for entry in schedule]
+            self._state_cache["schedule"] = payload
+            await self._runtime_store.save_document("schedule", payload)
             return
-        await config_store.save_schedule(
-            schedule=schedule,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            schedule_path=self._core_file_path("schedule"),
-        )
+        self._state_cache["schedule"] = [entry.model_dump(mode="json") for entry in schedule]
 
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
@@ -541,6 +543,55 @@ class StateManager:
         )
 
     # ==========================================================================
+    # Schedule Run Tracking (database-backed in production runtime)
+    # ==========================================================================
+
+    async def get_schedule_runs(self) -> list[ScheduleRunRecord]:
+        if self._runtime_store is not None:
+            payload = await self._get_runtime_document("schedule_runs")
+            return [ScheduleRunRecord.model_validate(item) for item in payload]
+        payload = self._state_cache.get("schedule_runs", [])
+        rows = payload if isinstance(payload, list) else []
+        return [ScheduleRunRecord.model_validate(item) for item in rows]
+
+    async def save_schedule_runs(self, runs: list[ScheduleRunRecord]) -> None:
+        if self._runtime_store is not None:
+            await self._save_runtime_document(
+                "schedule_runs",
+                [run.model_dump(mode="json") for run in runs],
+            )
+            return
+        self._state_cache["schedule_runs"] = [run.model_dump(mode="json") for run in runs]
+
+    async def get_schedule_run(self, run_id: str) -> ScheduleRunRecord | None:
+        for run in await self.get_schedule_runs():
+            if run.run_id == run_id:
+                return run
+        return None
+
+    async def upsert_schedule_run(self, run: ScheduleRunRecord) -> None:
+        runs = await self.get_schedule_runs()
+        for index, existing in enumerate(runs):
+            if existing.run_id == run.run_id:
+                runs[index] = run
+                break
+        else:
+            runs.append(run)
+        await self.save_schedule_runs(runs)
+
+    async def update_schedule_run(self, run_id: str, updates: dict[str, Any]) -> bool:
+        runs = await self.get_schedule_runs()
+        for index, existing in enumerate(runs):
+            if existing.run_id != run_id:
+                continue
+            payload = existing.model_dump()
+            payload.update(updates)
+            runs[index] = ScheduleRunRecord(**payload)
+            await self.save_schedule_runs(runs)
+            return True
+        return False
+
+    # ==========================================================================
     # Messages Management (stored in current_state.json)
     # ==========================================================================
 
@@ -594,8 +645,8 @@ class StateManager:
         )
 
     # ==========================================================================
-    # Schedule Management - Convenience methods using data/config/schedule.json
-    # (Schedule is a system feature stored separately from current_state)
+    # Schedule Management - Convenience methods for the ``schedule`` document
+    # (a system feature persisted in Postgres, stored separately from current_state)
     # ==========================================================================
 
     async def add_schedule_entry(self, entry) -> None:

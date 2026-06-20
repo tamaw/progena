@@ -46,6 +46,7 @@ class ScheduleTaskTool(BaseSystemTool):
         cron_expression = str(args.get("cron_expression") or "").strip()
         scheduled_at = str(args.get("scheduled_at") or "").strip()
         description = str(args.get("description") or "").strip()
+        timezone = str(args.get("timezone") or "").strip()
         if not user_input:
             return ToolResult.fail("No user input provided for scheduling.")
         if not instruction:
@@ -63,6 +64,7 @@ class ScheduleTaskTool(BaseSystemTool):
                 description=description,
                 cron_expression=cron_expression,
                 scheduled_at=scheduled_at,
+                timezone=timezone,
             )
 
             if not result.success:
@@ -108,6 +110,9 @@ class ScheduleTaskTool(BaseSystemTool):
                         "Persisted schedule entry %s",
                         entry_data.get("id"),
                     )
+                    from .schedule import emit_schedule_changed_event
+
+                    await emit_schedule_changed_event(context, str(entry_data.get("id") or ""))
 
             return ToolResult.ok(tool_data, state_updates=state_updates)
         except Exception as e:

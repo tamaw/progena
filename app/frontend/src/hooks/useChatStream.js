@@ -1,5 +1,15 @@
-import { useCallback, useRef, useState } from 'react';
-import { fetchChatSessions } from '../store/uiDataSlice';
+import { useCallback, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+import {
+  clearChatErrored,
+  clearChatGenerating,
+  fetchChatSessions,
+  markChatErrored,
+  markChatUnread,
+  selectErroredChatIds,
+  selectGeneratingChatIds,
+  selectUnreadChatIds,
+} from '../store/uiDataSlice';
 import {
   appendReasoningText,
   appendStreamEvent,
@@ -7,6 +17,16 @@ import {
   extractReasoningTokenCount,
   finalizeSupersededAssistant,
 } from '../components/chat/streamEventsModel';
+
+function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
+  if (!selectedBackendChatId) {
+    return null;
+  }
+  if (activeBackendChat?.chat_session_id !== selectedBackendChatId) {
+    return null;
+  }
+  return activeBackendChat;
+}
 
 // Owns the streaming-send lifecycle and the background generation/unread
 // indicators. The `messages` state stays in the page (it is shared with the
@@ -17,6 +37,7 @@ export function useChatStream({
   messages,
   setMessages,
   activeBackendChat,
+  selectedBackendChatId,
   sessionId,
   sendMessageStream,
   cancelStream,
@@ -27,13 +48,12 @@ export function useChatStream({
   reloadOpenChat,
 }) {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [unreadChatIds, setUnreadChatIds] = useState(() => new Set());
-  // Set of chat ids with a stream still running in the background — each shows
-  // its own orange "generating" dot, so several at once are all indicated.
-  const [backgroundGeneratingChatIds, setBackgroundGeneratingChatIds] = useState(() => new Set());
-  // Background chats whose last turn ended in an error — their unread dot is
-  // shown red instead of green.
-  const [backgroundErrorChatIds, setBackgroundErrorChatIds] = useState(() => new Set());
+  const unreadChatIdList = useSelector(selectUnreadChatIds);
+  const generatingChatIdList = useSelector(selectGeneratingChatIds);
+  const erroredChatIdList = useSelector(selectErroredChatIds);
+  const unreadChatIds = useMemo(() => new Set(unreadChatIdList), [unreadChatIdList]);
+  const backgroundGeneratingChatIds = useMemo(() => new Set(generatingChatIdList), [generatingChatIdList]);
+  const backgroundErrorChatIds = useMemo(() => new Set(erroredChatIdList), [erroredChatIdList]);
   const activeAssistantIdRef = useRef(null);
   const backgroundOriginChatIdRef = useRef(null);
 
@@ -85,15 +105,17 @@ export function useChatStream({
 
     // When continuing a backend chat, route to its original LangGraph thread so
     // the full conversation history is preserved rather than starting a new thread.
-    const threadMetadata = activeBackendChat?.thread_id
-      ? { thread_id: activeBackendChat.thread_id }
+    const selectedBackendChat = resolveSelectedBackendChat(
+      activeBackendChat,
+      selectedBackendChatId,
+    );
+    const threadMetadata = selectedBackendChat?.thread_id
+      ? { thread_id: selectedBackendChat.thread_id }
       : null;
 
-    // The chat this stream belongs to, captured as a closure-local so that
-    // concurrent background streams don't clobber each other through the shared
-    // ref. Use activeBackendChat (in deps) not selectedBackendChatId to avoid a
-    // stale closure.
-    const originChatId = activeBackendChat?.chat_session_id ?? null;
+    // The chat this stream belongs to, captured as a closure-local so
+    // background completion can update the right sidebar card later.
+    const originChatId = selectedBackendChat?.chat_session_id ?? null;
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).
     backgroundOriginChatIdRef.current = originChatId;
@@ -122,12 +144,9 @@ export function useChatStream({
           if (isStale()) {
             // A background stream finished. Clear just this chat's orange dot,
             // leaving any other still-generating background chats indicated.
-            setBackgroundGeneratingChatIds((prev) => {
-              if (!prev.has(originChatId)) return prev;
-              const next = new Set(prev);
-              next.delete(originChatId);
-              return next;
-            });
+            if (originChatId) {
+              dispatch(clearChatGenerating(originChatId));
+            }
             if (status !== 'cancelled' && originChatId) {
               if (selectedBackendChatIdRef?.current === originChatId) {
                 // The user navigated away and back to this chat while it was
@@ -138,13 +157,8 @@ export function useChatStream({
                 // Finished OK in the background while the user is on another
                 // chat: green unread dot, clearing any prior error flag.
                 dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-                setUnreadChatIds((prev) => new Set([...prev, originChatId]));
-                setBackgroundErrorChatIds((prev) => {
-                  if (!prev.has(originChatId)) return prev;
-                  const next = new Set(prev);
-                  next.delete(originChatId);
-                  return next;
-                });
+                dispatch(markChatUnread(originChatId));
+                dispatch(clearChatErrored(originChatId));
               }
             }
             return;
@@ -168,19 +182,16 @@ export function useChatStream({
             // A background stream errored. Clear its orange dot; if the user is
             // viewing it, reload; otherwise flag it unread + errored so its card
             // shows a red dot in place of the green "done" dot.
-            setBackgroundGeneratingChatIds((prev) => {
-              if (!prev.has(originChatId)) return prev;
-              const next = new Set(prev);
-              next.delete(originChatId);
-              return next;
-            });
+            if (originChatId) {
+              dispatch(clearChatGenerating(originChatId));
+            }
             if (originChatId) {
               if (selectedBackendChatIdRef?.current === originChatId) {
                 reloadOpenChat?.(originChatId);
               } else {
                 dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-                setUnreadChatIds((prev) => new Set([...prev, originChatId]));
-                setBackgroundErrorChatIds((prev) => new Set([...prev, originChatId]));
+                dispatch(markChatUnread(originChatId));
+                dispatch(markChatErrored(originChatId));
               }
             }
             return;
@@ -234,6 +245,7 @@ export function useChatStream({
     getApiUrl,
     messages,
     reloadOpenChat,
+    selectedBackendChatId,
     selectedBackendChatIdRef,
     sendMessageStream,
     sessionId,
@@ -249,11 +261,8 @@ export function useChatStream({
     isGenerating,
     setIsGenerating,
     unreadChatIds,
-    setUnreadChatIds,
     backgroundGeneratingChatIds,
-    setBackgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    setBackgroundErrorChatIds,
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
     handleSend,
