@@ -33,7 +33,7 @@ OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → LEARN
 ## State Persistence
 - `current_state.json`: Conversation state (messages, tool calls)
 - `build_state.json`: Build backlog, work items, verification results
-- `data/config/schedule.json`: Scheduled tasks
+- `schedule` document (Postgres-backed state store): Scheduled tasks
 - `agents.json`: Agent registry (`data/config/agents.json`)
 
 All state writes are atomic: write to temp file → fsync → rename.

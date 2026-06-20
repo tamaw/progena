@@ -96,6 +96,57 @@ const quickPrompts = [
   'What should I work on next?',
   'Draft a short status update',
 ];
+const scheduleQuickPrompts = [
+  'One-off: remind me tomorrow at 9am to send the weekly update.',
+  'Recurring: every weekday at 8:30am, prepare my morning brief.',
+  'Scheduled: on the first day of each month at 10am, review budget drift.',
+];
+const defaultQuickChatConfig = {
+  mode: 'default',
+  title: 'Quick chat',
+  subtitle: '',
+  placeholder: 'Ask anything...',
+  prompts: quickPrompts,
+};
+const scheduleQuickChatConfig = {
+  mode: 'schedule-create',
+  title: 'Create schedule',
+  subtitle: 'Describe the timing and what Progenitor should do. New schedules appear here live when the event stream updates.',
+  placeholder: 'Describe the schedule you want Progenitor to create...',
+  prompts: scheduleQuickPrompts,
+};
+
+function normalizeQuickChatConfig(config) {
+  const candidate = config && typeof config === 'object' ? config : {};
+  const baseConfig = candidate.mode === 'schedule-create'
+    ? scheduleQuickChatConfig
+    : defaultQuickChatConfig;
+  const prompts = Array.isArray(candidate.prompts)
+    ? candidate.prompts.filter((prompt) => typeof prompt === 'string' && prompt.trim())
+    : [];
+  return {
+    ...baseConfig,
+    ...candidate,
+    prompts: prompts.length ? prompts : baseConfig.prompts,
+  };
+}
+
+function buildQuickChatOutboundMessage(mode, text) {
+  if (mode !== 'schedule-create') {
+    return text;
+  }
+  return [
+    'Create a new schedule from the following user request.',
+    'Use the schedule_task tool.',
+    'If the request is one-off, provide scheduled_at.',
+    'If the request is recurring, provide cron_expression.',
+    'Choose a concise schedule name and preserve the requested intent as the instruction.',
+    'Only ask a follow-up question if critical schedule details are missing; otherwise create it.',
+    'Reply with one short sentence confirming the created schedule name and timing.',
+    '',
+    `User request: ${text}`,
+  ].join('\n');
+}
 
 function UserAvatarIcon() {
   return (
@@ -702,7 +753,7 @@ function WorkspaceSwitcher() {
   );
 }
 
-function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNav }) {
+function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuickChat, onToggleNav }) {
   const { currentTheme, toggleTheme } = useTheme();
   const { unreadCount, markAllViewed } = useAlertCenter();
   const location = useLocation();
@@ -753,7 +804,10 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onToggleNa
           label="Quick chat"
           icon={<QuickChatIcon />}
           active={activePanel === 'quickChat'}
-          onClick={() => openPanel('quickChat')}
+          onClick={() => {
+            onOpenQuickChat();
+            onOpenPanel('quickChat');
+          }}
         />
         <ChromeIconButton
           label="Alerts"
@@ -1001,7 +1055,7 @@ function AlertsPanel({ onClose }) {
   );
 }
 
-function QuickChatPanel({ onClose }) {
+function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig }) {
   const { createSession, sendMessageStream, cancelStream } = useApi();
   const { config } = useConfig();
   const navigate = useNavigate();
@@ -1013,6 +1067,10 @@ function QuickChatPanel({ onClose }) {
   const sessionPromiseRef = useRef(null);
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
+  const normalizedConfig = useMemo(
+    () => normalizeQuickChatConfig(panelConfig),
+    [panelConfig],
+  );
 
   const startFreshQuickSession = useCallback(() => {
     if (isQuickChatMountedRef.current) {
@@ -1073,6 +1131,7 @@ function QuickChatPanel({ onClose }) {
   const submit = useCallback(async (message) => {
     const text = message.trim();
     if (!text || isSending) return;
+    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text);
 
     const now = Date.now();
     const assistantId = `qchat_assistant_${now + 1}`;
@@ -1100,7 +1159,7 @@ function QuickChatPanel({ onClose }) {
       let assistantContent = '';
       const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
-        text,
+        outboundMessage,
         streamHistory,
         (chunk) => {
           if (isStale()) return;
@@ -1155,7 +1214,7 @@ function QuickChatPanel({ onClose }) {
       }
       setIsSending(false);
     }
-  }, [ensureQuickSession, history, isSending, sendMessageStream]);
+  }, [ensureQuickSession, history, isSending, normalizedConfig.mode, sendMessageStream]);
 
   const promoteToChat = useCallback(() => {
     if (history.length === 0) return;
@@ -1221,8 +1280,9 @@ function QuickChatPanel({ onClose }) {
 
   return (
     <TopNavPane
-      title="Quick chat"
+      title={normalizedConfig.title}
       icon={<QuickChatIcon />}
+      subtitle={normalizedConfig.subtitle || undefined}
       className="topnav-pane--quick"
       bodyClassName="qchat-pane__body"
       onClose={onClose}
@@ -1256,7 +1316,7 @@ function QuickChatPanel({ onClose }) {
       </div>
       {history.length === 0 && !isSending && !error ? (
         <div className="qchat-pane__hints" aria-label="Quick chat suggestions">
-          {quickPrompts.map((prompt) => (
+          {normalizedConfig.prompts.map((prompt) => (
             <button key={prompt} type="button" className="qchat-chip" onClick={() => selectPrompt(prompt)}>
               {prompt}
             </button>
@@ -1266,7 +1326,7 @@ function QuickChatPanel({ onClose }) {
       <ChatInput
         key={composerSeed.key}
         className="qchat-input"
-        placeholder="Ask anything..."
+        placeholder={normalizedConfig.placeholder}
         onSend={submit}
         onStop={stopQuickChat}
         isGenerating={isSending}
@@ -1658,7 +1718,7 @@ function AccountPanel({ onClose }) {
   );
 }
 
-function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
+function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, runtime }) {
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
   useEffect(() => {
@@ -1671,7 +1731,15 @@ function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
   }, [activePanel, closePanel]);
 
   if (activePanel === 'alerts') return <AlertsPanel onClose={closePanel} />;
-  if (activePanel === 'quickChat') return <QuickChatPanel onClose={closePanel} />;
+  if (activePanel === 'quickChat') {
+    return (
+      <QuickChatPanel
+        key={`${quickChatConfig.mode}:${quickChatConfig.title}`}
+        onClose={closePanel}
+        panelConfig={quickChatConfig}
+      />
+    );
+  }
   if (activePanel === 'settings') return <SettingsPanel onClose={closePanel} />;
   if (activePanel === 'account') return <AccountPanel onClose={closePanel} />;
   if (activePanel === 'search') {
@@ -1685,6 +1753,7 @@ function PanelHost({ activePanel, searchQuery, setActivePanel, runtime }) {
 
 function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
+  const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const [searchQuery, setSearchQuery] = useState('');
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
@@ -1694,6 +1763,7 @@ function AppRuntimeShell() {
     const handleKeyDown = (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
+        setQuickChatConfig(defaultQuickChatConfig);
         setActivePanel('quickChat');
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
@@ -1703,6 +1773,18 @@ function AppRuntimeShell() {
     };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const handleOpenQuickChat = (event) => {
+      const nextConfig = normalizeQuickChatConfig(event.detail);
+      setQuickChatConfig(nextConfig);
+      setActivePanel('quickChat');
+    };
+    window.addEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
+    return () => {
+      window.removeEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
+    };
   }, []);
 
   const handleSearch = useCallback((event) => {
@@ -1735,6 +1817,10 @@ function AppRuntimeShell() {
         setActivePanel={setActivePanel}
         onSearch={handleSearch}
         onOpenPanel={handleOpenPanel}
+        onOpenQuickChat={() => {
+          setQuickChatConfig(defaultQuickChatConfig);
+          setActivePanel('quickChat');
+        }}
         onToggleNav={() => setIsNavOpen((current) => !current)}
       />
       <main className="app-shell__content">
@@ -1743,6 +1829,7 @@ function AppRuntimeShell() {
       {isNavOpen ? <button type="button" className="app-shell__nav-scrim" aria-label="Close navigation" onClick={() => setIsNavOpen(false)} /> : null}
       <PanelHost
         activePanel={activePanel}
+        quickChatConfig={quickChatConfig}
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}
         runtime={runtime}

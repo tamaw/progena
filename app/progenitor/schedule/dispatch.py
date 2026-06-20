@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..state.models import (
+    ScheduleRunRecord,
+    ScheduleRunStatus,
+    generate_schedule_run_id,
+    generate_schedule_thread_id,
+)
 from ..utils import utcnow
 from .engine import Scheduler
 
@@ -55,9 +61,32 @@ async def enqueue_due_schedule_entries(
         else:
             full_message = message
 
-        queued = await queues.enqueue_input(f"{SCHEDULED_INPUT_PREFIX}{full_message}", timeout=0.5)
+        run_id = generate_schedule_run_id()
+        thread_id = generate_schedule_thread_id(schedule_id)
+        queued = await queues.enqueue_input(
+            f"{SCHEDULED_INPUT_PREFIX}{full_message}",
+            timeout=0.5,
+            metadata={
+                "thread_id": thread_id,
+                "schedule_id": schedule_id,
+                "schedule_run_id": run_id,
+            },
+        )
         if not queued:
             break
+
+        await state_manager.upsert_schedule_run(
+            ScheduleRunRecord(
+                run_id=run_id,
+                schedule_id=schedule_id,
+                thread_id=thread_id,
+                message=message,
+                user_request=user_request or None,
+                status=ScheduleRunStatus.QUEUED,
+                created_at=now,
+                updated_at=now,
+            )
+        )
 
         scheduled_at = str(entry.get("scheduled_at") or "")
         cron_expression = str(entry.get("cron_expression") or "")
@@ -69,15 +98,15 @@ async def enqueue_due_schedule_entries(
                 {
                     "paused": True,
                     "enabled": False,
-                    "last_run_status": "completed",
-                    "completed_at": now.isoformat(),
+                    "last_run_status": "running",
+                    "completed_at": None,
                     "updated_at": now.isoformat(),
                 }
             )
         else:
             next_entry.update(
                 {
-                    "last_run_status": "completed",
+                    "last_run_status": "running",
                     "updated_at": now.isoformat(),
                 }
             )
@@ -102,11 +131,13 @@ async def enqueue_due_schedule_entries(
         await state_manager.log_schedule_event(
             {
                 "message": (
-                    f"Schedule {schedule_id} fired and was marked completed"
+                    f"Schedule {schedule_id} fired and run {run_id} was queued"
                     if is_one_shot
-                    else f"Schedule {schedule_id} fired"
+                    else f"Schedule {schedule_id} fired and run {run_id} was queued"
                 ),
                 "schedule_id": schedule_id,
+                "schedule_run_id": run_id,
+                "thread_id": thread_id,
                 "event": "schedule_fired",
                 "one_shot": is_one_shot,
             }
@@ -115,26 +146,69 @@ async def enqueue_due_schedule_entries(
         await queues.push_event(
             "scheduled_task_triggered",
             f"Scheduled task triggered: {entry.get('message') or schedule_id}",
-            {"schedule_id": schedule_id, "one_shot": is_one_shot},
+            {
+                "schedule_id": schedule_id,
+                "schedule_run_id": run_id,
+                "thread_id": thread_id,
+                "one_shot": is_one_shot,
+                "status": "queued",
+            },
         )
         enqueued_count += 1
 
     return enqueued_count
 
 
-async def emit_scheduled_completion(state: dict[str, Any], queues: Any) -> dict[str, Any]:
+async def emit_scheduled_completion(
+    state: dict[str, Any],
+    state_manager: Any,
+    queues: Any,
+) -> dict[str, Any]:
     """Emit completion events for scheduled work and return state cleanup updates."""
     is_scheduled_input = bool(state.get("is_scheduled_input"))
+    scheduled_schedule_id = str(state.get("scheduled_schedule_id") or "").strip() or None
+    scheduled_run_id = str(state.get("scheduled_run_id") or "").strip() or None
     scheduled_message = str(state.get("scheduled_message") or "").strip() or None
     if not is_scheduled_input:
-        return {"is_scheduled_input": False, "scheduled_message": None}
+        return {
+            "is_scheduled_input": False,
+            "scheduled_schedule_id": None,
+            "scheduled_run_id": None,
+            "scheduled_message": None,
+        }
 
     response_text = str(state.get("last_cycle_response") or "").strip()
-    result_status = "completed" if response_text else "completed_no_response"
+    is_error = str(state.get("health_status_override") or "").strip().lower() == "error"
+    result_status = (
+        "error" if is_error else ("completed" if response_text else "completed_no_response")
+    )
+    now = utcnow().isoformat()
+    if scheduled_run_id:
+        await state_manager.update_schedule_run(
+            scheduled_run_id,
+            {
+                "status": "error" if is_error else "completed",
+                "result_status": result_status,
+                "response": response_text or None,
+                "updated_at": now,
+                "completed_at": now,
+            },
+        )
+    if scheduled_schedule_id:
+        await state_manager.update_schedule_entry(
+            scheduled_schedule_id,
+            {
+                "last_run_status": result_status,
+                "updated_at": now,
+                "completed_at": now,
+            },
+        )
     await queues.push_event(
         "scheduled_response",
         response_text or "(no response)",
         {
+            "schedule_id": scheduled_schedule_id,
+            "schedule_run_id": scheduled_run_id,
             "schedule_message": scheduled_message,
             "status": result_status,
         },
@@ -144,11 +218,15 @@ async def emit_scheduled_completion(state: dict[str, Any], queues: Any) -> dict[
         f"Completed scheduled work: {scheduled_message or 'Scheduled task'}",
         {
             "work_type": "scheduled",
+            "schedule_id": scheduled_schedule_id,
+            "schedule_run_id": scheduled_run_id,
             "status": result_status,
         },
     )
     return {
         "is_scheduled_input": False,
+        "scheduled_schedule_id": None,
+        "scheduled_run_id": None,
         "scheduled_message": None,
         "scheduled_result_status": result_status,
     }

@@ -132,7 +132,8 @@ Router in `App.jsx` wraps all routes under `AppRuntimeShell`. Pages: Conversatio
 Runtime config flows from environment variables → `data/config/*.json` (live, runtime-managed):
 - `data/config/agents.json` — registered A2A agents
 - `data/config/mcp.json` — external MCP servers
-- `data/config/schedule.json` — scheduled tasks
+- scheduled tasks — persisted in the shared Postgres document store (the `schedule`
+  document under the `("progenitor", "state")` namespace), not a file
 
 Key env vars: `PROGENITOR_DATABASE_URL`, `PROGENITOR_LLM_PROVIDER`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_DEFAULT`, `CHAT_SERVER_IPC_HOST`, `CHAT_SERVER_IPC_PORT`.
 

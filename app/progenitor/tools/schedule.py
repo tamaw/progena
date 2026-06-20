@@ -46,6 +46,13 @@ class ScheduleRequest(BaseModel):
     description: str | None = Field(
         default=None, description="Human-readable description of the scheduled task"
     )
+    timezone: str | None = Field(
+        default=None,
+        description=(
+            "Optional IANA timezone for cron evaluation (e.g. 'America/New_York' "
+            "or 'UTC'). Leave unset to use the system default timezone."
+        ),
+    )
 
 
 class DeleteScheduleArgs(BaseModel):
@@ -334,6 +341,9 @@ The tool takes:
 - instruction: A processed instruction that will run at the scheduled time as if the user sent it
 - scheduled_at: One-off ISO8601 datetime, mutually exclusive with cron_expression
 - cron_expression: Recurring cron expression, mutually exclusive with scheduled_at
+- timezone: (optional) IANA timezone for cron evaluation (e.g. "America/New_York"
+  or "UTC"). Only set this if the user explicitly names a timezone; otherwise
+  leave it unset and the system default timezone is used.
 
 Example: If user says "say hello world every day at 9am", create:
 - cron_expression: "0 9 * * *"

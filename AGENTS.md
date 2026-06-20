@@ -57,7 +57,7 @@ progenitor/
 - Always activate venv before Python commands
 - Mock mode available: `$env:PROGENITOR_MOCK_LLM = "true"`
 - Backend runs on `:8000`, Frontend on `:5173`
-- State persists in JSON files: `current_state.json`, `build_state.json`, and `data/config/schedule.json`
+- State persists in the Postgres document store (e.g. `current_state`, `build_state`, and the `schedule` document), not in JSON files
 
 ### Repo Safety Policy (Copilot)
 - **Do not merge PRs**. Create PRs and wait for human approval/merge.

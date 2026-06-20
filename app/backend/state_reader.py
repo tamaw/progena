@@ -680,8 +680,6 @@ class StateReader:
 
     def get_schedule(self) -> list[ScheduleItem]:
         data = self._read_json_from_path(self.schedule_config_path)
-        if self.document_store is None and data is None and not self.schedule_config_path.exists():
-            data = self._read_json("schedule.json")
         if not data or not isinstance(data, list):
             return []
         return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]

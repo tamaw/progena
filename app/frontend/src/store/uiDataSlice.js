@@ -146,11 +146,12 @@ const initialState = {
   // Schedule list, kept live by `schedule.snapshot` events on /api/ui/stream
   // and seeded once via REST when the Schedules page mounts.
   schedule: [],
-  // Lightweight chat signals surfaced to the primary nav dot. Owned by the
-  // chat page while it is mounted; reset on unmount.
-  chatIndicators: {
-    hasUnread: false,
-    isGenerating: false,
+  // Chat runtime state drives both the conversation cards and the primary nav
+  // dot, so route changes do not clear unread/running indicators.
+  chatRuntime: {
+    unreadChatIds: [],
+    generatingChatIds: [],
+    erroredChatIds: [],
   },
   chats: {
     byId: {},
@@ -248,6 +249,27 @@ function mergeActiveDetail(active, session) {
   };
 }
 
+function normalizeChatRuntimeIds(ids) {
+  if (!Array.isArray(ids)) {
+    return [];
+  }
+  return [...new Set(ids.filter((id) => typeof id === 'string' && id))];
+}
+
+function addChatRuntimeId(ids, chatSessionId) {
+  if (typeof chatSessionId !== 'string' || !chatSessionId || ids.includes(chatSessionId)) {
+    return ids;
+  }
+  return [...ids, chatSessionId];
+}
+
+function removeChatRuntimeId(ids, chatSessionId) {
+  if (typeof chatSessionId !== 'string' || !chatSessionId || !ids.includes(chatSessionId)) {
+    return ids;
+  }
+  return ids.filter((id) => id !== chatSessionId);
+}
+
 function replaceAgentList(agents, items) {
   agents.byId = {};
   agents.order = [];
@@ -279,8 +301,32 @@ const uiDataSlice = createSlice({
   name: 'uiData',
   initialState,
   reducers: {
-    setChatIndicators(state, action) {
-      state.chatIndicators = { ...state.chatIndicators, ...action.payload };
+    setUnreadChatIds(state, action) {
+      state.chatRuntime.unreadChatIds = normalizeChatRuntimeIds(action.payload);
+    },
+    markChatUnread(state, action) {
+      state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, action.payload);
+    },
+    clearChatUnread(state, action) {
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, action.payload);
+    },
+    setGeneratingChatIds(state, action) {
+      state.chatRuntime.generatingChatIds = normalizeChatRuntimeIds(action.payload);
+    },
+    markChatGenerating(state, action) {
+      state.chatRuntime.generatingChatIds = addChatRuntimeId(state.chatRuntime.generatingChatIds, action.payload);
+    },
+    clearChatGenerating(state, action) {
+      state.chatRuntime.generatingChatIds = removeChatRuntimeId(state.chatRuntime.generatingChatIds, action.payload);
+    },
+    setErroredChatIds(state, action) {
+      state.chatRuntime.erroredChatIds = normalizeChatRuntimeIds(action.payload);
+    },
+    markChatErrored(state, action) {
+      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, action.payload);
+    },
+    clearChatErrored(state, action) {
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, action.payload);
     },
     clearActiveChatSession(state) {
       state.chats.active = {
@@ -478,8 +524,16 @@ const uiDataSlice = createSlice({
 export const {
   applyUiEvent,
   clearActiveChatSession,
-  setChatIndicators,
+  clearChatErrored,
+  clearChatGenerating,
+  clearChatUnread,
+  markChatErrored,
+  markChatGenerating,
+  markChatUnread,
   scheduleSnapshotReceived,
+  setErroredChatIds,
+  setGeneratingChatIds,
+  setUnreadChatIds,
 } = uiDataSlice.actions;
 
 export const selectUiStatus = (state) => state.uiData.status;
@@ -491,7 +545,16 @@ export const selectChatSessions = createSelector(
   (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
-export const selectChatIndicators = (state) => state.uiData.chatIndicators;
+export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
+export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
+export const selectErroredChatIds = (state) => state.uiData.chatRuntime.erroredChatIds;
+export const selectChatIndicators = createSelector(
+  [selectUnreadChatIds, selectGeneratingChatIds],
+  (unreadChatIds, generatingChatIds) => ({
+    hasUnread: unreadChatIds.length > 0,
+    isGenerating: generatingChatIds.length > 0,
+  }),
+);
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
 export const selectAgentProfiles = createSelector(

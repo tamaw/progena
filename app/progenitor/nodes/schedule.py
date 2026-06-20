@@ -42,7 +42,11 @@ async def scheduled_completion_node(
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
     """Emit completion events for scheduled work."""
-    return await emit_scheduled_completion(state, runtime.context.queues)
+    return await emit_scheduled_completion(
+        state,
+        runtime.context.state_manager,
+        runtime.context.queues,
+    )
 
 
 async def scheduler_tick_node(

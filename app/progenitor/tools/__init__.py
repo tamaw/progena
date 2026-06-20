@@ -24,6 +24,7 @@ if TYPE_CHECKING:
         resume_scheduled_task,
         update_scheduled_task,
     )
+    from .schedule_results import GetScheduleRunResultTool, ListScheduleRunsTool
     from .schedule_task import ScheduleTaskTool
     from .self_reflect import SELF_REFLECT_TOOL_SPEC, SelfReflection, execute_self_reflect
     from .self_reflect_tool import SelfReflectTool
@@ -60,6 +61,8 @@ def __getattr__(name: str):
         "ListScheduleTool": "list_schedule",
         "SelfReflectTool": "self_reflect_tool",
         "ScheduleTaskTool": "schedule_task",
+        "ListScheduleRunsTool": "schedule_results",
+        "GetScheduleRunResultTool": "schedule_results",
     }
     if name in _tool_modules:
         import importlib
@@ -98,4 +101,6 @@ __all__ = [
     "ListScheduleTool",
     "SelfReflectTool",
     "ScheduleTaskTool",
+    "ListScheduleRunsTool",
+    "GetScheduleRunResultTool",
 ]
