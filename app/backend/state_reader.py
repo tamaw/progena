@@ -485,9 +485,7 @@ class StateReader:
             return None
 
         if prefix_key_default is not None:
-            prefix, key, default = prefix_key_default
-            document = self.document_store.get_document(prefix, key, default)
-            return document.payload if document is not None else default
+            return default_for_missing
         return None
 
     def _write_json_to_path(self, filepath: Path, data: Any) -> bool:
