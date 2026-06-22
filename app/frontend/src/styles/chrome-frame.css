@@ -5053,22 +5053,6 @@ body,
   font-weight: 500;
 }
 
-.tools-link-button {
-  padding: 2px 4px;
-  color: var(--color-accent);
-  background: transparent;
-  border: 0;
-  border-radius: 5px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.tools-link-button:hover {
-  background: var(--color-accent-soft);
-}
-
 .tools-pane__filters {
   display: grid;
   grid-template-columns: repeat(4, auto) minmax(0, 1fr);
@@ -5268,6 +5252,85 @@ body,
   font-size: 10px;
 }
 
+/* Two-line MCP server card (mirrors .schedule-pane-row). Distinct class name so
+   it never collides with the graph-node .tools / .schedule-row styles. */
+.tools-pane-row {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tools-pane-row--disabled,
+.tools-pane-row--error {
+  opacity: 0.82;
+}
+
+.tools-pane-row .sess-row__top {
+  grid-column: 1;
+}
+
+.tools-pane-row .sess-row__title {
+  grid-column: 1;
+  /* Reserve the second line so the card height stays stable. */
+  min-height: 1.35em;
+}
+
+.tools-pane-row__name {
+  color: var(--color-text-secondary);
+  font-weight: 700;
+}
+
+.tools-config-edit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.tools-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tools-config-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+}
+
+.tools-config-field input {
+  padding: 9px 11px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.tools-config-field input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.tools-config-field input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tools-config-edit__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.tools-detail__url {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+  vertical-align: bottom;
+}
+
 .tools-pane__foot {
   display: flex;
   justify-content: space-between;
@@ -5402,28 +5465,6 @@ body,
   white-space: nowrap;
 }
 
-.tools-capabilities {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.tools-capability {
-  padding: 4px 9px;
-  color: var(--color-text-muted);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 5px;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.tools-capability.is-active {
-  color: #cfe0ff;
-  background: color-mix(in oklab, var(--color-accent) 28%, var(--color-bg-secondary));
-  border-color: color-mix(in oklab, var(--color-accent) 38%, var(--color-border));
-}
-
 .tools-tool-list {
   display: grid;
   gap: 6px;
@@ -5514,6 +5555,25 @@ body,
 .tools-toggle.is-on span {
   background: #fff;
   transform: translateX(11px);
+}
+
+.tools-toggle:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+/* Keep the per-tool toggle pinned to the card's reserved right-hand column. */
+.tools-tool-row > .tools-toggle {
+  grid-column: 4;
+}
+
+.tools-tool-row--disabled {
+  opacity: 0.55;
+}
+
+.tools-tool-row--disabled .tools-tool-row__body strong {
+  text-decoration: line-through;
+  text-decoration-color: var(--color-text-muted);
 }
 
 .tools-empty-state {

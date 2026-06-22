@@ -2,6 +2,7 @@
 Tests for the centralized configuration module.
 """
 
+import json
 import logging
 import os
 from pathlib import Path
@@ -17,7 +18,6 @@ from app.progenitor.config import (
     StorageConfig,
     get_config,
     reload_config,
-    resolve_mcp_config_path,
     resolve_schedule_config_path,
 )
 from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
@@ -264,13 +264,7 @@ class TestStorageConfig:
 
 
 class TestMCPConfig:
-    """Tests for Progenitor's live MCP config loader."""
-
-    def test_resolve_mcp_config_path_uses_checked_in_default(self):
-        repo_root = Path(__file__).resolve().parents[2]
-        with patch.dict(os.environ, {}, clear=False):
-            path = resolve_mcp_config_path()
-        assert path == repo_root / "data" / "config" / "mcp.json"
+    """Tests for Progenitor's persisted MCP registry loader."""
 
     def test_resolve_schedule_config_path_uses_checked_in_default(self):
         repo_root = Path(__file__).resolve().parents[2]
@@ -278,9 +272,8 @@ class TestMCPConfig:
             path = resolve_schedule_config_path()
         assert path == repo_root / "data" / "config" / "schedule.json"
 
-    def test_load_mcp_servers_reads_mcp_servers_map(self, tmp_path):
-        config_path = tmp_path / "mcp.json"
-        config_path.write_text(
+    def test_load_mcp_servers_reads_mcp_servers_map(self):
+        payload = json.loads(
             """{
   "mcpServers": {
     "jina": {
@@ -293,12 +286,10 @@ class TestMCPConfig:
       }
     }
   }
-}""",
-            encoding="utf-8",
+}"""
         )
-
         with patch.dict(os.environ, {"JINA_API_KEY": "jina_test_key"}, clear=False):
-            servers = load_mcp_servers(config_path)
+            servers = load_mcp_servers(payload)
 
         assert servers == [
             MCPServerConfig(
@@ -311,9 +302,8 @@ class TestMCPConfig:
             )
         ]
 
-    def test_load_mcp_servers_drops_headers_with_missing_env(self, tmp_path):
-        config_path = tmp_path / "mcp.json"
-        config_path.write_text(
+    def test_load_mcp_servers_drops_headers_with_missing_env(self):
+        payload = json.loads(
             """{
   "mcpServers": {
     "jina": {
@@ -325,13 +315,11 @@ class TestMCPConfig:
       }
     }
   }
-}""",
-            encoding="utf-8",
+}"""
         )
-
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("JINA_API_KEY", None)
-            servers = load_mcp_servers(config_path)
+            servers = load_mcp_servers(payload)
 
         assert len(servers) == 1
         assert servers[0].name == "jina"
@@ -350,17 +338,11 @@ class TestMCPConfig:
             [],
         )
 
-    def test_empty_mcp_config_has_no_servers(self, tmp_path):
-        config_path = tmp_path / "mcp.json"
-        config_path.write_text("", encoding="utf-8")
+    def test_empty_mcp_config_has_no_servers(self):
+        assert load_mcp_servers({}) == []
 
-        assert load_mcp_servers(config_path) == []
-
-    def test_load_reads_checked_in_file(self, tmp_path):
-        mcp_dir = tmp_path / "data" / "config"
-        mcp_dir.mkdir(parents=True)
-        config_path = mcp_dir / "mcp.json"
-        config_path.write_text(
+    def test_load_reads_persisted_payload(self):
+        payload = json.loads(
             """{
   "mcpServers": {
     "jina": {
@@ -369,13 +351,11 @@ class TestMCPConfig:
       "url": "https://mcp.jina.ai/v1"
     }
   }
-}""",
-            encoding="utf-8",
+}"""
         )
 
-        config = MCPConfig.load(config_path=config_path)
+        config = MCPConfig.from_payload(payload)
 
-        assert config.config_path == config_path
         assert [server.name for server in config.servers] == ["jina"]
 
 

@@ -17,6 +17,8 @@ import reducer, {
   selectGeneratingChatIds,
   selectChatSessions,
   selectUnreadChatIds,
+  selectMcpServers,
+  selectMcpState,
   selectSchedules,
   scheduleSnapshotReceived,
   setErroredChatIds,
@@ -92,6 +94,17 @@ describe('applyUiEvent reducer', () => {
     const items = [{ id: 'sched-a', name: 'A' }, { id: 'sched-b', name: 'B', paused: true }];
     const s = reducer(undefined, applyUiEvent({ type: 'schedule.snapshot', payload: { items } }));
     expect(selectSchedules({ uiData: s })).toEqual(items);
+  });
+
+  it('mcp.snapshot replaces the MCP server list and marks it loaded', () => {
+    const items = [
+      { id: 'mcp:jina', type: 'mcp', name: 'jina' },
+      { id: 'mcp:linear', type: 'mcp', name: 'linear' },
+    ];
+    const s = reducer(undefined, applyUiEvent({ type: 'mcp.snapshot', payload: { items } }));
+    expect(selectMcpServers({ uiData: s })).toEqual(items);
+    expect(selectMcpState({ uiData: s }).loaded).toBe(true);
+    expect(selectMcpState({ uiData: s }).error).toBe(null);
   });
 });
 

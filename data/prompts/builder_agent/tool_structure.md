@@ -158,9 +158,9 @@ Before marking as complete, verify:
 
 After building, the tool should be discoverable by:
 1. Adding to the tool registry via `rediscover_tools` system tool
-2. Or manually registering in `data/config/mcp.json`
+2. Or manually registering it in the shared MCP registry document
 
-## Example Tool Entry (mcp.json)
+## Example Tool Entry (shared MCP registry payload)
 
 ```json
 {

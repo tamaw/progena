@@ -1,5 +1,5 @@
 """
-MCP Refresh - Refresh live MCP tool discovery from data/config/mcp.json.
+MCP Refresh - Refresh live MCP tool discovery from the shared MCP state document.
 """
 
 import logging
@@ -56,10 +56,14 @@ class MCPRefreshTool(BaseSystemTool):
                 llm_client,
                 context.tool_registry,
                 mcp_config,
+                state_manager=context.state_manager,
                 reload_config=True,
             )
         else:
-            refreshed_config = MCPConfig.load(config_path=mcp_config.config_path)
+            if context.state_manager is None:
+                return ToolResult.fail("state_manager unavailable")
+            refreshed_payload = await context.state_manager.get_mcp_config()
+            refreshed_config = MCPConfig.from_payload(refreshed_payload)
             await attach_mcp_runtime_context(llm_client, refreshed_config)
 
         mcp_runtime = llm_client.mcp_runtime
