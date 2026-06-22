@@ -2102,10 +2102,11 @@ async def get_widgets():
     """
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
-    broadcast_widgets_snapshot()
+    broadcast_widgets_snapshot(widgets)
     return WidgetsResponse(items=widgets, total=len(widgets))
 
 
+@router.get("/mcp", response_model=WidgetsResponse)
 async def get_mcp_servers():
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
 
@@ -2114,8 +2115,7 @@ async def get_mcp_servers():
     store instead of filtering the generic widget list.
     """
     items = _mcp_widget_items()
-    payload_items = [item.model_dump(mode="json") for item in items]
-    broadcast_ui_event("mcp.snapshot", {"items": payload_items})
+    broadcast_mcp_snapshot(items)
     return WidgetsResponse(items=items, total=len(items))
 
 
@@ -4273,24 +4273,32 @@ def broadcast_schedule_snapshot() -> UiEventEnvelope:
     return broadcast_ui_event("schedule.snapshot", {"items": items})
 
 
-def broadcast_mcp_snapshot() -> UiEventEnvelope:
+def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
     """Broadcast the current MCP server list to /api/ui/stream subscribers.
 
     Emitted after the Tools page requests the list and whenever an MCP config
     change is detected (backend edit, or runtime/agent write surfaced via the
-    Postgres NOTIFY watcher), so the Tools page reflects changes live.
+    Postgres NOTIFY watcher), so the Tools page reflects changes live. Callers
+    that already built the list (e.g. the GET handler) can pass it in to avoid
+    a second ``get_widgets()`` pass and keep the snapshot consistent with the
+    HTTP response.
     """
-    items = [item.model_dump(mode="json") for item in _mcp_widget_items()]
-    return broadcast_ui_event("mcp.snapshot", {"items": items})
+    source = _mcp_widget_items() if items is None else items
+    payload = [item.model_dump(mode="json") for item in source]
+    return broadcast_ui_event("mcp.snapshot", {"items": payload})
 
 
-def broadcast_widgets_snapshot() -> UiEventEnvelope:
-    """Broadcast the unified widget list (dashboard/cross-cutting views)."""
-    state_reader = get_state_reader()
-    items = [
-        _widget_to_response(widget).model_dump(mode="json") for widget in state_reader.get_widgets()
-    ]
-    return broadcast_ui_event("widgets.updated", {"items": items})
+def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
+    """Broadcast the unified widget list (dashboard/cross-cutting views).
+
+    Callers holding a freshly built list can pass it in to avoid recomputing
+    widgets and to keep the SSE snapshot consistent with their HTTP response.
+    """
+    if items is None:
+        state_reader = get_state_reader()
+        items = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
+    payload = [item.model_dump(mode="json") for item in items]
+    return broadcast_ui_event("widgets.updated", {"items": payload})
 
 
 def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
