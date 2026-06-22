@@ -485,7 +485,7 @@ class StateReader:
             return None
 
         if prefix_key_default is not None:
-            return default_for_missing
+            return default
         return None
 
     def _write_json_to_path(self, filepath: Path, data: Any) -> bool:
