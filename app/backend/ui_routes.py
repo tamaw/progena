@@ -2102,7 +2102,7 @@ async def get_widgets():
     """
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
-    broadcast_ui_event("widgets.updated", {"items": [w.model_dump(mode="json") for w in widgets]})
+    broadcast_widgets_snapshot()
     return WidgetsResponse(items=widgets, total=len(widgets))
 
 
@@ -3569,9 +3569,6 @@ _status_monitor_task: asyncio.Task | None = None
 _last_status: dict = {}
 _state_watch_callback = None
 _state_watch_push_task: asyncio.Task | None = None
-# Last seen MCP-config fingerprint, so the watcher only emits mcp.snapshot when
-# the MCP config actually changed (not on every unrelated state change).
-_last_mcp_fingerprint: str | None = None
 
 # Track active SSE response tasks so we can cancel them on shutdown
 _active_chat_tasks: list[asyncio.Task] = []
@@ -3699,41 +3696,52 @@ async def _get_current_status() -> dict:
     return status
 
 
-async def _status_monitor():
-    """Background task that polls status and broadcasts to SSE subscribers.
+def _process_metrics() -> dict:
+    """Process-level status that changes without a DB write (uptime, memory).
 
-    Pushes status updates every 3 seconds for responsive UI.
-    Pushes to _status_subscribers for status stream consumers.
+    The full, DB-derived status is pushed on connect (connection.ready) and on
+    every change via the Postgres NOTIFY watcher; this lightweight payload is
+    merged into it by the periodic tick so we never re-read the DB just to
+    refresh metrics.
     """
-    global _last_status
+    from . import main as chat_main
 
-    update_interval = 3  # Push status every 3 seconds for responsive updates
+    now = time.time()
+    start_time = getattr(chat_main, "_server_start_time", now)
+    shutdown_mgr = getattr(chat_main, "shutdown_manager", None)
+    draining = bool(shutdown_mgr and shutdown_mgr.is_shutting_down)
 
-    logger.info("[StatusMonitor] Starting status monitor loop")
+    metrics: dict = {
+        "status": "draining" if draining else "healthy",
+        "uptime_seconds": round(now - start_time, 1),
+    }
+    try:
+        import psutil
+
+        metrics["memory_mb"] = round(psutil.Process().memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        metrics["memory_mb"] = None
+    return metrics
+
+
+async def _status_monitor():
+    """Push process-level metrics to SSE subscribers on a fixed cadence.
+
+    Only metrics (uptime/memory) are sent here; DB-derived state is carried by
+    the LISTEN/NOTIFY watcher, so this loop never reads the database.
+    """
+    update_interval = 3  # Refresh process metrics every 3 seconds
+
+    logger.info("[StatusMonitor] Starting process-metrics loop")
 
     while True:
         try:
             await asyncio.sleep(update_interval)
 
-            # Count subscribers
-            status_count = len(_status_subscribers)
-            stream_count = len(_ui_stream_subscribers)
-            total_subscribers = status_count + stream_count
-
-            if total_subscribers == 0:
+            if not _status_subscribers and not _ui_stream_subscribers:
                 continue  # No subscribers, skip
 
-            current = await _get_current_status()
-            _last_status = current.copy()
-
-            # Push to /status subscribers
-            broadcast_status_event("status", current)
-
-            logger.debug(
-                "[StatusMonitor] Pushed status to %d status and %d stream subscribers",
-                status_count,
-                stream_count,
-            )
+            broadcast_status_event("status", _process_metrics())
 
         except asyncio.CancelledError:
             print("[StatusMonitor] Cancelled", flush=True)
@@ -3755,20 +3763,28 @@ async def _broadcast_latest_status() -> None:
         _state_watch_push_task = None
 
 
-def _queue_state_watch_status(snapshot) -> None:
-    global _state_watch_push_task, _last_mcp_fingerprint
+# Store keys whose change should refresh the unified widget list.
+_WIDGET_KEYS = frozenset({"mcp", "mcp_tools", "schedule", "registry", "event_widgets"})
+
+
+def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
+    global _state_watch_push_task
     if not _status_subscribers and not _ui_stream_subscribers:
         return
-    # Emit the dedicated mcp.snapshot only when the MCP config fingerprint
-    # changed, so the Tools page is isolated from unrelated state churn.
-    fingerprint = getattr(snapshot, "mcp_fingerprint", "")
-    if fingerprint != _last_mcp_fingerprint:
-        _last_mcp_fingerprint = fingerprint
-        if _ui_stream_subscribers:
-            try:
+    # Route the changed key to its dedicated event so pages render from a precise
+    # snapshot (None = full resync after a reconnect → refresh everything).
+    if _ui_stream_subscribers:
+        try:
+            if changed_key in (None, "mcp", "mcp_tools"):
                 broadcast_mcp_snapshot()
-            except Exception:
-                logger.debug("Failed to broadcast mcp snapshot", exc_info=True)
+            if changed_key in (None, "schedule"):
+                broadcast_schedule_snapshot()
+            if changed_key is None or changed_key in _WIDGET_KEYS:
+                broadcast_widgets_snapshot()
+        except Exception:
+            logger.debug("Failed to broadcast dedicated snapshot", exc_info=True)
+    # Status (health/agents/loops/sessions) + chat sessions follow on the
+    # coalesced task.
     if _state_watch_push_task and not _state_watch_push_task.done():
         return
     _state_watch_push_task = asyncio.create_task(_broadcast_latest_status())
@@ -4266,6 +4282,15 @@ def broadcast_mcp_snapshot() -> UiEventEnvelope:
     """
     items = [item.model_dump(mode="json") for item in _mcp_widget_items()]
     return broadcast_ui_event("mcp.snapshot", {"items": items})
+
+
+def broadcast_widgets_snapshot() -> UiEventEnvelope:
+    """Broadcast the unified widget list (dashboard/cross-cutting views)."""
+    state_reader = get_state_reader()
+    items = [
+        _widget_to_response(widget).model_dump(mode="json") for widget in state_reader.get_widgets()
+    ]
+    return broadcast_ui_event("widgets.updated", {"items": items})
 
 
 def _broadcast_chat_sessions_snapshot(include_archived: bool = True):

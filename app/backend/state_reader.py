@@ -425,7 +425,7 @@ class StateReader:
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
-        self._watchers: list[Callable[[StateSnapshot], None]] = []
+        self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []
         self._listener: StoreChangeListener | None = None
         self.document_store = document_store or (
             get_default_document_store()
@@ -1597,10 +1597,10 @@ class StateReader:
             "widgets": self.get_widgets(),
         }
 
-    def add_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
+    def add_watcher(self, callback: Callable[[StateSnapshot, str | None], None]) -> None:
         self._watchers.append(callback)
 
-    def remove_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
+    def remove_watcher(self, callback: Callable[[StateSnapshot, str | None], None]) -> None:
         if callback in self._watchers:
             self._watchers.remove(callback)
 
@@ -1629,11 +1629,25 @@ class StateReader:
             await self._listener.stop()
             self._listener = None
 
-    def _on_store_change(self, _payload: str) -> None:
-        self._emit_if_changed()
+    def _on_store_change(self, payload: str) -> None:
+        # The NOTIFY payload is {"prefix": ..., "key": ...}; pass the key so
+        # watchers can route to the right dedicated event instead of recomputing
+        # everything.
+        changed_key: str | None = None
+        try:
+            data = json.loads(payload) if payload else {}
+            value = data.get("key") if isinstance(data, dict) else None
+            changed_key = value if isinstance(value, str) else None
+        except (ValueError, TypeError):
+            changed_key = None
+        self._emit_if_changed(changed_key)
 
-    def _emit_if_changed(self) -> None:
-        """Recompute the snapshot and notify watchers when something changed."""
+    def _emit_if_changed(self, changed_key: str | None = None) -> None:
+        """Recompute the snapshot and notify watchers when something changed.
+
+        ``changed_key`` is the store key that triggered the change (None on a
+        full resync, e.g. after a listener reconnect).
+        """
         try:
             snapshot = self.get_snapshot()
         except Exception as e:
@@ -1644,7 +1658,7 @@ class StateReader:
         self._last_snapshot = snapshot
         for watcher in list(self._watchers):
             try:
-                watcher(snapshot)
+                watcher(snapshot, changed_key)
             except Exception as e:
                 logger.warning("Watcher error: %s", e)
 
