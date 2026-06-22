@@ -2106,7 +2106,6 @@ async def get_widgets():
     return WidgetsResponse(items=widgets, total=len(widgets))
 
 
-@router.get("/mcp", response_model=WidgetsResponse)
 async def get_mcp_servers():
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
 
@@ -2115,7 +2114,8 @@ async def get_mcp_servers():
     store instead of filtering the generic widget list.
     """
     items = _mcp_widget_items()
-    broadcast_mcp_snapshot()
+    payload_items = [item.model_dump(mode="json") for item in items]
+    broadcast_ui_event("mcp.snapshot", {"items": payload_items})
     return WidgetsResponse(items=items, total=len(items))
 
 
