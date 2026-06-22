@@ -34,6 +34,23 @@ def _resnapshot(reader: StateReader) -> object:
     return reader.get_snapshot()
 
 
+def test_store_change_threads_key_to_watchers(tmp_path):
+    reader, _store = _reader(tmp_path, {"jina": {"url": "https://x/mcp", "transport": "http"}})
+    seen: list[tuple[object, object]] = []
+    reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
+
+    # NOTIFY payload carries the changed store key; it must reach the watcher.
+    reader._on_store_change('{"prefix": "progenitor.state", "key": "mcp"}')
+
+    assert len(seen) == 1
+    assert seen[0][1] == "mcp"
+
+    # A full resync (no payload) threads None.
+    reader._last_snapshot = None
+    reader._on_store_change("")
+    assert seen[-1][1] is None
+
+
 def test_toggling_enabled_is_detected(tmp_path):
     reader, store = _reader(
         tmp_path,

@@ -128,6 +128,35 @@ class TestUIRoutes:
         assert "items" in data
         assert "total" in data
 
+    def test_process_metrics_excludes_db_fields(self):
+        """The periodic tick carries only process metrics, never DB-derived state."""
+        from app.backend import ui_routes
+
+        metrics = ui_routes._process_metrics()
+        assert set(metrics) == {"status", "uptime_seconds", "memory_mb"}
+        assert metrics["status"] in {"healthy", "draining"}
+        # None of the DB-derived fields leak into the metrics tick.
+        assert "widgets" not in metrics
+        assert "agents" not in metrics
+        assert "schedule" not in metrics
+
+    def test_widgets_endpoint_broadcasts_snapshot(self, client):
+        """GET /widgets returns the list and publishes widgets.updated."""
+        from app.backend import ui_routes
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.append(queue)
+        try:
+            response = client.get("/api/ui/widgets")
+        finally:
+            ui_routes._ui_stream_subscribers.remove(queue)
+
+        assert response.status_code == 200
+        streamed = queue.get_nowait()
+        assert streamed["type"] == "ui.event"
+        assert streamed["envelope"].type == "widgets.updated"
+        assert streamed["envelope"].payload["items"] == response.json()["items"]
+
     def test_mcp_endpoint_broadcasts_snapshot(self, client):
         """GET /mcp returns the MCP list and publishes mcp.snapshot on the stream."""
         from app.backend import ui_routes
