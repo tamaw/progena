@@ -333,7 +333,7 @@ export default function ToolsPage() {
         <PaneListScroll>
           {servers.length === 0 ? (
             <div className="tools-empty-state">
-              No MCP servers configured. Use “+ Add server” to ask Progenitor to connect one.
+              No MCP servers configured. Use “+ Add” to ask Progenitor to connect one.
             </div>
           ) : visibleServers.length === 0 ? (
             <div className="tools-empty-state">No MCP servers match this view.</div>
