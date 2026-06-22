@@ -96,6 +96,19 @@ describe('applyUiEvent reducer', () => {
     expect(selectSchedules({ uiData: s })).toEqual(items);
   });
 
+  it('status.updated merges into existing status (partial metric pushes)', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'status.updated',
+      payload: { progenitor_running: true, agents: [{ name: 'a' }], memory_mb: 100 },
+    }));
+    // A later partial push (e.g. the process-metrics tick) updates only its
+    // fields and preserves the rest.
+    s = reducer(s, applyUiEvent({ type: 'status.updated', payload: { memory_mb: 142 } }));
+    expect(s.status.memory_mb).toBe(142);
+    expect(s.status.progenitor_running).toBe(true);
+    expect(s.status.agents).toEqual([{ name: 'a' }]);
+  });
+
   it('mcp.snapshot replaces the MCP server list and marks it loaded', () => {
     const items = [
       { id: 'mcp:jina', type: 'mcp', name: 'jina' },

@@ -2094,9 +2094,15 @@ def _mcp_widget_items() -> list[WidgetResponse]:
 
 @router.get("/widgets", response_model=WidgetsResponse)
 async def get_widgets():
-    """Get unified widget data derived from existing state/config/log files."""
+    """Return the unified widget list and publish it on the UI stream.
+
+    Mirrors the schedule/agent/mcp pattern: the GET acknowledges and broadcasts
+    ``widgets.updated`` so pages render from the realtime store rather than
+    holding the HTTP response themselves.
+    """
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
+    broadcast_ui_event("widgets.updated", {"items": [w.model_dump(mode="json") for w in widgets]})
     return WidgetsResponse(items=widgets, total=len(widgets))
 
 

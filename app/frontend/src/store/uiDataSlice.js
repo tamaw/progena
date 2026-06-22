@@ -95,6 +95,19 @@ export const fetchAgentProfiles = createAsyncThunk(
   },
 );
 
+// Acknowledge a widget-list request; the snapshot arrives on the realtime
+// stream as `widgets.updated` (the GET just triggers the broadcast).
+export const fetchWidgets = createAsyncThunk(
+  'uiData/fetchWidgets',
+  async ({ widgetsUrl }) => {
+    const response = await fetch(widgetsUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load widgets (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
 // Acknowledge an MCP-list request; the snapshot arrives on the realtime stream
 // as `mcp.snapshot` (the GET just triggers the broadcast).
 export const fetchMcp = createAsyncThunk(
@@ -371,7 +384,10 @@ const uiDataSlice = createSlice({
         return;
       }
       if (event?.type === 'status.updated') {
-        state.status = payload;
+        // Merge rather than replace so a partial push (e.g. the periodic
+        // process-metrics tick) updates only the fields it carries and leaves
+        // the rest (agents/tools/schedule/...) intact.
+        state.status = { ...state.status, ...payload };
         if (payload.alerts) {
           state.alerts = payload.alerts;
         }
