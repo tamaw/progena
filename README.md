@@ -145,9 +145,9 @@ through backend-managed conversation/session stores.
 
 ## Configuration
 
-Configuration is sourced from environment variables plus live config files under `data/config/`. See `.env.example` for defaults.
+Configuration is sourced from environment variables plus the shared runtime state. See `.env.example` for defaults.
 
-Progenitor loads external MCP servers from `data/config/mcp.json`. The default file includes a disabled Jina remote MCP example for web search and page reading:
+Progenitor loads external MCP servers from the shared `mcp` state document. A typical payload looks like:
 
 ```json
 {
@@ -177,7 +177,7 @@ AZURE_OPENAI_ENDPOINT=https://...
 AZURE_OPENAI_API_KEY=...
 AZURE_OPENAI_DEPLOYMENT_DEFAULT=gpt-4o
 
-# MCP auth referenced by data/config/mcp.json
+# MCP auth referenced by the shared MCP registry
 JINA_API_KEY=
 ```
 

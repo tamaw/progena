@@ -57,7 +57,7 @@ class StateManager:
     Core runtime data is split across state and config files:
     - build_state.json: Agent build process only (inner loop, LLM messages, verification)
     - current_state.json: Progenitor agent operational state (chat, tool calls)
-    - schedule.json: Scheduled tasks stored in data/config
+    - schedule.json: Scheduled tasks stored in the config directory bridge
 
     Provides:
     - Atomic writes for crash safety
@@ -77,7 +77,6 @@ class StateManager:
         "build_state": "build_state.json",  # Agent builds only
         "current_state": "current_state.json",  # Progenitor agent state
         "registry": "agents.json",
-        "mcp": "mcp.json",
         "schedule": "schedule.json",
     }
 
@@ -100,7 +99,7 @@ class StateManager:
 
     def _path_for(self, name: str) -> Path:
         """Resolve core file path, routing registry files to config dir."""
-        if name in {"registry", "mcp", "schedule"}:
+        if name in {"registry", "schedule"}:
             return self.config_dir / self.CORE_FILES[name]
         return self.state_dir / self.CORE_FILES[name]
 
@@ -261,7 +260,6 @@ class StateManager:
                 "current_build_request": None,  # Reference to active build (id only)
             },
             "registry": {},
-            "mcp": {"tools": []},
             "schedule": schedule_default,
         }
 
@@ -455,9 +453,9 @@ class StateManager:
                 break
         await self.save_backlog(backlog)
 
-    # Schedule management (stored in data/config/schedule.json)
+    # Schedule management (stored in the config-directory schedule bridge)
     async def get_schedule(self) -> list[ScheduleEntry]:
-        """Get scheduled tasks from data/config/schedule.json.
+        """Get scheduled tasks from the config-directory schedule bridge.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.
@@ -467,7 +465,7 @@ class StateManager:
             return [ScheduleEntry(**item) for item in (data or [])]
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        """Save scheduled tasks to data/config/schedule.json.
+        """Save scheduled tasks to the config-directory schedule bridge.
 
         Schedule is a system feature that persists beyond user sessions.
         It is stored separately from current_state.json.

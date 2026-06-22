@@ -156,7 +156,7 @@ DeepAgent backend map:
 | --- | --- | --- | --- |
 | `/memories/` | `data/memories/` | read-write | Durable agent memory. |
 | `/self/` | project `app/` | read-only | Self-inspection of application code. |
-| `/data/` | configured data dir | read-only | Runtime data/config visibility. |
+| `/data/` | configured data dir | read-only | Runtime data visibility and config-bridge inspection. |
 | `/logs/` | configured log dir | read-only | Audit/log visibility. |
 | `/prompts/` | configured prompts dir | read-only | Prompt pack visibility. |
 | default | DeepAgents `StateBackend` | read-write | Ephemeral workspace state. |

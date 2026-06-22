@@ -44,9 +44,10 @@ def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
 class StateManager:
     """Manages persistence of Progenitor state with file locking.
 
-    Core runtime data is split across state and config files:
+    Core runtime data is split across the current-state file bridge and
+    shared runtime documents:
     - current_state.json: Progenitor agent operational state (chat, tool calls)
-    - registry/mcp config files for backend-managed metadata
+    - registry/mcp/schedule: backend-managed metadata in the shared store
 
     Provides:
     - Atomic writes for crash safety
@@ -149,6 +150,10 @@ class StateManager:
             read_json=self._read_json,
             atomic_write_json=self._atomic_write_json,
         )
+        from ..config import default_mcp_config_payload
+
+        self._state_cache.setdefault("mcp", default_mcp_config_payload())
+        self._state_cache.setdefault("mcp_tools", {"tools": []})
         self._state_cache.setdefault("schedule", [])
         self._state_cache.setdefault("schedule_runs", [])
 
@@ -178,6 +183,7 @@ class StateManager:
             "schedule_runs": [],
             "registry": {},
             "mcp": default_mcp_config_payload(),
+            "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
         }
         assert self._runtime_store is not None
@@ -311,6 +317,55 @@ class StateManager:
             atomic_write_json=self._atomic_write_json,
             registry_path=self._core_file_path("registry"),
         )
+
+    async def get_mcp_config(self) -> dict[str, Any]:
+        from ..config import default_mcp_config_payload
+        from ..mcp.loader import normalize_mcp_config_payload
+
+        if self._runtime_store is not None:
+            # Read straight from the shared store rather than the in-memory
+            # cache: the MCP config document is also created/edited by the
+            # backend (UI) writing the same Postgres document, so a cached copy
+            # would hide those cross-process changes from the runtime's periodic
+            # MCP refresh. See get_schedule for the same rationale.
+            payload = await self._runtime_store.get_document("mcp", default_mcp_config_payload())
+            self._state_cache["mcp"] = payload
+            return normalize_mcp_config_payload(
+                payload if isinstance(payload, dict) else default_mcp_config_payload()
+            )
+        payload = self._state_cache.get("mcp", default_mcp_config_payload())
+        return normalize_mcp_config_payload(payload if isinstance(payload, dict) else None)
+
+    async def save_mcp_config(self, payload: dict[str, Any]) -> None:
+        from ..mcp.loader import normalize_mcp_config_payload
+
+        normalized = normalize_mcp_config_payload(payload)
+        if self._runtime_store is not None:
+            await self._save_runtime_document("mcp", normalized)
+            return
+        self._state_cache["mcp"] = normalized
+
+    async def get_mcp_tools(self) -> dict[str, Any]:
+        """Return the runtime-owned discovered MCP tools document.
+
+        Read straight from the shared store (not the cache): the backend (UI)
+        toggles per-tool enabled flags by writing this same document, so a cached
+        copy would hide those cross-process changes. See get_schedule.
+        """
+        default: dict[str, Any] = {"tools": []}
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.get_document("mcp_tools", default)
+            self._state_cache["mcp_tools"] = payload
+            return payload if isinstance(payload, dict) else dict(default)
+        payload = self._state_cache.get("mcp_tools", default)
+        return payload if isinstance(payload, dict) else dict(default)
+
+    async def save_mcp_tools(self, payload: dict[str, Any]) -> None:
+        if self._runtime_store is not None:
+            self._state_cache["mcp_tools"] = payload
+            await self._runtime_store.save_document("mcp_tools", payload)
+            return
+        self._state_cache["mcp_tools"] = payload
 
     # ==========================================================================
     # Current State Management (current_state.json - Progenitor agent state)

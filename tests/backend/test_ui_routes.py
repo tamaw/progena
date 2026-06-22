@@ -128,6 +128,28 @@ class TestUIRoutes:
         assert "items" in data
         assert "total" in data
 
+    def test_mcp_endpoint_broadcasts_snapshot(self, client):
+        """GET /mcp returns the MCP list and publishes mcp.snapshot on the stream."""
+        from app.backend import ui_routes
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.append(queue)
+        try:
+            response = client.get("/api/ui/mcp")
+        finally:
+            ui_routes._ui_stream_subscribers.remove(queue)
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "items" in data
+        assert all(item["type"] == "mcp" for item in data["items"])
+
+        streamed = queue.get_nowait()
+        assert streamed["type"] == "ui.event"
+        envelope = streamed["envelope"]
+        assert envelope.type == "mcp.snapshot"
+        assert envelope.payload["items"] == data["items"]
+
     def test_database_schema_endpoint_reports_store_schema(self, client, document_store):
         response = client.get("/api/ui/database/schema")
 
@@ -1526,13 +1548,15 @@ class TestWorkspaceBridgeActions:
             ),
             encoding="utf-8",
         )
-        (config_dir / "mcp.json").write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": {}})
 
         state_reader = StateReader(
             state_dir=state_dir,
             config_dir=config_dir,
             sessions_dir=sessions_dir,
             logs_dir=logs_dir,
+            document_store=store,
         )
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1568,7 +1592,9 @@ class TestWorkspaceBridgeActions:
         assert payload["data"]["inspection"]["skills"][0]["id"] == "diagnose"
         assert payload["data"]["agent_card_url"].endswith("/.well-known/agent-card.json")
 
-    def test_refresh_mcp_widget_returns_protocol_catalog(self, client, tmp_path, monkeypatch):
+    def test_refresh_mcp_widget_is_rejected(self, client, tmp_path, monkeypatch):
+        # MCP tool discovery is owned by the Progenitor runtime's MCP init (and
+        # ``mcp_refresh``); the backend no longer probes servers itself.
         state_dir = tmp_path / "data" / "state"
         config_dir = tmp_path / "data" / "config"
         sessions_dir = tmp_path / "data" / "sessions"
@@ -1582,20 +1608,20 @@ class TestWorkspaceBridgeActions:
             encoding="utf-8",
         )
         (config_dir / "agents.json").write_text(json.dumps({"agents": []}), encoding="utf-8")
-        (config_dir / "mcp.json").write_text(
-            json.dumps(
-                {
-                    "mcpServers": {
-                        "jina": {
-                            "description": "Web tools",
-                            "enabled": True,
-                            "transport": "http",
-                            "url": "https://mcp.example.test",
-                        }
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp",
+            {
+                "mcpServers": {
+                    "jina": {
+                        "description": "Web tools",
+                        "enabled": True,
+                        "transport": "http",
+                        "url": "https://mcp.example.test",
                     }
                 }
-            ),
-            encoding="utf-8",
+            },
         )
 
         state_reader = StateReader(
@@ -1603,39 +1629,14 @@ class TestWorkspaceBridgeActions:
             config_dir=config_dir,
             sessions_dir=sessions_dir,
             logs_dir=logs_dir,
+            document_store=store,
         )
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
-        async def fake_inspect_mcp_widget(widget, reader):
-            assert widget["id"] == "mcp:jina"
-            assert reader is state_reader
-            return {
-                **widget,
-                "inspection": {
-                    "source": "mcp",
-                    "refreshed_at": "2026-04-13T10:31:00Z",
-                    "protocol_version": "2025-03-26",
-                    "tools": [{"name": "search", "description": "Search the web"}],
-                    "resources": [{"name": "docs", "uri": "resource://docs"}],
-                    "prompts": [{"name": "summarize", "description": "Summarize a page"}],
-                },
-                "url": "https://mcp.example.test",
-            }
-
-        monkeypatch.setattr(
-            "app.backend.ui_routes._inspect_mcp_widget",
-            fake_inspect_mcp_widget,
-        )
-
         response = client.post("/api/ui/widgets/mcp:jina/refresh")
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["id"] == "mcp:jina"
-        assert payload["data"]["inspection"]["source"] == "mcp"
-        assert payload["data"]["inspection"]["tools"][0]["name"] == "search"
-        assert payload["data"]["inspection"]["resources"][0]["uri"] == "resource://docs"
-        assert payload["data"]["inspection"]["prompts"][0]["name"] == "summarize"
+        assert response.status_code == 400
+        assert "agent" in response.json()["detail"].lower()
 
     def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()

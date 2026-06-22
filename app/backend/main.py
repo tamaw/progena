@@ -822,7 +822,7 @@ async def lifespan(app: FastAPI):
         config.rate_limit_enabled,
     )
     logger.info("Enhanced features: streaming, metadata, attachments, sessions")
-    await start_state_status_watcher(interval=1.0)
+    await start_state_status_watcher(reconnect_delay=2.0)
     graceful_shutdown.register_callback(
         "stop_state_status_watcher",
         stop_state_status_watcher,

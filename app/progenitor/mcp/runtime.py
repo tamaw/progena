@@ -26,6 +26,9 @@ class MCPRuntime:
         self.mcp_tools: list[dict[str, Any]] = []
         self.mcp_langchain_tools: list[BaseTool] = []
         self.mcp_tool_lookup: dict[str, dict[str, Any]] = {}
+        # Namespaced tool names the user has disabled. Disabled tools are hidden
+        # from the agent (langchain/openai surfaces) and rejected at call time.
+        self.disabled_tools: set[str] = set()
 
     def set_context(
         self,
@@ -38,10 +41,15 @@ class MCPRuntime:
         self.mcp_tools = mcp_tools or []
         self.mcp_langchain_tools = mcp_langchain_tools or []
         self.mcp_tool_lookup = {}
+        self.disabled_tools = set()
         for tool in self.mcp_tools:
             name = str(tool.get("name") or "").strip()
             if name:
                 self.mcp_tool_lookup[name] = tool
+
+    def set_disabled_tools(self, names: set[str] | None) -> None:
+        """Set the namespaced tool names to hide from the agent."""
+        self.disabled_tools = {str(name) for name in (names or set())}
 
     async def close(self) -> None:
         """Close all initialized MCP clients and clear the runtime context."""
@@ -87,17 +95,24 @@ class MCPRuntime:
         return normalize_mcp_tool_definition(tool)
 
     def iter_openai_tools(self) -> list[dict[str, Any]]:
-        """Return the live MCP tool set in OpenAI tool-definition format."""
+        """Return the live (enabled) MCP tool set in OpenAI tool-definition format."""
         normalized: list[dict[str, Any]] = []
         for tool in self.mcp_tools:
+            if str(tool.get("name") or "") in self.disabled_tools:
+                continue
             definition = self.normalize_tool_definition(tool)
             if definition is not None:
                 normalized.append(definition)
         return normalized
 
     def get_langchain_tools(self) -> list[BaseTool]:
-        """Return the live MCP LangChain tool wrappers."""
-        return [tool for tool in self.mcp_langchain_tools if isinstance(tool, BaseTool)]
+        """Return the live (enabled) MCP LangChain tool wrappers."""
+        return [
+            tool
+            for tool in self.mcp_langchain_tools
+            if isinstance(tool, BaseTool)
+            and str(getattr(tool, "name", "")) not in self.disabled_tools
+        ]
 
     async def call_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call against the resolved live MCP server."""
@@ -139,6 +154,9 @@ class MCPRuntime:
 
         if resolved_tool is None:
             return {"error": f"MCP tool '{name}' is not registered"}
+
+        if str(resolved_tool.get("name") or "") in self.disabled_tools:
+            return {"error": f"MCP tool '{name}' is disabled"}
 
         server_name = str(resolved_tool.get("mcp_server_name") or "").strip()
         server_runtime = self.mcp_servers.get(server_name) if server_name else None

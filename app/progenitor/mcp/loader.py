@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
-from pathlib import Path
 from string import Template
 from typing import TYPE_CHECKING
 
@@ -31,30 +29,24 @@ def resolve_required_env_template(value: str) -> tuple[str | None, list[str]]:
     return template.safe_substitute(os.environ), []
 
 
-def load_mcp_servers(
-    config_path: Path | str | None = None,
-) -> list[MCPServerConfig]:
-    """Load external MCP server definitions from Progenitor's live MCP config file."""
-    from ..config import MCPServerConfig, resolve_mcp_config_path
+def normalize_mcp_config_payload(raw_data: dict[str, object] | None) -> dict[str, object]:
+    """Normalize a raw MCP config payload into the persisted document shape."""
+    data = dict(raw_data) if isinstance(raw_data, dict) else {}
+    raw_servers = data.get("mcpServers")
+    if not isinstance(raw_servers, dict):
+        data["mcpServers"] = {}
+    return data
 
-    path = Path(config_path) if config_path is not None else resolve_mcp_config_path()
-    if not path.exists():
-        return []
 
-    try:
-        text = path.read_text(encoding="utf-8").strip()
-        if not text:
-            return []
-        raw_data = json.loads(text)
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Failed to load MCP config from %s: %s", path, exc)
-        return []
+def load_mcp_servers(raw_data: dict[str, object] | None) -> list[MCPServerConfig]:
+    """Load external MCP server definitions from the persisted MCP state document."""
+    from ..config import MCPServerConfig
 
-    raw_servers = raw_data.get("mcpServers") if isinstance(raw_data, dict) else None
+    normalized = normalize_mcp_config_payload(raw_data)
+    raw_servers = normalized.get("mcpServers")
     if raw_servers is None:
         return []
     if not isinstance(raw_servers, dict):
-        logger.warning("MCP config at %s has non-object 'mcpServers'", path)
         return []
 
     servers: list[MCPServerConfig] = []
