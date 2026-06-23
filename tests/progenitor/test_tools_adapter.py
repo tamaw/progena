@@ -123,7 +123,6 @@ def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
 
     call_schema = _tool_by_name(tools, "call_agent").args_schema.model_json_schema()
     task_schema = _tool_by_name(tools, "get_a2a_task").args_schema.model_json_schema()
-    refresh_schema = _tool_by_name(tools, "mcp_refresh").args_schema.model_json_schema()
     background_schema = _tool_by_name(
         tools, "enqueue_background_task"
     ).args_schema.model_json_schema()
@@ -137,9 +136,6 @@ def test_call_agent_and_task_tools_expose_structured_parameters() -> None:
     task_properties = task_schema.get("properties", {})
     assert {"task_id", "refresh", "history_length"} <= set(task_properties)
     assert task_schema.get("required") == ["task_id"]
-
-    assert "persist" in refresh_schema.get("properties", {})
-    assert "required" not in refresh_schema or refresh_schema.get("required") == []
 
     background_properties = background_schema.get("properties", {})
     assert {"request", "notify_on_completion", "isolated_thread", "completion_event_type"} <= set(

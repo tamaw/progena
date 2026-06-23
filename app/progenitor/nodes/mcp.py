@@ -13,13 +13,21 @@ from ..utils import utcnow_isoformat
 from .context import HeartbeatContext
 
 
-async def _sync_mcp_tool_flags(mcp_runtime: Any, state_manager: Any) -> None:
+async def _sync_mcp_tool_flags(
+    mcp_runtime: Any,
+    state_manager: Any,
+    server_status: dict[str, Any] | None = None,
+) -> None:
     """Persist discovered MCP tools (preserving user enabled flags) and apply them.
 
     The runtime owns the tool list; the backend (UI) owns the per-tool enabled
     flag. On each discovery we merge: keep the existing enabled value for known
     tools, default new tools to enabled, and drop tools no longer present. The
     resulting disabled set is applied so the agent stops seeing disabled tools.
+
+    ``server_status`` (name -> {status, error, tool_count, checked_at}) records
+    each server's last discovery outcome so the UI can show a failed state with
+    a reason instead of a server that silently has no tools.
     """
     existing_doc = await state_manager.get_mcp_tools()
     existing = existing_doc.get("tools", []) if isinstance(existing_doc, dict) else []
@@ -51,7 +59,36 @@ async def _sync_mcp_tool_flags(mcp_runtime: Any, state_manager: Any) -> None:
         )
 
     mcp_runtime.set_disabled_tools(disabled)
-    await state_manager.save_mcp_tools({"tools": entries, "updated_at": utcnow_isoformat()})
+    await state_manager.save_mcp_tools(
+        {
+            "tools": entries,
+            "servers": server_status or {},
+            "updated_at": utcnow_isoformat(),
+        }
+    )
+
+
+async def reapply_mcp_disabled_tools(llm_client: Any, state_manager: Any) -> int:
+    """Re-apply per-tool enabled flags to the live runtime without re-discovery.
+
+    The backend (UI) toggles a tool by flipping its ``enabled`` flag in the
+    ``mcp_tools`` document. This reads those flags and updates the runtime's
+    disabled set so the toggle takes effect immediately — without re-fetching
+    every server (which a full ``sync_mcp_runtime_context`` does). Returns the
+    number of tools left disabled.
+    """
+    mcp_runtime = getattr(llm_client, "mcp_runtime", None)
+    if mcp_runtime is None or state_manager is None:
+        return 0
+    doc = await state_manager.get_mcp_tools()
+    raw = doc.get("tools", []) if isinstance(doc, dict) else []
+    disabled = {
+        str(tool.get("name"))
+        for tool in raw
+        if isinstance(tool, dict) and tool.get("name") and not bool(tool.get("enabled", True))
+    }
+    mcp_runtime.set_disabled_tools(disabled)
+    return len(disabled)
 
 
 async def sync_mcp_runtime_context(
@@ -81,12 +118,12 @@ async def sync_mcp_runtime_context(
     llm_client.mcp_config = effective_config
     llm_client.set_mcp_runtime(mcp_runtime)
 
-    mcp_servers, mcp_tools = await build_mcp_runtime_context(effective_config)
+    mcp_servers, mcp_tools, server_status = await build_mcp_runtime_context(effective_config)
     mcp_langchain_tools = await build_mcp_langchain_tool_wrappers(effective_config, mcp_tools)
     mcp_runtime.set_context(mcp_servers, mcp_tools, mcp_langchain_tools)
 
     if state_manager is not None and hasattr(state_manager, "get_mcp_tools"):
-        await _sync_mcp_tool_flags(mcp_runtime, state_manager)
+        await _sync_mcp_tool_flags(mcp_runtime, state_manager, server_status)
 
     if tool_registry is not None:
         entries = mcp_runtime.get_tool_registry_entries()

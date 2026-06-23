@@ -117,8 +117,8 @@ const scheduleQuickChatConfig = {
 };
 const mcpQuickPrompts = [
   'Connect the GitHub MCP server at https://api.githubcopilot.com/mcp/.',
-  'Add a filesystem MCP server scoped to the app directory.',
-  'Connect our Linear MCP server over SSE.',
+  'Connect our Linear MCP server at https://mcp.linear.app/mcp.',
+  'Disable the GitHub MCP server.',
 ];
 const mcpQuickChatConfig = {
   mode: 'mcp-create',
@@ -149,9 +149,9 @@ function buildQuickChatOutboundMessage(mode, text) {
   if (mode === 'mcp-create') {
     return [
       'Connect a new MCP server from the following user request.',
-      'Use the add_mcp_server tool with the server name and url (HTTP only),',
-      'including any auth headers, leaving it enabled. This persists it and',
-      'discovers its tools immediately.',
+      'Follow the managing-mcp skill: read /state/mcp.json, then add an entry under',
+      'mcpServers with the server name, url (HTTP only), any auth headers, and',
+      'enabled: true. Saving the file persists it and discovers its tools immediately.',
       'Only ask a follow-up question if the endpoint URL is missing; otherwise add it.',
       'Reply with one short sentence confirming the connected server name and endpoint.',
       '',

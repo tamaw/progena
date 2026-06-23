@@ -18,7 +18,7 @@ async def check_mcp():
     print(f"  Enabled Servers: {[server.name for server in config.enabled_servers]}")
     print()
 
-    runtime_servers, tools = await build_mcp_runtime_context(config)
+    runtime_servers, tools, _server_status = await build_mcp_runtime_context(config)
     print(f"Found {len(tools)} MCP tools:")
     for tool in tools:
         print(
