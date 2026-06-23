@@ -1,9 +1,7 @@
 ---
 name: prompt-maintenance
 description: Safely update prompt assets through /prompts with minimal, auditable edits while preserving tone and operating constraints
-allowed-tools:
-  - read_file
-  - shell
+allowed-tools: read_file shell
 ---
 
 # Prompt Maintenance Skill

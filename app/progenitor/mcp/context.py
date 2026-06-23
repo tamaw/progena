@@ -86,10 +86,16 @@ async def build_mcp_runtime_context(
     mcp_config: MCPConfig,
 ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     checked_at = utcnow_isoformat()
+    # Discover servers concurrently: latency is the slowest server's round-trip,
+    # not the sum, and one slow/unreachable server no longer stalls the rest.
+    catalogs = await asyncio.gather(
+        *(fetch_mcp_server_catalog(sc) for sc in mcp_config.enabled_servers)
+    )
     discovered_servers: list[tuple[MCPServerConfig, dict[str, Any], list[dict[str, Any]]]] = []
     server_status: dict[str, dict[str, Any]] = {}
-    for server_config in mcp_config.enabled_servers:
-        runtime_server, tools, error = await fetch_mcp_server_catalog(server_config)
+    for server_config, (runtime_server, tools, error) in zip(
+        mcp_config.enabled_servers, catalogs, strict=True
+    ):
         if runtime_server is None:
             server_status[server_config.name] = {
                 "status": "error",
