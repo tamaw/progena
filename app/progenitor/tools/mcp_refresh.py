@@ -4,29 +4,14 @@ MCP Refresh - Refresh live MCP tool discovery from the shared MCP state document
 
 import logging
 
-from pydantic import BaseModel, Field
-
 from ..config import MCPConfig
-from ..mcp import attach_mcp_runtime_context, reload_mcp_runtime_context
+from ..mcp import reload_mcp_runtime_context
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
 
-class MCPRefreshArgs(BaseModel):
-    """Structured arguments for MCP registry refresh."""
-
-    persist: bool = Field(
-        default=True,
-        description="Persist refreshed MCP discovery into the runtime registry.",
-    )
-
-
 class MCPRefreshTool(BaseSystemTool):
-    @property
-    def args_model(self) -> type[BaseModel]:
-        return MCPRefreshArgs
-
     @property
     def name(self) -> str:
         return "mcp_refresh"
@@ -48,23 +33,13 @@ class MCPRefreshTool(BaseSystemTool):
         if not isinstance(mcp_config, MCPConfig):
             return ToolResult.fail("mcp_config unavailable")
 
-        args = context.tool_args if isinstance(context.tool_args, dict) else {}
-        persist = bool(args.get("persist", True))
-
-        if persist:
-            await reload_mcp_runtime_context(
-                llm_client,
-                context.tool_registry,
-                mcp_config,
-                state_manager=context.state_manager,
-                reload_config=True,
-            )
-        else:
-            if context.state_manager is None:
-                return ToolResult.fail("state_manager unavailable")
-            refreshed_payload = await context.state_manager.get_mcp_config()
-            refreshed_config = MCPConfig.from_payload(refreshed_payload)
-            await attach_mcp_runtime_context(llm_client, refreshed_config)
+        await reload_mcp_runtime_context(
+            llm_client,
+            context.tool_registry,
+            mcp_config,
+            state_manager=context.state_manager,
+            reload_config=True,
+        )
 
         mcp_runtime = llm_client.mcp_runtime
 
