@@ -63,6 +63,7 @@ class ListToolsTool(BaseSystemTool):
                     llm_client,
                     context.tool_registry,
                     cast(MCPConfig, mcp_config),
+                    state_manager=context.state_manager,
                     reload_config=True,
                 )
 

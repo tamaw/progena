@@ -16,10 +16,12 @@ Tests cover:
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
 from app.backend.state_reader import (
     HealthInfo,
@@ -107,7 +109,6 @@ def complete_state_files(tmp_path):
             },
         ]
     }
-    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
         "mcpServers": {
             "universal_translator": {
@@ -131,7 +132,8 @@ def complete_state_files(tmp_path):
         }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    mcp_config_path.write_text(json.dumps(mcp_data))
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - actively working on first contact
     build_state = {
@@ -194,7 +196,7 @@ def complete_state_files(tmp_path):
     ]
     (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
-    return state_dir
+    return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)
 
 
 class TestCriticalUIDataPipeline:
@@ -256,7 +258,10 @@ class TestCriticalUIDataPipeline:
 
     def test_state_reader_with_complete_state(self, complete_state_files):
         """StateReader must correctly read all state data for aliens."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
         snapshot = reader.get_snapshot()
 
         # Health
@@ -372,14 +377,17 @@ class TestRealTimeFeedbackConsistency:
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
 
         # Initial read
         snapshot1 = reader.get_snapshot()
         assert snapshot1.health.cycle_count == 1337
 
         # Simulate progress
-        health_file = complete_state_files / "health.json"
+        health_file = complete_state_files.state_dir / "health.json"
         health = json.loads(health_file.read_text())
         health["cycle_count"] = 1338
         health["last_active"] = datetime.now(UTC).isoformat()
@@ -424,8 +432,6 @@ class TestErrorRecoveryAndGracefulDegradation:
         config_dir = state_dir.parent / "config"
         config_dir.mkdir()
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
-        mcp_config_path = config_dir / "mcp.json"
-        mcp_config_path.write_text("{this is not valid json!!!")
         (config_dir / "schedule.json").write_text("{this is not valid json!!!")
 
         reader = StateReader(state_dir=state_dir, config_dir=config_dir)
@@ -519,12 +525,15 @@ class TestDataIntegrityUnderAllConditions:
 
     def test_all_build_phases_valid(self, complete_state_files):
         """All build phases must be recognized."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
 
         phases = ["observe", "think", "plan", "build", "execute", "verify", "learn"]
 
         for phase in phases:
-            build_file = complete_state_files / "build_state.json"
+            build_file = complete_state_files.state_dir / "build_state.json"
             build_state = json.loads(build_file.read_text())
             build_state["build_phase"] = phase
             build_file.write_text(json.dumps(build_state))
@@ -536,12 +545,15 @@ class TestDataIntegrityUnderAllConditions:
 
     def test_agent_status_values(self, complete_state_files):
         """All agent statuses must be valid."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
 
         valid_statuses = ["ready", "busy", "offline", "stopped", "error", "starting"]
 
         for status in valid_statuses:
-            registry_file = complete_state_files.parent / "config" / "agents.json"
+            registry_file = complete_state_files.config_dir / "agents.json"
             registry = json.loads(registry_file.read_text())
             registry["agents"][0]["status"] = status
             registry_file.write_text(json.dumps(registry))
@@ -552,7 +564,10 @@ class TestDataIntegrityUnderAllConditions:
 
     def test_snapshot_serialization_roundtrip(self, complete_state_files):
         """Snapshot must survive JSON serialization (for SSE transmission)."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
         snapshot = reader.get_snapshot()
 
         # Convert to dict
@@ -632,7 +647,10 @@ class TestSubAgentStatusVisibility:
 
     def test_loops_reflect_activity(self, complete_state_files):
         """Loops must reflect current activity."""
-        reader = StateReader(state_dir=complete_state_files)
+        reader = StateReader(
+            state_dir=complete_state_files.state_dir,
+            document_store=complete_state_files.document_store,
+        )
 
         # With active build, loops should show activity
         health = reader.get_health()

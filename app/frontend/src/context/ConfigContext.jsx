@@ -41,6 +41,7 @@ const defaultConfig = {
       models: '/v1/models',
       workspace: '/api/ui/workspace',
       widgets: '/api/ui/widgets',
+      mcp: '/api/ui/mcp',
       widgetSchemas: '/api/ui/widget-schemas',
       kanban: '/api/ui/kanban',
       prompts: '/api/ui/prompts',

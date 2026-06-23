@@ -1,7 +1,7 @@
 """
 Centralized Configuration for Progenitor.
 
-Configuration is read from environment variables and live config files.
+Configuration is read from environment variables plus shared runtime state.
 """
 
 import logging
@@ -73,12 +73,6 @@ def _default_config_dir(project_root: Path | None = None) -> Path:
     return state_dir.parent / "config"
 
 
-def resolve_mcp_config_path(config_dir: Path | str | None = None) -> Path:
-    """Resolve the live MCP config path from the active config directory."""
-    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
-    return base_dir / "mcp.json"
-
-
 def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
     """Resolve the logical schedule document identifier.
 
@@ -92,7 +86,7 @@ def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
 
 
 def default_mcp_config_payload() -> dict[str, Any]:
-    """Return the default MCP server configuration written to data/config/mcp.json."""
+    """Return the default MCP server configuration stored in the shared state document."""
     return {"mcpServers": {}}
 
 
@@ -284,7 +278,7 @@ class SchedulerConfig:
 
 @dataclass
 class MCPServerConfig:
-    """Remote HTTP MCP server definition loaded from the live MCP config file."""
+    """Remote HTTP MCP server definition loaded from the persisted MCP state."""
 
     name: str
     url: str
@@ -298,25 +292,14 @@ class MCPServerConfig:
 class MCPConfig:
     """MCP (Model Context Protocol) configuration."""
 
-    config_path: Path = field(default_factory=resolve_mcp_config_path)
     servers: list[MCPServerConfig] = field(default_factory=list)
 
     @classmethod
-    def load(
-        cls,
-        *,
-        config_path: Path | str | None = None,
-    ) -> "MCPConfig":
-        """Load MCP config from the live data/config/mcp.json file."""
-        resolved_config_path = (
-            Path(config_path) if config_path is not None else resolve_mcp_config_path()
-        )
+    def from_payload(cls, payload: dict[str, Any] | None) -> "MCPConfig":
+        """Build MCP config from the persisted state document payload."""
         from .mcp.loader import load_mcp_servers
 
-        return cls(
-            config_path=resolved_config_path,
-            servers=load_mcp_servers(resolved_config_path),
-        )
+        return cls(servers=load_mcp_servers(payload))
 
     @property
     def enabled_servers(self) -> list[MCPServerConfig]:
@@ -355,7 +338,7 @@ class ProgenitorConfig:
             storage=storage_config,
             database=DatabaseConfig.from_env(),
             scheduler=SchedulerConfig.from_env(),
-            mcp=MCPConfig.load(),
+            mcp=MCPConfig(),
         )
 
         if validate:

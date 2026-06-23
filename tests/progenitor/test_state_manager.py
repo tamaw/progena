@@ -82,7 +82,6 @@ class TestStateManager:
         assert (state_dir / "async_subagent_tasks.json").exists()
         assert (state_dir / "background_tasks.json").exists()
         assert (state_dir.parent / "config" / "agents.json").exists()
-        assert (state_dir.parent / "config" / "mcp.json").exists()
         assert not (state_dir / "build_state.json").exists()
 
     @pytest.mark.asyncio
@@ -217,6 +216,31 @@ class TestStateManager:
         await manager.commit_state()
         current_state = native_store.items[(STATE_NAMESPACE, "current_state")]["payload"]
         assert current_state["messages"][0]["id"] == "msg-native"
+
+        await manager.close()
+
+    @pytest.mark.asyncio
+    async def test_get_mcp_config_reflects_cross_process_store_writes(self, temp_dirs):
+        state_dir, logs_dir = temp_dirs
+        native_store = FakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
+        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
+        await manager.initialize()
+
+        # Startup seeds an empty config and caches it.
+        assert (await manager.get_mcp_config())["mcpServers"] == {}
+
+        # Simulate the backend writing the same shared document directly (as the
+        # UI does). A cached read would hide this; get_mcp_config must read fresh.
+        await native_store.aput(
+            STATE_NAMESPACE,
+            "mcp",
+            {"payload": {"mcpServers": {"jina": {"url": "https://x", "enabled": True}}}},
+        )
+
+        config = await manager.get_mcp_config()
+        assert "jina" in config["mcpServers"]
+        assert config["mcpServers"]["jina"]["url"] == "https://x"
 
         await manager.close()
 

@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+
+import psycopg
 from psycopg_pool import PoolClosed
 
-from app.backend.document_store import PostgresDocumentStore
+from app.backend.document_store import (
+    STORE_CHANGE_CHANNEL,
+    InMemoryDocumentStore,
+    PostgresDocumentStore,
+    StoreChangeListener,
+    store_database_url,
+)
 
 
 class _FakeCursor:
@@ -71,3 +80,116 @@ def test_postgres_document_store_reopens_closed_pool():
     assert healthy_pool._cursor.executed
     assert doc is not None
     assert doc.payload == {"ok": True}
+
+
+def test_store_database_url_resolution():
+    pg = PostgresDocumentStore("postgresql://example")
+    assert store_database_url(pg) == "postgresql://example"
+    assert store_database_url(InMemoryDocumentStore()) is None
+    assert store_database_url(None) is None
+
+
+def test_ensure_change_trigger_notifies_state_only():
+    store = PostgresDocumentStore("postgresql://example")
+    pool = _HealthyPool(None)
+    store._pool = pool
+
+    store._ensure_change_trigger()
+
+    emitted = " ".join(str(query) for query, _ in pool._cursor.executed)
+    assert "progenitor_notify_store_change" in emitted
+    assert "pg_notify" in emitted
+    assert "CREATE TRIGGER progenitor_store_change" in emitted
+    # State prefixes notify; the high-frequency logs prefix is excluded.
+    assert "progenitor.state" in emitted
+    assert "backend.state" in emitted
+    assert "progenitor.logs" not in emitted
+
+
+class _FakeNotify:
+    def __init__(self, payload: str) -> None:
+        self.payload = payload
+
+
+class _FakeAsyncConn:
+    def __init__(self, items: list[_FakeNotify]) -> None:
+        self._items = items
+        self.executed: list[object] = []
+        self.closed = False
+
+    async def execute(self, query: object) -> None:
+        self.executed.append(query)
+
+    async def notifies(self):
+        for item in self._items:
+            yield item
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class _BlockingAsyncConn:
+    def __init__(self) -> None:
+        self.closed = False
+
+    async def execute(self, query: object) -> None:
+        return None
+
+    async def notifies(self):
+        await asyncio.Event().wait()  # block until cancelled
+        yield  # pragma: no cover - unreachable
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+async def test_listener_resyncs_on_connect_then_streams_changes(monkeypatch):
+    fake = _FakeAsyncConn([_FakeNotify("a"), _FakeNotify("b")])
+
+    async def fake_connect(dsn, autocommit=False):
+        return fake
+
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", fake_connect)
+
+    resyncs: list[bool] = []
+    changes: list[str] = []
+    listener = StoreChangeListener(
+        "postgresql://example",
+        on_change=changes.append,
+        on_resync=lambda: resyncs.append(True),
+    )
+
+    await listener._listen_once()
+
+    # Resync fires before live notifications start; each NOTIFY maps to on_change.
+    assert resyncs == [True]
+    assert changes == ["a", "b"]
+    assert fake.closed is True
+    assert any("LISTEN" in str(q) and STORE_CHANGE_CHANNEL in str(q) for q in fake.executed)
+
+
+async def test_listener_reconnects_after_connection_error(monkeypatch):
+    attempts: list[str] = []
+    reconnected = asyncio.Event()
+
+    async def fake_connect(dsn, autocommit=False):
+        attempts.append(dsn)
+        if len(attempts) == 1:
+            raise RuntimeError("boom")
+        reconnected.set()
+        return _BlockingAsyncConn()
+
+    monkeypatch.setattr(psycopg.AsyncConnection, "connect", fake_connect)
+
+    listener = StoreChangeListener(
+        "postgresql://example",
+        on_change=lambda _payload: None,
+        reconnect_delay=0.01,
+    )
+    await listener.start()
+    try:
+        await asyncio.wait_for(reconnected.wait(), timeout=2)
+    finally:
+        await listener.stop()
+
+    assert len(attempts) >= 2

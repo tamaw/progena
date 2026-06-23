@@ -8,7 +8,6 @@ layer; it does not own any durable UI state.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import hashlib
 import json
@@ -22,14 +21,20 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import resolve_mcp_config_path, resolve_schedule_config_path
-from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
+from app.progenitor.config import default_mcp_config_payload, resolve_schedule_config_path
+from app.progenitor.mcp.loader import (
+    load_mcp_servers,
+    normalize_mcp_config_payload,
+    resolve_required_env_template,
+)
 
 from .document_store import (
     BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
     BackendDocumentStore,
+    StoreChangeListener,
     get_default_document_store,
+    store_database_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -391,6 +396,11 @@ class StateSnapshot:
     messages_count: int
     build: BuildInfo | None = None
     sessions: SessionSummary | None = None
+    # Content fingerprint of the MCP server config. ``tools`` already has one
+    # entry per server, so add/remove is caught by count; this additionally
+    # catches in-place edits (enable/disable, url/description) that leave the
+    # count unchanged.
+    mcp_fingerprint: str = ""
 
 
 class StateReader:
@@ -415,9 +425,8 @@ class StateReader:
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
         self._cache: dict[str, tuple[float, Any]] = {}
         self._last_snapshot: StateSnapshot | None = None
-        self._watchers: list[Callable[[StateSnapshot], None]] = []
-        self._watch_task: asyncio.Task | None = None
-        self._last_watch_versions: dict[str, tuple[int, int] | None] | None = None
+        self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []
+        self._listener: StoreChangeListener | None = None
         self.document_store = document_store or (
             get_default_document_store()
             if state_dir is None
@@ -426,10 +435,6 @@ class StateReader:
             and logs_dir is None
             else None
         )
-
-    @property
-    def mcp_config_path(self) -> Path:
-        return resolve_mcp_config_path(self.config_dir)
 
     @property
     def schedule_config_path(self) -> Path:
@@ -451,34 +456,37 @@ class StateReader:
 
     def _read_json_from_path(self, filepath: Path) -> Any:
         filepath = Path(filepath)
+        prefix_key_default = None
         if self.document_store is not None:
             prefix_key_default = self._document_for_path(filepath)
-            if prefix_key_default is None:
-                return None
-            prefix, key, default = prefix_key_default
-            document = self.document_store.get_document(prefix, key, default)
-            return document.payload if document is not None else default
+            if prefix_key_default is not None:
+                prefix, key, default = prefix_key_default
+                document = self.document_store.get_document(prefix, key, None)
+                if document is not None:
+                    return document.payload
         try:
-            if not filepath.exists():
-                return None
+            if filepath.exists():
+                mtime = filepath.stat().st_mtime
+                cache_key = str(filepath)
+                if cache_key in self._cache:
+                    cached_mtime, cached_data = self._cache[cache_key]
+                    if cached_mtime == mtime:
+                        return cached_data
 
-            mtime = filepath.stat().st_mtime
-            cache_key = str(filepath)
-            if cache_key in self._cache:
-                cached_mtime, cached_data = self._cache[cache_key]
-                if cached_mtime == mtime:
-                    return cached_data
-
-            content = filepath.read_text(encoding="utf-8")
-            data = json.loads(content)
-            self._cache[cache_key] = (mtime, data)
-            return data
+                content = filepath.read_text(encoding="utf-8")
+                data = json.loads(content)
+                self._cache[cache_key] = (mtime, data)
+                return data
         except json.JSONDecodeError as e:
             logger.warning("Invalid JSON in %s: %s", filepath, e)
             return None
         except Exception as e:
             logger.debug("Failed to read %s: %s", filepath, e)
             return None
+
+        if prefix_key_default is not None:
+            return default
+        return None
 
     def _write_json_to_path(self, filepath: Path, data: Any) -> bool:
         """Persist a legacy path-shaped write into the configured document store."""
@@ -503,8 +511,6 @@ class StateReader:
             return PROGENITOR_STATE_PREFIX, "health", {}
         if name == "agents.json":
             return PROGENITOR_STATE_PREFIX, "registry", {}
-        if name == "mcp.json":
-            return PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": {}}
         if name == "event_widgets.json":
             return BACKEND_STATE_PREFIX, "event_widgets", []
         if name == "kanban.json":
@@ -627,13 +633,13 @@ class StateReader:
                         "url": server.url,
                     }
                 )
-                for server in load_mcp_servers(self.mcp_config_path)
+                for server in load_mcp_servers(self.get_mcp_config())
             ]
         )
         return agents, tools
 
     def _mcp_tools_from_store(self) -> list[ToolInfo]:
-        data = self._read_json_from_path(self.mcp_config_path) or {}
+        data = self.get_mcp_config()
         raw_servers = data.get("mcpServers") if isinstance(data, dict) else None
         if not isinstance(raw_servers, dict):
             return []
@@ -670,6 +676,67 @@ class StateReader:
                 )
             )
         return tools
+
+    def _mcp_tools_by_server(self) -> dict[str, list[dict[str, Any]]]:
+        """Group the runtime-discovered MCP tools (with enabled flags) by server."""
+        data = self.get_mcp_tools()
+        raw_tools = data.get("tools") if isinstance(data, dict) else None
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        if not isinstance(raw_tools, list):
+            return grouped
+        for entry in raw_tools:
+            if not isinstance(entry, dict):
+                continue
+            server = str(entry.get("server") or "").strip()
+            name = str(entry.get("name") or "").strip()
+            if not server or not name:
+                continue
+            grouped.setdefault(server, []).append(
+                {
+                    "name": name,
+                    "original_name": entry.get("original_name") or name,
+                    "description": entry.get("description") or "",
+                    "enabled": bool(entry.get("enabled", True)),
+                }
+            )
+        return grouped
+
+    def get_mcp_config(self) -> dict[str, Any]:
+        if self.document_store is not None:
+            document = self.document_store.get_document(
+                PROGENITOR_STATE_PREFIX,
+                "mcp",
+                default_mcp_config_payload(),
+            )
+            payload = document.payload if document is not None else default_mcp_config_payload()
+        else:
+            payload = self._cache.get("__mcp_config__", (0.0, default_mcp_config_payload()))[1]
+        return normalize_mcp_config_payload(payload if isinstance(payload, dict) else None)
+
+    def save_mcp_config(self, payload: dict[str, Any]) -> None:
+        normalized = normalize_mcp_config_payload(payload)
+        if self.document_store is not None:
+            self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp", normalized)
+            return
+        self._cache["__mcp_config__"] = (time.time(), normalized)
+
+    def get_mcp_tools(self) -> dict[str, Any]:
+        """Read the runtime-owned discovered MCP tools document."""
+        default: dict[str, Any] = {"tools": []}
+        if self.document_store is not None:
+            document = self.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "mcp_tools", default
+            )
+            payload = document.payload if document is not None else default
+        else:
+            payload = self._cache.get("__mcp_tools__", (0.0, default))[1]
+        return payload if isinstance(payload, dict) else dict(default)
+
+    def save_mcp_tools(self, payload: dict[str, Any]) -> None:
+        if self.document_store is not None:
+            self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", payload)
+            return
+        self._cache["__mcp_tools__"] = (time.time(), payload)
 
     def get_backlog(self) -> list[BacklogItem]:
         data = self._read_json("build_state.json")
@@ -790,6 +857,19 @@ class StateReader:
             ),
         ]
 
+    def _mcp_fingerprint(self) -> str:
+        """Stable hash of the MCP server config for change detection."""
+        try:
+            config = self.get_mcp_config()
+        except Exception:
+            return ""
+        servers = config.get("mcpServers") if isinstance(config, dict) else None
+        try:
+            serialized = json.dumps(servers or {}, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            serialized = str(servers)
+        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -811,6 +891,7 @@ class StateReader:
             messages_count=len(progenitor.get("messages", [])),
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
+            mcp_fingerprint=self._mcp_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1275,7 +1356,8 @@ class StateReader:
             return []
         if self.document_store is not None:
             entries = self.query_logs(search=widget_name, limit=limit)["entries"]
-            return cast(list[dict[str, Any]], entries)
+            if entries:
+                return cast(list[dict[str, Any]], entries)
 
         matches: list[dict[str, Any]] = []
         for path in self._iter_log_files():
@@ -1325,6 +1407,7 @@ class StateReader:
                 }
             )
 
+        tools_by_server = self._mcp_tools_by_server()
         for tool in tools:
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
@@ -1341,6 +1424,7 @@ class StateReader:
                     "transport": tool.transport,
                     "enabled": tool.enabled,
                     "url": tool.url,
+                    "tools": tools_by_server.get(tool.name, []),
                     "current_thread_id": health.thread_id,
                     "logs": logs,
                     "updated_at": health.last_active,
@@ -1444,28 +1528,6 @@ class StateReader:
             },
         }
 
-    def _watched_paths(self) -> list[Path]:
-        return [
-            self.state_dir / "health.json",
-            self.state_dir / "current_state.json",
-            self.state_dir / "build_state.json",
-            self.schedule_config_path,
-            self.config_dir / "agents.json",
-            self.config_dir / "mcp.json",
-            self.config_dir / "event_widgets.json",
-            self.sessions_dir / "sessions.json",
-        ]
-
-    def _path_version(self, path: Path) -> tuple[int, int] | None:
-        try:
-            stat = path.stat()
-        except FileNotFoundError:
-            return None
-        return stat.st_mtime_ns, stat.st_size
-
-    def _collect_watch_versions(self) -> dict[str, tuple[int, int] | None]:
-        return {str(path): self._path_version(path) for path in self._watched_paths()}
-
     def snapshot_to_dict(self, snapshot: StateSnapshot) -> dict[str, Any]:
         return {
             "timestamp": snapshot.timestamp,
@@ -1533,69 +1595,70 @@ class StateReader:
             "widgets": self.get_widgets(),
         }
 
-    def add_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
+    def add_watcher(self, callback: Callable[[StateSnapshot, str | None], None]) -> None:
         self._watchers.append(callback)
 
-    def remove_watcher(self, callback: Callable[[StateSnapshot], None]) -> None:
+    def remove_watcher(self, callback: Callable[[StateSnapshot, str | None], None]) -> None:
         if callback in self._watchers:
             self._watchers.remove(callback)
 
-    async def start_watching(self, interval: float = 5.0) -> None:
-        if self._watch_task and not self._watch_task.done():
+    async def start_watching(self, reconnect_delay: float = 2.0) -> None:
+        """Push state changes to watchers via Postgres LISTEN/NOTIFY (no polling).
+
+        ``reconnect_delay`` is the backoff between listener reconnect attempts.
+        With a non-Postgres store (in-memory/tests) there is nothing to listen
+        to, so this is a no-op.
+        """
+        if self._listener is not None:
             return
-        self._watch_task = asyncio.create_task(self._watch_loop(interval))
+        database_url = store_database_url(self.document_store)
+        if database_url is None:
+            return
+        self._listener = StoreChangeListener(
+            database_url,
+            on_change=self._on_store_change,
+            on_resync=self._emit_if_changed,
+            reconnect_delay=reconnect_delay,
+        )
+        await self._listener.start()
 
     async def stop_watching(self) -> None:
-        if self._watch_task:
-            self._watch_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._watch_task
-            self._watch_task = None
+        if self._listener is not None:
+            await self._listener.stop()
+            self._listener = None
 
-    async def _watch_loop(self, interval: float) -> None:
-        while True:
+    def _on_store_change(self, payload: str) -> None:
+        # The NOTIFY payload is {"prefix": ..., "key": ...}; pass the key so
+        # watchers can route to the right dedicated event instead of recomputing
+        # everything.
+        changed_key: str | None = None
+        try:
+            data = json.loads(payload) if payload else {}
+            value = data.get("key") if isinstance(data, dict) else None
+            changed_key = value if isinstance(value, str) else None
+        except (ValueError, TypeError):
+            changed_key = None
+        self._emit_if_changed(changed_key)
+
+    def _emit_if_changed(self, changed_key: str | None = None) -> None:
+        """Recompute the snapshot and notify watchers when something changed.
+
+        ``changed_key`` is the store key that triggered the change (None on a
+        full resync, e.g. after a listener reconnect).
+        """
+        try:
+            snapshot = self.get_snapshot()
+        except Exception as e:
+            logger.error("Failed to read state snapshot: %s", e)
+            return
+        if not self._state_changed(snapshot):
+            return
+        self._last_snapshot = snapshot
+        for watcher in list(self._watchers):
             try:
-                await asyncio.sleep(interval)
-                if self.document_store is not None:
-                    snapshot = self.get_snapshot()
-                    if not self._state_changed(snapshot):
-                        continue
-                    self._last_snapshot = snapshot
-                    for watcher in list(self._watchers):
-                        try:
-                            watcher(snapshot)
-                        except Exception as e:
-                            logger.warning("Watcher error: %s", e)
-                    continue
-
-                versions = self._collect_watch_versions()
-                if self._last_watch_versions is None:
-                    self._last_watch_versions = versions
-                    self._last_snapshot = self.get_snapshot()
-                    continue
-
-                changed_paths = [
-                    Path(path)
-                    for path, version in versions.items()
-                    if self._last_watch_versions.get(path) != version
-                ]
-                if not changed_paths:
-                    continue
-
-                self._last_watch_versions = versions
-                self.invalidate(*changed_paths)
-                snapshot = self.get_snapshot()
-                self._last_snapshot = snapshot
-                for watcher in list(self._watchers):
-                    try:
-                        watcher(snapshot)
-                    except Exception as e:
-                        logger.warning("Watcher error: %s", e)
-            except asyncio.CancelledError:
-                break
+                watcher(snapshot, changed_key)
             except Exception as e:
-                logger.error("Watch loop error: %s", e)
-                await asyncio.sleep(interval)
+                logger.warning("Watcher error: %s", e)
 
     def _state_changed(self, new: StateSnapshot) -> bool:
         if not self._last_snapshot:
@@ -1619,6 +1682,8 @@ class StateReader:
         if len(new.schedule) != len(old.schedule):
             return True
         if len(new.backlog) != len(old.backlog):
+            return True
+        if new.mcp_fingerprint != old.mcp_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0

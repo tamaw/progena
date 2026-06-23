@@ -7,16 +7,16 @@ real Scheduler class.  No LLM or network access is required.
 
 import pytest
 
-from app.progenitor.schedule import Scheduler
-from app.progenitor.state.manager import StateManager
-from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.schedule import (
+    Scheduler,
     add_scheduled_task,
     delete_scheduled_task,
     pause_scheduled_task,
     resume_scheduled_task,
     update_scheduled_task,
 )
+from app.progenitor.state.manager import StateManager
+from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.utils import utcnow
 
 # ---------------------------------------------------------------------------

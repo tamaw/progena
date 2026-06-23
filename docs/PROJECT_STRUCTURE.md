@@ -62,8 +62,8 @@ data/
 logs/              # Runtime and backend logs
 ```
 
-Live Progenitor MCP server definitions live in `data/config/mcp.json` so the backend
-and runtime can share the same mutable config file.
+Live Progenitor MCP server definitions live in the shared Postgres-backed `mcp`
+state document so the backend and runtime share the same mutable registry.
 
 ## Docker assets
 

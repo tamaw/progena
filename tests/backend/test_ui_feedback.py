@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi.testclient import TestClient
 
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
 from app.backend.state_reader import (
     AgentInfo,
@@ -489,12 +490,11 @@ class TestStateReaderFileOperations:
             }
         }
         config_dir = temp_state_dir.parent / "config"
-        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(json.dumps(agents_data))
-        mcp_config_path.write_text(json.dumps(mcp_data))
-
-        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir, document_store=store)
         agents, tools = reader.get_registry()
 
         assert len(agents) == 1
@@ -505,7 +505,6 @@ class TestStateReaderFileOperations:
     def test_read_registry_merges_legacy_and_map(self, temp_state_dir):
         """Map entries should be visible even if legacy list is present."""
         config_dir = temp_state_dir.parent / "config"
-        mcp_config_path = config_dir / "mcp.json"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "agents.json").write_text(
             json.dumps(
@@ -516,9 +515,11 @@ class TestStateReaderFileOperations:
                 }
             )
         )
-        mcp_config_path.write_text(json.dumps({"mcpServers": {}}))
-
-        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
+        reader = StateReader(
+            state_dir=temp_state_dir,
+            config_dir=config_dir,
+            document_store=InMemoryDocumentStore(),
+        )
         agents, tools = reader.get_registry()
 
         by_name = {a.name: a.url for a in agents}
