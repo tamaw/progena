@@ -185,31 +185,16 @@ def create_progenitor_agent(
         db_path = state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
-    # Re-discover MCP tools after the agent edits /state/mcp.json, so a file
-    # write has the same live effect as the add_mcp_server tool.
-    async def _mcp_reload() -> None:
-        if llm_client is None or state_manager is None:
-            return
-        from ..config import MCPConfig
-        from ..mcp import reload_mcp_runtime_context
-
-        payload = await state_manager.get_mcp_config()
-        await reload_mcp_runtime_context(
-            llm_client,
-            tool_registry,
-            MCPConfig.from_payload(payload),
-            state_manager=state_manager,
-            reload_config=True,
-        )
-
-    # Core-only backend: no project filesystem, no shell.
+    # Writes to /state/mcp.json persist via the StateManager; the runtime's store
+    # listener re-discovers MCP tools when the mcp document changes (the same path
+    # used for UI-driven server/tool toggles), so no per-backend write-hook is
+    # needed. The managing-mcp skill documents this edit flow for the agent.
     backend = create_progenitor_backend(
         project_root=project_root,
         data_dir=data_dir,
         prompts_dir=prompts_dir,
         worktree_dir=worktree_dir,
         state_manager=state_manager,
-        mcp_reload=_mcp_reload,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
