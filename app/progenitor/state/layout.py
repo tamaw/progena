@@ -7,7 +7,6 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from ..config import default_mcp_config_payload
 from ..utils import utcnow_isoformat
 
 logger = logging.getLogger(__name__)
@@ -19,7 +18,6 @@ CORE_FILES: dict[str, str] = {
     "async_subagent_tasks": "async_subagent_tasks.json",
     "background_tasks": "background_tasks.json",
     "registry": "agents.json",
-    "mcp": "mcp.json",
 }
 
 LOG_FILES: dict[str, str] = {
@@ -27,7 +25,7 @@ LOG_FILES: dict[str, str] = {
     "schedule": "schedule.jsonl",
 }
 
-CONFIG_BACKED_CORE_FILES = {"registry", "mcp"}
+CONFIG_BACKED_CORE_FILES = {"registry"}
 
 
 def core_file_path(name: str, state_dir: Path, config_dir: Path) -> Path:
@@ -66,7 +64,6 @@ async def ensure_initial_state(
         "async_subagent_tasks": [],
         "background_tasks": [],
         "registry": {},
-        "mcp": default_mcp_config_payload(),
     }
 
     for name, filename in CORE_FILES.items():

@@ -62,3 +62,45 @@ async def test_build_mcp_langchain_tool_wrappers_applies_runtime_aliases() -> No
     assert [tool.name for tool in tools] == ["jina_search_web"]
     assert tools[0].description == "Search the web [server: jina, original: search_web]"
     assert await tools[0].ainvoke({"query": "langgraph"}) == {"query": "langgraph"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_runtime_disabled_tools_are_hidden_and_rejected() -> None:
+    from app.progenitor.config import MCPConfig
+    from app.progenitor.mcp.runtime import MCPRuntime
+
+    runtime = MCPRuntime(MCPConfig(servers=[]))
+
+    def _tool(name: str, original: str) -> dict:
+        return {
+            "name": name,
+            "mcp_server_name": "jina",
+            "mcp_original_name": original,
+            "description": f"Tool {name}",
+            "inputSchema": {"type": "object", "properties": {}},
+        }
+
+    mcp_tools = [_tool("jina_search_web", "search_web"), _tool("jina_read_url", "read_url")]
+    runtime.set_context(
+        {"jina": {"url": "https://x", "client": object()}},
+        mcp_tools,
+        [_adapter_tool("jina_search_web"), _adapter_tool("jina_read_url")],
+    )
+
+    # All tools visible by default.
+    assert {t.name for t in runtime.get_langchain_tools()} == {"jina_search_web", "jina_read_url"}
+    assert len(runtime.iter_openai_tools()) == 2
+
+    runtime.set_disabled_tools({"jina_read_url"})
+
+    # Disabled tool is hidden from both agent-facing surfaces.
+    assert {t.name for t in runtime.get_langchain_tools()} == {"jina_search_web"}
+    assert {d["function"]["name"] for d in runtime.iter_openai_tools()} == {"jina_search_web"}
+
+    # And rejected at call time.
+    result = await runtime.call_tool({"name": "jina_read_url", "arguments": {}})
+    assert "disabled" in result.get("error", "")
+
+    # set_context resets the disabled set.
+    runtime.set_context({}, mcp_tools, [])
+    assert runtime.disabled_tools == set()

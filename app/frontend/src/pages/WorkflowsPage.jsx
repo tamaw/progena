@@ -31,7 +31,8 @@ import EventNode from '../components/workspace/nodes/EventNode';
 import GroupNode from '../components/workspace/nodes/GroupNode';
 import AgentNode from '../components/workspace/nodes/AgentNode';
 import UserNode from '../components/workspace/nodes/UserNode';
-import { useStatusSSE } from '../hooks/useSSE';
+import { useSelector } from 'react-redux';
+import { selectUiWidgets } from '../store/uiDataSlice';
 
 const nodeTypes = {
   prompt: PromptNode,
@@ -143,14 +144,12 @@ function WorkspaceInner() {
     reactFlowInstance.setViewport(viewport);
   }, [reactFlowInstance, viewport, viewportVersion, workspaceReady]);
 
-  const handleStatusEvent = useCallback((event) => {
-    if (event?.type !== 'widgets' || !event?.data) {
-      return;
-    }
-    syncWidgets(event.data.items || event.data.widgets || []);
-  }, [syncWidgets]);
-
-  useStatusSSE(handleStatusEvent);
+  // Widgets come from the Redux realtime store (single source of truth) rather
+  // than this page opening its own status stream.
+  const widgets = useSelector(selectUiWidgets);
+  useEffect(() => {
+    syncWidgets(widgets);
+  }, [widgets, syncWidgets]);
 
   // Handle drop from sidebar
   const onDrop = useCallback(

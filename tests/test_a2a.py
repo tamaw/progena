@@ -11,8 +11,9 @@ from fastapi.testclient import TestClient
 
 os.environ["GYM_AGENT_DB"] = ":memory:"
 
-from src.gym_agent import storage  # noqa: E402  (must come after env patch)
 from src.gym_agent.main import app  # noqa: E402
+
+from src.gym_agent import storage  # noqa: E402  (must come after env patch)
 
 
 @pytest.fixture(autouse=True)

@@ -15,10 +15,12 @@ Tests the complete feedback path:
 import asyncio
 import json
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
 from app.backend.state_reader import (
     AgentInfo,
@@ -83,7 +85,6 @@ def mock_state_files(tmp_path):
             },
         ]
     }
-    mcp_config_path = config_dir / "mcp.json"
     mcp_data = {
         "mcpServers": {
             "universal_decoder": {
@@ -95,7 +96,8 @@ def mock_state_files(tmp_path):
         }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    mcp_config_path.write_text(json.dumps(mcp_data))
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - in progress
     build_state = {
@@ -134,7 +136,7 @@ def mock_state_files(tmp_path):
     ]
     (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
-    return state_dir
+    return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)
 
 
 class TestUIFeedbackIntegration:
@@ -164,7 +166,10 @@ class TestUIFeedbackIntegration:
 
     def test_state_reader_with_mock_files(self, mock_state_files):
         """Test StateReader correctly reads simulated state files."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         # Health should show running
         health = reader.get_health()
@@ -192,7 +197,10 @@ class TestUIFeedbackIntegration:
 
     def test_snapshot_provides_all_data(self, mock_state_files):
         """Test that state snapshot contains all data for UI."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
         snapshot = reader.get_snapshot()
 
         # Verify snapshot structure
@@ -211,7 +219,10 @@ class TestUIFeedbackIntegration:
 
     def test_snapshot_to_dict_serialization(self, mock_state_files):
         """Test snapshot can be serialized for SSE transmission."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
         snapshot = reader.get_snapshot()
 
         # Convert to dict for JSON serialization
@@ -238,7 +249,11 @@ class TestUIFeedbackIntegration:
             encoding="utf-8",
         )
 
-        reader = StateReader(state_dir=mock_state_files, logs_dir=logs_dir)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            logs_dir=logs_dir,
+            document_store=mock_state_files.document_store,
+        )
         payload = reader.get_workspace_payload()
 
         assert payload["workspace"]["storage"] == "indexeddb"
@@ -261,7 +276,11 @@ class TestUIFeedbackIntegration:
             encoding="utf-8",
         )
 
-        reader = StateReader(state_dir=mock_state_files, logs_dir=logs_dir)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            logs_dir=logs_dir,
+            document_store=mock_state_files.document_store,
+        )
         widgets = reader.get_widgets()
         tech_widget = next(widget for widget in widgets if widget["id"] == "agent:tech-analyzer")
 
@@ -275,14 +294,17 @@ class TestAgentFeedbackVisibility:
 
     def test_agent_status_changes_visible(self, mock_state_files):
         """Test that agent status changes are picked up by StateReader."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         # Initial read
         agents, _ = reader.get_registry()
         initial_status = {a.name: a.status for a in agents}
 
         # Update registry to simulate agent status change
-        registry_file = mock_state_files.parent / "config" / "agents.json"
+        registry_file = mock_state_files.config_dir / "agents.json"
         registry = json.loads(registry_file.read_text())
         registry["agents"][1]["status"] = "ready"  # tech-analyzer becomes ready
         registry_file.write_text(json.dumps(registry))
@@ -300,13 +322,16 @@ class TestAgentFeedbackVisibility:
 
     def test_build_phase_progression(self, mock_state_files):
         """Test build phase changes are tracked."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         phases = ["observe", "think", "plan", "build", "execute", "verify", "learn"]
 
         for phase in phases:
             # Update build phase
-            build_file = mock_state_files / "build_state.json"
+            build_file = mock_state_files.state_dir / "build_state.json"
             build_state = json.loads(build_file.read_text())
             build_state["build_phase"] = phase
             build_file.write_text(json.dumps(build_state))
@@ -321,10 +346,13 @@ class TestAgentFeedbackVisibility:
 
     def test_backlog_progress_tracking(self, mock_state_files):
         """Test backlog item status changes are visible."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         # Complete a task
-        build_file = mock_state_files / "build_state.json"
+        build_file = mock_state_files.state_dir / "build_state.json"
         build_state = json.loads(build_file.read_text())
         build_state["backlog"][0]["status"] = "completed"
         build_file.write_text(json.dumps(build_state))
@@ -343,7 +371,10 @@ class TestLoopStatusFeedback:
 
     def test_loops_reflect_agent_state(self, mock_state_files):
         """Test that loop status reflects actual agent state."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         health = reader.get_health()
         loops = reader.get_loops(health)
@@ -357,10 +388,13 @@ class TestLoopStatusFeedback:
 
     def test_loops_empty_when_agent_stopped(self, mock_state_files):
         """Test loops are empty when agent is not running."""
-        reader = StateReader(state_dir=mock_state_files)
+        reader = StateReader(
+            state_dir=mock_state_files.state_dir,
+            document_store=mock_state_files.document_store,
+        )
 
         # Update health to stopped
-        health_file = mock_state_files / "health.json"
+        health_file = mock_state_files.state_dir / "health.json"
         health = json.loads(health_file.read_text())
         health["status"] = "stopped"
         health_file.write_text(json.dumps(health))

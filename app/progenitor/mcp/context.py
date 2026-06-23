@@ -186,6 +186,7 @@ async def attach_mcp_runtime_context(llm_client, mcp_config: MCPConfig) -> None:
         llm_client=llm_client,
         tool_registry=None,
         mcp_config=mcp_config,
+        state_manager=None,
         reload_config=False,
     )
 
@@ -194,6 +195,7 @@ async def reload_mcp_runtime_context(
     llm_client,
     tool_registry,
     mcp_config: MCPConfig,
+    state_manager=None,
     *,
     reload_config: bool = False,
 ) -> None:
@@ -207,5 +209,6 @@ async def reload_mcp_runtime_context(
         llm_client=llm_client,
         tool_registry=tool_registry,
         mcp_config=mcp_config,
+        state_manager=state_manager,
         reload_config=reload_config,
     )

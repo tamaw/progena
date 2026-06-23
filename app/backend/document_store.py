@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
+import psycopg
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -17,6 +20,12 @@ from psycopg_pool import ConnectionPool, PoolClosed
 PROGENITOR_STATE_PREFIX = "progenitor.state"
 PROGENITOR_LOG_PREFIX = "progenitor.logs"
 BACKEND_STATE_PREFIX = "backend.state"
+
+# Postgres LISTEN/NOTIFY channel used to push ``store`` table changes to the
+# backend without polling. Only state-namespace writes notify on it (the
+# high-frequency ``progenitor.logs.*`` rows are deliberately excluded).
+STORE_CHANGE_CHANNEL = "store_changed"
+_STORE_CHANGE_PREFIXES = (PROGENITOR_STATE_PREFIX, BACKEND_STATE_PREFIX)
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +190,10 @@ class PostgresDocumentStore:
         self._database_url = database_url
         self._pool = self._create_pool()
 
+    @property
+    def database_url(self) -> str:
+        return self._database_url
+
     def _create_pool(self) -> ConnectionPool:
         return ConnectionPool(
             conninfo=self._database_url,
@@ -191,6 +204,7 @@ class PostgresDocumentStore:
     def open(self) -> None:
         self._pool.open()
         self._ensure_store_table()
+        self._ensure_change_trigger()
 
     def close(self) -> None:
         self._pool.close()
@@ -228,6 +242,41 @@ class PostgresDocumentStore:
                     ttl_minutes DOUBLE PRECISION,
                     PRIMARY KEY (prefix, key)
                 )
+                """
+            )
+
+    def _ensure_change_trigger(self) -> None:
+        """Install a NOTIFY trigger so state writes push to listeners without polling.
+
+        Fires for both backend writes and the runtime's LangGraph store writes
+        (same ``store`` table). Scoped to state-namespace prefixes so the noisy
+        append-only ``progenitor.logs.*`` rows do not flood the channel.
+        ``CREATE OR REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
+        """
+        prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
+        with self._cursor() as cur:
+            cur.execute(
+                f"""
+                CREATE OR REPLACE FUNCTION progenitor_notify_store_change()
+                RETURNS trigger AS $$
+                BEGIN
+                    IF NEW.prefix IN ({prefixes}) THEN
+                        PERFORM pg_notify(
+                            '{STORE_CHANGE_CHANNEL}',
+                            json_build_object('prefix', NEW.prefix, 'key', NEW.key)::text
+                        );
+                    END IF;
+                    RETURN NEW;
+                END;
+                $$ LANGUAGE plpgsql;
+                """
+            )
+            cur.execute("DROP TRIGGER IF EXISTS progenitor_store_change ON store")
+            cur.execute(
+                """
+                CREATE TRIGGER progenitor_store_change
+                AFTER INSERT OR UPDATE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
                 """
             )
 
@@ -447,6 +496,79 @@ class PostgresDocumentStore:
             checkpoint_ts=str(row.get("checkpoint_ts")) if row.get("checkpoint_ts") else None,
             messages=messages,
         )
+
+
+def store_database_url(store: BackendDocumentStore | None) -> str | None:
+    """Return the Postgres DSN backing ``store``, or None for non-Postgres stores."""
+    url = getattr(store, "database_url", None)
+    return url if isinstance(url, str) else None
+
+
+class StoreChangeListener:
+    """Listen for ``store`` table changes over Postgres LISTEN/NOTIFY.
+
+    Fully event-driven: on every (re)connect it fires ``on_resync`` so callers
+    can recover any changes missed while disconnected, then streams NOTIFY
+    events to ``on_change``. There is no polling timer.
+    """
+
+    def __init__(
+        self,
+        database_url: str,
+        *,
+        on_change: Callable[[str], None],
+        on_resync: Callable[[], None] | None = None,
+        reconnect_delay: float = 2.0,
+    ) -> None:
+        self._database_url = database_url
+        self._on_change = on_change
+        self._on_resync = on_resync
+        self._reconnect_delay = reconnect_delay
+        self._task: asyncio.Task[None] | None = None
+
+    async def start(self) -> None:
+        if self._task and not self._task.done():
+            return
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+
+    async def _run(self) -> None:
+        while True:
+            try:
+                await self._listen_once()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:  # noqa: BLE001 - keep listening across DB blips
+                logger.warning(
+                    "Store change listener disconnected (%s); reconnecting in %ss",
+                    exc,
+                    self._reconnect_delay,
+                )
+                try:
+                    await asyncio.sleep(self._reconnect_delay)
+                except asyncio.CancelledError:
+                    break
+
+    async def _listen_once(self) -> None:
+        aconn = await psycopg.AsyncConnection.connect(self._database_url, autocommit=True)
+        try:
+            # Recover anything that changed while we were disconnected before we
+            # start streaming live notifications.
+            if self._on_resync is not None:
+                self._on_resync()
+            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(STORE_CHANGE_CHANNEL)))
+            logger.info("Listening for store changes on %r", STORE_CHANGE_CHANNEL)
+            async for notify in aconn.notifies():
+                self._on_change(notify.payload)
+        finally:
+            await aconn.close()
 
 
 def _log_row_to_entry(row: dict[str, Any]) -> dict[str, Any]:

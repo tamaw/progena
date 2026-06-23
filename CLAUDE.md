@@ -129,9 +129,9 @@ Router in `App.jsx` wraps all routes under `AppRuntimeShell`. Pages: Conversatio
 
 ### Configuration
 
-Runtime config flows from environment variables → `data/config/*.json` (live, runtime-managed):
+Runtime config flows from environment variables plus shared runtime state:
 - `data/config/agents.json` — registered A2A agents
-- `data/config/mcp.json` — external MCP servers
+- shared `mcp` state document — external MCP servers
 - scheduled tasks — persisted in the shared Postgres document store (the `schedule`
   document under the `("progenitor", "state")` namespace), not a file
 

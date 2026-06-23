@@ -92,10 +92,10 @@ class LLMClient:
 
         Args:
             config: LLM configuration. If None, loads from environment.
-            mcp_config: MCP configuration. If None, loads from data/config/mcp.json.
+            mcp_config: MCP configuration. If None, starts empty until runtime init refreshes it.
         """
         self.config = config or LLMConfig.from_env()
-        self.mcp_config = mcp_config or MCPConfig.load()
+        self.mcp_config = mcp_config or MCPConfig()
         self.model = self.config.model_default
 
         self.endpoint_url = _build_responses_endpoint(self.config.base_url)

@@ -115,6 +115,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 #### Config Files
 - `current_state.json`: User session state
 - `a2a_tasks.json`: Tracked external A2A tasks
+- `mcp` document (Postgres-backed state store): External MCP server registry
 - `schedule` document (Postgres-backed state store): Scheduled tasks
 
 ### Key Patterns

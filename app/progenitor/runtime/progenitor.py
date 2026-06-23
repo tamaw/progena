@@ -88,6 +88,10 @@ class Progenitor:
             runtime_store=runtime_store,
         )
         await self.state_manager.initialize()
+        mcp_payload = await self.state_manager.get_mcp_config()
+        self.config.mcp = type(self.config.mcp).from_payload(mcp_payload)
+        self.llm_client.mcp_config = self.config.mcp
+        self.mcp_runtime.config = self.config.mcp
         # Back the registry with the database (registry document); agents.json is
         # only used to migrate any pre-existing entries on first load.
         self.registry_runtime.bind_state_manager(self.state_manager)

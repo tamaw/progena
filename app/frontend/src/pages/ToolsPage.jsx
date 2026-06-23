@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   PaneList,
   PaneListFilters,
@@ -12,332 +13,86 @@ import {
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
-  ConfigureActionIcon,
+  DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
-  LogsActionIcon,
-  ReconnectActionIcon,
+  PauseActionIcon,
+  PlayActionIcon,
 } from '../components/layout/DetailHeader';
-import { useChromeRuntime } from '../context/ChromeRuntimeContext';
+import { useApi } from '../hooks/useApi';
+import { useConfig } from '../context/ConfigContext';
+import { fetchMcp, selectMcpServers } from '../store/uiDataSlice';
+import { selectRealtime } from '../store/realtimeSlice';
 
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
+const SERVER_SORTS = ['Status', 'Name', 'Transport'];
 
-const MCP_SERVERS = [
-  {
-    id: 'github',
-    name: 'github',
-    initials: 'gh',
-    packageName: '@modelcontextprotocol/github',
-    version: 'v1.4.0',
-    status: 'connected',
-    transport: 'http · streamable',
-    latency: '24ms',
-    endpoint: 'api.githubcopilot.com/mcp/',
-    auth: 'OAuth 2.1',
-    protocol: '2025-06-18',
-    approval: 'Auto (allowlist)',
-    timeout: '30,000 ms',
-    connection: 'Persistent · keep-alive 30s',
-    handshake: '2m ago',
-    tools: 26,
-    enabledTools: 18,
-    resources: 4,
-    calls: '4,128',
-    callsDetail: 'last 30 days',
-    avgLatency: '24ms',
-    latencyDetail: 'p95 · 180ms',
-    errorRate: '0.4%',
-    errorDetail: '17 / 4,128 calls',
-    capabilities: ['tools', 'resources', 'prompts', 'logging', 'roots', 'sampling'],
-    activeCapabilities: ['tools', 'resources', 'prompts'],
-    serverTools: [
-      { name: 'list_issues', description: 'List & filter issues in a repository', calls: '1,204', enabled: true },
-      { name: 'get_pull_request', description: 'Read a PR with diff and review state', calls: '880', enabled: true },
-      { name: 'search_code', description: 'Search code across connected repositories', calls: '642', enabled: true },
-      { name: 'create_issue', description: 'Open a tracked GitHub issue from context', calls: '421', enabled: true },
-      { name: 'request_review', description: 'Ask a reviewer to inspect a branch or PR', calls: '318', enabled: false },
-    ],
-    scope: 'remote',
-  },
-  {
-    id: 'filesystem',
-    name: 'filesystem',
-    initials: 'fs',
-    packageName: '@modelcontextprotocol/filesystem',
-    version: 'v0.9.2',
-    status: 'connected',
-    transport: 'stdio',
-    latency: '3ms',
-    endpoint: './app',
-    auth: 'local process',
-    protocol: '2025-03-26',
-    approval: 'Workspace paths',
-    timeout: '10,000 ms',
-    connection: 'Child process',
-    handshake: 'now',
-    tools: 8,
-    enabledTools: 8,
-    resources: 0,
-    calls: '2,046',
-    callsDetail: 'last 30 days',
-    avgLatency: '3ms',
-    latencyDetail: 'p95 · 12ms',
-    errorRate: '0.1%',
-    errorDetail: '2 / 2,046 calls',
-    capabilities: ['tools', 'resources', 'logging'],
-    activeCapabilities: ['tools'],
-    serverTools: [
-      { name: 'read_file', description: 'Read files inside approved workspace roots', calls: '912', enabled: true },
-      { name: 'list_directory', description: 'Inspect directory entries and metadata', calls: '684', enabled: true },
-      { name: 'search_files', description: 'Find files by glob pattern', calls: '320', enabled: true },
-    ],
-    scope: 'local',
-  },
-  {
-    id: 'postgres',
-    name: 'postgres',
-    initials: 'pg',
-    packageName: '@modelcontextprotocol/postgres',
-    version: 'v0.8.1',
-    status: 'connected',
-    transport: 'stdio',
-    latency: '12ms',
-    endpoint: 'localhost:5432/progenitor',
-    auth: 'managed secret',
-    protocol: '2025-03-26',
-    approval: 'Read-only queries',
-    timeout: '20,000 ms',
-    connection: 'Pool · 4 workers',
-    handshake: '8m ago',
-    tools: 11,
-    enabledTools: 9,
-    resources: 9,
-    calls: '1,188',
-    callsDetail: 'last 30 days',
-    avgLatency: '12ms',
-    latencyDetail: 'p95 · 64ms',
-    errorRate: '0.2%',
-    errorDetail: '3 / 1,188 calls',
-    capabilities: ['tools', 'resources', 'logging'],
-    activeCapabilities: ['tools', 'resources'],
-    serverTools: [
-      { name: 'query', description: 'Execute approved read-only SQL statements', calls: '804', enabled: true },
-      { name: 'list_tables', description: 'Inspect schemas, tables, and columns', calls: '212', enabled: true },
-      { name: 'describe_table', description: 'Return table metadata and indexes', calls: '172', enabled: true },
-    ],
-    scope: 'local',
-  },
-  {
-    id: 'linear',
-    name: 'linear',
-    initials: 'ln',
-    packageName: '@modelcontextprotocol/linear',
-    version: 'v1.1.0',
-    status: 'connected',
-    transport: 'sse',
-    latency: '88ms',
-    endpoint: 'mcp.linear.app/sse',
-    auth: 'OAuth',
-    protocol: '2025-03-26',
-    approval: 'Team allowlist',
-    timeout: '30,000 ms',
-    connection: 'Event stream',
-    handshake: '12m ago',
-    tools: 14,
-    enabledTools: 12,
-    resources: 0,
-    calls: '732',
-    callsDetail: 'last 30 days',
-    avgLatency: '88ms',
-    latencyDetail: 'p95 · 240ms',
-    errorRate: '0.7%',
-    errorDetail: '5 / 732 calls',
-    capabilities: ['tools', 'prompts', 'logging'],
-    activeCapabilities: ['tools', 'prompts'],
-    serverTools: [
-      { name: 'list_issues', description: 'List current Linear issues by team', calls: '312', enabled: true },
-      { name: 'create_issue', description: 'Create an issue from chat context', calls: '188', enabled: true },
-      { name: 'update_status', description: 'Move work items between workflow states', calls: '94', enabled: true },
-    ],
-    scope: 'remote',
-  },
-  {
-    id: 'sentry',
-    name: 'sentry',
-    initials: 'se',
-    packageName: '@modelcontextprotocol/sentry',
-    version: 'v0.5.4',
-    status: 'connected',
-    transport: 'http · streamable',
-    latency: '42ms',
-    endpoint: 'mcp.sentry.io',
-    auth: 'API token',
-    protocol: '2025-03-26',
-    approval: 'Read incidents',
-    timeout: '30,000 ms',
-    connection: 'Persistent',
-    handshake: '5m ago',
-    tools: 9,
-    enabledTools: 7,
-    resources: 0,
-    calls: '604',
-    callsDetail: 'last 30 days',
-    avgLatency: '42ms',
-    latencyDetail: 'p95 · 190ms',
-    errorRate: '0.8%',
-    errorDetail: '5 / 604 calls',
-    capabilities: ['tools', 'logging'],
-    activeCapabilities: ['tools', 'logging'],
-    serverTools: [
-      { name: 'list_events', description: 'List recent application errors', calls: '260', enabled: true },
-      { name: 'get_trace', description: 'Fetch stack trace and release metadata', calls: '211', enabled: true },
-      { name: 'assign_issue', description: 'Assign an incident to a responder', calls: '28', enabled: false },
-    ],
-    scope: 'remote',
-  },
-  {
-    id: 'brave-search',
-    name: 'brave-search',
-    initials: 'bs',
-    packageName: '@modelcontextprotocol/brave-search',
-    version: 'v0.6.0',
-    status: 'connected',
-    transport: 'stdio',
-    latency: '31ms',
-    endpoint: 'brave-search local bridge',
-    auth: 'API key',
-    protocol: '2025-03-26',
-    approval: 'Search only',
-    timeout: '20,000 ms',
-    connection: 'Child process',
-    handshake: '18m ago',
-    tools: 2,
-    enabledTools: 2,
-    resources: 0,
-    calls: '356',
-    callsDetail: 'last 30 days',
-    avgLatency: '31ms',
-    latencyDetail: 'p95 · 126ms',
-    errorRate: '0.0%',
-    errorDetail: '0 / 356 calls',
-    capabilities: ['tools'],
-    activeCapabilities: ['tools'],
-    serverTools: [
-      { name: 'web_search', description: 'Search the web with grounded snippets', calls: '292', enabled: true },
-      { name: 'local_search', description: 'Find nearby business or place results', calls: '64', enabled: true },
-    ],
-    scope: 'remote',
-  },
-  {
-    id: 'puppeteer',
-    name: 'puppeteer',
-    initials: 'pp',
-    packageName: '@modelcontextprotocol/puppeteer',
-    version: 'v0.7.3',
-    status: 'disabled',
-    transport: 'stdio',
-    latency: '-',
-    endpoint: 'local chromium',
-    auth: 'local process',
-    protocol: '2025-03-26',
-    approval: 'Manual',
-    timeout: '45,000 ms',
-    connection: 'Stopped',
-    handshake: 'disabled',
-    tools: 7,
-    enabledTools: 0,
-    resources: 0,
-    calls: '0',
-    callsDetail: 'last 30 days',
-    avgLatency: '-',
-    latencyDetail: 'disabled',
-    errorRate: '-',
-    errorDetail: 'server disabled',
-    capabilities: ['tools', 'resources'],
-    activeCapabilities: [],
-    serverTools: [
-      { name: 'navigate', description: 'Open a page in a browser context', calls: '0', enabled: false },
-      { name: 'screenshot', description: 'Capture viewport or full-page screenshots', calls: '0', enabled: false },
-    ],
-    scope: 'local',
-  },
-  {
-    id: 'slack',
-    name: 'slack',
-    initials: 'sl',
-    packageName: '@modelcontextprotocol/slack',
-    version: 'v0.4.9',
-    status: 'disabled',
-    transport: 'http',
-    latency: '-',
-    endpoint: 'mcp.slack.com',
-    auth: 'OAuth',
-    protocol: '2025-03-26',
-    approval: 'Manual',
-    timeout: '30,000 ms',
-    connection: 'Stopped',
-    handshake: 'disabled',
-    tools: 10,
-    enabledTools: 0,
-    resources: 0,
-    calls: '0',
-    callsDetail: 'last 30 days',
-    avgLatency: '-',
-    latencyDetail: 'disabled',
-    errorRate: '-',
-    errorDetail: 'server disabled',
-    capabilities: ['tools', 'prompts'],
-    activeCapabilities: [],
-    serverTools: [
-      { name: 'send_message', description: 'Post an approved message to a channel', calls: '0', enabled: false },
-      { name: 'search_messages', description: 'Search connected Slack workspaces', calls: '0', enabled: false },
-    ],
-    scope: 'remote',
-  },
-  {
-    id: 'browser-use',
-    name: 'browser-use',
-    initials: 'bu',
-    packageName: '@modelcontextprotocol/browser-use',
-    version: 'v0.2.0',
-    status: 'error',
-    transport: 'sse',
-    latency: '-',
-    endpoint: 'browser-use.local/sse',
-    auth: 'local session',
-    protocol: '2025-03-26',
-    approval: 'Manual',
-    timeout: '45,000 ms',
-    connection: 'Retry paused',
-    handshake: 'failed 23m ago',
-    tools: 12,
-    enabledTools: 0,
-    resources: 0,
-    calls: '48',
-    callsDetail: 'last 30 days',
-    avgLatency: '-',
-    latencyDetail: 'not connected',
-    errorRate: '18.7%',
-    errorDetail: '9 / 48 calls',
-    capabilities: ['tools', 'resources', 'sampling'],
-    activeCapabilities: [],
-    serverTools: [
-      { name: 'open_page', description: 'Open browser automation target', calls: '21', enabled: false },
-      { name: 'click', description: 'Click an element by selector', calls: '14', enabled: false },
-      { name: 'extract_text', description: 'Extract visible page content', calls: '13', enabled: false },
-    ],
-    scope: 'local',
-  },
-];
+// Derive a coarse status from the live MCP widget. Disabled wins (the runtime
+// won't connect a disabled server); otherwise an error-ish status surfaces, and
+// everything else counts as connected.
+function statusOf(server) {
+  if (server.enabled === false) return 'disabled';
+  const raw = String(server.status || '').toLowerCase();
+  if (raw.includes('error') || raw.includes('fail') || raw.includes('unhealthy')) return 'error';
+  // An enabled server counts as connected/available even if the runtime reports
+  // it as "stopped" (not actively connected in this read path).
+  return 'connected';
+}
 
-function ServerIcon() {
-  return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M5.2 3.2h5.6M8 1.8v3M4.6 6.3 2.8 4.5M11.4 6.3l1.8-1.8M4.6 9.7l-1.8 1.8M11.4 9.7l1.8 1.8M5.2 12.8h5.6M8 11.2v3" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
-      <rect x="5" y="5" width="6" height="6" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.3" />
-    </svg>
-  );
+function statusLabel(status) {
+  if (status === 'connected') return 'Connected';
+  if (status === 'disabled') return 'Disabled';
+  return 'Error';
+}
+
+function statusTone(status) {
+  if (status === 'connected') return 'ok';
+  if (status === 'error') return 'error';
+  return 'muted';
+}
+
+function serverMatchesFilter(server, filter) {
+  const status = statusOf(server);
+  if (filter === 'All') return true;
+  if (filter === 'Errors') return status === 'error';
+  return status === filter.toLowerCase();
+}
+
+const STATUS_RANK = { connected: 0, error: 1, disabled: 2 };
+
+function compareServers(a, b, sortMode) {
+  if (sortMode === 'Name') {
+    return String(a.name || '').localeCompare(String(b.name || ''));
+  }
+  if (sortMode === 'Transport') {
+    const delta = String(a.transport || '').localeCompare(String(b.transport || ''));
+    if (delta !== 0) return delta;
+  } else if (sortMode === 'Status') {
+    const delta = (STATUS_RANK[statusOf(a)] ?? 9) - (STATUS_RANK[statusOf(b)] ?? 9);
+    if (delta !== 0) return delta;
+  }
+  return String(a.name || '').localeCompare(String(b.name || ''));
+}
+
+const STATUS_GROUP = { connected: 'Connected', disabled: 'Disabled', error: 'Needs attention' };
+const GROUP_ORDER = ['Connected', 'Needs attention', 'Disabled'];
+
+function parseDate(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatLogTime(value) {
+  const date = parseDate(value);
+  if (!date) return '';
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function ToolIcon() {
@@ -348,267 +103,437 @@ function ToolIcon() {
   );
 }
 
-function statusLabel(status) {
-  if (status === 'connected') return 'Connected';
-  if (status === 'disabled') return 'Disabled';
-  return 'Error';
+function ToolToggle({ checked, disabled, onChange }) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={checked ? 'Disable tool' : 'Enable tool'}
+      title={checked ? 'Disable tool' : 'Enable tool'}
+      className={`tools-toggle ${checked ? 'is-on' : 'is-off'}`}
+      disabled={disabled}
+      onClick={onChange}
+    >
+      <span />
+    </button>
+  );
 }
 
-function serverMatchesFilter(server, filter) {
-  if (filter === 'All') return true;
-  if (filter === 'Errors') return server.status === 'error';
-  return server.status === filter.toLowerCase();
-}
-
-function groupServers(servers) {
-  return servers.reduce((groups, server) => {
-    const group = server.status === 'connected' ? 'Connected' : server.status === 'disabled' ? 'Disabled' : 'Needs attention';
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push(server);
-    return groups;
-  }, new Map());
+function MetricCard({ label, value, detail }) {
+  return (
+    <article className="tools-metric-card">
+      <span>{label}</span>
+      <strong>{value}</strong>
+      <small>{detail}</small>
+    </article>
+  );
 }
 
 export default function ToolsPage() {
-  const { emitActivity } = useChromeRuntime();
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const realtime = useSelector(selectRealtime);
+  const mcpServers = useSelector(selectMcpServers);
+  const { updateWidget, deleteWidget } = useApi();
+
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState('github');
-  const [servers, setServers] = useState(MCP_SERVERS);
+  const [sortMode, setSortMode] = useState('Status');
+  const [selectedId, setSelectedId] = useState(null);
+  const [mutating, setMutating] = useState(false);
+  const [error, setError] = useState(null);
 
-  const filteredServers = useMemo(() => {
+  const [isEditingConfig, setIsEditingConfig] = useState(false);
+  const [configUrl, setConfigUrl] = useState('');
+  const [configDesc, setConfigDesc] = useState('');
+  const configInputRef = useRef(null);
+
+  const [togglingTool, setTogglingTool] = useState(null);
+
+  const mcpUrl = getApiUrl('mcp');
+  // Request the MCP list; the snapshot comes back on the realtime stream as
+  // `mcp.snapshot`, and live MCP changes arrive the same way (Postgres
+  // NOTIFY -> SSE). The GET just acknowledges and triggers the broadcast.
+  const refreshMcp = useCallback(
+    () => dispatch(fetchMcp({ mcpUrl }))
+      .unwrap()
+      .catch((err) => setError(err.message || 'Failed to load servers.')),
+    [dispatch, mcpUrl],
+  );
+
+  // The server's rich fields (enabled/transport/url/kind) live under `data`;
+  // flatten so the page can read them directly. The store slice already holds
+  // only MCP widgets, so no type filter is needed here.
+  const servers = useMemo(
+    () => (Array.isArray(mcpServers)
+      ? mcpServers.map((widget) => ({ ...widget, ...(widget.data || {}) }))
+      : []),
+    [mcpServers],
+  );
+
+  const visibleServers = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
-    return servers.filter((server) => {
-      const matchesFilter = serverMatchesFilter(server, activeFilter);
-      const haystack = `${server.name} ${server.packageName} ${server.transport} ${server.endpoint} ${server.scope}`.toLowerCase();
-      const matchesQuery = !normalizedQuery || haystack.includes(normalizedQuery);
-      return matchesFilter && matchesQuery;
+    const filtered = servers.filter((server) => {
+      if (!serverMatchesFilter(server, activeFilter)) return false;
+      if (!normalizedQuery) return true;
+      const haystack = `${server.name} ${server.transport} ${server.url} ${server.description}`.toLowerCase();
+      return haystack.includes(normalizedQuery);
     });
-  }, [activeFilter, query, servers]);
-  const groupedServers = useMemo(() => groupServers(filteredServers), [filteredServers]);
-  const selectedServer = servers.find((server) => server.id === selectedId) ?? filteredServers[0] ?? servers[0];
+    return [...filtered].sort((a, b) => compareServers(a, b, sortMode));
+  }, [servers, activeFilter, query, sortMode]);
+
+  const groupedServers = useMemo(() => {
+    const groups = { Connected: [], 'Needs attention': [], Disabled: [] };
+    for (const server of visibleServers) {
+      groups[STATUS_GROUP[statusOf(server)]].push(server);
+    }
+    return groups;
+  }, [visibleServers]);
+
+  const selectedServer =
+    servers.find((server) => server.id === selectedId) || visibleServers[0] || servers[0] || null;
+  const selectedStatus = selectedServer ? statusOf(selectedServer) : 'disabled';
 
   const totals = useMemo(() => ({
-    connected: servers.filter((server) => server.status === 'connected').length,
-    disabled: servers.filter((server) => server.status === 'disabled').length,
-    errors: servers.filter((server) => server.status === 'error').length,
+    connected: servers.filter((server) => statusOf(server) === 'connected').length,
+    disabled: servers.filter((server) => statusOf(server) === 'disabled').length,
+    errors: servers.filter((server) => statusOf(server) === 'error').length,
   }), [servers]);
 
-  const emitServerAction = (title) => {
-    emitActivity?.({
-      kind: 'tools',
-      title,
-      detail: `${selectedServer.name} · ${selectedServer.transport}`,
-    });
-  };
+  // Request the MCP list once the realtime stream is connected, so the
+  // `mcp.snapshot` it triggers isn't missed before the EventSource is listening.
+  useEffect(() => {
+    if (!realtime.connected) return;
+    refreshMcp();
+  }, [realtime.connected, refreshMcp]);
 
-  const toggleServerTool = (toolName) => {
-    setServers((current) => current.map((server) => {
-      if (server.id !== selectedServer.id) return server;
-      return {
-        ...server,
-        serverTools: server.serverTools.map((tool) => (
-          tool.name === toolName ? { ...tool, enabled: !tool.enabled } : tool
-        )),
-      };
+  // Leave edit mode whenever the selected server changes so a stale draft never
+  // leaks across selections.
+  useEffect(() => {
+    setIsEditingConfig(false);
+    setError(null);
+  }, [selectedServer?.id]);
+
+  useEffect(() => {
+    if (!isEditingConfig) return undefined;
+    configInputRef.current?.focus();
+    configInputRef.current?.select();
+    return undefined;
+  }, [isEditingConfig]);
+
+  const toggleEnabled = useCallback(async () => {
+    if (!selectedServer) return;
+    setMutating(true);
+    setError(null);
+    try {
+      await updateWidget(`mcp:${selectedServer.name}`, { enabled: selectedServer.enabled === false });
+      await refreshMcp();
+    } catch (err) {
+      setError(err.message || 'Failed to update server.');
+    } finally {
+      setMutating(false);
+    }
+  }, [refreshMcp, selectedServer, updateWidget]);
+
+  const toggleTool = useCallback(async (tool) => {
+    if (!tool?.name) return;
+    setTogglingTool(tool.name);
+    setError(null);
+    try {
+      await updateWidget(`mcp_tool:${tool.name}`, { enabled: tool.enabled === false });
+      await refreshMcp();
+    } catch (err) {
+      setError(err.message || 'Failed to update tool.');
+    } finally {
+      setTogglingTool(null);
+    }
+  }, [refreshMcp, updateWidget]);
+
+  const startConfigEdit = useCallback(() => {
+    if (!selectedServer) return;
+    setConfigUrl(selectedServer.url || '');
+    setConfigDesc(selectedServer.description || '');
+    setIsEditingConfig(true);
+  }, [selectedServer]);
+
+  const cancelConfigEdit = useCallback(() => {
+    setIsEditingConfig(false);
+  }, []);
+
+  const saveConfigEdit = useCallback(async () => {
+    if (!selectedServer) return;
+    const url = configUrl.trim();
+    const description = configDesc.trim();
+    if (!url) {
+      setError('Endpoint URL is required.');
+      return;
+    }
+    setMutating(true);
+    setError(null);
+    try {
+      await updateWidget(`mcp:${selectedServer.name}`, { url, description });
+      await refreshMcp();
+      setIsEditingConfig(false);
+    } catch (err) {
+      setError(err.message || 'Failed to save configuration.');
+    } finally {
+      setMutating(false);
+    }
+  }, [configDesc, configUrl, refreshMcp, selectedServer, updateWidget]);
+
+  const handleDelete = useCallback(async () => {
+    if (!selectedServer) return;
+    const confirmed = window.confirm(
+      `Remove MCP server "${selectedServer.name}"? This can't be undone.`,
+    );
+    if (!confirmed) return;
+    setMutating(true);
+    setError(null);
+    try {
+      await deleteWidget(`mcp:${selectedServer.name}`);
+      setSelectedId(null);
+      await refreshMcp();
+    } catch (err) {
+      setError(err.message || 'Failed to remove server.');
+    } finally {
+      setMutating(false);
+    }
+  }, [deleteWidget, refreshMcp, selectedServer]);
+
+  const addServer = useCallback(() => {
+    // Creation is a Progenitor change request: open quick-chat primed to add an
+    // MCP server (there is no REST create — the agent owns config mutation).
+    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+      detail: { mode: 'mcp-create' },
     }));
-  };
+  }, []);
 
-  const addServer = () => {
-    const nextIndex = servers.length + 1;
-    const nextServer = {
-      ...MCP_SERVERS[1],
-      id: `custom-${Date.now()}`,
-      name: `custom-server-${nextIndex}`,
-      initials: 'cs',
-      packageName: '@workspace/custom-mcp',
-      version: 'v0.1.0',
-      status: 'disabled',
-      latency: '-',
-      tools: 0,
-      enabledTools: 0,
-      resources: 0,
-      calls: '0',
-      callsDetail: 'new server',
-      serverTools: [],
-    };
-    setServers((current) => [nextServer, ...current]);
-    setSelectedId(nextServer.id);
-    emitActivity?.({
-      kind: 'tools',
-      title: `Added ${nextServer.name}`,
-      detail: 'MCP server scaffold ready to configure',
-    });
-  };
+  // DB-backed tools surfaced by the runtime (with per-tool enabled flags),
+  // discovered when the runtime initialises / refreshes its MCP context.
+  const serverTools = Array.isArray(selectedServer?.tools) ? selectedServer.tools : [];
+  const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
+  const selectedLogs = Array.isArray(selectedServer?.logs) ? selectedServer.logs.slice(0, 5) : [];
 
   return (
     <PageShell className="tools-page">
       <PaneList className="tools-pane" label="MCP servers">
-        <PaneListFilters filters={SERVER_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar actionLabel="+ Add server" onAction={addServer}>
-          <PaneListSearch value={query} placeholder="Search servers" onChange={setQuery} />
-          <PaneListSortButton title="Sort" onClick={() => emitServerAction('Sorted MCP servers')}>Usage</PaneListSortButton>
+        <PaneListFilters
+          filters={SERVER_FILTERS}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+          actionLabel="+ Add"
+          onAction={addServer}
+        />
+        <PaneListToolbar>
+          <PaneListSearch value={query} placeholder="Search servers..." onChange={setQuery} />
+          <PaneListSortButton title="Sort servers" options={SERVER_SORTS} value={sortMode} onSelect={setSortMode} />
         </PaneListToolbar>
 
         <PaneListScroll>
-          {Array.from(groupedServers.entries()).map(([group, groupServersList]) => (
-            <PaneListGroup key={group} title={group} count={groupServersList.length}>
-              {groupServersList.map((server) => (
-                <button
-                  type="button"
-                  key={server.id}
-                  className={`sess-row tools-server-row ${selectedServer.id === server.id ? 'is-selected' : ''} tools-server-row--${server.status}`}
-                  aria-label={`${server.name}, ${statusLabel(server.status)}, ${server.transport}`}
-                  onClick={() => setSelectedId(server.id)}
-                >
-                  <span className="sess-row__top">
-                    <span className={`sess-row__dot tools-status-dot--${server.status}`} />
-                    <span className="sess-row__project">{server.transport}</span>
-                  </span>
-                  <span className="sess-row__age">{server.latency}</span>
-                  <span className="pane-row-title tools-server-row__title">{server.name}</span>
-                  <span className="pane-row-caption sess-row__msgs">
-                    <span className="num">{server.tools}</span> tools · {server.resources} resources · <span className="tools-server-row__scope">{server.scope}</span>
-                  </span>
-                </button>
-              ))}
-            </PaneListGroup>
-          ))}
-          {filteredServers.length === 0 ? (
-            <div className="empty-state small">No MCP servers match the current filter.</div>
-          ) : null}
+          {servers.length === 0 ? (
+            <div className="tools-empty-state">
+              No MCP servers configured. Use “+ Add” to ask Progenitor to connect one.
+            </div>
+          ) : visibleServers.length === 0 ? (
+            <div className="tools-empty-state">No MCP servers match this view.</div>
+          ) : (
+            GROUP_ORDER.map((group) => (
+              groupedServers[group]?.length ? (
+                <PaneListGroup key={group} title={group} count={groupedServers[group].length}>
+                  {groupedServers[group].map((server) => {
+                    const status = statusOf(server);
+                    return (
+                      <button
+                        type="button"
+                        key={server.id}
+                        className={`sess-row tools-pane-row tools-pane-row--${status} ${selectedServer?.id === server.id ? 'is-selected' : ''}`}
+                        aria-label={`${server.name}, ${statusLabel(status)}, ${server.transport || 'mcp'}`}
+                        onClick={() => setSelectedId(server.id)}
+                      >
+                        <span className="sess-row__top">
+                          <span className={`sess-row__dot tools-status-dot--${status}`} />
+                          <span className="sess-row__agent tools-pane-row__name">{server.name}</span>
+                        </span>
+                        <span className="sess-row__title">{server.description || server.url || '—'}</span>
+                      </button>
+                    );
+                  })}
+                </PaneListGroup>
+              ) : null
+            ))
+          )}
         </PaneListScroll>
 
         <PaneListFooter>
-          <span>{totals.connected} connected</span>
-          <span>{totals.disabled} disabled</span>
-          <span>{totals.errors} errors</span>
+          <span><span className="num">{totals.connected}</span> connected</span>
+          <span><span className="num">{totals.disabled}</span> disabled</span>
+          <span><span className="num">{totals.errors}</span> errors</span>
         </PaneListFooter>
       </PaneList>
 
-      <DetailPane className="tools-detail">
-        <DetailHeader
-          title={selectedServer.name}
-          actions={(
-            <DetailHeaderActions>
-              <DetailHeaderAction
-                icon={<LogsActionIcon />}
-                label="Logs"
-                tooltip={`Open logs for ${selectedServer.name}`}
-                ariaLabel={`Open logs for ${selectedServer.name}`}
-                onClick={() => emitServerAction(`Opened logs for ${selectedServer.name}`)}
-              />
-              <DetailHeaderAction
-                icon={<ReconnectActionIcon />}
-                label="Reconnect"
-                tooltip={`Reconnect ${selectedServer.name}`}
-                ariaLabel={`Reconnect ${selectedServer.name}`}
-                onClick={() => emitServerAction(`Reconnected ${selectedServer.name}`)}
-              />
-              <DetailHeaderAction
-                icon={<ConfigureActionIcon />}
-                label="Configure"
-                tooltip={`Configure ${selectedServer.name}`}
-                ariaLabel={`Configure ${selectedServer.name}`}
-                variant="primary"
-                onClick={() => emitServerAction(`Configured ${selectedServer.name}`)}
-              />
-            </DetailHeaderActions>
-          )}
-          meta={[
-            <DetailStatus key="status" tone={selectedServer.status === 'connected' ? 'ok' : selectedServer.status === 'error' ? 'error' : 'muted'}>
-              {statusLabel(selectedServer.status)}
-            </DetailStatus>,
-            <span key="counts">{selectedServer.tools} tools · {selectedServer.resources} resources</span>,
-            <span key="endpoint">endpoint: <code>{selectedServer.endpoint}</code></span>,
-            <span key="auth">auth: {selectedServer.auth}</span>,
-          ]}
-        />
-
-        <div className="tools-detail__body">
-          <section className="tools-metrics" aria-label="MCP server metrics">
-            <article className="tools-metric-card">
-              <span>Tools</span>
-              <strong>{selectedServer.tools}</strong>
-              <small>{selectedServer.enabledTools} enabled · {Math.max(selectedServer.tools - selectedServer.enabledTools, 0)} off</small>
-            </article>
-            <article className="tools-metric-card">
-              <span>Calls</span>
-              <strong>{selectedServer.calls}</strong>
-              <small>{selectedServer.callsDetail}</small>
-            </article>
-            <article className="tools-metric-card">
-              <span>Avg latency</span>
-              <strong>{selectedServer.avgLatency}</strong>
-              <small>{selectedServer.latencyDetail}</small>
-            </article>
-            <article className="tools-metric-card">
-              <span>Error rate</span>
-              <strong>{selectedServer.errorRate}</strong>
-              <small>{selectedServer.errorDetail}</small>
-            </article>
-          </section>
-
-          <section className="tools-section">
-            <h2>Connection</h2>
-            <dl className="tools-connection-grid">
-              <div><dt>Transport</dt><dd>{selectedServer.transport.replace(' · ', '-')}</dd></div>
-              <div><dt>Protocol version</dt><dd>{selectedServer.protocol}</dd></div>
-              <div><dt>Endpoint</dt><dd>{selectedServer.endpoint}</dd></div>
-              <div><dt>Auth</dt><dd>{selectedServer.auth.toLowerCase()}</dd></div>
-              <div><dt>Approval policy</dt><dd>{selectedServer.approval}</dd></div>
-              <div><dt>Timeout</dt><dd>{selectedServer.timeout}</dd></div>
-              <div><dt>Connection</dt><dd>{selectedServer.connection}</dd></div>
-              <div><dt>Last handshake</dt><dd>{selectedServer.handshake}</dd></div>
-            </dl>
-          </section>
-
-          <section className="tools-section">
-            <h2>Capabilities</h2>
-            <div className="tools-capabilities">
-              {selectedServer.capabilities.map((capability) => (
-                <span
-                  key={capability}
-                  className={`tools-capability ${selectedServer.activeCapabilities.includes(capability) ? 'is-active' : ''}`}
-                >
-                  {capability}
-                </span>
-              ))}
+      <DetailPane className="detail-pane--dense tools-detail" label="MCP server detail">
+        {!selectedServer ? (
+          <div className="detail-pane__body">
+            <div className="tools-empty-state">
+              Select a server, or use “+ Add server” to ask Progenitor to connect one.
             </div>
-          </section>
-
-          <section className="tools-section">
-            <div className="tools-section__head">
-              <h2>Tools <span>{selectedServer.enabledTools} of {selectedServer.tools} enabled</span></h2>
-              <div>
-                <button type="button" className="tools-link-button" onClick={() => emitServerAction(`Enabled all tools for ${selectedServer.name}`)}>Enable all</button>
-                <button type="button" className="tools-link-button" onClick={() => emitServerAction(`Added tool to ${selectedServer.name}`)}>+ Add</button>
-              </div>
-            </div>
-            <div className="tools-tool-list">
-              {selectedServer.serverTools.length > 0 ? selectedServer.serverTools.map((tool) => (
-                <article className="tools-tool-row" key={tool.name}>
-                  <span className="tools-tool-row__icon"><ToolIcon /></span>
-                  <div className="tools-tool-row__body">
-                    <strong>{tool.name}</strong>
-                    <p>{tool.description}</p>
-                  </div>
-                  <span className="tools-tool-row__calls">{tool.calls} calls</span>
-                  <button
-                    type="button"
-                    className={`tools-toggle ${tool.enabled ? 'is-on' : ''}`}
-                    aria-label={`${tool.enabled ? 'Disable' : 'Enable'} ${tool.name}`}
-                    onClick={() => toggleServerTool(tool.name)}
-                  >
-                    <span />
-                  </button>
-                </article>
-              )) : (
-                <div className="tools-empty-state">No tools have been registered for this server yet.</div>
+          </div>
+        ) : (
+          <>
+            <DetailHeader
+              title={selectedServer.name}
+              actions={(
+                <DetailHeaderActions menuLabel="Server actions">
+                  <DetailHeaderAction
+                    icon={selectedServer.enabled === false ? <PlayActionIcon /> : <PauseActionIcon />}
+                    label={selectedServer.enabled === false ? 'Enable' : 'Disable'}
+                    tooltip={selectedServer.enabled === false ? 'Enable server' : 'Disable server'}
+                    ariaLabel={selectedServer.enabled === false ? 'Enable server' : 'Disable server'}
+                    variant="primary"
+                    disabled={mutating}
+                    onClick={toggleEnabled}
+                  />
+                  <DetailHeaderAction
+                    icon={<DeleteActionIcon />}
+                    label="Remove"
+                    tooltip="Remove server"
+                    ariaLabel="Remove server"
+                    variant="danger"
+                    disabled={mutating}
+                    onClick={handleDelete}
+                  />
+                </DetailHeaderActions>
               )}
+              meta={[
+                <DetailStatus key="status" tone={statusTone(selectedStatus)}>{statusLabel(selectedStatus)}</DetailStatus>,
+                <span key="transport" className="muted">{selectedServer.transport || 'mcp'}</span>,
+                selectedServer.url ? <span key="url" className="muted tools-detail__url">{selectedServer.url}</span> : null,
+                selectedServer.kind ? <span key="kind" className="muted">{selectedServer.kind}</span> : null,
+              ]}
+            />
+
+            <div className="detail-pane__body">
+              {error ? <div className="tools-empty-state">{error}</div> : null}
+
+              <section className="tools-metrics" aria-label="MCP server metrics">
+                <MetricCard label="Status" value={statusLabel(selectedStatus)} detail={selectedServer.enabled === false ? 'disabled' : 'enabled'} />
+                <MetricCard label="Transport" value={selectedServer.transport || 'mcp'} detail="protocol" />
+                <MetricCard
+                  label="Tools"
+                  value={serverTools.length ? `${enabledToolCount}/${serverTools.length}` : '—'}
+                  detail={serverTools.length ? 'enabled' : 'none discovered'}
+                />
+                <MetricCard
+                  label="Updated"
+                  value={selectedServer.updated_at ? formatLogTime(selectedServer.updated_at) : '—'}
+                  detail="last change"
+                />
+              </section>
+
+              <section className="tools-section">
+                <div className="tools-section__head">
+                  <h2>Configuration</h2>
+                  <div>
+                    {isEditingConfig ? (
+                      <>
+                        <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelConfigEdit} disabled={mutating}>Cancel</button>
+                        <button type="button" className="repo-btn" onClick={saveConfigEdit} disabled={mutating}>Save</button>
+                      </>
+                    ) : (
+                      <button type="button" className="repo-btn repo-btn--ghost" onClick={startConfigEdit}>Edit</button>
+                    )}
+                  </div>
+                </div>
+                {isEditingConfig ? (
+                  <div className="tools-config-edit">
+                    <label className="tools-config-field">
+                      <span>Endpoint URL</span>
+                      <input
+                        ref={configInputRef}
+                        value={configUrl}
+                        disabled={mutating}
+                        placeholder="https://host/mcp"
+                        onChange={(event) => setConfigUrl(event.target.value)}
+                      />
+                    </label>
+                    <label className="tools-config-field">
+                      <span>Description</span>
+                      <input
+                        value={configDesc}
+                        disabled={mutating}
+                        placeholder="What this server provides"
+                        onChange={(event) => setConfigDesc(event.target.value)}
+                      />
+                    </label>
+                    <p className="tools-config-edit__hint">{mutating ? 'Processing…' : 'Changes apply to the shared MCP registry.'}</p>
+                  </div>
+                ) : (
+                  <dl className="tools-connection-grid">
+                    <div><dt>Endpoint</dt><dd>{selectedServer.url || '—'}</dd></div>
+                    <div><dt>Transport</dt><dd>{selectedServer.transport || 'mcp'}</dd></div>
+                    <div><dt>Enabled</dt><dd>{selectedServer.enabled === false ? 'no' : 'yes'}</dd></div>
+                    <div><dt>Description</dt><dd>{selectedServer.description || '—'}</dd></div>
+                  </dl>
+                )}
+              </section>
+
+              <section className="tools-section">
+                <div className="tools-section__head">
+                  <h2>
+                    Tools {serverTools.length ? <span>{enabledToolCount}/{serverTools.length} enabled</span> : null}
+                  </h2>
+                </div>
+                <div className="tools-tool-list">
+                  {serverTools.length ? serverTools.map((tool, index) => {
+                    const toolEnabled = tool.enabled !== false;
+                    return (
+                      <article
+                        className={`tools-tool-row ${toolEnabled ? '' : 'tools-tool-row--disabled'}`}
+                        key={tool.name || index}
+                      >
+                        <span className="tools-tool-row__icon"><ToolIcon /></span>
+                        <div className="tools-tool-row__body">
+                          <strong>{tool.original_name || tool.name || 'tool'}</strong>
+                          <p>{tool.description || 'No description provided.'}</p>
+                        </div>
+                        <ToolToggle
+                          checked={toolEnabled}
+                          disabled={togglingTool === tool.name}
+                          onChange={() => toggleTool(tool)}
+                        />
+                      </article>
+                    );
+                  }) : (
+                    <div className="tools-empty-state">
+                      {selectedServer.enabled === false
+                        ? 'Enable the server to discover its tools.'
+                        : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.'}
+                    </div>
+                  )}
+                </div>
+              </section>
+
+              <section className="tools-section">
+                <h2>Activity</h2>
+                <div className="tools-tool-list">
+                  {selectedLogs.length ? selectedLogs.map((entry, index) => (
+                    <article className="tools-tool-row" key={entry.id || entry.timestamp || index}>
+                      <span className="tools-tool-row__icon">log</span>
+                      <div className="tools-tool-row__body">
+                        <strong>{entry.message || entry.event || 'Server activity'}</strong>
+                        <p>{formatLogTime(entry.timestamp || entry.time || entry.updated_at) || 'recent'}</p>
+                      </div>
+                      <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
+                    </article>
+                  )) : (
+                    <div className="tools-empty-state">No recent activity for this server.</div>
+                  )}
+                </div>
+              </section>
             </div>
-          </section>
-        </div>
+          </>
+        )}
       </DetailPane>
     </PageShell>
   );

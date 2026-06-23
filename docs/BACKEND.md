@@ -71,7 +71,8 @@ The frontend relies on additional routes in `app/backend/ui_routes.py`, includin
 - logs and exports: `/api/ui/logs*`
 - Telegram status/testing: `/api/ui/telegram/*`
 
-These routes read repo/runtime state from files under `data/state/`, `data/config/`, and `logs/` via `app/backend/state_reader.py`.
+These routes read repo/runtime state from file-backed runtime artifacts plus
+shared documents via `app/backend/state_reader.py`.
 
 ## Important environment variables
 

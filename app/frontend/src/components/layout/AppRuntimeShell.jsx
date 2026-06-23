@@ -115,12 +115,26 @@ const scheduleQuickChatConfig = {
   placeholder: 'Describe the schedule you want Progenitor to create...',
   prompts: scheduleQuickPrompts,
 };
+const mcpQuickPrompts = [
+  'Connect the GitHub MCP server at https://api.githubcopilot.com/mcp/.',
+  'Add a filesystem MCP server scoped to the app directory.',
+  'Connect our Linear MCP server over SSE.',
+];
+const mcpQuickChatConfig = {
+  mode: 'mcp-create',
+  title: 'Add MCP server',
+  subtitle: 'Describe the MCP server to connect. It appears on the Tools page live once the config updates.',
+  placeholder: 'Describe the MCP server you want Progenitor to connect...',
+  prompts: mcpQuickPrompts,
+};
 
 function normalizeQuickChatConfig(config) {
   const candidate = config && typeof config === 'object' ? config : {};
   const baseConfig = candidate.mode === 'schedule-create'
     ? scheduleQuickChatConfig
-    : defaultQuickChatConfig;
+    : candidate.mode === 'mcp-create'
+      ? mcpQuickChatConfig
+      : defaultQuickChatConfig;
   const prompts = Array.isArray(candidate.prompts)
     ? candidate.prompts.filter((prompt) => typeof prompt === 'string' && prompt.trim())
     : [];
@@ -132,6 +146,18 @@ function normalizeQuickChatConfig(config) {
 }
 
 function buildQuickChatOutboundMessage(mode, text) {
+  if (mode === 'mcp-create') {
+    return [
+      'Connect a new MCP server from the following user request.',
+      'Use the add_mcp_server tool with the server name and url (HTTP only),',
+      'including any auth headers, leaving it enabled. This persists it and',
+      'discovers its tools immediately.',
+      'Only ask a follow-up question if the endpoint URL is missing; otherwise add it.',
+      'Reply with one short sentence confirming the connected server name and endpoint.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
   if (mode !== 'schedule-create') {
     return text;
   }

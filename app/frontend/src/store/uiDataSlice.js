@@ -95,6 +95,32 @@ export const fetchAgentProfiles = createAsyncThunk(
   },
 );
 
+// Acknowledge a widget-list request; the snapshot arrives on the realtime
+// stream as `widgets.updated` (the GET just triggers the broadcast).
+export const fetchWidgets = createAsyncThunk(
+  'uiData/fetchWidgets',
+  async ({ widgetsUrl }) => {
+    const response = await fetch(widgetsUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load widgets (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
+// Acknowledge an MCP-list request; the snapshot arrives on the realtime stream
+// as `mcp.snapshot` (the GET just triggers the broadcast).
+export const fetchMcp = createAsyncThunk(
+  'uiData/fetchMcp',
+  async ({ mcpUrl }) => {
+    const response = await fetch(mcpUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load MCP servers (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
 export const requestAgentDetail = createAsyncThunk(
   'uiData/requestAgentDetail',
   async ({ agentsUrl, agentId, requestId }) => {
@@ -182,6 +208,14 @@ const initialState = {
       error: null,
       requestId: null,
     },
+  },
+  // MCP servers, kept live by `mcp.snapshot` events on /api/ui/stream and
+  // seeded via REST when the Tools page mounts.
+  mcp: {
+    servers: [],
+    loaded: false,
+    loading: false,
+    error: null,
   },
 };
 
@@ -350,7 +384,10 @@ const uiDataSlice = createSlice({
         return;
       }
       if (event?.type === 'status.updated') {
-        state.status = payload;
+        // Merge rather than replace so a partial push (e.g. the periodic
+        // process-metrics tick) updates only the fields it carries and leaves
+        // the rest (agents/tools/schedule/...) intact.
+        state.status = { ...state.status, ...payload };
         if (payload.alerts) {
           state.alerts = payload.alerts;
         }
@@ -369,6 +406,13 @@ const uiDataSlice = createSlice({
       }
       if (event?.type === 'schedule.snapshot') {
         state.schedule = Array.isArray(payload.items) ? payload.items : [];
+        return;
+      }
+      if (event?.type === 'mcp.snapshot') {
+        state.mcp.servers = Array.isArray(payload.items) ? payload.items : [];
+        state.mcp.loaded = true;
+        state.mcp.loading = false;
+        state.mcp.error = null;
         return;
       }
       if (event?.type === 'chat.sessions.snapshot') {
@@ -517,6 +561,17 @@ const uiDataSlice = createSlice({
           state.agents.active.loading = false;
           state.agents.active.error = action.error?.message || 'Failed to load agent';
         }
+      })
+      .addCase(fetchMcp.pending, (state) => {
+        state.mcp.loading = true;
+        state.mcp.error = null;
+      })
+      .addCase(fetchMcp.fulfilled, (state) => {
+        state.mcp.loading = false;
+      })
+      .addCase(fetchMcp.rejected, (state, action) => {
+        state.mcp.loading = false;
+        state.mcp.error = action.error?.message || 'Failed to load MCP servers';
       });
   },
 });
@@ -539,6 +594,8 @@ export const {
 export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
 export const selectUiWidgets = (state) => state.uiData.widgets;
+export const selectMcpServers = (state) => state.uiData.mcp.servers;
+export const selectMcpState = (state) => state.uiData.mcp;
 export const selectSchedules = (state) => state.uiData.schedule;
 export const selectChatSessions = createSelector(
   [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],

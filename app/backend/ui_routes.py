@@ -3,9 +3,9 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from data/state/, data/config/, and live backend-managed config:
+Reads real state data from file-backed runtime artifacts plus shared backend-managed state:
 - health.json: Agent health status
-- agents.json + data/config/mcp.json: Registered agents and enabled MCP servers
+- agents.json + the shared MCP state document: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
 - schedules: scheduled tasks, persisted in the shared Postgres document store
@@ -1749,15 +1749,14 @@ def _atomic_write_json(
         raise
 
 
-def _read_mcp_config(state_reader: StateReader) -> tuple[Path, dict]:
-    """Read the live MCP config, normalizing the top-level mcpServers map."""
-    mcp_config_path = state_reader.mcp_config_path
-    raw = state_reader._read_json_from_path(mcp_config_path)  # noqa: SLF001 - shared helper
-    data = raw if isinstance(raw, dict) else {}
-    raw_servers = data.get("mcpServers")
-    if not isinstance(raw_servers, dict):
-        data["mcpServers"] = {}
-    return mcp_config_path, data
+def _read_mcp_config(state_reader: StateReader) -> dict:
+    """Read the live MCP config from the shared state document."""
+    return state_reader.get_mcp_config()
+
+
+def _write_mcp_config(state_reader: StateReader, data: dict[str, Any]) -> None:
+    """Persist the MCP config to the shared state document."""
+    state_reader.save_mcp_config(data)
 
 
 def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
@@ -1817,21 +1816,6 @@ def _format_httpx_error(exc: httpx.HTTPError) -> str:
     if isinstance(exc, httpx.RequestError):
         return f"Request to {exc.request.url} failed: {exc}"
     return str(exc)
-
-
-def _mcp_jsonrpc_error_detail(error_payload: Any) -> str:
-    if not isinstance(error_payload, Mapping):
-        return str(error_payload or "Unknown MCP error")
-
-    message = str(error_payload.get("message") or "Unknown MCP error").strip()
-    code = error_payload.get("code")
-    data = error_payload.get("data")
-    detail = message
-    if code is not None:
-        detail = f"{detail} (code {code})"
-    if data not in (None, ""):
-        detail = f"{detail}: {data}"
-    return detail
 
 
 def _agent_card_url(agent: Any) -> str | None:
@@ -1903,157 +1887,6 @@ async def _inspect_agent_widget(
         "url": str(payload.get("url") or getattr(agent, "url", "") or ""),
         "agent_card_url": card_url,
         "version": str(payload.get("version") or getattr(agent, "version", "") or ""),
-        "availability_status": "online",
-        "inspection": inspection,
-    }
-
-
-async def _call_mcp_jsonrpc(
-    client: httpx.AsyncClient,
-    endpoint: str,
-    request_id: int,
-    method: str,
-    params: dict[str, Any] | None = None,
-    *,
-    session_id: str | None = None,
-) -> tuple[dict[str, Any], str | None]:
-    from app.progenitor.mcp.jsonrpc import parse_mcp_jsonrpc_response
-
-    request = {
-        "jsonrpc": "2.0",
-        "id": request_id,
-        "method": method,
-    }
-    if params is not None:
-        request["params"] = params
-
-    headers = {"mcp-session-id": session_id} if session_id else None
-
-    response = await client.post(endpoint, json=request, headers=headers)
-    response.raise_for_status()
-
-    parsed = parse_mcp_jsonrpc_response(response.text)
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{method} returned an invalid JSON-RPC response")
-
-    error_payload = parsed.get("error")
-    if error_payload is not None:
-        raise RuntimeError(_mcp_jsonrpc_error_detail(error_payload))
-
-    result = parsed.get("result", parsed)
-    if not isinstance(result, dict):
-        raise ValueError(f"{method} returned a non-object result")
-
-    next_session_id = response.headers.get("mcp-session-id") or session_id
-    return result, next_session_id
-
-
-def _extract_mcp_collection(payload: dict[str, Any], key: str, method: str) -> list[dict[str, Any]]:
-    entries = payload.get(key)
-    if entries is None:
-        return []
-    if not isinstance(entries, list):
-        raise ValueError(f"{method} returned '{key}' in an unexpected format")
-    return [entry for entry in entries if isinstance(entry, dict)]
-
-
-async def _inspect_mcp_widget(widget: dict[str, Any], state_reader: StateReader) -> dict[str, Any]:
-    from app.progenitor.mcp.loader import load_mcp_servers
-
-    server_name = str(widget.get("name") or "").strip()
-    servers = {server.name: server for server in load_mcp_servers(state_reader.mcp_config_path)}
-    server_config = servers.get(server_name)
-    if server_config is None:
-        _mcp_config_path, mcp_data = _read_mcp_config(state_reader)
-        raw_servers = mcp_data.get("mcpServers")
-        if isinstance(raw_servers, dict) and server_name in raw_servers:
-            raise HTTPException(
-                status_code=400,
-                detail=f"MCP server '{server_name}' is not available for live inspection",
-            )
-        raise HTTPException(status_code=404, detail="MCP widget is not registered")
-
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json, text/event-stream",
-        **server_config.headers,
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0), headers=headers) as client:
-            initialize_result, session_id = await _call_mcp_jsonrpc(
-                client,
-                server_config.url,
-                1,
-                "initialize",
-                params={
-                    "protocolVersion": "2025-03-26",
-                    "capabilities": {},
-                    "clientInfo": {"name": "progenitor-ui", "version": "0.0.0"},
-                },
-            )
-            tools_result, session_id = await _call_mcp_jsonrpc(
-                client,
-                server_config.url,
-                2,
-                "tools/list",
-                session_id=session_id,
-            )
-
-            optional_errors: dict[str, str] = {}
-            resources_result: dict[str, Any] = {}
-            prompts_result: dict[str, Any] = {}
-            for method_name, key_name, request_id in (
-                ("resources/list", "resources", 3),
-                ("prompts/list", "prompts", 4),
-            ):
-                try:
-                    result, session_id = await _call_mcp_jsonrpc(
-                        client,
-                        server_config.url,
-                        request_id,
-                        method_name,
-                        session_id=session_id,
-                    )
-                except (httpx.HTTPError, RuntimeError, ValueError) as exc:
-                    optional_errors[method_name] = (
-                        _format_httpx_error(exc) if isinstance(exc, httpx.HTTPError) else str(exc)
-                    )
-                    continue
-                if key_name == "resources":
-                    resources_result = result
-                else:
-                    prompts_result = result
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=502, detail=_format_httpx_error(exc)) from exc
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"MCP inspection failed for {server_name}: {exc}",
-        ) from exc
-
-    inspection = {
-        "source": "mcp",
-        "refreshed_at": utcnow().isoformat(),
-        "endpoint": server_config.url,
-        "protocol_version": initialize_result.get("protocolVersion"),
-        "server_info": initialize_result.get("serverInfo"),
-        "instructions": initialize_result.get("instructions"),
-        "capabilities": initialize_result.get("capabilities"),
-        "session_id_present": bool(session_id),
-        "tools": _extract_mcp_collection(tools_result, "tools", "tools/list"),
-        "resources": _extract_mcp_collection(resources_result, "resources", "resources/list"),
-        "prompts": _extract_mcp_collection(prompts_result, "prompts", "prompts/list"),
-        "errors": optional_errors,
-    }
-
-    return {
-        **widget,
-        "description": str(widget.get("description") or server_config.description or ""),
-        "summary": str(
-            widget.get("summary") or server_config.description or widget.get("title") or ""
-        ),
-        "url": server_config.url,
         "availability_status": "online",
         "inspection": inspection,
     }
@@ -2249,12 +2082,41 @@ async def get_database_schema():
     return {"tables": get_default_document_store().inspect_schema()}
 
 
+def _mcp_widget_items() -> list[WidgetResponse]:
+    """The MCP-type widgets, used by the /mcp route and the mcp.snapshot event."""
+    state_reader = get_state_reader()
+    return [
+        _widget_to_response(widget)
+        for widget in state_reader.get_widgets()
+        if widget.get("type") == "mcp"
+    ]
+
+
 @router.get("/widgets", response_model=WidgetsResponse)
 async def get_widgets():
-    """Get unified widget data derived from existing state/config/log files."""
+    """Return the unified widget list and publish it on the UI stream.
+
+    Mirrors the schedule/agent/mcp pattern: the GET acknowledges and broadcasts
+    ``widgets.updated`` so pages render from the realtime store rather than
+    holding the HTTP response themselves.
+    """
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
+    broadcast_widgets_snapshot(widgets)
     return WidgetsResponse(items=widgets, total=len(widgets))
+
+
+@router.get("/mcp", response_model=WidgetsResponse)
+async def get_mcp_servers():
+    """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
+
+    Mirrors the schedule/agent pattern: a dedicated typed event (``mcp.snapshot``)
+    feeds a dedicated store slice, so the Tools page renders from the realtime
+    store instead of filtering the generic widget list.
+    """
+    items = _mcp_widget_items()
+    broadcast_mcp_snapshot(items)
+    return WidgetsResponse(items=items, total=len(items))
 
 
 @router.get("/widget-schemas", response_model=WidgetSchemasResponse)
@@ -2265,7 +2127,12 @@ async def get_widget_schemas():
 
 @router.post("/widgets/{widget_id}/refresh", response_model=WidgetResponse)
 async def refresh_widget(widget_id: str):
-    """Refresh agent or MCP widget metadata from its live protocol surface."""
+    """Refresh agent widget metadata from its live protocol surface.
+
+    MCP servers are not refreshed here: their tools/capabilities are discovered
+    by the Progenitor runtime when it initialises its MCP context (and on
+    ``mcp_refresh``), which is the single source of truth the UI reads from.
+    """
     state_reader = get_state_reader()
     widget = _find_widget_payload(state_reader, widget_id)
 
@@ -2273,13 +2140,9 @@ async def refresh_widget(widget_id: str):
         refreshed = await _inspect_agent_widget(widget, state_reader)
         return _widget_to_response(refreshed)
 
-    if widget.get("type") == "mcp":
-        refreshed = await _inspect_mcp_widget(widget, state_reader)
-        return _widget_to_response(refreshed)
-
     raise HTTPException(
         status_code=400,
-        detail="Only agent and MCP widgets support live refresh",
+        detail="Only agent widgets support live refresh",
     )
 
 
@@ -2412,14 +2275,49 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         _broadcast_widget_refresh(state_reader)
         return _widget_to_response(refreshed)
 
+    if widget_id.startswith("mcp_tool:"):
+        tool_name = widget_id.split(":", 1)[1]
+        if body.enabled is None:
+            raise HTTPException(status_code=400, detail="enabled is required for MCP tool widgets")
+        tools_doc = state_reader.get_mcp_tools()
+        raw_tools = tools_doc.get("tools") if isinstance(tools_doc, dict) else None
+        target = (
+            next(
+                (t for t in raw_tools if isinstance(t, dict) and t.get("name") == tool_name),
+                None,
+            )
+            if isinstance(raw_tools, list)
+            else None
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail="MCP tool not found")
+        target["enabled"] = body.enabled
+        # The runtime owns the tool list; we only flip the enabled flag here. The
+        # runtime re-reads this document on its next MCP refresh and stops/starts
+        # exposing the tool to the agent accordingly.
+        state_reader.save_mcp_tools(tools_doc)
+        _broadcast_widget_refresh(state_reader)
+        return _widget_to_response(
+            {
+                "id": widget_id,
+                "type": "mcp_tool",
+                "name": tool_name,
+                "title": tool_name,
+                "status": "enabled" if body.enabled else "disabled",
+                "enabled": body.enabled,
+                "server": target.get("server"),
+                "description": target.get("description"),
+            }
+        )
+
     if not widget_id.startswith("mcp:"):
         raise HTTPException(
             status_code=400,
-            detail="Only schedule, event, and MCP widgets are mutable from the backend",
+            detail="Only schedule, event, MCP, and MCP tool widgets are mutable from the backend",
         )
 
     server_name = widget_id.split(":", 1)[1]
-    mcp_config_path, mcp_data = _read_mcp_config(state_reader)
+    mcp_data = _read_mcp_config(state_reader)
     raw_servers = mcp_data.get("mcpServers")
     if not isinstance(raw_servers, dict):
         raw_servers = {}
@@ -2443,8 +2341,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             raise HTTPException(status_code=400, detail="MCP server URL is required")
         server["url"] = url
 
-    _atomic_write_json(mcp_config_path, mcp_data, state_reader)
-    state_reader.invalidate(mcp_config_path)
+    _write_mcp_config(state_reader, mcp_data)
 
     refreshed = next(
         (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
@@ -2475,10 +2372,29 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
 async def delete_widget(widget_id: str):
     """Delete a backend-owned widget where a matching state file exists."""
     state_reader = get_state_reader()
+
+    if widget_id.startswith("mcp:"):
+        server_name = widget_id.split(":", 1)[1]
+        mcp_data = _read_mcp_config(state_reader)
+        raw_servers = mcp_data.get("mcpServers")
+        if not isinstance(raw_servers, dict) or server_name not in raw_servers:
+            warning = f"Widget {widget_id} was already removed."
+            logger.warning("MCP widget %s was already removed before delete request", widget_id)
+            return WidgetDeleteResponse(
+                widget_id=widget_id,
+                removed=True,
+                already_removed=True,
+                warning=warning,
+            )
+        del raw_servers[server_name]
+        _write_mcp_config(state_reader, mcp_data)
+        _broadcast_widget_refresh(state_reader)
+        return WidgetDeleteResponse(widget_id=widget_id, removed=True)
+
     if not widget_id.startswith("schedule:"):
         raise HTTPException(
             status_code=400,
-            detail="Only schedule widgets can be deleted from the backend",
+            detail="Only schedule and MCP widgets can be deleted from the backend",
         )
 
     schedule_id = widget_id.split(":", 1)[1]
@@ -3780,41 +3696,52 @@ async def _get_current_status() -> dict:
     return status
 
 
-async def _status_monitor():
-    """Background task that polls status and broadcasts to SSE subscribers.
+def _process_metrics() -> dict:
+    """Process-level status that changes without a DB write (uptime, memory).
 
-    Pushes status updates every 3 seconds for responsive UI.
-    Pushes to _status_subscribers for status stream consumers.
+    The full, DB-derived status is pushed on connect (connection.ready) and on
+    every change via the Postgres NOTIFY watcher; this lightweight payload is
+    merged into it by the periodic tick so we never re-read the DB just to
+    refresh metrics.
     """
-    global _last_status
+    from . import main as chat_main
 
-    update_interval = 3  # Push status every 3 seconds for responsive updates
+    now = time.time()
+    start_time = getattr(chat_main, "_server_start_time", now)
+    shutdown_mgr = getattr(chat_main, "shutdown_manager", None)
+    draining = bool(shutdown_mgr and shutdown_mgr.is_shutting_down)
 
-    logger.info("[StatusMonitor] Starting status monitor loop")
+    metrics: dict = {
+        "status": "draining" if draining else "healthy",
+        "uptime_seconds": round(now - start_time, 1),
+    }
+    try:
+        import psutil
+
+        metrics["memory_mb"] = round(psutil.Process().memory_info().rss / 1024 / 1024, 2)
+    except Exception:
+        metrics["memory_mb"] = None
+    return metrics
+
+
+async def _status_monitor():
+    """Push process-level metrics to SSE subscribers on a fixed cadence.
+
+    Only metrics (uptime/memory) are sent here; DB-derived state is carried by
+    the LISTEN/NOTIFY watcher, so this loop never reads the database.
+    """
+    update_interval = 3  # Refresh process metrics every 3 seconds
+
+    logger.info("[StatusMonitor] Starting process-metrics loop")
 
     while True:
         try:
             await asyncio.sleep(update_interval)
 
-            # Count subscribers
-            status_count = len(_status_subscribers)
-            stream_count = len(_ui_stream_subscribers)
-            total_subscribers = status_count + stream_count
-
-            if total_subscribers == 0:
+            if not _status_subscribers and not _ui_stream_subscribers:
                 continue  # No subscribers, skip
 
-            current = await _get_current_status()
-            _last_status = current.copy()
-
-            # Push to /status subscribers
-            broadcast_status_event("status", current)
-
-            logger.debug(
-                "[StatusMonitor] Pushed status to %d status and %d stream subscribers",
-                status_count,
-                stream_count,
-            )
+            broadcast_status_event("status", _process_metrics())
 
         except asyncio.CancelledError:
             print("[StatusMonitor] Cancelled", flush=True)
@@ -3836,22 +3763,40 @@ async def _broadcast_latest_status() -> None:
         _state_watch_push_task = None
 
 
-def _queue_state_watch_status(_snapshot) -> None:
+# Store keys whose change should refresh the unified widget list.
+_WIDGET_KEYS = frozenset({"mcp", "mcp_tools", "schedule", "registry", "event_widgets"})
+
+
+def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _status_subscribers and not _ui_stream_subscribers:
         return
+    # Route the changed key to its dedicated event so pages render from a precise
+    # snapshot (None = full resync after a reconnect → refresh everything).
+    if _ui_stream_subscribers:
+        try:
+            if changed_key in (None, "mcp", "mcp_tools"):
+                broadcast_mcp_snapshot()
+            if changed_key in (None, "schedule"):
+                broadcast_schedule_snapshot()
+            if changed_key is None or changed_key in _WIDGET_KEYS:
+                broadcast_widgets_snapshot()
+        except Exception:
+            logger.debug("Failed to broadcast dedicated snapshot", exc_info=True)
+    # Status (health/agents/loops/sessions) + chat sessions follow on the
+    # coalesced task.
     if _state_watch_push_task and not _state_watch_push_task.done():
         return
     _state_watch_push_task = asyncio.create_task(_broadcast_latest_status())
 
 
-async def start_state_status_watcher(interval: float = 1.0) -> None:
+async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     global _state_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
         state_reader.add_watcher(_state_watch_callback)
-    await state_reader.start_watching(interval)
+    await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
@@ -4326,6 +4271,34 @@ def broadcast_schedule_snapshot() -> UiEventEnvelope:
         _schedule_item_to_info(item).model_dump(mode="json") for item in state_reader.get_schedule()
     ]
     return broadcast_ui_event("schedule.snapshot", {"items": items})
+
+
+def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
+    """Broadcast the current MCP server list to /api/ui/stream subscribers.
+
+    Emitted after the Tools page requests the list and whenever an MCP config
+    change is detected (backend edit, or runtime/agent write surfaced via the
+    Postgres NOTIFY watcher), so the Tools page reflects changes live. Callers
+    that already built the list (e.g. the GET handler) can pass it in to avoid
+    a second ``get_widgets()`` pass and keep the snapshot consistent with the
+    HTTP response.
+    """
+    source = _mcp_widget_items() if items is None else items
+    payload = [item.model_dump(mode="json") for item in source]
+    return broadcast_ui_event("mcp.snapshot", {"items": payload})
+
+
+def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
+    """Broadcast the unified widget list (dashboard/cross-cutting views).
+
+    Callers holding a freshly built list can pass it in to avoid recomputing
+    widgets and to keep the SSE snapshot consistent with their HTTP response.
+    """
+    if items is None:
+        state_reader = get_state_reader()
+        items = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
+    payload = [item.model_dump(mode="json") for item in items]
+    return broadcast_ui_event("widgets.updated", {"items": payload})
 
 
 def _broadcast_chat_sessions_snapshot(include_archived: bool = True):

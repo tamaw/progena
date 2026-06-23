@@ -13,10 +13,8 @@ from app.progenitor.mcp import build_mcp_runtime_context
 
 async def check_mcp():
     """Check what MCP tools are available."""
-    config = MCPConfig.from_env()
+    config = MCPConfig()
     print("MCP Config:")
-    print(f"  Enabled: {config.enabled}")
-    print(f"  Config Path: {config.config_path}")
     print(f"  Enabled Servers: {[server.name for server in config.enabled_servers]}")
     print()
 
