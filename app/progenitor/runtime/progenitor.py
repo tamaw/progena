@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -16,8 +17,10 @@ from ..nodes.health import write_health_status
 from ..registry import AgentRegistryRuntime
 from ..state.langgraph_store import LangGraphRuntimeStore
 from ..state.manager import StateManager
+from ..state.store_listener import RuntimeStoreListener
 from .heartbeat import ProgenitorLoop
 from .http import ProgenitorHTTPServer
+from .mcp_sync import MCPSyncScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +62,54 @@ class Progenitor:
         self._ipc_server: IPCServer | None = None
         self._background_tasks: list[asyncio.Task] = []
         self._persistence_stack = contextlib.AsyncExitStack()
+        self._store_listener: RuntimeStoreListener | None = None
+        self._mcp_scheduler: MCPSyncScheduler | None = None
+
+    def _on_store_change(self, payload: str) -> None:
+        """Handle a ``store`` NOTIFY by re-syncing the live MCP runtime.
+
+        Runs in the listener task; routes by key onto the coalescing scheduler:
+        ``mcp`` (server config: add/remove/enable/disable/url) needs a full
+        re-discovery; ``mcp_tools`` (a per-tool enable toggle) only needs the
+        disabled set re-applied. This is the single path for both UI-driven and
+        agent-driven config changes — there is no separate write-hook.
+        """
+        if self._mcp_scheduler is None:
+            return
+        try:
+            data = json.loads(payload) if payload else {}
+            key = data.get("key") if isinstance(data, dict) else None
+        except (ValueError, TypeError):
+            key = None
+        if key == "mcp":
+            self._mcp_scheduler.request(full=True)
+        elif key == "mcp_tools":
+            self._mcp_scheduler.request(full=False)
+
+    def _on_store_resync(self) -> None:
+        """On (re)connect, recover any MCP config change missed while disconnected."""
+        if self._mcp_scheduler is not None:
+            self._mcp_scheduler.request(full=True)
+
+    async def _do_mcp_full_resync(self) -> None:
+        from ..nodes.mcp import sync_mcp_runtime_context
+
+        if self.state_manager is None:
+            return
+        summary = await sync_mcp_runtime_context(
+            llm_client=self.llm_client,
+            tool_registry=self.tool_registry,
+            mcp_config=self.config.mcp,
+            state_manager=self.state_manager,
+            reload_config=True,
+        )
+        logger.info("Re-synced MCP runtime from config change: %s", summary)
+
+    async def _do_mcp_reapply(self) -> None:
+        from ..nodes.mcp import reapply_mcp_disabled_tools
+
+        count = await reapply_mcp_disabled_tools(self.llm_client, self.state_manager)
+        logger.info("Re-applied MCP tool flags from store change (%d disabled)", count)
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -131,6 +182,21 @@ class Progenitor:
             log_sink=self.log_store,
         )
 
+        # React to store writes (UI server/tool toggles, agent edits to
+        # /state/mcp.json) by re-syncing the live MCP runtime immediately, rather
+        # than waiting for the next heartbeat MCP refresh. The scheduler serializes
+        # and coalesces this work so bursts can't race on the shared runtime.
+        self._mcp_scheduler = MCPSyncScheduler(
+            full_resync=self._do_mcp_full_resync,
+            reapply=self._do_mcp_reapply,
+        )
+        self._store_listener = RuntimeStoreListener(
+            self.config.database.url,
+            on_change=self._on_store_change,
+            on_resync=self._on_store_resync,
+        )
+        await self._store_listener.start()
+
     async def run(self) -> None:
         """Run the perpetual agent loop until shutdown."""
         self.running = True
@@ -199,6 +265,14 @@ class Progenitor:
         self._shutdown_started = True
         logger.info("Progenitor shutting down...")
         self.running = False
+
+        if self._store_listener is not None:
+            await self._store_listener.stop()
+            self._store_listener = None
+
+        if self._mcp_scheduler is not None:
+            await self._mcp_scheduler.aclose()
+            self._mcp_scheduler = None
 
         if self._ipc_server is not None:
             await self._ipc_server.stop()

@@ -13,7 +13,6 @@ Profile:
 """
 
 import logging
-from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -52,7 +51,6 @@ def create_progenitor_backend(
     prompts_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
-    mcp_reload: Callable[[], Awaitable[None]] | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -63,9 +61,9 @@ def create_progenitor_backend(
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
         state_manager: When provided, mounts ``/state/`` with state documents
-            (currently ``mcp.json``) the agent can read/edit as files.
-        mcp_reload: Side-effect run after the agent writes ``/state/mcp.json``
-            (re-discovers MCP tools). Optional.
+            (currently ``mcp.json``) the agent can read/edit as files. Writes
+            persist via the StateManager; the runtime's store listener handles
+            live MCP re-discovery, so no write-hook callback is needed here.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
@@ -115,9 +113,7 @@ def create_progenitor_backend(
     # State documents surfaced as virtual files (e.g. /state/mcp.json), backed by
     # the runtime StateManager so writes persist through the normal store path.
     if state_manager is not None:
-        routes["/state/"] = StateDocumentBackend(
-            [create_mcp_state_file(state_manager, on_change=mcp_reload)]
-        )
+        routes["/state/"] = StateDocumentBackend([create_mcp_state_file(state_manager)])
 
     state_backend_cls: Any = StateBackend
     logger.info("Created progenitor backend with scoped filesystem mounts")
