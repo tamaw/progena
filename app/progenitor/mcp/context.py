@@ -13,6 +13,7 @@ from langchain_mcp_adapters.sessions import Connection, StreamableHttpConnection
 
 from ..config import MCPConfig, MCPServerConfig
 from ..registry import normalize_tool_name
+from ..utils import utcnow_isoformat
 from .jsonrpc import parse_mcp_jsonrpc_response
 from .tool_schema import get_mcp_tool_description, get_mcp_tool_name
 
@@ -21,7 +22,13 @@ logger = logging.getLogger(__name__)
 
 async def fetch_mcp_server_catalog(
     server_config: MCPServerConfig,
-) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    """Discover a server's tools. Returns (runtime_server|None, tools, error|None).
+
+    ``error`` is a short human-readable reason when discovery fails (e.g.
+    ``"401 Unauthorized"``), so callers can surface a failed state instead of
+    silently dropping the server.
+    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json, text/event-stream",
@@ -55,27 +62,55 @@ async def fetch_mcp_server_catalog(
         parsed = parse_mcp_jsonrpc_response(response.text) or {}
         result = parsed.get("result", parsed) if isinstance(parsed, dict) else {}
         tools = result.get("tools", []) if isinstance(result, dict) else []
-        return {
-            "name": server_config.name,
-            "url": server_config.url,
-            "transport": server_config.transport,
-            "client": client,
-        }, cast(list[dict[str, Any]], tools)
+        return (
+            {
+                "name": server_config.name,
+                "url": server_config.url,
+                "transport": server_config.transport,
+                "client": client,
+            },
+            cast(list[dict[str, Any]], tools),
+            None,
+        )
     except Exception as exc:
         logger.warning("Failed to initialize MCP server '%s': %s", server_config.name, exc)
         await client.aclose()
-        return None, []
+        if isinstance(exc, httpx.HTTPStatusError):
+            reason = f"{exc.response.status_code} {exc.response.reason_phrase}".strip()
+        else:
+            reason = str(exc) or exc.__class__.__name__
+        return None, [], reason
 
 
 async def build_mcp_runtime_context(
     mcp_config: MCPConfig,
-) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    checked_at = utcnow_isoformat()
+    # Discover servers concurrently: latency is the slowest server's round-trip,
+    # not the sum, and one slow/unreachable server no longer stalls the rest.
+    catalogs = await asyncio.gather(
+        *(fetch_mcp_server_catalog(sc) for sc in mcp_config.enabled_servers)
+    )
     discovered_servers: list[tuple[MCPServerConfig, dict[str, Any], list[dict[str, Any]]]] = []
-    for server_config in mcp_config.enabled_servers:
-        runtime_server, tools = await fetch_mcp_server_catalog(server_config)
+    server_status: dict[str, dict[str, Any]] = {}
+    for server_config, (runtime_server, tools, error) in zip(
+        mcp_config.enabled_servers, catalogs, strict=True
+    ):
         if runtime_server is None:
+            server_status[server_config.name] = {
+                "status": "error",
+                "error": error or "discovery failed",
+                "tool_count": 0,
+                "checked_at": checked_at,
+            }
             continue
         discovered_servers.append((server_config, runtime_server, tools))
+        server_status[server_config.name] = {
+            "status": "connected",
+            "error": None,
+            "tool_count": len(tools),
+            "checked_at": checked_at,
+        }
 
     runtime_servers: dict[str, dict[str, Any]] = {}
     flattened_tools: list[dict[str, Any]] = []
@@ -103,7 +138,7 @@ async def build_mcp_runtime_context(
         len(runtime_servers),
         len(flattened_tools),
     )
-    return runtime_servers, flattened_tools
+    return runtime_servers, flattened_tools, server_status
 
 
 def _build_adapter_connections(mcp_config: MCPConfig) -> dict[str, Connection]:
@@ -173,22 +208,6 @@ async def build_mcp_langchain_tool_wrappers(
     flattened = [tool for tools in loaded_tool_groups for tool in tools]
     logger.info("Loaded %d LangChain MCP tool wrapper(s)", len(flattened))
     return flattened
-
-
-async def attach_mcp_runtime_context(llm_client, mcp_config: MCPConfig) -> None:
-    from ..nodes.mcp import sync_mcp_runtime_context
-
-    mcp_runtime = llm_client.mcp_runtime
-    if mcp_runtime is None:
-        raise RuntimeError("llm_client.mcp_runtime must be initialized before MCP setup")
-    mcp_runtime.config = mcp_config
-    await sync_mcp_runtime_context(
-        llm_client=llm_client,
-        tool_registry=None,
-        mcp_config=mcp_config,
-        state_manager=None,
-        reload_config=False,
-    )
 
 
 async def reload_mcp_runtime_context(

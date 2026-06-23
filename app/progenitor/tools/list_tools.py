@@ -4,9 +4,8 @@ List Tools - Lists all available tools including system tools, agents, and MCP t
 
 import logging
 from contextlib import suppress
-from typing import Any, cast
+from typing import Any
 
-from ..config import MCPConfig
 from ..nodes.registry import refresh_agent_metadata
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
@@ -45,27 +44,15 @@ class ListToolsTool(BaseSystemTool):
     async def execute(self, context: ToolContext) -> ToolResult:
         from .system_registry import get_all_system_tools
 
-        # Best-effort refresh: agents.json, agent cards, and MCP tools can all
-        # change during process uptime.
+        # Best-effort refresh of agents.json and agent cards, which can change
+        # during process uptime. MCP tool discovery is owned by the heartbeat,
+        # the /state/mcp.json write-hook, and the mcp_refresh tool — listing
+        # reads the already-synced registry rather than rebuilding the runtime.
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):
                 await context.tool_registry.load()
         with suppress(Exception):
             await refresh_agent_metadata(context.tool_registry)
-
-        llm_client = getattr(context, "llm_client", None)
-        mcp_config = getattr(llm_client, "mcp_config", None) if llm_client is not None else None
-        if llm_client is not None and isinstance(mcp_config, MCPConfig):
-            with suppress(Exception):
-                from ..mcp import reload_mcp_runtime_context
-
-                await reload_mcp_runtime_context(
-                    llm_client,
-                    context.tool_registry,
-                    cast(MCPConfig, mcp_config),
-                    state_manager=context.state_manager,
-                    reload_config=True,
-                )
 
         system_tools: list[dict[str, Any]] = [tool.to_dict() for tool in get_all_system_tools()]
 

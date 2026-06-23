@@ -119,6 +119,7 @@ async def test_apply_mcp_runtime_refresh_updates_runtime_and_registry(monkeypatc
                     "capabilities": ["search_web"],
                 }
             ],
+            {"remote": {"status": "connected", "error": None, "tool_count": 1}},
         )
 
     async def fake_build_mcp_langchain_tool_wrappers(_config, _tools):

@@ -1,9 +1,7 @@
 ---
 name: runtime-inspection
 description: Inspect runtime state and logs through /data and /logs mounts to diagnose failures, stalls, and behavioral regressions
-allowed-tools:
-  - read_file
-  - shell
+allowed-tools: read_file shell
 ---
 
 # Runtime Inspection Skill

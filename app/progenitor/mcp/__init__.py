@@ -1,7 +1,6 @@
 """MCP integration package for Progenitor."""
 
 from .context import (
-    attach_mcp_runtime_context,
     build_mcp_langchain_tool_wrappers,
     build_mcp_runtime_context,
     fetch_mcp_server_catalog,
@@ -19,7 +18,6 @@ from .tool_schema import (
 
 __all__ = [
     "MCPRuntime",
-    "attach_mcp_runtime_context",
     "build_mcp_langchain_tool_wrappers",
     "build_mcp_runtime_context",
     "fetch_mcp_server_catalog",
