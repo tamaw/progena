@@ -58,6 +58,20 @@ class TestSkillFiles:
             desc = frontmatter.get("description", "")
             assert len(desc) > 10, f"{skill_dir.name}: description too short"
 
+    def test_allowed_tools_is_space_separated_string(self):
+        # The DeepAgents skills middleware only honours `allowed-tools` as a
+        # space-separated string; a YAML list is silently ignored (the skill then
+        # runs unrestricted). Enforce the string form so that can't regress.
+        for skill_dir in self._get_skill_dirs():
+            content = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
+            frontmatter = yaml.safe_load(content.split("---", 2)[1])
+            if "allowed-tools" not in frontmatter:
+                continue
+            assert isinstance(frontmatter["allowed-tools"], str), (
+                f"{skill_dir.name}: 'allowed-tools' must be a space-separated string, "
+                f"not a YAML list (lists are silently ignored by the skills middleware)"
+            )
+
     def test_skill_names_valid_format(self):
         """Skill names must be lowercase alphanumeric with hyphens."""
         import re
