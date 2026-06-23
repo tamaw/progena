@@ -1,4 +1,4 @@
-"""Tools module - MCP client, agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
+"""Tools module - agent discovery, schedule, self-reflection, user communication, and LLM-invoked system tools."""
 
 from typing import TYPE_CHECKING
 
@@ -10,7 +10,6 @@ if TYPE_CHECKING:
     from .list_agents import ListAgentsTool
     from .list_schedule import ListScheduleTool
     from .list_tools import ListToolsTool
-    from .mcp import MCPClient
     from .new_conversation import NewConversationTool
     from .schedule import (
         DELETE_SCHEDULE_TOOL_SPEC,
@@ -35,7 +34,6 @@ def __getattr__(name: str):
     """Lazy-load LLM-invoked tool classes to avoid circular imports with node_helpers."""
     _tool_modules = {
         "ToolRegistry": "registry",
-        "MCPClient": "mcp",
         "AgentDiscovery": "agent_discovery",
         "discover_agents": "agent_discovery",
         "delete_scheduled_task": "schedule",
@@ -74,7 +72,6 @@ def __getattr__(name: str):
 
 __all__ = [
     "ToolRegistry",
-    "MCPClient",
     "AgentDiscovery",
     "discover_agents",
     "delete_scheduled_task",

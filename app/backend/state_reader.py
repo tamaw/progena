@@ -701,6 +701,22 @@ class StateReader:
             )
         return grouped
 
+    def _mcp_server_status(self) -> dict[str, dict[str, Any]]:
+        """Per-server discovery outcome (name -> {status, error, ...}).
+
+        Written by the runtime on each MCP refresh; used to surface a failed
+        server (e.g. auth error) instead of a silently empty one.
+        """
+        data = self.get_mcp_tools()
+        servers = data.get("servers") if isinstance(data, dict) else None
+        if not isinstance(servers, dict):
+            return {}
+        return {
+            str(name): entry
+            for name, entry in servers.items()
+            if isinstance(name, str) and isinstance(entry, dict)
+        }
+
     def get_mcp_config(self) -> dict[str, Any]:
         if self.document_store is not None:
             document = self.document_store.get_document(
@@ -858,16 +874,32 @@ class StateReader:
         ]
 
     def _mcp_fingerprint(self) -> str:
-        """Stable hash of the MCP server config for change detection."""
+        """Stable hash of the MCP config *and* discovered tools/status.
+
+        Includes the runtime-owned tools document (discovered tools + per-server
+        status), not just the server config, so that tool discovery completing
+        after a config write (or a server flipping to a failed state) is detected
+        as a change and pushed live — otherwise the snapshot would only fire on
+        the config edit, before any tools were discovered.
+        """
         try:
             config = self.get_mcp_config()
         except Exception:
             return ""
         servers = config.get("mcpServers") if isinstance(config, dict) else None
         try:
-            serialized = json.dumps(servers or {}, sort_keys=True, default=str)
+            tools_doc = self.get_mcp_tools()
+        except Exception:
+            tools_doc = {}
+        material = {
+            "servers": servers or {},
+            "tools": tools_doc.get("tools") if isinstance(tools_doc, dict) else None,
+            "status": tools_doc.get("servers") if isinstance(tools_doc, dict) else None,
+        }
+        try:
+            serialized = json.dumps(material, sort_keys=True, default=str)
         except (TypeError, ValueError):
-            serialized = str(servers)
+            serialized = str(material)
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
     def get_snapshot(self) -> StateSnapshot:
@@ -1408,8 +1440,29 @@ class StateReader:
             )
 
         tools_by_server = self._mcp_tools_by_server()
+        server_status = self._mcp_server_status()
         for tool in tools:
             logs = self._normalize_widget_logs(self.get_logs_for_widget(tool.name))
+            status = self._status_with_health(tool.status, health.is_running())
+            status_message: str | None = None
+            # A connected-but-failed server (e.g. auth error) reports its reason
+            # via the runtime status map; surface it as an error state + activity.
+            outcome = server_status.get(tool.name)
+            if tool.enabled and isinstance(outcome, dict) and outcome.get("status") == "error":
+                status = "error"
+                status_message = str(outcome.get("error") or "Discovery failed")
+                logs = self._normalize_widget_logs(
+                    [
+                        {
+                            "time": outcome.get("checked_at"),
+                            "timestamp": outcome.get("checked_at"),
+                            "level": "error",
+                            "source": "mcp_discovery",
+                            "message": f"Discovery failed: {status_message}",
+                        },
+                        *logs,
+                    ]
+                )
             summary = self._summary_from_logs(logs, tool.description or f"MCP {tool.name}")
             widgets.append(
                 {
@@ -1419,7 +1472,8 @@ class StateReader:
                     "title": tool.name,
                     "description": tool.description,
                     "kind": tool.kind,
-                    "status": self._status_with_health(tool.status, health.is_running()),
+                    "status": status,
+                    "status_message": status_message,
                     "summary": summary,
                     "transport": tool.transport,
                     "enabled": tool.enabled,

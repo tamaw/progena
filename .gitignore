@@ -72,6 +72,11 @@ venv.bak/
 
 # Project specific
 data/state/*.json
+# Local runtime SQLite checkpoint DB (and its WAL/SHM sidecars) — runtime state,
+# not source.
+data/state/conversations.db
+data/state/conversations.db-shm
+data/state/conversations.db-wal
 !data/state/.gitkeep
 data/config/*
 !data/config/.gitkeep

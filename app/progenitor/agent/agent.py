@@ -185,12 +185,16 @@ def create_progenitor_agent(
         db_path = state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
-    # Core-only backend: no project filesystem, no shell.
+    # Writes to /state/mcp.json persist via the StateManager; the runtime's store
+    # listener re-discovers MCP tools when the mcp document changes (the same path
+    # used for UI-driven server/tool toggles), so no per-backend write-hook is
+    # needed. The managing-mcp skill documents this edit flow for the agent.
     backend = create_progenitor_backend(
         project_root=project_root,
         data_dir=data_dir,
         prompts_dir=prompts_dir,
         worktree_dir=worktree_dir,
+        state_manager=state_manager,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools

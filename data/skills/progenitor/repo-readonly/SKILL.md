@@ -1,9 +1,7 @@
 ---
 name: repo-readonly
 description: Read-only repository inspection via /self for architecture understanding, code tracing, and change planning without mutating files
-allowed-tools:
-  - read_file
-  - shell
+allowed-tools: read_file shell
 ---
 
 # Repo Readonly Skill
