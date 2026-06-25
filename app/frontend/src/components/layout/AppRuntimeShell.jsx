@@ -127,6 +127,18 @@ const mcpQuickChatConfig = {
   placeholder: 'Describe the MCP server you want Progenitor to connect...',
   prompts: mcpQuickPrompts,
 };
+const taskQuickPrompts = [
+  'Add a task to wire the Tasks page to the live event stream, owner me, high priority.',
+  'Create a backlog task: investigate the slow /health check, label backend.',
+  'New task in build: ship the kanban tool, assign builder_progenitor.',
+];
+const taskQuickChatConfig = {
+  mode: 'task-create',
+  title: 'Create task',
+  subtitle: 'Describe the task. It appears on the Tasks board live once Progenitor saves it.',
+  placeholder: 'Describe the task you want Progenitor to create...',
+  prompts: taskQuickPrompts,
+};
 
 function normalizeQuickChatConfig(config) {
   const candidate = config && typeof config === 'object' ? config : {};
@@ -134,7 +146,9 @@ function normalizeQuickChatConfig(config) {
     ? scheduleQuickChatConfig
     : candidate.mode === 'mcp-create'
       ? mcpQuickChatConfig
-      : defaultQuickChatConfig;
+      : candidate.mode === 'task-create'
+        ? taskQuickChatConfig
+        : defaultQuickChatConfig;
   const prompts = Array.isArray(candidate.prompts)
     ? candidate.prompts.filter((prompt) => typeof prompt === 'string' && prompt.trim())
     : [];
@@ -154,6 +168,22 @@ function buildQuickChatOutboundMessage(mode, text) {
       'enabled: true. Saving the file persists it and discovers its tools immediately.',
       'Only ask a follow-up question if the endpoint URL is missing; otherwise add it.',
       'Reply with one short sentence confirming the connected server name and endpoint.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
+  if (mode === 'task-create') {
+    return [
+      'Create a new task on the kanban board from the following user request.',
+      'Write a new file /state/tasks/<id>.md where <id> is a unique slug',
+      '(e.g. card_<short-hex>). The file is YAML frontmatter + a markdown body:',
+      'frontmatter keys: title (concise), column_id (default "backlog"),',
+      'status (default "draft"), owner (default "user"), and any agent_name plus',
+      'free-form labels (tags) the request implies; the markdown body is the task',
+      'description. Writing the file persists the task and the Tasks board updates',
+      'live (board.json tracks the card order automatically).',
+      'Only ask a follow-up question if the task title is unclear; otherwise create it.',
+      'Reply with one short sentence confirming the created task title and column.',
       '',
       `User request: ${text}`,
     ].join('\n');

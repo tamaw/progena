@@ -882,6 +882,23 @@
   color: var(--color-success);
 }
 
+/* Inline priority glyph (header meta): tiny, sized to the status dot. */
+.task-pri-ico {
+  flex: 0 0 auto;
+}
+
+.task-pri-ico--high {
+  color: var(--color-error);
+}
+
+.task-pri-ico--medium {
+  color: var(--color-warning);
+}
+
+.task-pri-ico--low {
+  color: var(--color-success);
+}
+
 .task-svc,
 .task-assignee {
   gap: 5px;
@@ -1037,7 +1054,9 @@
   gap: 8px;
   align-items: center;
   margin: 8px 0 12px;
-  padding: 6px 10px;
+  /* Tighter right padding so the trailing action button nests against the
+     rounded edge instead of floating cramped in the corner. */
+  padding: 5px 5px 5px 10px;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -1046,6 +1065,18 @@
 .task-comment-input:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* Trailing action button (e.g. "Add note", "Add"): fill the shell height and
+   round to match so it reads as part of the field rather than poking out.
+   margin/padding are reset because some of these buttons reuse the inline
+   link styles (.task-add-sub) which carry their own offsets. */
+.task-comment-input > button:last-child {
+  flex: 0 0 auto;
+  align-self: stretch;
+  margin: 0;
+  padding: 0 10px;
+  border-radius: 6px;
 }
 
 .task-comment-avatar {
@@ -1113,12 +1144,83 @@
 }
 
 .task-meta {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
   padding: 14px 18px 18px;
-  background: var(--color-bg-secondary);
+  background: var(--color-bg-tertiary);
   border-left: 1px solid var(--color-border);
+}
+
+/* Collapse control pinned to the panel's top-right (chevron points right to
+   collapse away). Sticky so it stays in view while the panel scrolls. */
+.task-meta__collapse {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin-left: auto;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.task-meta__collapse:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* Collapsed right-edge rail that re-opens the meta panel. Mirrors the workspace
+   JSON dock. */
+.task-meta-dock {
+  display: flex;
+  justify-content: center;
+  padding-top: 12px;
+  background: var(--color-bg-tertiary);
+  border-left: 1px solid var(--color-border);
+}
+
+.task-meta-dock__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 8px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.task-meta-dock__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.task-meta-dock__label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+/* When the meta panel is docked, the third column shrinks to just the rail. */
+.tasks-page.tasks-meta-collapsed {
+  grid-template-columns: auto minmax(0, 1fr) auto;
 }
 
 .task-meta-sec {
@@ -1166,12 +1268,14 @@
 }
 
 .task-dep-card__title {
+  display: -webkit-box;
   overflow: hidden;
   color: var(--color-text-primary);
   font-size: 12px;
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.3;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .task-dep-card__id {
@@ -1179,6 +1283,59 @@
   color: var(--color-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+
+/* Open action: an icon button that jumps to the blocking task. */
+.task-dep-card__open {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+
+.task-dep-card__open:hover {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-hover);
+}
+
+/* Remove control: reserved in the layout (no shift) but only revealed on hover
+   so the resting card matches the clean Open-only design. */
+.task-dep-card__remove {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.task-dep-card:hover .task-dep-card__remove,
+.task-dep-card__remove:focus-visible {
+  opacity: 1;
+}
+
+.task-dep-card__remove:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
 }
 
 .task-progress {
@@ -1263,6 +1420,43 @@
   color: var(--color-text-muted);
   background: transparent;
   border: 1px dashed var(--color-border-light);
+  transition:
+    border-color 120ms ease,
+    color 120ms ease,
+    background-color 120ms ease;
+}
+
+.task-lbl--add:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+  border-color: var(--color-text-secondary);
+}
+
+.task-tag-remove {
+  margin-left: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0.65;
+}
+
+.task-tag-remove:hover {
+  opacity: 1;
+}
+
+.task-checklist {
+  border-top: 1px solid var(--color-border-light);
+  padding-top: 8px;
+}
+
+.task-description {
+  margin: 0;
+  white-space: pre-wrap;
 }
 
 .task-assignee-row {
@@ -1492,11 +1686,13 @@
 }
 
 @media (max-width: 1180px) {
-  .tasks-page {
+  .tasks-page,
+  .tasks-page.tasks-meta-collapsed {
     grid-template-columns: auto minmax(0, 1fr);
   }
 
-  .task-meta {
+  .task-meta,
+  .task-meta-dock {
     display: none;
   }
 }

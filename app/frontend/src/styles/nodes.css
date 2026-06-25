@@ -565,7 +565,7 @@
   white-space: normal;
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.24);
   transition: opacity var(--transition-fast), transform var(--transition-fast);
-  z-index: 10;
+  z-index: var(--z-tooltip, 1100);
 }
 
 .node-help-control:hover .node-help-tooltip,
