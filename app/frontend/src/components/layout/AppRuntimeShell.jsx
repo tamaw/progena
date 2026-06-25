@@ -678,13 +678,12 @@ function TopNavPane({
   const panelId = title.replace(/\s+/g, '-').toLowerCase();
   return (
     <>
-      {!isPinned && isOpen ? (
-        <button type="button" className="topnav-scrim is-open" aria-label={`Close ${title}`} onClick={onClose} />
-      ) : null}
       <aside
         className={`topnav-pane${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned' : ''} ${className}`.trim()}
         aria-label={title}
         aria-labelledby={`${panelId}-title`}
+        role={isPinned ? undefined : 'dialog'}
+        aria-modal={isPinned ? undefined : true}
       >
         <header className="topnav-pane__head">
           <div className="topnav-pane__heading">
@@ -1868,23 +1867,32 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
 
   if (!displayed) return null;
 
+  // Scrim: visible for the full lifetime of the pane (including enter/exit
+  // transitions) so clicks never pass through while the panel is animating.
+  const scrim = !isPinned ? (
+    <button type="button" className="topnav-scrim is-open" aria-label="Close panel" onClick={closePanel} />
+  ) : null;
+
   const shared = { isOpen, isPinned, onTogglePin };
 
-  if (displayed === 'alerts') return <AlertsPanel onClose={closePanel} {...shared} />;
+  if (displayed === 'alerts') return <>{scrim}<AlertsPanel onClose={closePanel} {...shared} /></>;
   if (displayed === 'quickChat') {
     return (
-      <QuickChatPanel
-        key={`${quickChatConfig.mode}:${quickChatConfig.title}`}
-        onClose={closePanel}
-        panelConfig={quickChatConfig}
-        {...shared}
-      />
+      <>
+        {scrim}
+        <QuickChatPanel
+          key={`${quickChatConfig.mode}:${quickChatConfig.title}`}
+          onClose={closePanel}
+          panelConfig={quickChatConfig}
+          {...shared}
+        />
+      </>
     );
   }
-  if (displayed === 'settings') return <SettingsPanel onClose={closePanel} {...shared} />;
-  if (displayed === 'account') return <AccountPanel onClose={closePanel} {...shared} />;
-  if (displayed === 'search') return <SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} {...shared} />;
-  if (displayed === 'insights') return <InsightsPanel runtime={runtime} onClose={closePanel} {...shared} />;
+  if (displayed === 'settings') return <>{scrim}<SettingsPanel onClose={closePanel} {...shared} /></>;
+  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} {...shared} /></>;
+  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} {...shared} /></>;
+  if (displayed === 'insights') return <>{scrim}<InsightsPanel runtime={runtime} onClose={closePanel} {...shared} /></>;
   return null;
 }
 
