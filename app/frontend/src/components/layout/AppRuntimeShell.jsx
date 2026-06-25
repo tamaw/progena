@@ -596,6 +596,20 @@ function CloseIcon() {
   );
 }
 
+function PinIcon({ isPinned }) {
+  return isPinned ? (
+    /* Filled thumbtack = pinned; matches the chat page pin icon */
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="currentColor" />
+    </svg>
+  ) : (
+    /* Outline thumbtack = unpinned */
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path d="M5.1 2.75h5.8l-1.2 3.3 1.95 1.85v1.05H8.75v4.3l-.75-.65-.75.65v-4.3H4.35V7.9L6.3 6.05 5.1 2.75Z" fill="none" stroke="currentColor" strokeWidth="1.15" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function RefreshIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
@@ -604,18 +618,21 @@ function RefreshIcon() {
   );
 }
 
-function ExpandUpIcon() {
+function OpenChatIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <path d="M5 11 11 5M7 5h4v4" fill="none" stroke="currentColor" strokeWidth="1.45" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M4.5 3.5h7A1.5 1.5 0 0 1 13 5v6a1.5 1.5 0 0 1-1.5 1.5h-7A1.5 1.5 0 0 1 3 11V5a1.5 1.5 0 0 1 1.5-1.5z" fill="none" stroke="currentColor" strokeWidth="1.1" opacity=".55" />
+      {/* chat bubble */}
+      <path d="M1.5 3.5A1.5 1.5 0 0 1 3 2h10A1.5 1.5 0 0 1 14.5 3.5v5.5A1.5 1.5 0 0 1 13 10.5H9.5L7.5 13l-2-2.5H3A1.5 1.5 0 0 1 1.5 9Z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      {/* expand arrow pointing out of the top-right */}
+      <path d="M9.5 5.5h2.5v2.5" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12 5.5 9.5 8" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
 }
 
 function PanelIconButton({ label, children, onClick, type = 'button', disabled = false }) {
   return (
-    <button type={type} className="topnav-pane__icon-btn" aria-label={label} title={label} onClick={onClick} disabled={disabled}>
+    <button type={type} className="topnav-pane__icon-btn" aria-label={label} data-tooltip={label} onClick={onClick} disabled={disabled}>
       {children}
     </button>
   );
@@ -652,16 +669,26 @@ function TopNavPane({
   actions,
   children,
   onClose,
+  onTogglePin,
+  isPinned,
+  isOpen = true,
   className = '',
   bodyClassName = 'topnav-pane__body',
 }) {
+  const panelId = title.replace(/\s+/g, '-').toLowerCase();
   return (
     <>
-      <button type="button" className="topnav-scrim is-open" aria-label={`Close ${title}`} onClick={onClose} />
-      <aside className={`topnav-pane is-open ${className}`.trim()} aria-modal="true" role="dialog" aria-labelledby={`${title.replace(/\s+/g, '-').toLowerCase()}-title`}>
+      {!isPinned && isOpen ? (
+        <button type="button" className="topnav-scrim is-open" aria-label={`Close ${title}`} onClick={onClose} />
+      ) : null}
+      <aside
+        className={`topnav-pane${isOpen ? ' is-open' : ''}${isPinned ? ' is-pinned' : ''} ${className}`.trim()}
+        aria-label={title}
+        aria-labelledby={`${panelId}-title`}
+      >
         <header className="topnav-pane__head">
           <div className="topnav-pane__heading">
-            <h2 className="topnav-pane__title" id={`${title.replace(/\s+/g, '-').toLowerCase()}-title`}>
+            <h2 className="topnav-pane__title" id={`${panelId}-title`}>
               {icon ? <span className="topnav-pane__title-icon">{icon}</span> : null}
               {title}
               {badge ? <span className="topnav-pane__badge">{badge}</span> : null}
@@ -670,7 +697,12 @@ function TopNavPane({
           </div>
           <div className="topnav-pane__actions">
             {actions}
-            <PanelIconButton label={`Close ${title}`} onClick={onClose}><CloseIcon /></PanelIconButton>
+            {onTogglePin ? (
+              <PanelIconButton label={isPinned ? 'Unpin panel' : 'Pin panel'} onClick={onTogglePin}>
+                <PinIcon isPinned={isPinned} />
+              </PanelIconButton>
+            ) : null}
+            <PanelIconButton label="Close" onClick={onClose}><CloseIcon /></PanelIconButton>
           </div>
         </header>
         <div className={bodyClassName}>{children}</div>
@@ -841,12 +873,6 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuic
       </form>
       <div className="app-shell__actions">
         <ChromeIconButton
-          label="Insights"
-          icon={<InsightsIcon />}
-          active={activePanel === 'insights'}
-          onClick={() => openPanel('insights')}
-        />
-        <ChromeIconButton
           label="Toggle theme"
           icon={(
             <>
@@ -857,12 +883,20 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuic
           onClick={toggleTheme}
         />
         <ChromeIconButton
+          label="Insights"
+          icon={<InsightsIcon />}
+          active={activePanel === 'insights'}
+          onClick={() => openPanel('insights')}
+        />
+        <ChromeIconButton
           label="Quick chat"
           icon={<QuickChatIcon />}
           active={activePanel === 'quickChat'}
           onClick={() => {
-            onOpenQuickChat();
-            onOpenPanel('quickChat');
+            if (activePanel !== 'quickChat') {
+              onOpenQuickChat();
+            }
+            openPanel('quickChat');
           }}
         />
         <ChromeIconButton
@@ -936,11 +970,11 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
         <button
           type="button"
           className="app-shell__rail-toggle"
-          aria-label={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-          title={isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
-          onClick={onToggleCollapse}
+          aria-label={isOpen ? 'Close navigation' : isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          title={isOpen ? 'Close navigation' : isCollapsed ? 'Expand navigation' : 'Collapse navigation'}
+          onClick={isOpen ? onClose : onToggleCollapse}
         >
-          {isCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
+          {isOpen ? <ChevronLeftIcon /> : isCollapsed ? <ChevronRightIcon /> : <ChevronLeftIcon />}
         </button>
       </div>
       <nav className="app-shell__nav" aria-label="Primary">
@@ -1012,7 +1046,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
   );
 }
 
-function AlertsPanel({ onClose }) {
+function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const {
     alerts,
     unreadCount,
@@ -1050,6 +1084,9 @@ function AlertsPanel({ onClose }) {
       badge={unreadCount > 0 ? `${unreadCount} new` : 'All caught up'}
       className="topnav-pane--alerts"
       bodyClassName="alerts-pane__body"
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
+      isOpen={isOpen}
       onClose={() => {
         closeAlert();
         onClose();
@@ -1111,10 +1148,12 @@ function AlertsPanel({ onClose }) {
   );
 }
 
-function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig }) {
+function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
   const { createSession, sendMessageStream, cancelStream } = useApi();
   const { config } = useConfig();
   const navigate = useNavigate();
+  const location = useLocation();
+  const isOnChatPage = location.pathname === '/';
   const [history, setHistory] = useState([]);
   const [scratchSession, setScratchSession] = useState(null);
   const [isSending, setIsSending] = useState(false);
@@ -1272,37 +1311,38 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig }) {
     }
   }, [ensureQuickSession, history, isSending, normalizedConfig.mode, sendMessageStream]);
 
-  const promoteToChat = useCallback(() => {
-    if (history.length === 0) return;
-
-    const promotedMessages = history.map((turn, index) => ({
-      id: `msg_quick_${Date.now()}_${index}`,
-      role: turn.role,
-      content: turn.content,
-      timestamp: Number.isFinite(turn.timestamp) ? turn.timestamp : Date.now() + index,
-      tokenCount: turn.role === 'assistant' ? turn.content.split(/\s+/).filter(Boolean).length : 0,
-      reasoningTokenCount: 0,
-      reasoningText: '',
-      streamEvents: [],
-    }));
-
-    localStorage.setItem(config.storage.chatHistory, JSON.stringify(promotedMessages));
-    localStorage.setItem(
-      config.storage.quickChatHandoff,
-      JSON.stringify({
-        messages: promotedMessages,
-        sessionId: scratchSession?.session_id ?? null,
-      }),
-    );
-    window.dispatchEvent(new CustomEvent('progenitor:load-chat-history', {
-      detail: {
-        messages: promotedMessages,
-        sessionId: scratchSession?.session_id ?? null,
-      },
-    }));
+  const openInChat = useCallback(() => {
+    if (history.length > 0) {
+      const promotedMessages = history.map((turn, index) => ({
+        id: `msg_quick_${Date.now()}_${index}`,
+        role: turn.role,
+        content: turn.content,
+        timestamp: Number.isFinite(turn.timestamp) ? turn.timestamp : Date.now() + index,
+        tokenCount: turn.role === 'assistant' ? turn.content.split(/\s+/).filter(Boolean).length : 0,
+        reasoningTokenCount: 0,
+        reasoningText: '',
+        streamEvents: [],
+      }));
+      localStorage.setItem(config.storage.chatHistory, JSON.stringify(promotedMessages));
+      localStorage.setItem(
+        config.storage.quickChatHandoff,
+        JSON.stringify({
+          messages: promotedMessages,
+          sessionId: scratchSession?.session_id ?? null,
+        }),
+      );
+      window.dispatchEvent(new CustomEvent('progenitor:load-chat-history', {
+        detail: {
+          messages: promotedMessages,
+          sessionId: scratchSession?.session_id ?? null,
+        },
+      }));
+    }
     onClose();
-    navigate('/');
-  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, navigate, onClose, scratchSession?.session_id]);
+    if (!isOnChatPage) {
+      navigate('/');
+    }
+  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchSession?.session_id]);
 
   const resetQuickChat = useCallback(() => {
     cancelStream();
@@ -1342,13 +1382,16 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig }) {
       className="topnav-pane--quick"
       bodyClassName="qchat-pane__body"
       onClose={onClose}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
+      isOpen={isOpen}
       actions={(
         <>
-          <PanelIconButton label="Reset quick chat" onClick={resetQuickChat} disabled={isSending}>
+          <PanelIconButton label="Reset" onClick={resetQuickChat} disabled={isSending}>
             <RefreshIcon />
           </PanelIconButton>
-          <PanelIconButton label="Send to chat" onClick={promoteToChat} disabled={history.length === 0 || !scratchSession || isSending}>
-            <ExpandUpIcon />
+          <PanelIconButton label="Open in chat" onClick={openInChat} disabled={isSending}>
+            <OpenChatIcon />
           </PanelIconButton>
         </>
       )}
@@ -1398,13 +1441,13 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig }) {
   );
 }
 
-function SettingsPanel({ onClose }) {
+function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const { config, setApiUrl, setNotifications, setSounds, setTheme } = useConfig();
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
   const [section, setSection] = useState('general');
 
   return (
-    <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose}>
+    <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
           <nav className="settings-nav" aria-label="Settings sections">
             {settingsSections.map((item) => (
               <button
@@ -1580,7 +1623,7 @@ function SettingsPanel({ onClose }) {
   );
 }
 
-function SearchPanel({ query, widgets, onClose }) {
+function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen }) {
   const [search, setSearch] = useState(query);
   const normalizedSearch = search.trim().toLowerCase();
   const routeResults = navItems
@@ -1611,7 +1654,7 @@ function SearchPanel({ query, widgets, onClose }) {
   const results = routeResults.concat(widgetResults);
 
   return (
-    <TopNavPane title="Search" subtitle="Visual command palette" className="topnav-pane--search" onClose={onClose}>
+    <TopNavPane title="Search" subtitle="Visual command palette" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
       <div className="chrome-search-panel">
         <div className="chrome-search-panel__input">
           <span aria-hidden="true">⌕</span>
@@ -1640,7 +1683,7 @@ function SearchPanel({ query, widgets, onClose }) {
   );
 }
 
-function InsightsPanel({ runtime, onClose }) {
+function InsightsPanel({ runtime, onClose, isPinned, onTogglePin, isOpen }) {
   const { health, isStatusStreamConnected, lastEventAt, refreshWidgets, status, widgets } = runtime;
   const [range, setRange] = useState('7d');
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent' || widget.type === 'mcp');
@@ -1655,21 +1698,22 @@ function InsightsPanel({ runtime, onClose }) {
       title="Token consumption"
       subtitle={`${isStatusStreamConnected ? 'Live status stream connected' : 'Waiting for status stream'} · progenitor-main`}
       onClose={onClose}
+      isPinned={isPinned}
+      onTogglePin={onTogglePin}
+      isOpen={isOpen}
       className="topnav-pane--insights"
       bodyClassName="ins-pane__body"
-      actions={(
-        <>
-          <SegmentedControl
-            className="ins-range"
-            ariaLabel="Insight range"
-            value={range}
-            onChange={setRange}
-            items={insightRanges.map((value) => ({ value, label: value }))}
-          />
-          <button type="button" className="topnav-pane__text-btn" onClick={refreshWidgets}>Refresh</button>
-        </>
-      )}
     >
+      <div className="ins-pane__toolbar">
+        <SegmentedControl
+          className="ins-range"
+          ariaLabel="Insight range"
+          value={range}
+          onChange={setRange}
+          items={insightRanges.map((value) => ({ value, label: value }))}
+        />
+        <button type="button" className="topnav-pane__text-btn" onClick={refreshWidgets}>Refresh</button>
+      </div>
       <div className="ins-kpis">
         <div className="ins-kpi">
           <div className="ins-kpi__label">Runtime</div>
@@ -1750,9 +1794,9 @@ function InsightsPanel({ runtime, onClose }) {
   );
 }
 
-function AccountPanel({ onClose }) {
+function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   return (
-    <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose}>
+    <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
       <div className="account-pane__id">
         <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
         <div className="account-pane__id-text">
@@ -1774,36 +1818,73 @@ function AccountPanel({ onClose }) {
   );
 }
 
-function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, runtime }) {
+// Transition durations must match the CSS transition on .topnav-pane.
+const PANEL_EXIT_MS = 200;
+const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
+
+function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, runtime, isPinned, onTogglePin }) {
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
+
+  // `displayed` = what is currently rendered in the DOM (may lag activePanel during transitions).
+  // `isOpen`    = whether the `is-open` CSS class is applied (drives the slide animation).
+  const [displayed, setDisplayed] = useState(activePanel);
+  const [isOpen, setIsOpen] = useState(false);
+  const timerRef = useRef(null);
+
+  useEffect(() => {
+    const clear = () => { if (timerRef.current) { clearTimeout(timerRef.current); timerRef.current = null; } };
+    clear();
+
+    if (activePanel === null) {
+      // Closing: slide out, then unmount.
+      setIsOpen(false);
+      timerRef.current = setTimeout(() => setDisplayed(null), PANEL_EXIT_MS);
+    } else if (displayed === null) {
+      // Fresh open: mount content, then slide in on next frame.
+      setDisplayed(activePanel);
+      timerRef.current = setTimeout(() => setIsOpen(true), PANEL_ENTER_DELAY_MS);
+    } else if (displayed !== activePanel) {
+      // Switching panels: slide out → swap content → slide in.
+      setIsOpen(false);
+      timerRef.current = setTimeout(() => {
+        setDisplayed(activePanel);
+        timerRef.current = setTimeout(() => setIsOpen(true), PANEL_ENTER_DELAY_MS);
+      }, PANEL_EXIT_MS);
+    }
+    // Same panel re-opened: ensure it's visible.
+    else {
+      setIsOpen(true);
+    }
+
+    return clear;
+  }, [activePanel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!activePanel) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') closePanel();
-    };
+    const handleKeyDown = (event) => { if (event.key === 'Escape') closePanel(); };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [activePanel, closePanel]);
 
-  if (activePanel === 'alerts') return <AlertsPanel onClose={closePanel} />;
-  if (activePanel === 'quickChat') {
+  if (!displayed) return null;
+
+  const shared = { isOpen, isPinned, onTogglePin };
+
+  if (displayed === 'alerts') return <AlertsPanel onClose={closePanel} {...shared} />;
+  if (displayed === 'quickChat') {
     return (
       <QuickChatPanel
         key={`${quickChatConfig.mode}:${quickChatConfig.title}`}
         onClose={closePanel}
         panelConfig={quickChatConfig}
+        {...shared}
       />
     );
   }
-  if (activePanel === 'settings') return <SettingsPanel onClose={closePanel} />;
-  if (activePanel === 'account') return <AccountPanel onClose={closePanel} />;
-  if (activePanel === 'search') {
-    return <SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} />;
-  }
-  if (activePanel === 'insights') {
-    return <InsightsPanel runtime={runtime} onClose={closePanel} />;
-  }
+  if (displayed === 'settings') return <SettingsPanel onClose={closePanel} {...shared} />;
+  if (displayed === 'account') return <AccountPanel onClose={closePanel} {...shared} />;
+  if (displayed === 'search') return <SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} {...shared} />;
+  if (displayed === 'insights') return <InsightsPanel runtime={runtime} onClose={closePanel} {...shared} />;
   return null;
 }
 
@@ -1811,9 +1892,41 @@ function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 980px)').matches,
+  );
   const [isNavOpen, setIsNavOpen] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
   const runtime = useChromeRuntime();
+
+  // Below 980px the sidebar becomes a fixed overlay drawer (CSS handles it).
+  // Ensure the nav is not in icon-rail mode at those widths — the drawer is
+  // either open (is-open class) or hidden off-screen, never a collapsed rail.
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 980px)');
+    const handler = (e) => {
+      if (e.matches) {
+        setIsNavCollapsed(false); // no icon rail — drawer handles narrow viewports
+        setIsNavOpen(false);      // start with drawer closed
+      }
+    };
+    if (mq.matches) {
+      setIsNavCollapsed(false);
+      setIsNavOpen(false);
+    }
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const handleTogglePin = useCallback(() => {
+    setIsPinned((current) => !current);
+  }, []);
+
+  const shellClass = [
+    'app-shell',
+    isNavCollapsed ? 'is-nav-collapsed' : '',
+    activePanel && isPinned ? 'has-right-panel' : '',
+  ].filter(Boolean).join(' ');
 
   useEffect(() => {
     const handleKeyDown = (event) => {
@@ -1858,7 +1971,7 @@ function AppRuntimeShell() {
   }, [runtime]);
 
   return (
-    <div className={`app-shell ${isNavCollapsed ? 'is-nav-collapsed' : ''}`}>
+    <div className={shellClass}>
       <PrimaryNav
         isCollapsed={isNavCollapsed}
         isOpen={isNavOpen}
@@ -1875,7 +1988,6 @@ function AppRuntimeShell() {
         onOpenPanel={handleOpenPanel}
         onOpenQuickChat={() => {
           setQuickChatConfig(defaultQuickChatConfig);
-          setActivePanel('quickChat');
         }}
         onToggleNav={() => setIsNavOpen((current) => !current)}
       />
@@ -1889,6 +2001,8 @@ function AppRuntimeShell() {
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}
         runtime={runtime}
+        isPinned={isPinned}
+        onTogglePin={handleTogglePin}
       />
       <NotificationContainer />
     </div>
