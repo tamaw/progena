@@ -12,6 +12,7 @@ import {
   PaneListFooter,
 } from '../layout/PaneList';
 import { usePaneCollapse } from '../layout/usePaneCollapse';
+import { PaneSection } from '../layout/PaneList';
 
 const WORKSPACE_FILTERS = ['All', 'Flow', 'Research'];
 const WORKSPACE_SORT_MODES = ['Recent', 'Name', 'Items'];
@@ -124,7 +125,7 @@ function WorkspaceSidebar() {
   };
 
   return (
-    <aside className={paneClassName} aria-label="Workflows">
+    <PaneSection as="aside" className={paneClassName} aria-label="Workflows" onItemSelect={() => setCollapsed(true)}>
       {collapsed ? (
         <PaneExpandRail label="Workflows" onExpand={() => setCollapsed(false)} />
       ) : (
@@ -215,7 +216,7 @@ function WorkspaceSidebar() {
           </PaneListFooter>
         </>
       )}
-    </aside>
+    </PaneSection>
   );
 }
 

@@ -2,14 +2,16 @@
 
 :root {
   --chrome-header-height: 44px;
-  --chrome-sidebar-width: 216px;
+  --chrome-sidebar-width: 240px;
   --chrome-status-height: 30px;
+  --right-panel-width: 420px;
 }
 
 html,
 body,
 #root {
   height: 100%;
+  min-width: 320px;
 }
 
 .app-shell {
@@ -18,6 +20,7 @@ body,
   grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
   height: 100vh;
   min-height: 0;
+  min-width: var(--chrome-sidebar-width);
   overflow: hidden;
   background: var(--color-bg-primary);
   color: var(--color-text-primary);
@@ -25,6 +28,16 @@ body,
 
 .app-shell.is-nav-collapsed {
   grid-template-columns: 52px minmax(0, 1fr);
+  min-width: 52px;
+}
+
+/* Pinned right panel: adds a third column for the panel */
+.app-shell.has-right-panel {
+  grid-template-columns: var(--chrome-sidebar-width) minmax(0, 1fr) var(--right-panel-width);
+}
+
+.app-shell.has-right-panel.is-nav-collapsed {
+  grid-template-columns: 52px minmax(0, 1fr) var(--right-panel-width);
 }
 
 /* Left rail spans the full height as one continuous bar. */
@@ -34,18 +47,13 @@ body,
 }
 
 .app-shell > .app-shell__header {
-  grid-column: 2;
+  grid-column: 2 / -1;
   grid-row: 1;
 }
 
 .app-shell > .app-shell__content {
   grid-column: 2;
   grid-row: 2;
-}
-
-.app-shell > .app-shell__statusbar {
-  grid-column: 2;
-  grid-row: 3;
 }
 
 .app-shell__header {
@@ -276,6 +284,7 @@ body,
   display: flex;
   flex-direction: column;
   min-height: 0;
+  min-width: var(--chrome-sidebar-width);
   padding: 0 10px;
   overflow-x: hidden;
   overflow-y: auto;
@@ -768,6 +777,7 @@ body,
 }
 
 .app-shell__sidebar.is-collapsed {
+  min-width: 52px;
   padding-right: 6px;
   padding-left: 6px;
   /* Let hover tooltips escape the narrow rail instead of being clipped,
@@ -1880,70 +1890,62 @@ body,
 
 .topnav-scrim {
   position: fixed;
-  inset: 0;
+  top: var(--chrome-header-height);
+  left: 0;
+  right: min(var(--right-panel-width), 100vw);
+  bottom: 0;
   z-index: 80;
-  background: rgba(15, 18, 25, 0.42);
+  background: rgba(15, 18, 25, 0.22);
   border: 0;
   cursor: default;
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
 }
 
 [data-theme="dark"] .topnav-scrim {
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.32);
 }
 
+/* Right-side panel — sits below the header, overlaps content in overlay mode */
 .topnav-pane {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  z-index: 90;
+  top: var(--chrome-header-height);
+  right: 0;
+  bottom: 0;
+  z-index: 85;
   display: flex;
   flex-direction: column;
-  width: min(560px, calc(100vw - 48px));
-  max-height: min(680px, calc(100vh - 80px));
+  width: min(var(--right-panel-width), 100vw);
   min-height: 0;
   overflow: hidden;
   color: var(--color-text-primary);
   background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 14px;
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 24px 64px rgba(15, 18, 25, 0.28),
-    0 4px 16px rgba(15, 18, 25, 0.12);
-  transform: translate(-50%, -50%);
+  border-left: 1px solid var(--color-border);
+  box-shadow: -4px 0 24px rgba(15, 18, 25, 0.14);
+  transform: translateX(100%);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 200ms ease;
+}
+
+.topnav-pane.is-open {
+  transform: translateX(0);
+}
+
+/* Pinned: exits fixed positioning and occupies the third grid column */
+.topnav-pane.is-pinned {
+  position: static;
+  grid-column: 3;
+  grid-row: 2;
+  width: 100%;
+  border-left: 1px solid var(--color-border);
+  border-radius: 0;
+  box-shadow: none;
+  transform: none;
 }
 
 [data-theme="dark"] .topnav-pane {
-  box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 24px 64px rgba(0, 0, 0, 0.6),
-    0 4px 16px rgba(0, 0, 0, 0.4);
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
-.topnav-pane--quick {
-  width: min(640px, calc(100vw - 48px));
-  max-height: min(720px, calc(100vh - 80px));
-}
-
-.topnav-pane--settings {
-  width: min(820px, calc(100vw - 48px));
-  height: min(580px, calc(100vh - 80px));
-  max-height: calc(100vh - 80px);
-}
-
-.topnav-pane--insights {
-  width: min(940px, calc(100vw - 48px));
-  max-height: calc(100vh - 80px);
-}
-
-.topnav-pane--search {
-  width: min(590px, calc(100vw - 48px));
-}
-
-.topnav-pane--account {
-  width: min(440px, calc(100vw - 48px));
+[data-theme="dark"] .topnav-pane.is-pinned {
+  box-shadow: none;
 }
 
 .account-pane {
@@ -2120,11 +2122,64 @@ body,
 }
 
 .topnav-pane__icon-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
+}
+
+/* Styled tooltip — drops below the button, right-anchored so it stays inside
+   the panel. Matches the detail-header and chat-icon-button tooltip pattern. */
+.topnav-pane__icon-btn[data-tooltip]::before,
+.topnav-pane__icon-btn[data-tooltip]::after {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+  z-index: 100;
+}
+
+.topnav-pane__icon-btn[data-tooltip]::before {
+  content: '';
+  left: 50%;
+  top: calc(100% + 2px);
+  border-width: 5px;
+  border-style: solid;
+  border-color: transparent transparent var(--color-bg-tertiary);
+  transform: translate(-50%, -3px);
+}
+
+.topnav-pane__icon-btn[data-tooltip]::after {
+  content: attr(data-tooltip);
+  left: auto;
+  bottom: auto;
+  right: 0;
+  top: calc(100% + 11px);
+  padding: 6px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-tertiary);
+  box-shadow: var(--shadow-md);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  transform: translate(0, -3px);
+}
+
+.topnav-pane__icon-btn[data-tooltip]:not(:disabled):hover::before,
+.topnav-pane__icon-btn[data-tooltip]:focus-visible::before {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.topnav-pane__icon-btn[data-tooltip]:not(:disabled):hover::after,
+.topnav-pane__icon-btn[data-tooltip]:focus-visible::after {
+  opacity: 1;
+  transform: translate(0, 0);
 }
 
 .topnav-pane__text-btn {
@@ -2475,66 +2530,13 @@ body,
   min-height: 0;
 }
 
-.qchat-pane__composer {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 8px;
-  align-items: flex-end;
-  padding: 14px 16px 10px;
-}
-
-.qchat-pane__composer textarea {
-  flex: 1 1 auto;
-  max-height: 160px;
-  min-height: 38px;
-  padding: 10px 12px;
-  color: var(--color-text-primary);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 9px;
-  font: inherit;
-  font-size: 13.5px;
-  line-height: 1.45;
-  outline: 0;
-  resize: none;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
-}
-
-.qchat-pane__composer textarea::placeholder {
-  color: var(--color-text-muted);
-}
-
-.qchat-pane__send {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  color: #fff;
-  background: var(--color-accent);
-  border: 0;
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-  transition: opacity 120ms ease, transform 120ms ease;
-}
-
-.qchat-pane__send:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.qchat-pane__send:disabled {
-  cursor: not-allowed;
-  opacity: 0.35;
-}
-
 .qchat-pane__hints {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
-  padding: 2px 14px 10px;
+  padding: 10px 20px 8px;
 }
 
 .qchat-chip {
@@ -2560,11 +2562,10 @@ body,
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
-  max-height: calc(100vh - 222px);
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
-  padding: 14px 16px;
+  padding: 14px 20px;
   scrollbar-color: color-mix(in oklab, var(--color-text-muted) 36%, transparent) transparent;
   scrollbar-width: thin;
 }
@@ -2584,15 +2585,16 @@ body,
   background-clip: content-box;
 }
 
+/* Empty scroll area keeps its flex-grow so hints+input stay at the bottom */
 .qchat-pane__scroll.is-empty {
-  flex: 0 0 auto;
-  min-height: 6px;
-  padding: 6px 16px 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
 }
 
 .qchat-input {
   flex: 0 0 auto;
-  padding: 12px 16px 16px;
+  padding: 10px 20px 18px;
   background: var(--color-bg-secondary);
   border-top: 1px solid var(--color-border);
 }
@@ -2707,7 +2709,15 @@ body,
   gap: 16px;
   min-height: 0;
   overflow-y: auto;
-  padding: 18px 20px 22px;
+  padding: 14px 16px 22px;
+}
+
+.ins-pane__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .ins-range {
@@ -2866,8 +2876,8 @@ body,
 
 .ins-agent {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) 90px 80px 70px;
-  gap: 12px;
+  grid-template-columns: 28px minmax(0, 1fr) 56px 64px;
+  gap: 10px;
   align-items: center;
   padding: 10px 12px;
   border-radius: 8px;
@@ -2903,11 +2913,9 @@ body,
   font-size: 11px;
 }
 
+/* Spark bars hidden in the narrower right panel layout */
 .ins-agent__spark {
-  display: flex;
-  align-items: center;
-  width: 90px;
-  height: 28px;
+  display: none;
 }
 
 .ins-agent__spark span {
@@ -2952,6 +2960,7 @@ body,
 .sess-list {
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
   min-height: 0;
   background: var(--color-bg-tertiary);
   border-right: 1px solid var(--color-border);
@@ -2961,7 +2970,9 @@ body,
    pane drives its own width and animates down to a slim rail when collapsed. */
 .sess-list--collapsible {
   position: relative;
+  flex-shrink: 0;
   width: 300px;
+  min-width: 300px;
   overflow: hidden;
   transition: width 180ms ease;
 }
@@ -3036,6 +3047,102 @@ body,
   font-weight: 600;
   letter-spacing: 0.4px;
   white-space: nowrap;
+}
+
+/* ── Mobile overlay behavior for the collapsible left pane ──────────────── */
+/* ── Left list pane: overlay behavior below desktop ───────────────────────
+   Tablet (481–980px): slides in at natural pane width (300px), scrim covers rest.
+   Mobile (≤ 480px): full-screen overlay, no scrim.
+   Collapsed: off-screen to the left (left:-100vw) with a fixed expand tab. */
+@media (max-width: 980px) {
+  .sess-list--collapsible {
+    position: fixed;
+    top: var(--chrome-header-height);
+    bottom: 0;
+    z-index: 65;
+    display: flex;
+    flex-direction: column;
+    width: min(300px, 100vw);
+    min-width: 0;
+    max-width: none;
+    background: var(--color-bg-secondary);
+    overflow: hidden;
+    border-right: 0;
+    transition: left 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  /* Collapsed: off-screen to the left; low z-index so nav sits on top */
+  .sess-list--collapsible.is-collapsed {
+    left: -100vw;
+    width: min(300px, 100vw);
+    min-width: 0;
+    z-index: 65;
+    overflow: visible;
+  }
+
+  /* Expanded: on-screen with right border + scrim covering the rest */
+  .sess-list--collapsible:not(.is-collapsed) {
+    left: 0;
+    min-height: 0;
+    z-index: 200;
+    border-right: 1px solid var(--color-border);
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.22);
+  }
+
+  /* Scrim covers the area to the right of the pane — click to close */
+  .pane-mobile-scrim {
+    display: block;
+    position: fixed;
+    top: var(--chrome-header-height);
+    left: min(300px, 100vw);
+    right: 0;
+    bottom: 0;
+    z-index: 199;
+    background: rgba(0, 0, 0, 0.4);
+    border: 0;
+    cursor: pointer;
+  }
+
+  /* Expand tab: position:fixed inside position:fixed (no transform) = viewport-relative.
+     z-index lower than nav (70) so the nav drawer sits on top. */
+  .sess-list--collapsible.is-collapsed .sess-list__expand {
+    position: fixed;
+    top: calc(var(--chrome-header-height) + 72px);
+    left: 0;
+    width: auto;
+    height: auto;
+    padding: 10px 6px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-left: 0;
+    border-radius: 0 8px 8px 0;
+    box-shadow: var(--shadow-sm);
+    z-index: 64;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .sess-list--collapsible.is-collapsed .sess-list__expand-label {
+    writing-mode: vertical-rl;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  /* Collapse seam: always visible on touch (no hover) */
+  .sess-list--collapsible:not(.is-collapsed) .sess-list__collapse {
+    opacity: 1;
+    width: 28px;
+    height: 56px;
+    border-right: 0;
+    background: var(--color-bg-tertiary);
+    border-color: var(--color-border);
+  }
+}
+
+
+/* Scrim hidden on desktop — only active on narrow viewports */
+.pane-mobile-scrim {
+  display: none;
 }
 
 .chat-sessions-pane__head,
@@ -3940,20 +4047,22 @@ body,
 }
 
 .settings-pane__body {
-  display: grid;
+  display: flex;
   flex: 1 1 auto;
-  grid-template-columns: 200px 1fr;
+  flex-direction: column;
   min-height: 0;
 }
 
 .settings-nav {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 1px;
   overflow-y: auto;
-  padding: 10px 8px;
+  padding: 8px 8px 0;
   background: var(--color-bg-tertiary);
-  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .set-nav__item {
@@ -3995,6 +4104,8 @@ body,
 }
 
 .settings-content {
+  flex: 1 1 auto;
+  min-height: 0;
   min-width: 0;
   overflow-y: auto;
   padding: 4px;
@@ -4110,8 +4221,7 @@ body,
 }
 
 .set-input:focus,
-.set-text-input:focus,
-.qchat-pane__composer textarea:focus {
+.set-text-input:focus {
   border-color: var(--color-accent);
   outline: 0;
   box-shadow: 0 0 0 3px var(--color-accent-soft);
@@ -5030,7 +5140,7 @@ body,
 }
 
 .tools-pane {
-  min-width: 0;
+  min-width: 300px;
 }
 
 .tools-pane__head {
@@ -5590,8 +5700,8 @@ body,
    generic class defaults to the lighter secondary surface and the few
    primary/gradient pages override it via their own modifier class. */
 .pane-page {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: row;
   height: 100%;
   min-width: 0;
   min-height: 0;
@@ -5599,12 +5709,11 @@ body,
   background: var(--color-bg-secondary);
 }
 
-/* Third column for boards with a right rail (e.g. Tasks). */
-.pane-page--rail {
-  grid-template-columns: auto minmax(0, 1fr) 280px;
-}
+/* Third column for boards with a right rail — kept for potential future use. */
+/* .pane-page--rail { grid-template-columns: auto minmax(0,1fr) 280px; } */
 
 .detail-pane {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -6815,13 +6924,67 @@ body,
 }
 
 @media (max-width: 980px) {
-  .app-shell {
-    grid-template-columns: 58px minmax(0, 1fr);
+  /* Nav becomes a slide-over drawer — no sidebar column in the grid. */
+  .app-shell,
+  .app-shell.is-nav-collapsed,
+  .app-shell.has-right-panel,
+  .app-shell.has-right-panel.is-nav-collapsed {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  .app-shell__nav-item span:not(.app-shell__nav-icon),
-  .app-shell__sidebar-section {
-    display: none;
+  .app-shell > .app-shell__header,
+  .app-shell > .app-shell__content {
+    grid-column: 1;
+  }
+
+  /* The pinned right panel also reverts to overlay at narrow widths. */
+  .topnav-pane.is-pinned {
+    position: fixed;
+    top: var(--chrome-header-height);
+    right: 0;
+    bottom: 0;
+    grid-column: unset;
+    grid-row: unset;
+    width: var(--right-panel-width);
+  }
+
+  .app-shell__menu-btn {
+    display: inline-flex;
+  }
+
+  /* Sidebar slides in from the left as a fixed overlay. */
+  .app-shell__sidebar,
+  .app-shell__sidebar.is-collapsed {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 300;
+    min-width: 0;
+    width: min(var(--chrome-sidebar-width), 84vw);
+    transform: translateX(-100%);
+    transition: transform var(--transition-normal);
+    box-shadow: var(--shadow-lg);
+  }
+
+  .app-shell__sidebar.is-open {
+    transform: translateX(0);
+  }
+
+  /* Restore full nav labels inside the drawer. */
+  .app-shell__sidebar.is-collapsed .app-shell__nav-label,
+  .app-shell__sidebar.is-collapsed .app-shell__brand-name {
+    display: block;
+  }
+
+  .app-shell__nav-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 299;
+    display: block;
+    background: rgba(0, 0, 0, 0.38);
+    border: 0;
+    cursor: default;
   }
 
   .app-shell__search {
@@ -6832,11 +6995,12 @@ body,
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  /* Narrower list pane on small screens (shared by all non-rail two-pane pages). */
-  .pane-page:not(.pane-page--rail),
-  .knowledge-page,
-  .repositories-page {
-    grid-template-columns: 280px minmax(0, 1fr);
+  /* Narrower list pane on small screens. */
+  .pane-page .sess-list--collapsible:not(.is-collapsed),
+  .pane-page .sess-list:not(.sess-list--collapsible) {
+    width: 280px;
+    min-width: 280px;
+    max-width: 280px;
   }
 
   .repositories-hero,
@@ -6885,59 +7049,44 @@ body,
 }
 
 @media (max-width: 720px) {
-  .app-shell,
-  .app-shell.is-nav-collapsed {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: var(--chrome-header-height) minmax(0, 1fr);
-  }
-
-  .app-shell > .app-shell__header,
-  .app-shell > .app-shell__content,
-  .app-shell > .app-shell__statusbar {
-    grid-column: 1;
-  }
-
-  .app-shell__menu-btn {
-    display: inline-flex;
-  }
-
-  .app-shell__brand span:last-child {
+  .app-shell__crumb,
+  .app-shell__crumb-sep {
     display: none;
   }
 
+  .pane-page {
+    flex-direction: column;
+  }
+
+  .pane-page .sess-list--collapsible,
+  .pane-page .sess-list:not(.sess-list--collapsible) {
+    width: 100%;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .sess-list {
+    max-height: 40vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .sess-list--collapsible:not(.is-collapsed).sess-list {
+    max-height: none;
+    border-bottom: 0;
+  }
   .app-shell__search {
-    width: auto;
-    flex: 1;
+    display: none;
   }
 
-  .app-shell__sidebar {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    left: 0;
-    z-index: 70;
-    width: min(280px, 84vw);
-    transform: translateX(-100%);
-    transition: transform var(--transition-normal);
-    box-shadow: var(--shadow-lg);
+  /* search hidden — push actions to the right edge instead */
+  .app-shell__actions {
+    margin-left: auto;
   }
 
-  .app-shell__sidebar.is-open {
-    transform: translateX(0);
-  }
-
-  .app-shell__nav-item span:not(.app-shell__nav-icon),
-  .app-shell__sidebar-section {
-    display: block;
-  }
-
-  .app-shell__nav-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 60;
-    display: block;
-    background: rgba(0, 0, 0, 0.35);
-    border: 0;
+  .app-shell__crumb-sep,
+  .app-shell__crumb {
+    display: none;
   }
 
   .app-shell__statusbar {
@@ -6957,22 +7106,6 @@ body,
   .mock-grid,
   .mock-knowledge-layout {
     grid-template-columns: 1fr;
-  }
-
-  .mock-page--split {
-    grid-template-columns: 1fr;
-  }
-
-  .pane-page:not(.pane-page--rail),
-  .knowledge-page,
-  .repositories-page {
-    grid-template-columns: 1fr;
-  }
-
-  .sess-list {
-    max-height: 40vh;
-    border-right: 0;
-    border-bottom: 1px solid var(--color-border);
   }
 
   .repositories-main {
@@ -7007,6 +7140,27 @@ body,
     border-bottom: 1px solid var(--color-border);
   }
 
+  /* Expanded overlay: always full-height regardless of page-specific max-height */
+  .sess-list--collapsible:not(.is-collapsed) {
+    max-height: none;
+    border-bottom: 0;
+  }
+}
+
+/* ── Mobile (≤ 480px): left pane goes full screen ─────────────────────── */
+@media (max-width: 480px) {
+  .sess-list--collapsible,
+  .sess-list--collapsible.is-collapsed {
+    width: 100vw;
+  }
+
+  /* No scrim needed — pane fills the whole screen */
+  .pane-mobile-scrim {
+    display: none;
+  }
+}
+
+@media (max-width: 720px) {
   .tools-pane__filters {
     grid-template-columns: repeat(4, auto);
   }
@@ -7088,13 +7242,8 @@ body,
     border-bottom: 1px solid var(--color-border);
   }
 
-  .settings-pane {
-    width: calc(100vw - 24px);
-    height: calc(100vh - 54px);
-  }
-
   .settings-pane__body {
-    grid-template-columns: 1fr;
+    flex-direction: column;
   }
 
   .settings-nav {
