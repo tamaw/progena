@@ -7079,6 +7079,11 @@ body,
     display: none;
   }
 
+  /* search hidden — push actions to the right edge instead */
+  .app-shell__actions {
+    margin-left: auto;
+  }
+
   .app-shell__crumb-sep,
   .app-shell__crumb {
     display: none;
