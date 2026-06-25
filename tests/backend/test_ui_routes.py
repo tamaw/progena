@@ -70,8 +70,9 @@ def tasks_state_reader(tmp_path, monkeypatch):
 
     Tasks have no file fallback, so these tests need a real document store. The
     board, task bodies, and activity all persist under the shared
-    ``("progenitor", "state")`` namespace — the same documents the runtime agent
-    reads/edits as ``/state/tasks.json``.
+    ``("progenitor", "state")`` namespace — the same documents the runtime
+    agent reads/edits through ``/state/tasks/`` as ``board.json`` plus per-task
+    ``<id>.md`` files.
     """
     state_dir = tmp_path / "data" / "state"
     config_dir = tmp_path / "data" / "config"

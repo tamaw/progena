@@ -65,9 +65,11 @@ def create_progenitor_backend(
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
         state_manager: When provided, mounts ``/state/`` with state documents
-            (``mcp.json``, ``tasks.json``) the agent can read/edit as files. Writes
-            persist via the StateManager; the runtime's store listener handles
-            live MCP re-discovery, so no write-hook callback is needed here.
+            the agent can read/edit as files, including ``mcp.json`` plus the
+            ``/state/tasks/`` task directory (``board.json`` and per-task
+            ``<id>.md`` files). Writes persist via the StateManager; the
+            runtime's store listener handles live MCP re-discovery, so no
+            write-hook callback is needed here.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """

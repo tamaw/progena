@@ -473,9 +473,9 @@ function normalizeChecklistItems(items) {
     .filter((item) => item.title);
 }
 
-// Checklists are fully dynamic: the agent (via tasks.json) or the user can add
-// any number of named checklists. A legacy single `subtasks` list is surfaced as
-// one default checklist for backward compatibility.
+// Checklists are fully dynamic: the agent (via `/state/tasks/`) or the user can
+// add any number of named checklists. A legacy single `subtasks` list is
+// surfaced as one default checklist for backward compatibility.
 function normalizeChecklists(metadata) {
   const lists = metadata?.checklists;
   if (Array.isArray(lists) && lists.length) {
@@ -543,13 +543,34 @@ function normalizeAttachments(metadata) {
   }
   return attachments
     .filter((item) => item && typeof item === 'object')
-    .map((item) => ({
-      id: String(item.id || `attachment_${Math.random().toString(16).slice(2)}`),
+    .map((item, index) => ({
+      id: String(item.id || `attachment_${index}`),
       label: String(item.label || item.url || '').trim(),
       url: String(item.url || '').trim(),
       kind: String(item.kind || 'link').trim() || 'link',
     }))
     .filter((item) => item.label && item.url);
+}
+
+function buildDependencyDraft(value, board) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) {
+    return null;
+  }
+  const normalized = trimmed.toLowerCase();
+  const match = board?.cards.find((card) => (
+    card.id === trimmed || String(card.title || '').trim().toLowerCase() === normalized
+  ));
+  if (match) {
+    return {
+      title: String(match.title || trimmed).trim(),
+      ref: match.id,
+    };
+  }
+  return {
+    title: trimmed,
+    ref: '',
+  };
 }
 
 export default function TasksPage({ context = null }) {
@@ -663,8 +684,8 @@ export default function TasksPage({ context = null }) {
     : 'Not blocked';
 
   // Creation is delegated to the Progenitor agent (same pattern as Tools and
-  // Schedules): there is no local create form. The agent edits /state/tasks.json
-  // and the new card arrives here live via the kanban.snapshot event.
+  // Schedules): there is no local create form. The agent writes `/state/tasks/`
+  // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
       detail: { mode: 'task-create' },
@@ -884,13 +905,16 @@ export default function TasksPage({ context = null }) {
     if (!selectedCard || !title) {
       return;
     }
-    const ref = String(Math.floor(1000 + Math.random() * 9000));
+    const draft = buildDependencyDraft(title, board);
+    if (!draft) {
+      return;
+    }
     const nextDependencies = [
       ...selectedDependencies,
-      { id: `dep_${Date.now().toString(16)}`, title, ref },
+      { id: `dep_${Date.now().toString(16)}`, title: draft.title, ref: draft.ref },
     ];
-    await commitDependencies(nextDependencies, `Added dependency: ${title}`);
-  }, [commitDependencies, selectedCard, selectedDependencies]);
+    await commitDependencies(nextDependencies, `Added dependency: ${draft.title}`);
+  }, [board, commitDependencies, selectedCard, selectedDependencies]);
 
   const handleRemoveDependency = useCallback(async (id) => {
     if (!selectedCard) {
