@@ -12,6 +12,7 @@ import {
   PaneListToolbar,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import { PaneSection } from '../components/layout/PaneList';
 
 function buildPromptTree(prompts) {
   const groups = {};
@@ -276,7 +277,7 @@ export default function PromptsPage() {
 
   return (
     <div className="prompts-page">
-      <aside className={paneClassName} aria-label="Prompts">
+      <PaneSection as="aside" className={paneClassName} aria-label="Prompts" onItemSelect={() => setCollapsed(true)}>
         {collapsed ? (
           <PaneExpandRail label="Prompts" onExpand={() => setCollapsed(false)} />
         ) : (
@@ -322,7 +323,7 @@ export default function PromptsPage() {
         </PaneListScroll>
         </>
         )}
-      </aside>
+      </PaneSection>
 
       <main className="prompts-editor">
         {!selectedPrompt && !loading && (
