@@ -3145,11 +3145,6 @@ body,
   display: none;
 }
 
-/* Scrim hidden on desktop — only rendered/active on narrow viewports */
-.pane-mobile-scrim {
-  display: none;
-}
-
 .chat-sessions-pane__head,
 .sess-list__head {
   display: flex;

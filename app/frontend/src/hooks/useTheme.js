@@ -10,7 +10,12 @@ export function resolveTheme(theme, prefersDark) {
 
 export function useTheme() {
   const { config, setTheme } = useConfig();
-  const [currentTheme, setCurrentTheme] = useState(() => resolveTheme(config.theme.default));
+  const [currentTheme, setCurrentTheme] = useState(() =>
+    resolveTheme(
+      config.theme.default,
+      typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches,
+    ),
+  );
 
   useEffect(() => {
     const resolved = resolveTheme(
@@ -36,7 +41,8 @@ export function useTheme() {
 
   const toggleTheme = () => {
     const next = currentTheme === 'dark' ? 'light' : 'dark';
-    setTheme(next);
+    setCurrentTheme(next); // immediate UI sync
+    setTheme(next);        // persist to config
   };
 
   return { currentTheme, setTheme, toggleTheme };
