@@ -38,6 +38,8 @@ class AsyncLangGraphStore(Protocol):
         **kwargs: Any,
     ) -> list[Any]: ...
 
+    async def adelete(self, namespace: tuple[str, ...], key: str, **kwargs: Any) -> None: ...
+
 
 class LangGraphRuntimeStore:
     """Persist Progenitor runtime documents and logs in LangGraph's native store."""
@@ -63,6 +65,10 @@ class LangGraphRuntimeStore:
     async def save_document(self, name: str, payload: Any) -> None:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
+
+    async def delete_document(self, name: str) -> None:
+        """Remove one runtime document (no-op if it was never written)."""
+        await self._store.adelete(STATE_NAMESPACE, name)
 
     async def update_document(self, name: str, updates: dict[str, Any], default: Any) -> None:
         """Merge updates into one dict document."""
