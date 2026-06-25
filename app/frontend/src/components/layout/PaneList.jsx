@@ -13,7 +13,9 @@ const PaneAutoCollapseCtx = createContext(null);
  * Pass `onItemSelect` (typically `() => setCollapsed(true)`) so that
  * PaneListScroll can auto-collapse when an item is selected on mobile.
  */
-export function PaneSection({ as: Tag = 'section', className, onItemSelect, children, ...props }) {
+export function PaneSection({ as = 'section', className, onItemSelect, children, ...props }) {
+  // Capitalised local variable required for JSX to treat it as a component ref.
+  const Tag = as;
   const [narrow, setNarrow] = useState(
     () => typeof window !== 'undefined' && window.matchMedia(NARROW_MQ).matches,
   );
