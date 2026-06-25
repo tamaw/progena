@@ -12,6 +12,7 @@ import {
   PaneListToolbar,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import { PaneSection } from '../components/layout/PaneList';
 
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
@@ -276,7 +277,7 @@ export default function SkillsPage() {
 
   return (
     <div className="skills-page prompts-page">
-      <aside className={paneClassName} aria-label="Skills">
+      <PaneSection as="aside" className={paneClassName} aria-label="Skills" onItemSelect={() => setCollapsed(true)}>
         {collapsed ? (
           <PaneExpandRail label="Skills" onExpand={() => setCollapsed(false)} />
         ) : (
@@ -324,7 +325,7 @@ export default function SkillsPage() {
         </PaneListScroll>
         </>
         )}
-      </aside>
+      </PaneSection>
 
       <main className="skills-editor prompts-editor">
         {!selectedSkill && !creating && !loading && (

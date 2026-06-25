@@ -20,6 +20,7 @@ import {
   PaneListToolbar,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import { useConfig } from '../context/ConfigContext';
@@ -991,12 +992,13 @@ export default function TasksPage({ context = null }) {
 
   return (
     <PageShell className={`tasks-page ${context ? 'tasks-page--project' : ''}`}>
-      <section className={paneClassName} aria-label="Tasks">
+      <PaneSection className={paneClassName} aria-label="Tasks" onItemSelect={() => setCollapsed(true)}>
         {collapsed ? (
           <PaneExpandRail label={context?.listTitle || 'Tasks'} onExpand={() => setCollapsed(false)} />
         ) : (
         <>
         <PaneCollapseSeam label={context?.listTitle || 'Tasks'} onCollapse={() => setCollapsed(true)} />
+        <button type="button" className="pane-mobile-scrim" aria-label="Close Tasks list" onClick={() => setCollapsed(true)} />
         <PaneListFilters
           filters={TASK_FILTERS}
           activeFilter={taskFilter}
@@ -1041,7 +1043,7 @@ export default function TasksPage({ context = null }) {
         </PaneListFooter>
         </>
         )}
-      </section>
+      </PaneSection>
 
       <DetailPane flush className="task-detail">
         {selectedCard ? (

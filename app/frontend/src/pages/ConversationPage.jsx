@@ -36,6 +36,7 @@ import {
   PaneListToolbar,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
@@ -1072,7 +1073,7 @@ function ConversationPage() {
 
   return (
     <PageShell className="chat-page">
-      <aside className={sessionsPaneClassName} aria-label="Conversation sessions">
+      <PaneSection as="aside" className={sessionsPaneClassName} aria-label="Conversation sessions" onItemSelect={() => setSessionsCollapsed(true)}>
         {sessionsCollapsed ? (
           <PaneExpandRail label="Chats" onExpand={() => setSessionsCollapsed(false)} />
         ) : (
@@ -1159,7 +1160,7 @@ function ConversationPage() {
         </PaneListScroll>
         </>
         )}
-      </aside>
+      </PaneSection>
 
       <DetailPane flush className="chat-detail" label="Chat conversation">
         <DetailHeader
