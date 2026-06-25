@@ -26,7 +26,7 @@ from collections.abc import AsyncGenerator, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import httpx
 from croniter import croniter
@@ -55,7 +55,7 @@ from .alerts import (
 )
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
 from .chat_sessions import UiEventEnvelope
-from .document_store import get_default_document_store
+from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 from .prompt_service import PromptService
 from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
@@ -462,6 +462,9 @@ class KanbanCardResponse(BaseModel):
     updated_at: str
     position: int = 0
     metadata: dict = Field(default_factory=dict)
+    task_path: str | None = None
+    task_format: str = "markdown"
+    task_content_updated_at: str | None = None
 
 
 class KanbanBoardResponse(BaseModel):
@@ -504,6 +507,51 @@ class KanbanCardPatchRequest(BaseModel):
     last_error: str | None = None
     position: int | None = None
     metadata: dict | None = None
+
+
+class TaskContentResponse(BaseModel):
+    """Editable task body stored separately from the kanban card metadata."""
+
+    card_id: str
+    path: str
+    format: str = "markdown"
+    updated_at: str | None = None
+    content: str
+
+
+class TaskContentUpdateRequest(BaseModel):
+    """Persisted task-body update payload."""
+
+    content: str
+
+
+class TaskActivityEntryResponse(BaseModel):
+    """One persisted task activity entry."""
+
+    id: str
+    card_id: str
+    kind: str = "note"
+    actor: str = "system"
+    message: str
+    created_at: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskActivityResponse(BaseModel):
+    """Response containing a task activity timeline."""
+
+    card_id: str
+    items: list[TaskActivityEntryResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class TaskActivityCreateRequest(BaseModel):
+    """Create a user-visible task activity entry."""
+
+    message: str
+    actor: str = "user"
+    kind: str = "note"
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class ActionRunRequest(BaseModel):
@@ -585,6 +633,12 @@ class TaskInfo(BaseModel):
     status: str
     description: str | None = None
     progress: int | None = None
+    column_id: str | None = None
+    owner: str | None = None
+    agent_name: str | None = None
+    labels: list[str] = Field(default_factory=list)
+    updated_at: str | None = None
+    task_path: str | None = None
 
 
 class TasksResponse(BaseModel):
@@ -1404,6 +1458,7 @@ def _canonical_kanban_column_id(column_id: object) -> str:
 def _kanban_status_options() -> list[KanbanStatusOptionResponse]:
     """Return allowed kanban card statuses."""
     return [
+        KanbanStatusOptionResponse(id="draft", label="Draft", tone="neutral"),
         KanbanStatusOptionResponse(id="idle", label="Idle", tone="neutral"),
         KanbanStatusOptionResponse(id="running", label="Running", tone="info"),
         KanbanStatusOptionResponse(id="complete", label="Complete", tone="success"),
@@ -1600,9 +1655,290 @@ def _normalize_kanban_board(data: object) -> dict:
     }
 
 
-def _kanban_board_path(state_reader: StateReader) -> Path:
-    """Return the persisted kanban board path."""
-    return state_reader.config_dir / "kanban.json"
+def _kanban_default_board_document() -> dict:
+    """Return a freshly normalized empty board for first-time seeding."""
+    return _normalize_kanban_board(None)
+
+
+def _require_document_store(state_reader: StateReader):
+    """Return the backend document store or fail loudly.
+
+    Tasks are database-only: the board, task bodies, and activity all live in the
+    shared Postgres ``store`` (the same documents the runtime agent reads/edits).
+    There is no on-disk fallback, so a missing store is a hard 503.
+    """
+    if state_reader.document_store is None:
+        raise HTTPException(status_code=503, detail="Document store is unavailable")
+    return state_reader.document_store
+
+
+def _kanban_board_store_key() -> str:
+    """Return the shared-store key for the kanban board structure document.
+
+    Holds only board-level data (columns + ``card_order``); each card lives in
+    its own ``kanban_card:<id>`` document so the agent edits one task per file
+    and writes touch a single row.
+    """
+    return "kanban_board"
+
+
+_KANBAN_CARD_KEY_PREFIX = "kanban_card:"
+
+
+def _kanban_card_store_key(card_id: str) -> str:
+    """Return the shared-store key for one kanban card document."""
+    return f"{_KANBAN_CARD_KEY_PREFIX}{card_id}"
+
+
+def _task_content_store_key(card_id: str) -> str:
+    """Return the shared-store key for one task body."""
+    return f"kanban_task_content:{card_id}"
+
+
+def _task_content_public_path(card_id: str) -> str:
+    """Return the user-facing relative path for one task body."""
+    return f"tasks/{card_id}.md"
+
+
+def _task_activity_store_key(card_id: str) -> str:
+    """Return the shared-store key for task activity."""
+    return f"kanban_task_activity:{card_id}"
+
+
+def _render_task_content_value(value: object) -> str:
+    """Normalize stored task-body payloads into plain text."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return str(value.get("content") or "")
+    return ""
+
+
+def _default_task_content(card: dict, columns: list[dict] | None = None) -> str:
+    """Build a markdown task brief from the kanban card metadata."""
+    column_map = {column["id"]: column for column in columns or _kanban_default_columns()}
+    column = column_map.get(str(card.get("column_id") or "backlog"), {})
+    summary = str(card.get("summary") or "").strip() or "_No summary yet._"
+    description = str(card.get("description") or "").strip() or (
+        "_Add the implementation brief, acceptance criteria, or notes here._"
+    )
+    labels = ", ".join(_normalize_string_list(card.get("labels"))) or "none"
+    references = [
+        ("Spec", str(card.get("spec_path") or "").strip() or "not linked"),
+        ("Branch", str(card.get("branch_name") or "").strip() or "not linked"),
+        ("Pull request", str(card.get("pr_url") or "").strip() or "not linked"),
+    ]
+    reference_lines = "\n".join(f"- {label}: {value}" for label, value in references)
+    return "\n".join(
+        [
+            f"# {str(card.get('title') or 'Untitled task').strip()}",
+            "",
+            "## Summary",
+            "",
+            summary,
+            "",
+            "## Task",
+            "",
+            description,
+            "",
+            "## Workflow",
+            "",
+            f"- Column: {column.get('label') or str(card.get('column_id') or 'backlog')}",
+            f"- Status: {str(card.get('status') or 'idle')}",
+            f"- Owner: {str(card.get('owner') or 'user')}",
+            f"- Agent: {str(card.get('agent_name') or column.get('agent_name') or 'user')}",
+            f"- Labels: {labels}",
+            "",
+            "## References",
+            "",
+            reference_lines,
+        ]
+    ).strip()
+
+
+def _read_task_content(state_reader: StateReader, card: dict) -> TaskContentResponse:
+    """Read a task body from backend state, falling back to derived markdown."""
+    card_id = str(card.get("id") or "").strip()
+    if not card_id:
+        raise HTTPException(status_code=400, detail="Kanban card is missing an id")
+
+    store = _require_document_store(state_reader)
+    updated_at: str | None = None
+    content: str | None = None
+    document = store.get_document(
+        PROGENITOR_STATE_PREFIX,
+        _task_content_store_key(card_id),
+        None,
+    )
+    if document is not None:
+        content = _render_task_content_value(document.payload)
+        if document.updated_at is not None:
+            updated_at = document.updated_at.isoformat()
+
+    if content is None:
+        content = _default_task_content(card)
+
+    return TaskContentResponse(
+        card_id=card_id,
+        path=_task_content_public_path(card_id),
+        updated_at=updated_at,
+        content=content,
+    )
+
+
+def _normalize_task_activity_entries(value: object, card_id: str) -> list[dict[str, Any]]:
+    """Normalize persisted task activity entries into a stable API shape."""
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for entry in value:
+        if not isinstance(entry, dict):
+            continue
+        created_at = str(entry.get("created_at") or utcnow().isoformat())
+        normalized.append(
+            {
+                "id": str(entry.get("id") or f"task_activity_{uuid.uuid4().hex[:12]}"),
+                "card_id": card_id,
+                "kind": str(entry.get("kind") or "note"),
+                "actor": str(entry.get("actor") or "system"),
+                "message": str(entry.get("message") or "").strip(),
+                "created_at": created_at,
+                "metadata": entry.get("metadata")
+                if isinstance(entry.get("metadata"), dict)
+                else {},
+            }
+        )
+    normalized.sort(key=lambda item: str(item.get("created_at") or ""))
+    return [item for item in normalized if item["message"]]
+
+
+def _read_task_activity_entries(state_reader: StateReader, card_id: str) -> list[dict[str, Any]]:
+    """Read persisted task activity entries."""
+    store = _require_document_store(state_reader)
+    document = store.get_document(
+        PROGENITOR_STATE_PREFIX,
+        _task_activity_store_key(card_id),
+        [],
+    )
+    entries = document.payload if document is not None else []
+    return _normalize_task_activity_entries(entries, card_id)
+
+
+def _write_task_activity_entries(
+    state_reader: StateReader,
+    card_id: str,
+    entries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Persist task activity entries."""
+    store = _require_document_store(state_reader)
+    normalized = _normalize_task_activity_entries(entries, card_id)
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        _task_activity_store_key(card_id),
+        normalized,
+    )
+    return normalized
+
+
+def _append_task_activity_entry(
+    state_reader: StateReader,
+    *,
+    card_id: str,
+    message: str,
+    actor: str = "system",
+    kind: str = "note",
+    metadata: dict[str, Any] | None = None,
+    created_at: str | None = None,
+) -> TaskActivityEntryResponse:
+    """Append one activity entry to the task timeline."""
+    normalized_message = str(message or "").strip()
+    if not normalized_message:
+        raise HTTPException(status_code=400, detail="Task activity message is required")
+
+    entries = _read_task_activity_entries(state_reader, card_id)
+    entry: dict[str, Any] = {
+        "id": f"task_activity_{uuid.uuid4().hex[:12]}",
+        "card_id": card_id,
+        "kind": kind,
+        "actor": actor,
+        "message": normalized_message,
+        "created_at": created_at or utcnow().isoformat(),
+        "metadata": metadata or {},
+    }
+    entries.append(entry)
+    _write_task_activity_entries(state_reader, card_id, entries)
+    return TaskActivityEntryResponse(**entry)
+
+
+def _task_activity_response(state_reader: StateReader, card_id: str) -> TaskActivityResponse:
+    """Build a task activity response for one card."""
+    items = [
+        TaskActivityEntryResponse(**entry)
+        for entry in _read_task_activity_entries(state_reader, card_id)
+    ]
+    return TaskActivityResponse(card_id=card_id, items=items, total=len(items))
+
+
+def _write_task_content(
+    state_reader: StateReader, card_id: str, content: str
+) -> TaskContentResponse:
+    """Persist a task body to the shared document store."""
+    store = _require_document_store(state_reader)
+    normalized = content.rstrip()
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        _task_content_store_key(card_id),
+        {"content": normalized},
+    )
+    document = store.get_document(
+        PROGENITOR_STATE_PREFIX,
+        _task_content_store_key(card_id),
+        None,
+    )
+    updated_at = document.updated_at.isoformat() if document and document.updated_at else None
+
+    return TaskContentResponse(
+        card_id=card_id,
+        path=_task_content_public_path(card_id),
+        updated_at=updated_at,
+        content=normalized,
+    )
+
+
+def _find_kanban_card(state_reader: StateReader, card_id: str) -> dict[str, Any]:
+    """Look up one kanban card or raise a 404."""
+    board = _read_kanban_board(state_reader)
+    card = next((item for item in board["cards"] if item["id"] == card_id), None)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Kanban card not found")
+    return cast(dict[str, Any], card)
+
+
+def _kanban_card_response(state_reader: StateReader, card: dict) -> KanbanCardResponse:
+    """Attach task-body metadata to a kanban card response."""
+    task_content = _read_task_content(state_reader, card)
+    return KanbanCardResponse(
+        **card,
+        task_path=task_content.path,
+        task_format=task_content.format,
+        task_content_updated_at=task_content.updated_at,
+    )
+
+
+def _kanban_board_response(
+    state_reader: StateReader, board: dict | None = None
+) -> KanbanBoardResponse:
+    """Build the canonical kanban response payload."""
+    snapshot = _read_kanban_board(state_reader) if board is None else board
+    return KanbanBoardResponse(
+        id=snapshot["id"],
+        title=snapshot["title"],
+        updated_at=snapshot["updated_at"],
+        columns=[KanbanColumnResponse(**column) for column in snapshot["columns"]],
+        cards=[_kanban_card_response(state_reader, card) for card in snapshot["cards"]],
+        card_schema=_kanban_card_schema(snapshot["columns"]),
+    )
 
 
 def _event_widget_path(state_reader: StateReader) -> Path:
@@ -1610,11 +1946,82 @@ def _event_widget_path(state_reader: StateReader) -> Path:
     return state_reader.config_dir / "event_widgets.json"
 
 
+def _read_kanban_card_doc(store: Any, card_id: str) -> dict | None:
+    """Read one persisted card document (the ``kanban_card:<id>`` row)."""
+    document = store.get_document(
+        PROGENITOR_STATE_PREFIX,
+        _kanban_card_store_key(card_id),
+        None,
+    )
+    if document is None or not isinstance(document.payload, dict):
+        return None
+    return document.payload
+
+
+def _migrate_inline_cards(store: Any, structure: dict, inline_cards: list) -> list[str]:
+    """Split a legacy inline ``cards`` array into per-card documents.
+
+    Older boards stored every card inside the single ``kanban_board`` document.
+    The first read after upgrade writes each card to its own ``kanban_card:<id>``
+    row, records the ordering in ``card_order``, and drops the inline array.
+    """
+    card_order: list[str] = []
+    for card in inline_cards:
+        if not isinstance(card, dict):
+            continue
+        card_id = str(card.get("id") or "").strip()
+        if not card_id or card_id in card_order:
+            continue
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            _kanban_card_store_key(card_id),
+            card,
+        )
+        card_order.append(card_id)
+    structure["card_order"] = card_order
+    structure.pop("cards", None)
+    store.save_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure)
+    return card_order
+
+
 def _read_kanban_board(state_reader: StateReader) -> dict:
-    """Read the kanban board from persisted config state."""
-    board_path = _kanban_board_path(state_reader)
-    raw = state_reader._read_json_from_path(board_path)  # noqa: SLF001 - shared helper
-    return _normalize_kanban_board(raw)
+    """Assemble the kanban board from its structure + per-card documents.
+
+    The board structure (columns + ``card_order``) is one document under the
+    shared ``("progenitor", "state")`` namespace; each card is its own
+    ``kanban_card:<id>`` document so the runtime agent edits one task per file
+    and writes touch a single row. On first read we seed an empty board, and we
+    transparently migrate any legacy inline-``cards`` board into per-card rows.
+    """
+    store = _require_document_store(state_reader)
+    document = store.get_document(
+        PROGENITOR_STATE_PREFIX,
+        _kanban_board_store_key(),
+        None,
+    )
+    if document is None:
+        normalized = _kanban_default_board_document()
+        structure = {k: v for k, v in normalized.items() if k != "cards"}
+        structure["card_order"] = []
+        store.save_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure)
+        return normalized
+
+    structure = dict(document.payload) if isinstance(document.payload, dict) else {}
+    inline_cards = structure.get("cards")
+    if isinstance(inline_cards, list) and inline_cards and "card_order" not in structure:
+        card_order = _migrate_inline_cards(store, structure, inline_cards)
+    else:
+        order = structure.get("card_order")
+        card_order = (
+            [str(cid).strip() for cid in order if str(cid).strip()]
+            if isinstance(order, list)
+            else []
+        )
+
+    cards = [card for cid in card_order if (card := _read_kanban_card_doc(store, cid)) is not None]
+    assembled = {**structure, "cards": cards}
+    assembled.pop("card_order", None)
+    return _normalize_kanban_board(assembled)
 
 
 def _normalize_event_widget_logs(data: object) -> list[dict]:
@@ -1718,12 +2125,42 @@ def _build_event_widget_entry(
 
 
 def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
-    """Persist the normalized kanban board."""
-    board_path = _kanban_board_path(state_reader)
+    """Persist the kanban board as a structure document + per-card documents.
+
+    Diff-aware: only cards whose payload actually changed are rewritten, and
+    cards dropped from the board have their ``kanban_card:<id>`` row deleted.
+    Each touched row fires the shared-store NOTIFY trigger, so a single card
+    edit produces a single ``kanban.snapshot`` rebroadcast rather than a storm.
+    """
+    store = _require_document_store(state_reader)
     normalized = _normalize_kanban_board(board)
     normalized["updated_at"] = utcnow().isoformat()
-    _atomic_write_json(board_path, normalized, state_reader)
-    state_reader.invalidate(board_path)
+    cards = normalized.get("cards", [])
+
+    previous = store.get_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), None)
+    previous_order = []
+    if previous is not None and isinstance(previous.payload, dict):
+        order = previous.payload.get("card_order")
+        if isinstance(order, list):
+            previous_order = [str(cid).strip() for cid in order if str(cid).strip()]
+
+    card_order: list[str] = []
+    for card in cards:
+        card_id = str(card.get("id") or "").strip()
+        if not card_id:
+            continue
+        card_order.append(card_id)
+        existing = _read_kanban_card_doc(store, card_id)
+        if existing != card:
+            store.save_document(PROGENITOR_STATE_PREFIX, _kanban_card_store_key(card_id), card)
+
+    for stale_id in previous_order:
+        if stale_id not in card_order:
+            store.delete_document(PROGENITOR_STATE_PREFIX, _kanban_card_store_key(stale_id))
+
+    structure = {k: v for k, v in normalized.items() if k != "cards"}
+    structure["card_order"] = card_order
+    store.save_document(PROGENITOR_STATE_PREFIX, _kanban_board_store_key(), structure)
     return normalized
 
 
@@ -2631,14 +3068,9 @@ async def get_kanban_board():
     """Get the persisted kanban board used by the frontend."""
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
-    return KanbanBoardResponse(
-        id=board["id"],
-        title=board["title"],
-        updated_at=board["updated_at"],
-        columns=[KanbanColumnResponse(**column) for column in board["columns"]],
-        cards=[KanbanCardResponse(**card) for card in board["cards"]],
-        card_schema=_kanban_card_schema(board["columns"]),
-    )
+    response = _kanban_board_response(state_reader, board)
+    broadcast_kanban_snapshot(response)
+    return response
 
 
 @router.post("/kanban/cards", response_model=KanbanCardResponse)
@@ -2659,7 +3091,7 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             "summary": body.summary,
             "description": body.description,
             "column_id": "backlog",
-            "status": "idle",
+            "status": "draft",
             "agent_name": column_map["backlog"]["agent_name"],
             "owner": body.owner,
             "labels": body.labels,
@@ -2685,7 +3117,9 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             }
         ],
     )
-    return KanbanCardResponse(**created)
+    response = _kanban_card_response(state_reader, created)
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
+    return response
 
 
 @router.patch("/kanban/cards/{card_id}", response_model=KanbanCardResponse)
@@ -2842,7 +3276,58 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
                 }
             )
     _apply_event_widget_triggers(state_reader, triggers)
-    return KanbanCardResponse(**refreshed)
+    if previous_card is not None:
+        if previous_card.get("status") != refreshed.get("status"):
+            _append_task_activity_entry(
+                state_reader,
+                card_id=card_id,
+                kind="status",
+                actor="system",
+                message=(
+                    f"Status changed from {previous_card.get('status') or 'unknown'} "
+                    f"to {refreshed.get('status') or 'unknown'}."
+                ),
+                metadata={
+                    "from_status": previous_card.get("status"),
+                    "to_status": refreshed.get("status"),
+                },
+                created_at=now,
+            )
+        if previous_card.get("column_id") != refreshed.get("column_id"):
+            _append_task_activity_entry(
+                state_reader,
+                card_id=card_id,
+                kind="move",
+                actor="system",
+                message=(
+                    f"Moved from {previous_card.get('column_id') or 'unknown'} "
+                    f"to {refreshed.get('column_id') or 'unknown'}."
+                ),
+                metadata={
+                    "from_column_id": previous_card.get("column_id"),
+                    "to_column_id": refreshed.get("column_id"),
+                },
+                created_at=now,
+            )
+        if previous_card.get("title") != refreshed.get("title"):
+            _append_task_activity_entry(
+                state_reader,
+                card_id=card_id,
+                kind="update",
+                actor="system",
+                message=f"Renamed task to {refreshed.get('title') or 'Untitled task'}.",
+                metadata={"field": "title"},
+                created_at=now,
+            )
+    response = _kanban_card_response(state_reader, refreshed)
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
+    if previous_card is not None and (
+        previous_card.get("status") != refreshed.get("status")
+        or previous_card.get("column_id") != refreshed.get("column_id")
+        or previous_card.get("title") != refreshed.get("title")
+    ):
+        broadcast_task_activity(card_id)
+    return response
 
 
 @router.delete("/kanban/cards/{card_id}", status_code=204)
@@ -2872,7 +3357,66 @@ async def delete_kanban_card(card_id: str):
                 }
             ],
         )
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
     return None
+
+
+@router.get("/tasks/{card_id}/content", response_model=TaskContentResponse)
+async def get_task_content(card_id: str):
+    """Read the markdown body for a single task card."""
+    state_reader = get_state_reader()
+    card = _find_kanban_card(state_reader, card_id)
+    response = _read_task_content(state_reader, card)
+    broadcast_task_content(card_id, response)
+    return response
+
+
+@router.put("/tasks/{card_id}/content", response_model=TaskContentResponse)
+async def update_task_content(card_id: str, body: TaskContentUpdateRequest):
+    """Persist the markdown body for a single task card."""
+    state_reader = get_state_reader()
+    _find_kanban_card(state_reader, card_id)
+    result = _write_task_content(state_reader, card_id, body.content)
+    _append_task_activity_entry(
+        state_reader,
+        card_id=card_id,
+        kind="content",
+        actor="user",
+        message="Updated the task brief.",
+        metadata={"path": result.path},
+        created_at=utcnow().isoformat(),
+    )
+    broadcast_task_content(card_id, result)
+    broadcast_task_activity(card_id)
+    return result
+
+
+@router.get("/tasks/{card_id}/activity", response_model=TaskActivityResponse)
+async def get_task_activity(card_id: str):
+    """Read the persisted activity timeline for a task card."""
+    state_reader = get_state_reader()
+    _find_kanban_card(state_reader, card_id)
+    response = _task_activity_response(state_reader, card_id)
+    broadcast_task_activity(card_id, response)
+    return response
+
+
+@router.post("/tasks/{card_id}/activity", response_model=TaskActivityEntryResponse)
+async def create_task_activity(card_id: str, body: TaskActivityCreateRequest):
+    """Append a user-visible activity entry for a task card."""
+    state_reader = get_state_reader()
+    _find_kanban_card(state_reader, card_id)
+    created = _append_task_activity_entry(
+        state_reader,
+        card_id=card_id,
+        kind=body.kind,
+        actor=body.actor,
+        message=body.message,
+        metadata=body.metadata,
+        created_at=utcnow().isoformat(),
+    )
+    broadcast_task_activity(card_id)
+    return created
 
 
 @router.post("/actions/run", response_model=ActionResponse)
@@ -3097,32 +3641,35 @@ async def test_telegram():
 @router.get("/tasks", response_model=TasksResponse)
 async def get_active_tasks():
     """
-    Get list of active tasks.
-
-    Returns information about tasks currently being processed.
+    Get the current kanban task list for lightweight consumers.
     """
-    from . import main as chat_main
-
-    try:
-        health = await chat_main.health_check_detailed()
-        active_requests = health.get("shutdown", {}).get("active_requests", 0)
-    except Exception:
-        active_requests = 0
-
-    # In a full implementation, this would query the progenitor for task status
-    tasks = []
-
-    if active_requests > 0:
-        tasks.append(
-            TaskInfo(
-                id="task-active-1",
-                title="Processing Chat Request",
-                status="running",
-                description=f"Handling {active_requests} active request(s)",
-                progress=None,
-            )
+    state_reader = get_state_reader()
+    board = _read_kanban_board(state_reader)
+    tasks = [
+        TaskInfo(
+            id=card["id"],
+            title=card["title"],
+            status=card["status"],
+            description=card.get("summary") or card.get("description") or None,
+            progress=100 if card["status"] == "complete" else None,
+            column_id=card["column_id"],
+            owner=card.get("owner"),
+            agent_name=card.get("agent_name"),
+            labels=list(card.get("labels") or []),
+            updated_at=card.get("updated_at"),
+            task_path=_task_content_public_path(card["id"]),
         )
-
+        for card in board["cards"]
+        if not bool((card.get("metadata") or {}).get("archived_at"))
+    ]
+    tasks.sort(
+        key=lambda task: (
+            task.status == "complete",
+            task.column_id or "",
+            task.updated_at or "",
+        ),
+        reverse=False,
+    )
     return TasksResponse(tasks=tasks, total=len(tasks))
 
 
@@ -3775,10 +4322,28 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     # snapshot (None = full resync after a reconnect → refresh everything).
     if _ui_stream_subscribers:
         try:
+            if (
+                changed_key is None
+                or changed_key == _kanban_board_store_key()
+                or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
+            ):
+                broadcast_kanban_snapshot()
             if changed_key in (None, "mcp", "mcp_tools"):
                 broadcast_mcp_snapshot()
             if changed_key in (None, "schedule"):
                 broadcast_schedule_snapshot()
+            if changed_key is None:
+                board = _read_kanban_board(get_state_reader())
+                for card in board["cards"]:
+                    card_id = str(card.get("id") or "").strip()
+                    if not card_id:
+                        continue
+                    broadcast_task_content(card_id)
+                    broadcast_task_activity(card_id)
+            elif changed_key.startswith("kanban_task_content:"):
+                broadcast_task_content(changed_key.split(":", 1)[1])
+            elif changed_key.startswith("kanban_task_activity:"):
+                broadcast_task_activity(changed_key.split(":", 1)[1])
             if changed_key is None or changed_key in _WIDGET_KEYS:
                 broadcast_widgets_snapshot()
         except Exception:
@@ -4271,6 +4836,33 @@ def broadcast_schedule_snapshot() -> UiEventEnvelope:
         _schedule_item_to_info(item).model_dump(mode="json") for item in state_reader.get_schedule()
     ]
     return broadcast_ui_event("schedule.snapshot", {"items": items})
+
+
+def broadcast_kanban_snapshot(board: KanbanBoardResponse | None = None) -> UiEventEnvelope:
+    """Broadcast the current Tasks board to /api/ui/stream subscribers."""
+    state_reader = get_state_reader()
+    payload = (board or _kanban_board_response(state_reader)).model_dump(mode="json")
+    return broadcast_ui_event("kanban.snapshot", payload)
+
+
+def broadcast_task_content(
+    card_id: str, content: TaskContentResponse | None = None
+) -> UiEventEnvelope:
+    """Broadcast the canonical task-body payload for one card."""
+    state_reader = get_state_reader()
+    if content is None:
+        card = _find_kanban_card(state_reader, card_id)
+        content = _read_task_content(state_reader, card)
+    return broadcast_ui_event("task.content.updated", content.model_dump(mode="json"))
+
+
+def broadcast_task_activity(
+    card_id: str, activity: TaskActivityResponse | None = None
+) -> UiEventEnvelope:
+    """Broadcast the canonical task activity payload for one card."""
+    state_reader = get_state_reader()
+    payload = activity or _task_activity_response(state_reader, card_id)
+    return broadcast_ui_event("task.activity.updated", payload.model_dump(mode="json"))
 
 
 def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:

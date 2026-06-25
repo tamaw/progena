@@ -65,6 +65,35 @@ def kanban_state_reader(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def tasks_state_reader(tmp_path, monkeypatch):
+    """State reader backed by the shared document store for tasks (DB-only).
+
+    Tasks have no file fallback, so these tests need a real document store. The
+    board, task bodies, and activity all persist under the shared
+    ``("progenitor", "state")`` namespace — the same documents the runtime
+    agent reads/edits through ``/state/tasks/`` as ``board.json`` plus per-task
+    ``<id>.md`` files.
+    """
+    state_dir = tmp_path / "data" / "state"
+    config_dir = tmp_path / "data" / "config"
+    sessions_dir = tmp_path / "data" / "sessions"
+    logs_dir = tmp_path / "logs"
+
+    for directory in (state_dir, config_dir, sessions_dir, logs_dir):
+        directory.mkdir(parents=True)
+
+    state_reader = StateReader(
+        state_dir=state_dir,
+        config_dir=config_dir,
+        sessions_dir=sessions_dir,
+        logs_dir=logs_dir,
+        document_store=InMemoryDocumentStore(),
+    )
+    monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+    yield state_reader
+
+
+@pytest.fixture
 def document_store():
     store = InMemoryDocumentStore()
     set_default_document_store(store)
@@ -584,7 +613,7 @@ class TestUIRoutes:
         assert create_response.json()["path"] == "builder_agent/repo-triage/SKILL.md"
         assert (skills_dir / "builder_agent" / "repo-triage" / "SKILL.md").is_file()
 
-    def test_kanban_endpoint_returns_default_board(self, client, kanban_state_reader):
+    def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader):
         response = client.get("/api/ui/kanban")
 
         assert response.status_code == 200
@@ -599,6 +628,7 @@ class TestUIRoutes:
         ]
         assert data["cards"] == []
         assert {status["id"] for status in data["card_schema"]["statuses"]} == {
+            "draft",
             "idle",
             "running",
             "complete",
@@ -606,7 +636,7 @@ class TestUIRoutes:
             "blocked",
         }
 
-    def test_kanban_card_create_and_patch_persist(self, client, kanban_state_reader):
+    def test_kanban_card_create_and_patch_persist(self, client, tasks_state_reader):
         create_response = client.post(
             "/api/ui/kanban/cards",
             json={"title": "Build kanban board", "summary": "Server first"},
@@ -615,8 +645,20 @@ class TestUIRoutes:
         assert create_response.status_code == 200
         created = create_response.json()
         assert created["column_id"] == "backlog"
-        assert created["status"] == "idle"
-        assert (kanban_state_reader.config_dir / "kanban.json").exists()
+        assert created["status"] == "draft"
+        assert created["task_path"] == f"tasks/{created['id']}.md"
+        # Cards persist as their own ``kanban_card:<id>`` document; the board
+        # structure only records column layout + ``card_order``.
+        store = tasks_state_reader.document_store
+        stored_board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        assert stored_board is not None
+        assert created["id"] in stored_board.payload["card_order"]
+        assert "cards" not in stored_board.payload
+        stored_card = store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None
+        )
+        assert stored_card is not None
+        assert stored_card.payload["id"] == created["id"]
 
         patch_response = client.patch(
             f"/api/ui/kanban/cards/{created['id']}",
@@ -644,7 +686,161 @@ class TestUIRoutes:
         assert board["cards"][0]["id"] == created["id"]
         assert board["cards"][0]["column_id"] == "build"
 
-    def test_kanban_card_reorder_persists_positions(self, client, kanban_state_reader):
+    def test_kanban_card_metadata_persists_subtasks_and_dependencies(self, client):
+        created = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Metadata task"},
+        ).json()
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={
+                "metadata": {
+                    "subtasks": [
+                        {"id": "sub_1", "title": "First subtask", "done": False},
+                        {"id": "sub_2", "title": "Second subtask", "done": True},
+                    ],
+                    "dependencies": ["task-123", "docs/spec.md"],
+                }
+            },
+        )
+
+        assert patch_response.status_code == 200
+        payload = patch_response.json()
+        assert payload["metadata"]["subtasks"][0]["title"] == "First subtask"
+        assert payload["metadata"]["subtasks"][1]["done"] is True
+        assert payload["metadata"]["dependencies"] == ["task-123", "docs/spec.md"]
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={
+                "metadata": {
+                    "subtasks": payload["metadata"]["subtasks"],
+                    "dependencies": payload["metadata"]["dependencies"],
+                    "collaborators": ["review_agent", "qa_user"],
+                    "attachments": [
+                        {
+                            "id": "att_1",
+                            "label": "Spec doc",
+                            "url": "https://example.test/spec",
+                            "kind": "link",
+                        },
+                        {
+                            "id": "att_2",
+                            "label": "PR",
+                            "url": "https://example.test/pr/1",
+                            "kind": "pr",
+                        },
+                    ],
+                }
+            },
+        )
+
+        assert patch_response.status_code == 200
+        payload = patch_response.json()
+        assert payload["metadata"]["collaborators"] == ["review_agent", "qa_user"]
+        assert payload["metadata"]["attachments"][1]["kind"] == "pr"
+
+    def test_tasks_endpoint_returns_persisted_kanban_cards(self, client, tasks_state_reader):
+        created = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Wire backend tasks", "summary": "Replace placeholder feed"},
+        ).json()
+        client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"column_id": "build", "status": "running", "labels": ["backend", "high"]},
+        )
+
+        response = client.get("/api/ui/tasks")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total"] == 1
+        assert payload["tasks"][0]["id"] == created["id"]
+        assert payload["tasks"][0]["column_id"] == "build"
+        assert payload["tasks"][0]["status"] == "running"
+        assert payload["tasks"][0]["labels"] == ["backend", "high"]
+        assert payload["tasks"][0]["task_path"] == f"tasks/{created['id']}.md"
+
+    def test_task_content_round_trips_through_backend(self, client, tasks_state_reader):
+        created = client.post(
+            "/api/ui/kanban/cards",
+            json={
+                "title": "Functional task page",
+                "summary": "Use markdown body",
+                "description": "Back the task with editable text.",
+            },
+        ).json()
+
+        default_response = client.get(f"/api/ui/tasks/{created['id']}/content")
+
+        assert default_response.status_code == 200
+        default_payload = default_response.json()
+        assert default_payload["path"] == f"tasks/{created['id']}.md"
+        assert "# Functional task page" in default_payload["content"]
+        assert "Back the task with editable text." in default_payload["content"]
+
+        update_response = client.put(
+            f"/api/ui/tasks/{created['id']}/content",
+            json={"content": "# Functional task page\n\n- Ship the backend\n- Ship the UI"},
+        )
+
+        assert update_response.status_code == 200
+        updated_payload = update_response.json()
+        assert updated_payload["updated_at"] is not None
+        assert "- Ship the backend" in updated_payload["content"]
+
+        stored_content = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_task_content:{created['id']}", None
+        )
+        assert stored_content is not None
+        assert stored_content.payload["content"].startswith("# Functional task page")
+
+        fetched_again = client.get(f"/api/ui/tasks/{created['id']}/content").json()
+        assert fetched_again["content"] == updated_payload["content"]
+
+        activity = client.get(f"/api/ui/tasks/{created['id']}/activity").json()
+        assert activity["total"] == 1
+        assert activity["items"][0]["kind"] == "content"
+        assert activity["items"][0]["message"] == "Updated the task brief."
+
+    def test_task_activity_route_persists_notes_and_status_events(self, client, tasks_state_reader):
+        created = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Track activity"},
+        ).json()
+
+        note_response = client.post(
+            f"/api/ui/tasks/{created['id']}/activity",
+            json={"message": "Investigating the API contract.", "actor": "user", "kind": "note"},
+        )
+
+        assert note_response.status_code == 200
+        note_payload = note_response.json()
+        assert note_payload["actor"] == "user"
+        assert note_payload["kind"] == "note"
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"status": "running", "column_id": "build"},
+        )
+        assert patch_response.status_code == 200
+
+        activity = client.get(f"/api/ui/tasks/{created['id']}/activity").json()
+        assert activity["total"] == 3
+        assert [item["kind"] for item in activity["items"]] == ["note", "status", "move"]
+        assert "Status changed from draft to running." in [
+            item["message"] for item in activity["items"]
+        ]
+        assert "Moved from backlog to build." in [item["message"] for item in activity["items"]]
+
+        stored_activity = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_task_activity:{created['id']}", None
+        )
+        assert stored_activity is not None
+        assert len(stored_activity.payload) == 3
+
+    def test_kanban_card_reorder_persists_positions(self, client, tasks_state_reader):
         first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
         third = client.post("/api/ui/kanban/cards", json={"title": "Third card"}).json()
@@ -677,7 +873,7 @@ class TestUIRoutes:
         assert [card["title"] for card in build_cards] == ["First card"]
         assert build_cards[0]["position"] == 0
 
-    def test_kanban_normalizes_legacy_columns(self, client, kanban_state_reader):
+    def test_kanban_normalizes_legacy_columns(self, client, tasks_state_reader):
         legacy_board = {
             "id": "progenitor-kanban",
             "title": "Delivery Kanban",
@@ -689,11 +885,9 @@ class TestUIRoutes:
                 {"id": "legacy-review", "title": "Legacy review", "column_id": "review"},
             ],
         }
-        (kanban_state_reader.config_dir / "kanban.json").write_text(
-            json.dumps(legacy_board),
-            encoding="utf-8",
+        tasks_state_reader.document_store.save_document(
+            PROGENITOR_STATE_PREFIX, "kanban_board", legacy_board
         )
-        kanban_state_reader.invalidate(kanban_state_reader.config_dir / "kanban.json")
 
         board = client.get("/api/ui/kanban").json()
 
@@ -709,8 +903,21 @@ class TestUIRoutes:
             "legacy-test": "validate",
             "legacy-review": "validate",
         }
+        # The legacy inline-cards board is migrated to per-card documents + an
+        # ordered ``card_order`` on the structure document.
+        store = tasks_state_reader.document_store
+        structure = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        assert "cards" not in structure.payload
+        assert set(structure.payload["card_order"]) == {
+            "legacy-research",
+            "legacy-test",
+            "legacy-review",
+        }
+        assert (
+            store.get_document(PROGENITOR_STATE_PREFIX, "kanban_card:legacy-test", None) is not None
+        )
 
-    def test_kanban_card_delete_persists(self, client, kanban_state_reader):
+    def test_kanban_card_delete_persists(self, client, tasks_state_reader):
         created = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"}).json()
 
         delete_response = client.delete(f"/api/ui/kanban/cards/{created['id']}")
@@ -718,6 +925,15 @@ class TestUIRoutes:
         assert delete_response.status_code == 204
         board = client.get("/api/ui/kanban").json()
         assert all(card["id"] != created["id"] for card in board["cards"])
+        # Deleting the card also removes its backing document and drops it from
+        # the board's ``card_order``.
+        store = tasks_state_reader.document_store
+        assert (
+            store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None)
+            is None
+        )
+        structure = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        assert created["id"] not in structure.payload["card_order"]
 
     def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader):
         create_response = client.post(
@@ -1796,7 +2012,7 @@ class TestWorkspaceBridgeActions:
         assert stored[0]["enabled"] is False
 
     def test_kanban_create_and_update_events_trigger_matching_widgets(
-        self, client, kanban_state_reader
+        self, client, tasks_state_reader
     ):
         created_widget = client.post(
             "/api/ui/events",
@@ -1832,7 +2048,7 @@ class TestWorkspaceBridgeActions:
         assert updated_data["last_payload"]["event_type"] == "kanban.card.updated"
 
     def test_kanban_move_status_and_delete_events_trigger_matching_widgets(
-        self, client, kanban_state_reader
+        self, client, tasks_state_reader
     ):
         moved_widget = client.post(
             "/api/ui/events",
@@ -1873,7 +2089,7 @@ class TestWorkspaceBridgeActions:
         status_data = widgets[status_widget["id"]]["data"]
         assert status_data["trigger_count"] == 1
         assert status_data["last_payload"]["card"]["id"] == first["id"]
-        assert status_data["last_payload"]["from_status"] == "idle"
+        assert status_data["last_payload"]["from_status"] == "draft"
         assert status_data["last_payload"]["to_status"] == "running"
 
         delete_response = client.delete(f"/api/ui/kanban/cards/{first['id']}")

@@ -57,6 +57,8 @@ class BackendDocumentStore(Protocol):
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
+    def delete_document(self, prefix: str, key: str) -> None: ...
+
     def query_logs(
         self,
         *,
@@ -102,6 +104,9 @@ class InMemoryDocumentStore:
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
+
+    def delete_document(self, prefix: str, key: str) -> None:
+        self._documents.pop((prefix, key), None)
 
     def query_logs(
         self,
@@ -309,6 +314,13 @@ class PostgresDocumentStore:
                         updated_at = now()
                 """,
                 (prefix, key, Jsonb(value)),
+            )
+
+    def delete_document(self, prefix: str, key: str) -> None:
+        with self._cursor() as cur:
+            cur.execute(
+                "DELETE FROM store WHERE prefix = %s AND key = %s",
+                (prefix, key),
             )
 
     def query_logs(

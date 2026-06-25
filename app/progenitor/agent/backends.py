@@ -22,7 +22,11 @@ from deepagents.backends import (
     StateBackend,
 )
 
-from .state_backend import StateDocumentBackend, create_mcp_state_file
+from .state_backend import (
+    KanbanTaskDirectoryBackend,
+    StateDocumentBackend,
+    create_mcp_state_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +65,11 @@ def create_progenitor_backend(
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
         state_manager: When provided, mounts ``/state/`` with state documents
-            (currently ``mcp.json``) the agent can read/edit as files. Writes
-            persist via the StateManager; the runtime's store listener handles
-            live MCP re-discovery, so no write-hook callback is needed here.
+            the agent can read/edit as files, including ``mcp.json`` plus the
+            ``/state/tasks/`` task directory (``board.json`` and per-task
+            ``<id>.md`` files). Writes persist via the StateManager; the
+            runtime's store listener handles live MCP re-discovery, so no
+            write-hook callback is needed here.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
@@ -112,8 +118,15 @@ def create_progenitor_backend(
 
     # State documents surfaced as virtual files (e.g. /state/mcp.json), backed by
     # the runtime StateManager so writes persist through the normal store path.
+    # Tasks get their own mount: a directory of per-task files (/state/tasks/<id>.md
+    # + board.json) so the agent edits one task per file instead of a giant blob.
     if state_manager is not None:
-        routes["/state/"] = StateDocumentBackend([create_mcp_state_file(state_manager)])
+        routes["/state/"] = StateDocumentBackend(
+            [
+                create_mcp_state_file(state_manager),
+            ]
+        )
+        routes["/state/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
 
     state_backend_cls: Any = StateBackend
     logger.info("Created progenitor backend with scoped filesystem mounts")

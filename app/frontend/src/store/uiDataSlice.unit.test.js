@@ -5,6 +5,7 @@ import reducer, {
   clearChatGenerating,
   clearChatUnread,
   clearActiveChatSession,
+  kanbanSnapshotReceived,
   markChatErrored,
   markChatGenerating,
   markChatUnread,
@@ -16,6 +17,9 @@ import reducer, {
   selectErroredChatIds,
   selectGeneratingChatIds,
   selectChatSessions,
+  selectKanbanBoard,
+  selectTaskActivityEntry,
+  selectTaskContentEntry,
   selectUnreadChatIds,
   selectMcpServers,
   selectMcpState,
@@ -118,6 +122,32 @@ describe('applyUiEvent reducer', () => {
     expect(selectMcpServers({ uiData: s })).toEqual(items);
     expect(selectMcpState({ uiData: s }).loaded).toBe(true);
     expect(selectMcpState({ uiData: s }).error).toBe(null);
+  });
+
+  it('kanban.snapshot replaces the live tasks board', () => {
+    const board = {
+      id: 'progenitor-kanban',
+      title: 'Tasks',
+      updated_at: '2026-06-23T00:00:00Z',
+      columns: [{ id: 'backlog', label: 'Backlog' }],
+      cards: [{ id: 'card_1', title: 'Ship Tasks', column_id: 'backlog', status: 'idle' }],
+      card_schema: { statuses: [{ id: 'idle', label: 'Idle' }] },
+    };
+    const s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: board }));
+    expect(selectKanbanBoard({ uiData: s })).toEqual(board);
+  });
+
+  it('task content and activity events update per-card detail state', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'task.content.updated',
+      payload: { card_id: 'card_1', path: 'tasks/card_1.md', content: '# Ship Tasks' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'task.activity.updated',
+      payload: { card_id: 'card_1', items: [{ id: 'evt_1', message: 'Updated the task brief.' }], total: 1 },
+    }));
+    expect(selectTaskContentEntry({ uiData: s }, 'card_1')?.content).toBe('# Ship Tasks');
+    expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
   });
 });
 
@@ -269,5 +299,13 @@ describe('scheduleSnapshotReceived', () => {
     const items = [{ id: 'sched-live', name: 'Live schedule' }];
     const s = reducer(undefined, scheduleSnapshotReceived(items));
     expect(selectSchedules({ uiData: s })).toEqual(items);
+  });
+});
+
+describe('kanbanSnapshotReceived', () => {
+  it('stores the provided tasks board directly', () => {
+    const board = { id: 'board-1', cards: [] };
+    const s = reducer(undefined, kanbanSnapshotReceived(board));
+    expect(selectKanbanBoard({ uiData: s })).toEqual(board);
   });
 });
