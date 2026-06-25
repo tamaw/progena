@@ -23,7 +23,8 @@ export function useTheme() {
       window.matchMedia('(prefers-color-scheme: dark)').matches,
     );
     document.documentElement.dataset.theme = resolved;
-    setCurrentTheme(resolved);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setCurrentTheme(resolved); // sync local state with config change
 
     if (config.theme.default === 'system') {
       const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');

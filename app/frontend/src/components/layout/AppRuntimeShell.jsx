@@ -1836,6 +1836,7 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
 
     if (activePanel === null) {
       // Closing: slide out, then unmount.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setIsOpen(false);
       timerRef.current = setTimeout(() => setDisplayed(null), PANEL_EXIT_MS);
     } else if (displayed === null) {
@@ -1900,9 +1901,7 @@ function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isNavCollapsed, setIsNavCollapsed] = useState(
-    () => typeof window !== 'undefined' && window.matchMedia('(max-width: 980px)').matches,
-  );
+  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
   const runtime = useChromeRuntime();
@@ -1910,6 +1909,8 @@ function AppRuntimeShell() {
   // Below 980px the sidebar becomes a fixed overlay drawer (CSS handles it).
   // Ensure the nav is not in icon-rail mode at those widths — the drawer is
   // either open (is-open class) or hidden off-screen, never a collapsed rail.
+  // Note: isNavCollapsed initialises to false so no synchronous setState is
+  // needed in the effect body; only future viewport-change events need handling.
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 980px)');
     const handler = (e) => {
@@ -1918,10 +1919,6 @@ function AppRuntimeShell() {
         setIsNavOpen(false);      // start with drawer closed
       }
     };
-    if (mq.matches) {
-      setIsNavCollapsed(false);
-      setIsNavOpen(false);
-    }
     mq.addEventListener('change', handler);
     return () => mq.removeEventListener('change', handler);
   }, []);
