@@ -1,5 +1,44 @@
-import { useEffect, useRef, useState } from 'react';
-import { usePaneCollapse } from './usePaneCollapse';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { usePaneCollapse, NARROW_MQ } from './usePaneCollapse';
+
+/** Provided by PaneSection; consumed by PaneListScroll to auto-collapse on item selection. */
+const PaneAutoCollapseCtx = createContext(null);
+
+/**
+ * Shell-aware pane wrapper. On narrow viewports (≤ 980px) it portals the
+ * element into document.body so that position:fixed children are never
+ * clipped by app-shell__content's stacking context.
+ *
+ * Pass `onItemSelect` (typically `() => setCollapsed(true)`) so that
+ * PaneListScroll can auto-collapse when an item is selected on mobile.
+ */
+export function PaneSection({ as: Tag = 'section', className, onItemSelect, children, ...props }) {
+  const [narrow, setNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia(NARROW_MQ).matches,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia(NARROW_MQ);
+    const handler = (e) => setNarrow(e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  const el = (
+    <Tag className={className} {...props}>
+      <PaneAutoCollapseCtx.Provider value={narrow ? onItemSelect ?? null : null}>
+        {children}
+      </PaneAutoCollapseCtx.Provider>
+    </Tag>
+  );
+
+  if (narrow) {
+    const mount = typeof document !== 'undefined' ? document.body : null;
+    if (mount) return createPortal(el, mount);
+  }
+  return el;
+}
 
 function SearchIcon() {
   return (
@@ -65,18 +104,20 @@ export function PaneExpandRail({ label, onExpand }) {
 
 export function PaneList({ label, className = '', children }) {
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse(`${className} sess-list`.trim());
+  const collapseIfNarrow = useCallback(() => setCollapsed(true), [setCollapsed]);
 
   return (
-    <section className={paneClassName} aria-label={label}>
+    <PaneSection className={paneClassName} aria-label={label} onItemSelect={collapseIfNarrow}>
       {collapsed ? (
         <PaneExpandRail label={label} onExpand={() => setCollapsed(false)} />
       ) : (
         <>
           <PaneCollapseSeam label={label} onCollapse={() => setCollapsed(true)} />
+          <button type="button" className="pane-mobile-scrim" aria-label={`Close ${label} list`} onClick={() => setCollapsed(true)} />
           {children}
         </>
       )}
-    </section>
+    </PaneSection>
   );
 }
 
@@ -205,7 +246,15 @@ function PaneListSortMenu({ title, options, value, onSelect }) {
 }
 
 export function PaneListScroll({ children, className = '' }) {
-  return <div className={`sess-list__scroll ${className}`.trim()}>{children}</div>;
+  const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
+  return (
+    <div
+      className={`sess-list__scroll ${className}`.trim()}
+      onClick={collapseIfNarrow ?? undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 export function PaneListGroup({ title, count, children, className = '' }) {

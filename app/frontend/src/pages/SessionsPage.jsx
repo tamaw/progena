@@ -12,6 +12,7 @@ import {
   PaneListToolbar,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 
@@ -357,7 +358,7 @@ export default function SessionsPage() {
 
   return (
     <PageShell>
-      <section className={paneClassName} aria-label="Sessions">
+      <PaneSection className={paneClassName} aria-label="Sessions" onItemSelect={() => setCollapsed(true)}>
         {collapsed ? (
           <PaneExpandRail label="Sessions" onExpand={() => setCollapsed(false)} />
         ) : (
@@ -418,7 +419,7 @@ export default function SessionsPage() {
         </PaneListFooter>
         </>
         )}
-      </section>
+      </PaneSection>
 
       <DetailPane flush className="sess-detail">
         <DetailHeader
