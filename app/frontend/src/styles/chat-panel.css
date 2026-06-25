@@ -1398,7 +1398,7 @@
     opacity: 0;
     pointer-events: none;
     transition: opacity 120ms ease, transform 120ms ease;
-    z-index: 60;
+    z-index: var(--z-tooltip, 1100);
 }
 
 .chat-icon-button[data-tooltip]::before {

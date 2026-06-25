@@ -121,6 +121,43 @@ export const fetchMcp = createAsyncThunk(
   },
 );
 
+export const fetchKanbanBoard = createAsyncThunk(
+  'uiData/fetchKanbanBoard',
+  async ({ kanbanUrl }) => {
+    const response = await fetch(kanbanUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load tasks (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
+export const fetchTaskContent = createAsyncThunk(
+  'uiData/fetchTaskContent',
+  async ({ taskContentUrl, cardId }) => {
+    const response = await fetch(`${taskContentUrl}/${encodeURIComponent(cardId)}/content`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to load task brief (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
+export const fetchTaskActivity = createAsyncThunk(
+  'uiData/fetchTaskActivity',
+  async ({ taskActivityUrl, cardId }) => {
+    const response = await fetch(`${taskActivityUrl}/${encodeURIComponent(cardId)}/activity`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to load task activity (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
 export const requestAgentDetail = createAsyncThunk(
   'uiData/requestAgentDetail',
   async ({ agentsUrl, agentId, requestId }) => {
@@ -216,6 +253,14 @@ const initialState = {
     loaded: false,
     loading: false,
     error: null,
+  },
+  tasks: {
+    board: null,
+    loaded: false,
+    loading: false,
+    error: null,
+    contentById: {},
+    activityById: {},
   },
 };
 
@@ -374,6 +419,26 @@ const uiDataSlice = createSlice({
     scheduleSnapshotReceived(state, action) {
       state.schedule = Array.isArray(action.payload) ? action.payload : [];
     },
+    kanbanSnapshotReceived(state, action) {
+      state.tasks.board = action.payload || null;
+      state.tasks.loaded = true;
+      state.tasks.loading = false;
+      state.tasks.error = null;
+    },
+    taskContentReceived(state, action) {
+      const cardId = typeof action.payload?.card_id === 'string' ? action.payload.card_id : null;
+      if (!cardId) {
+        return;
+      }
+      state.tasks.contentById[cardId] = action.payload;
+    },
+    taskActivityReceived(state, action) {
+      const cardId = typeof action.payload?.card_id === 'string' ? action.payload.card_id : null;
+      if (!cardId) {
+        return;
+      }
+      state.tasks.activityById[cardId] = action.payload;
+    },
     applyUiEvent(state, action) {
       const event = action.payload;
       const payload = event?.payload || {};
@@ -413,6 +478,27 @@ const uiDataSlice = createSlice({
         state.mcp.loaded = true;
         state.mcp.loading = false;
         state.mcp.error = null;
+        return;
+      }
+      if (event?.type === 'kanban.snapshot') {
+        state.tasks.board = payload || null;
+        state.tasks.loaded = true;
+        state.tasks.loading = false;
+        state.tasks.error = null;
+        return;
+      }
+      if (event?.type === 'task.content.updated') {
+        const cardId = typeof payload.card_id === 'string' ? payload.card_id : null;
+        if (cardId) {
+          state.tasks.contentById[cardId] = payload;
+        }
+        return;
+      }
+      if (event?.type === 'task.activity.updated') {
+        const cardId = typeof payload.card_id === 'string' ? payload.card_id : null;
+        if (cardId) {
+          state.tasks.activityById[cardId] = payload;
+        }
         return;
       }
       if (event?.type === 'chat.sessions.snapshot') {
@@ -572,6 +658,32 @@ const uiDataSlice = createSlice({
       .addCase(fetchMcp.rejected, (state, action) => {
         state.mcp.loading = false;
         state.mcp.error = action.error?.message || 'Failed to load MCP servers';
+      })
+      .addCase(fetchKanbanBoard.pending, (state) => {
+        state.tasks.loading = true;
+        state.tasks.error = null;
+      })
+      .addCase(fetchKanbanBoard.fulfilled, (state, action) => {
+        state.tasks.board = action.payload || null;
+        state.tasks.loading = false;
+        state.tasks.loaded = true;
+        state.tasks.error = null;
+      })
+      .addCase(fetchKanbanBoard.rejected, (state, action) => {
+        state.tasks.loading = false;
+        state.tasks.error = action.error?.message || 'Failed to load tasks';
+      })
+      .addCase(fetchTaskContent.fulfilled, (state, action) => {
+        const cardId = typeof action.payload?.card_id === 'string' ? action.payload.card_id : null;
+        if (cardId) {
+          state.tasks.contentById[cardId] = action.payload;
+        }
+      })
+      .addCase(fetchTaskActivity.fulfilled, (state, action) => {
+        const cardId = typeof action.payload?.card_id === 'string' ? action.payload.card_id : null;
+        if (cardId) {
+          state.tasks.activityById[cardId] = action.payload;
+        }
       });
   },
 });
@@ -582,12 +694,15 @@ export const {
   clearChatErrored,
   clearChatGenerating,
   clearChatUnread,
+  kanbanSnapshotReceived,
   markChatErrored,
   markChatGenerating,
   markChatUnread,
   scheduleSnapshotReceived,
   setErroredChatIds,
   setGeneratingChatIds,
+  taskActivityReceived,
+  taskContentReceived,
   setUnreadChatIds,
 } = uiDataSlice.actions;
 
@@ -597,6 +712,14 @@ export const selectUiWidgets = (state) => state.uiData.widgets;
 export const selectMcpServers = (state) => state.uiData.mcp.servers;
 export const selectMcpState = (state) => state.uiData.mcp;
 export const selectSchedules = (state) => state.uiData.schedule;
+export const selectKanbanBoard = (state) => state.uiData.tasks.board;
+export const selectTasksState = (state) => state.uiData.tasks;
+export const selectTaskContentEntry = (state, cardId) => (
+  cardId ? state.uiData.tasks.contentById[cardId] || null : null
+);
+export const selectTaskActivityEntry = (state, cardId) => (
+  cardId ? state.uiData.tasks.activityById[cardId] || null : null
+);
 export const selectChatSessions = createSelector(
   [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
   (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),

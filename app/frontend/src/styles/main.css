@@ -44,6 +44,9 @@
     --header-height: 56px;
     --sidebar-width: 280px;
     --input-max-height: 200px;
+    /* Tooltips float above page chrome/panels (which reach ~1000) and modals
+       (~1001), so a hovered hint is never clipped. */
+    --z-tooltip: 1100;
     /* Shared height of a left list pane's header strip (filter-tabs row +
        search/sort row). The detail header pins its bottom border to this so the
        two panes share one continuous divider. Keep in sync if either row's
@@ -172,6 +175,50 @@ button:not(:disabled) {
 :where(button, a, input, select, textarea):focus-visible {
     outline: none;
     box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+/* ---- Field shells -------------------------------------------------------
+   A "field shell" wraps a borderless <input>/<textarea> (plus optional
+   adornments like an avatar or a trailing action button) and owns the focus
+   treatment itself — a 1px border plus a soft :focus-within ring, exactly like
+   the top-chrome search bar. Reuse it anywhere by adding class="field-shell".
+
+   Crucially, the inner control must NOT render its own :focus-visible ring or it
+   doubles up with the shell's ring (the "inner highlight" look). The reset rule
+   below folds in the app's existing shells so this stays consistent everywhere. */
+.field-shell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    transition: border-color var(--transition-fast),
+        box-shadow var(--transition-fast), background-color var(--transition-fast);
+}
+
+.field-shell:focus-within {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.field-shell :where(input, textarea) {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    outline: 0;
+}
+
+:where(
+    .field-shell,
+    .task-comment-input,
+    .app-shell__search,
+    .chrome-search-panel__input
+) :where(input, textarea):focus-visible {
+    box-shadow: none;
 }
 
 select {

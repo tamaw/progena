@@ -178,6 +178,32 @@ export function useApi() {
     });
   }, [fetchWithRetry]);
 
+  const getTaskContent = useCallback(async (cardId) => {
+    const response = await fetchWithRetry(`/api/ui/tasks/${cardId}/content`);
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const updateTaskContent = useCallback(async (cardId, content) => {
+    const response = await fetchWithRetry(`/api/ui/tasks/${cardId}/content`, {
+      method: 'PUT',
+      body: JSON.stringify({ content }),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const getTaskActivity = useCallback(async (cardId) => {
+    const response = await fetchWithRetry(`/api/ui/tasks/${cardId}/activity`);
+    return response.json();
+  }, [fetchWithRetry]);
+
+  const createTaskActivity = useCallback(async (cardId, payload) => {
+    const response = await fetchWithRetry(`/api/ui/tasks/${cardId}/activity`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    return response.json();
+  }, [fetchWithRetry]);
+
   const getPrompts = useCallback(async (agent = null) => {
     const search = agent ? `?${new URLSearchParams({ agent }).toString()}` : '';
     const response = await fetchWithRetry(search ? `/api/ui/prompts${search}` : 'prompts');
@@ -471,6 +497,10 @@ export function useApi() {
     createKanbanCard,
     updateKanbanCard,
     deleteKanbanCard,
+    getTaskContent,
+    updateTaskContent,
+    getTaskActivity,
+    createTaskActivity,
     getPrompts,
     getPromptContent,
     updatePromptContent,
