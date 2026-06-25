@@ -994,6 +994,36 @@
   padding: 18px 28px 28px;
 }
 
+/* Task tab: the former right-rail meta content, now a responsive grid of
+   sections styled like the Agents/Schedules detail pages. Each section is a
+   bordered panel matching the .agents-prompt / card treatment on those pages. */
+.task-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px 22px;
+  align-items: start;
+}
+
+.task-overview .agents-section {
+  margin-bottom: 0;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+/* Add control lives top-right in the header (like the Agents page actions); its
+   inline input wraps to a full-width row below the heading, with the content
+   box beneath that. */
+.task-overview .agents-section__head {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+
+.task-overview .agents-section__head .task-comment-input {
+  flex: 1 1 100%;
+}
+
 .task-detail__empty {
   display: grid;
   flex: 1;

@@ -195,24 +195,6 @@ function CheckIcon() {
   );
 }
 
-// Chevrons for the right-edge meta dock (point toward the action: left = expand
-// the panel leftward, right = collapse it away). Mirrors the workspace JSON dock.
-function ChevronLeftSmall() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="m9.8 4.2-3.6 3.8 3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-function ChevronRightSmall() {
-  return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
 // "Jump to the blocking task" — a small launch arrow leaping out of its corner.
 function DependencyOpenIcon() {
   return (
@@ -591,13 +573,10 @@ export default function TasksPage({ context = null }) {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef(null);
-  const [activityNote, setActivityNote] = useState('');
-  const [activitySaving, setActivitySaving] = useState(false);
   const [taskActivity, setTaskActivity] = useState([]);
   const [taskActivityLoading, setTaskActivityLoading] = useState(false);
   const [statusSaving, setStatusSaving] = useState(false);
   const [metadataSaving, setMetadataSaving] = useState(false);
-  const [metaCollapsed, setMetaCollapsed] = useState(false);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
 
   const loadBoard = useCallback(async () => {
@@ -797,26 +776,6 @@ export default function TasksPage({ context = null }) {
     }
   }, [selectedCard?.id, selectedCard?.status, show, updateKanbanCard]);
 
-  const handleAddActivityNote = useCallback(async () => {
-    if (!activityNote.trim() || !selectedCard?.id) {
-      return;
-    }
-    setActivitySaving(true);
-    try {
-      const created = await createTaskActivity(selectedCard.id, {
-        message: activityNote.trim(),
-        actor: 'user',
-        kind: 'note',
-      });
-      setTaskActivity((current) => [...current, created]);
-      setActivityNote('');
-    } catch (saveError) {
-      show('error', 'Note failed', saveError.message || 'Failed to add activity note');
-    } finally {
-      setActivitySaving(false);
-    }
-  }, [activityNote, createTaskActivity, selectedCard?.id, show]);
-
   const handleMetadataUpdate = useCallback(async (nextMetadata, activityMessage = '') => {
     if (!selectedCard?.id) {
       return;
@@ -1007,7 +966,7 @@ export default function TasksPage({ context = null }) {
   }, [handleMetadataUpdate, selectedAttachments, selectedCard]);
 
   return (
-    <PageShell className={`pane-page--rail tasks-page ${context ? 'tasks-page--project' : ''} ${metaCollapsed ? 'tasks-meta-collapsed' : ''}`}>
+    <PageShell className={`tasks-page ${context ? 'tasks-page--project' : ''}`}>
       <section className={paneClassName} aria-label="Tasks">
         {collapsed ? (
           <PaneExpandRail label={context?.listTitle || 'Tasks'} onExpand={() => setCollapsed(false)} />
@@ -1141,7 +1100,7 @@ export default function TasksPage({ context = null }) {
                 // leading meta aligned across tasks.
                 <span key="id" className="taskid">#{selectedCard.id}</span>,
               ]}
-              tabs={['Task', 'Activity', 'References']}
+              tabs={['Task', 'Description', 'Activity', 'References']}
               activeTab={detailTab}
               onTabChange={setDetailTab}
               tabLabel="Task detail tabs"
@@ -1149,6 +1108,191 @@ export default function TasksPage({ context = null }) {
 
             <div className="task-detail__body">
               {detailTab === 'Task' ? (
+                <div className="task-overview">
+                  <section className="agents-section">
+                    <header className="agents-section__head">
+                      <h2>Checklist <span>{checklistProgress.done}/{checklistProgress.total} done</span></h2>
+                      <InlineAdd
+                        pill
+                        openLabel="Add item"
+                        placeholder="Add an item..."
+                        disabled={metadataSaving}
+                        onSubmit={handleAddChecklistItem}
+                      />
+                    </header>
+                    {checklistItems.length ? (
+                      <div className="task-progress">
+                        <span style={{ width: `${checklistProgress.total ? Math.round((checklistProgress.done / checklistProgress.total) * 100) : 0}%` }} />
+                      </div>
+                    ) : null}
+                    {checklistItems.map((item) => (
+                      <div key={item.id} className="task-assignee-row" style={{ marginTop: 8 }}>
+                        <label className="task-ck" style={{ flex: 1 }}>
+                          <input
+                            type="checkbox"
+                            checked={item.done}
+                            onChange={() => handleToggleChecklistItem(item.id)}
+                            disabled={metadataSaving}
+                          />
+                          <span>{item.title}</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="task-lbl task-lbl--add"
+                          aria-label={`Remove item ${item.title}`}
+                          onClick={() => handleRemoveChecklistItem(item.id)}
+                          disabled={metadataSaving}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    {!checklistItems.length ? (
+                      <div className="task-meta-sub" style={{ marginTop: 8 }}>No checklist items yet.</div>
+                    ) : null}
+                  </section>
+
+                  <section className="agents-section">
+                    <header className="agents-section__head">
+                      <h2>Dependencies <span>{blockedLabel}</span></h2>
+                      <InlineAdd
+                        pill
+                        openLabel="Add dependency"
+                        placeholder="Add dependency reference..."
+                        disabled={metadataSaving}
+                        onSubmit={handleAddDependency}
+                      />
+                    </header>
+                    {selectedDependencies.length ? selectedDependencies.map((dependency) => (
+                      <div key={dependency.id} className="task-dep-card" style={{ marginTop: 8 }}>
+                        <div className="task-dep-card__main">
+                          <div className="task-dep-card__title">{dependency.title}</div>
+                          {dependency.ref ? <div className="task-dep-card__id">#{dependency.ref}</div> : null}
+                        </div>
+                        <button
+                          type="button"
+                          className="task-dep-card__open"
+                          data-tooltip="Open blocking task"
+                          aria-label={`Open blocking task ${dependency.title}`}
+                          onClick={() => handleOpenDependency(dependency)}
+                        >
+                          <DependencyOpenIcon />
+                        </button>
+                        <button
+                          type="button"
+                          className="task-dep-card__remove"
+                          aria-label={`Remove dependency ${dependency.title}`}
+                          onClick={() => handleRemoveDependency(dependency.id)}
+                          disabled={metadataSaving}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )) : <div className="task-meta-sub" style={{ marginTop: 8 }}>Not blocked by any tasks.</div>}
+                  </section>
+
+                  <section className="agents-section">
+                    <header className="agents-section__head">
+                      <h2>Tags</h2>
+                      <InlineAdd
+                        pill
+                        openLabel="Add tag"
+                        placeholder="Add a tag..."
+                        disabled={saving}
+                        onSubmit={handleAddTag}
+                      />
+                    </header>
+                    <div className="task-labels">
+                      {selectedTags.length ? selectedTags.map((tag, index) => (
+                        <span key={tag} className={`task-lbl task-lbl--${['green', 'red', 'orange', 'blue'][index % 4]}`}>
+                          {tag}
+                          <button
+                            type="button"
+                            className="task-tag-remove"
+                            aria-label={`Remove tag ${tag}`}
+                            onClick={() => handleRemoveTag(tag)}
+                            disabled={saving}
+                          >
+                            ×
+                          </button>
+                        </span>
+                      )) : <span className="task-meta-sub">No tags</span>}
+                    </div>
+                  </section>
+
+                  <section className="agents-section">
+                    <header className="agents-section__head">
+                      <h2>Assignees</h2>
+                      <InlineAdd
+                        pill
+                        openLabel="Add collaborator"
+                        placeholder="Add collaborator handle..."
+                        disabled={metadataSaving}
+                        onSubmit={handleAddCollaborator}
+                      />
+                    </header>
+                    <div className="task-assignee-row">
+                      <span className="task-av" style={{ background: selectedAssignee?.color }}>{selectedAssignee?.initial}</span>
+                      <div className="task-ar-body">
+                        <div className="task-ar-name">{selectedAssignee?.name} <span className="muted small">(Primary)</span></div>
+                        <div className="task-ar-handle">@{String(selectedCard.agent_name || selectedCard.owner || 'user').toLowerCase()}</div>
+                      </div>
+                      <span className="task-online" />
+                    </div>
+                    {selectedCollaborators.length ? selectedCollaborators.map((collaborator, index) => {
+                      const color = agentColors[(index + 1) % agentColors.length];
+                      const initial = collaborator.charAt(0).toUpperCase() || 'C';
+                      return (
+                        <div key={collaborator} className="task-assignee-row" style={{ marginTop: 8 }}>
+                          <span className="task-av" style={{ background: color }}>{initial}</span>
+                          <div className="task-ar-body">
+                            <div className="task-ar-name">{formatAgentName(collaborator)}</div>
+                            <div className="task-ar-handle">@{collaborator.toLowerCase()}</div>
+                          </div>
+                          <button
+                            type="button"
+                            className="task-lbl task-lbl--add"
+                            onClick={() => handleRemoveCollaborator(collaborator)}
+                            disabled={metadataSaving}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      );
+                    }) : null}
+                  </section>
+
+                  <section className="agents-section">
+                    <header className="agents-section__head">
+                      <h2>Attachments</h2>
+                      <InlineAddAttachment disabled={metadataSaving} onSubmit={handleAddAttachment} />
+                    </header>
+                    {selectedAttachments.length ? selectedAttachments.map((attachment) => (
+                      <div key={attachment.id} className="task-attach">
+                        <span className="task-attach-ic" />
+                        <a className="task-attach-name" href={attachment.url} target="_blank" rel="noreferrer">{attachment.label}</a>
+                        <span className="task-attach-ext">{attachment.kind}</span>
+                        <button
+                          type="button"
+                          className="task-lbl task-lbl--add"
+                          onClick={() => handleRemoveAttachment(attachment.id)}
+                          disabled={metadataSaving}
+                        >
+                          ×
+                        </button>
+                      </div>
+                    )) : selectedBadges.length ? selectedBadges.map((badge) => (
+                      <div key={badge.key} className="task-attach">
+                        <span className="task-attach-ic" />
+                        <span className="task-attach-name">{badge.label}</span>
+                        <span className="task-attach-ext">{badge.key}</span>
+                      </div>
+                    )) : <div className="task-meta-sub">No attachments linked.</div>}
+                  </section>
+                </div>
+              ) : null}
+
+              {detailTab === 'Description' ? (
                 <p className="task-description">
                   {selectedCard.description || selectedCard.summary || 'No detailed task body has been added yet.'}
                 </p>
@@ -1156,23 +1300,6 @@ export default function TasksPage({ context = null }) {
 
               {detailTab === 'Activity' ? (
                 <DetailSection title="Activity">
-                  <div className="task-comment-input">
-                    <span className="task-comment-avatar" />
-                    <input
-                      type="text"
-                      value={activityNote}
-                      onChange={(event) => setActivityNote(event.target.value)}
-                      placeholder="Add a worklog note to the task..."
-                    />
-                    <button
-                      type="button"
-                      className="node-action-btn primary"
-                      onClick={handleAddActivityNote}
-                      disabled={!activityNote.trim() || activitySaving}
-                    >
-                      {activitySaving ? 'Adding...' : 'Add note'}
-                    </button>
-                  </div>
                   <div className="task-activity">
                     <div className="task-act">
                       <span className="task-act-avatar" style={{ background: '#22a06b' }}>S</span>
@@ -1210,219 +1337,6 @@ export default function TasksPage({ context = null }) {
         )}
       </DetailPane>
 
-      {metaCollapsed ? (
-        <aside className="task-meta-dock" aria-label="Task details">
-          <button
-            type="button"
-            className="task-meta-dock__item"
-            title="Show details"
-            aria-label="Show task details"
-            onClick={() => setMetaCollapsed(false)}
-          >
-            <ChevronLeftSmall />
-            <span className="task-meta-dock__label">Details</span>
-          </button>
-        </aside>
-      ) : (
-      <aside className="task-meta">
-        <button
-          type="button"
-          className="task-meta__collapse"
-          title="Collapse details"
-          aria-label="Collapse details"
-          onClick={() => setMetaCollapsed(true)}
-        >
-          <ChevronRightSmall />
-        </button>
-        {selectedCard ? (
-          <>
-            <section className="task-meta-sec">
-              <div className="task-meta-sec__row">
-                <h4 className="task-meta-sec__h">Checklist</h4>
-                <span className="muted small">{checklistProgress.done}/{checklistProgress.total} done</span>
-              </div>
-              {checklistItems.length ? (
-                <div className="task-progress" style={{ marginTop: 10 }}>
-                  <span style={{ width: `${checklistProgress.total ? Math.round((checklistProgress.done / checklistProgress.total) * 100) : 0}%` }} />
-                </div>
-              ) : null}
-              {checklistItems.map((item) => (
-                <div key={item.id} className="task-assignee-row" style={{ marginTop: 8 }}>
-                  <label className="task-ck" style={{ flex: 1 }}>
-                    <input
-                      type="checkbox"
-                      checked={item.done}
-                      onChange={() => handleToggleChecklistItem(item.id)}
-                      disabled={metadataSaving}
-                    />
-                    <span>{item.title}</span>
-                  </label>
-                  <button
-                    type="button"
-                    className="task-lbl task-lbl--add"
-                    aria-label={`Remove item ${item.title}`}
-                    onClick={() => handleRemoveChecklistItem(item.id)}
-                    disabled={metadataSaving}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-              {!checklistItems.length ? (
-                <div className="task-meta-sub" style={{ marginTop: 8 }}>No checklist items yet.</div>
-              ) : null}
-              <div style={{ marginTop: 8 }}>
-                <InlineAdd
-                  pill
-                  openLabel="Add item"
-                  placeholder="Add an item..."
-                  disabled={metadataSaving}
-                  onSubmit={handleAddChecklistItem}
-                />
-              </div>
-            </section>
-
-            <section className="task-meta-sec">
-              <h4 className="task-meta-sec__h">Tags</h4>
-              <div className="task-meta-sub">Free-form labels for search. Editable by you or the agent.</div>
-              <div className="task-labels" style={{ marginTop: 8 }}>
-                {selectedTags.length ? selectedTags.map((tag, index) => (
-                  <span key={tag} className={`task-lbl task-lbl--${['green', 'red', 'orange', 'blue'][index % 4]}`}>
-                    {tag}
-                    <button
-                      type="button"
-                      className="task-tag-remove"
-                      aria-label={`Remove tag ${tag}`}
-                      onClick={() => handleRemoveTag(tag)}
-                      disabled={saving}
-                    >
-                      ×
-                    </button>
-                  </span>
-                )) : <span className="task-meta-sub">No tags</span>}
-                <InlineAdd
-                  pill
-                  openLabel="Add tag"
-                  placeholder="Add a tag..."
-                  disabled={saving}
-                  onSubmit={handleAddTag}
-                />
-              </div>
-            </section>
-
-            <section className="task-meta-sec">
-              <div className="task-meta-sec__row">
-                <h4 className="task-meta-sec__h">Dependencies</h4>
-                <span className="muted small">{blockedLabel}</span>
-              </div>
-              {selectedDependencies.length ? selectedDependencies.map((dependency) => (
-                <div key={dependency.id} className="task-dep-card" style={{ marginTop: 8 }}>
-                  <div className="task-dep-card__main">
-                    <div className="task-dep-card__title">{dependency.title}</div>
-                    {dependency.ref ? <div className="task-dep-card__id">#{dependency.ref}</div> : null}
-                  </div>
-                  <button
-                    type="button"
-                    className="task-dep-card__open"
-                    data-tooltip="Open blocking task"
-                    aria-label={`Open blocking task ${dependency.title}`}
-                    onClick={() => handleOpenDependency(dependency)}
-                  >
-                    <DependencyOpenIcon />
-                  </button>
-                  <button
-                    type="button"
-                    className="task-dep-card__remove"
-                    aria-label={`Remove dependency ${dependency.title}`}
-                    onClick={() => handleRemoveDependency(dependency.id)}
-                    disabled={metadataSaving}
-                  >
-                    ×
-                  </button>
-                </div>
-              )) : <div className="task-meta-sub" style={{ marginTop: 8 }}>Not blocked by any tasks.</div>}
-              <div style={{ marginTop: 8 }}>
-                <InlineAdd
-                  pill
-                  openLabel="Add dependency"
-                  placeholder="Add dependency reference..."
-                  disabled={metadataSaving}
-                  onSubmit={handleAddDependency}
-                />
-              </div>
-            </section>
-
-            <section className="task-meta-sec">
-              <h4 className="task-meta-sec__h">Assignees</h4>
-              <div className="task-assignee-row">
-                <span className="task-av" style={{ background: selectedAssignee?.color }}>{selectedAssignee?.initial}</span>
-                <div className="task-ar-body">
-                  <div className="task-ar-name">{selectedAssignee?.name} <span className="muted small">(Primary)</span></div>
-                  <div className="task-ar-handle">@{String(selectedCard.agent_name || selectedCard.owner || 'user').toLowerCase()}</div>
-                </div>
-                <span className="task-online" />
-              </div>
-              {selectedCollaborators.length ? selectedCollaborators.map((collaborator, index) => {
-                const color = agentColors[(index + 1) % agentColors.length];
-                const initial = collaborator.charAt(0).toUpperCase() || 'C';
-                return (
-                  <div key={collaborator} className="task-assignee-row" style={{ marginTop: 8 }}>
-                    <span className="task-av" style={{ background: color }}>{initial}</span>
-                    <div className="task-ar-body">
-                      <div className="task-ar-name">{formatAgentName(collaborator)}</div>
-                      <div className="task-ar-handle">@{collaborator.toLowerCase()}</div>
-                    </div>
-                    <button
-                      type="button"
-                      className="task-lbl task-lbl--add"
-                      onClick={() => handleRemoveCollaborator(collaborator)}
-                      disabled={metadataSaving}
-                    >
-                      ×
-                    </button>
-                  </div>
-                );
-              }) : null}
-              <div style={{ marginTop: 8 }}>
-                <InlineAdd
-                  pill
-                  openLabel="Add collaborator"
-                  placeholder="Add collaborator handle..."
-                  disabled={metadataSaving}
-                  onSubmit={handleAddCollaborator}
-                />
-              </div>
-            </section>
-
-            <section className="task-meta-sec">
-              <h4 className="task-meta-sec__h">Attachments</h4>
-              {selectedAttachments.length ? selectedAttachments.map((attachment) => (
-                <div key={attachment.id} className="task-attach">
-                  <span className="task-attach-ic" />
-                  <a className="task-attach-name" href={attachment.url} target="_blank" rel="noreferrer">{attachment.label}</a>
-                  <span className="task-attach-ext">{attachment.kind}</span>
-                  <button
-                    type="button"
-                    className="task-lbl task-lbl--add"
-                    onClick={() => handleRemoveAttachment(attachment.id)}
-                    disabled={metadataSaving}
-                  >
-                    ×
-                  </button>
-                </div>
-              )) : selectedBadges.length ? selectedBadges.map((badge) => (
-                <div key={badge.key} className="task-attach">
-                  <span className="task-attach-ic" />
-                  <span className="task-attach-name">{badge.label}</span>
-                  <span className="task-attach-ext">{badge.key}</span>
-                </div>
-              )) : <div className="task-meta-sub">No attachments linked.</div>}
-              <InlineAddAttachment disabled={metadataSaving} onSubmit={handleAddAttachment} />
-            </section>
-          </>
-        ) : null}
-      </aside>
-      )}
     </PageShell>
   );
 }
