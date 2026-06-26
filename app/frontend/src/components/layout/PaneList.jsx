@@ -127,6 +127,10 @@ export function PaneList({ label, className = '', children }) {
 // objects when the stored filter value differs from its display text. The
 // optional `renderFilter(item)` lets a page decorate a tab (e.g. an unread dot).
 export function PaneListFilters({ filters, activeFilter, onFilterChange, renderFilter, actionLabel, onAction, actionDisabled = false }) {
+  // Mirror PaneListScroll: on narrow viewports the action (e.g. "+ New") also
+  // collapses the pane so the new item's content is immediately visible.
+  const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
+  const handleAction = () => { onAction?.(); collapseIfNarrow?.(); };
   return (
     <div className="chat-pane-tabs sess-list__filters">
       {filters.map((item) => {
@@ -144,7 +148,7 @@ export function PaneListFilters({ filters, activeFilter, onFilterChange, renderF
         );
       })}
       {actionLabel ? (
-        <button type="button" className="chat-pane-action new-task sess-list__filters-action" onClick={onAction} disabled={actionDisabled}>
+        <button type="button" className="chat-pane-action new-task sess-list__filters-action" onClick={handleAction} disabled={actionDisabled}>
           {actionLabel}
         </button>
       ) : null}
@@ -153,11 +157,14 @@ export function PaneListFilters({ filters, activeFilter, onFilterChange, renderF
 }
 
 export function PaneListToolbar({ children, actionLabel, onAction }) {
+  // See PaneListFilters: collapse the pane on narrow viewports when the action fires.
+  const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
+  const handleAction = () => { onAction?.(); collapseIfNarrow?.(); };
   return (
     <div className="sess-list__tools">
       {children}
       {actionLabel ? (
-        <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={onAction}>
+        <button type="button" className="chat-pane-action new-task sess-list__tools-action" onClick={handleAction}>
           {actionLabel}
         </button>
       ) : null}
