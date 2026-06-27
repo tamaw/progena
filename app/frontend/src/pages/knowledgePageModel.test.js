@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  colorForId,
   filterBases,
   formatBytes,
   formatCount,
   formatRelativeTime,
+  fromApiBase,
   groupBases,
   matchesFilter,
   matchesQuery,
@@ -119,6 +121,52 @@ describe('formatCount', () => {
   it('groups thousands', () => {
     expect(formatCount(1500)).toBe('1,500');
     expect(formatCount('x')).toBe('0');
+  });
+});
+
+describe('colorForId', () => {
+  it('is stable and returns a hex colour', () => {
+    expect(colorForId('abc')).toBe(colorForId('abc'));
+    expect(colorForId('abc')).toMatch(/^#[0-9a-f]{6}$/i);
+  });
+});
+
+describe('fromApiBase', () => {
+  it('maps a backend row into the page shape', () => {
+    const ui = fromApiBase({
+      id: 'kb-1',
+      name: 'Ops notes',
+      description: 'runbooks',
+      owner: 'observer',
+      scope: 'Shared',
+      status: 'connected',
+      embedding_model: 'progenitor-hash-256',
+      dimensions: 256,
+      metric: 'cosine',
+      documents: 5,
+      collections: ['facts', 'people'],
+      updated_at: '2026-06-27T06:00:00Z',
+    });
+    expect(ui.id).toBe('kb-1');
+    expect(ui.name).toBe('Ops notes');
+    expect(ui.documents).toBe(5);
+    expect(ui.chunks).toBe(5);
+    expect(ui.embeddingModel).toBe('progenitor-hash-256');
+    expect(ui.dimensions).toBe(256);
+    expect(ui.table).toBe('knowledge_documents');
+    expect(ui.tags).toEqual(['facts', 'people']);
+    expect(ui.collections.map((c) => c.name)).toEqual(['facts', 'people']);
+    expect(ui.pluggedInto).toEqual(['Progenitor']);
+    expect(ui.persisted).toBe(true);
+    expect(ui.lastSynced).toBe('2026-06-27T06:00:00Z');
+  });
+
+  it('falls back when optional fields are missing', () => {
+    const ui = fromApiBase({ id: 'x' });
+    expect(ui.name).toBe('x');
+    expect(ui.documents).toBe(0);
+    expect(ui.dimensions).toBe(256);
+    expect(ui.tags).toEqual([]);
   });
 });
 

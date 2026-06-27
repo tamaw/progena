@@ -115,6 +115,51 @@ export function formatCount(value) {
   return new Intl.NumberFormat().format(num);
 }
 
+const KB_COLORS = ['#2f7dff', '#9b7cff', '#20b486', '#ff7a30', '#ff5f57', '#58a6ff', '#3fb950'];
+
+// Stable colour pick so a base keeps the same accent across reloads.
+export function colorForId(id) {
+  const text = String(id || '');
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
+  }
+  return KB_COLORS[hash % KB_COLORS.length];
+}
+
+// Adapt a backend knowledge-base row (snake_case, pgvector-oriented) into the
+// shape the page renders. Every knowledge base is reachable by the runtime
+// `knowledge_search` tool, so each one reports as plugged into Progenitor.
+export function fromApiBase(apiBase) {
+  const collections = Array.isArray(apiBase.collections) ? apiBase.collections : [];
+  const documents = Number(apiBase.documents) || 0;
+  const lastSynced = apiBase.updated_at || apiBase.created_at || null;
+  return {
+    id: apiBase.id,
+    name: apiBase.name || apiBase.id,
+    status: apiBase.status || 'connected',
+    scope: apiBase.scope || 'Mine',
+    owner: apiBase.owner || 'user',
+    color: colorForId(apiBase.id),
+    description: apiBase.description || 'pgvector knowledge base.',
+    embeddingModel: apiBase.embedding_model || 'progenitor-hash-256',
+    dimensions: Number(apiBase.dimensions) || 256,
+    indexType: 'Flat',
+    metric: apiBase.metric || 'cosine',
+    host: '127.0.0.1:15433',
+    database: 'progenitor',
+    table: 'knowledge_documents',
+    documents,
+    chunks: documents,
+    sizeBytes: documents * 4096,
+    lastSynced,
+    tags: collections,
+    collections: collections.map((name) => ({ name, chunks: 0, updated: lastSynced })),
+    pluggedInto: ['Progenitor'],
+    persisted: true,
+  };
+}
+
 export function formatRelativeTime(value, now = Date.now()) {
   if (!value) {
     return '--';
