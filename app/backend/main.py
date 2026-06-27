@@ -43,6 +43,7 @@ from .conversation import (
 )
 from .document_store import configure_default_document_store
 from .ipc_client import IPCProgenitorClient, get_ipc_client, start_ipc_client_with_retry
+from .knowledge_routes import router as knowledge_router
 from .models import (
     ErrorDetail,
     ErrorResponse,
@@ -849,6 +850,7 @@ app = FastAPI(
 
 app.include_router(agent_router)
 app.include_router(ui_router)
+app.include_router(knowledge_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
 # The frontend proxies /api, /v1, /health requests to this backend.

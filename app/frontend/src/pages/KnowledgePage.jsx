@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useConfig } from '../context/ConfigContext';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -28,6 +29,7 @@ import {
   formatBytes,
   formatCount,
   formatRelativeTime,
+  fromApiBase,
   groupBases,
   statusMeta,
 } from './knowledgePageModel';
@@ -257,13 +259,40 @@ function CodeBlock({ children }) {
 }
 
 export default function KnowledgePage() {
+  const { getApiUrl } = useConfig();
   const [bases, setBases] = useState(KNOWLEDGE_BASES);
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
   const [selectedBaseId, setSelectedBaseId] = useState(KNOWLEDGE_BASES[0].id);
   const [detailTab, setDetailTab] = useState('Overview');
+  const [creating, setCreating] = useState(false);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('tasks-list');
+
+  const knowledgeUrl = getApiUrl('/api/ui/knowledge');
+
+  // Load the live pgvector-backed bases. The static KNOWLEDGE_BASES stay as a
+  // fallback so the page still demos if the backend has none yet.
+  const loadBases = useCallback(async (selectId = null) => {
+    try {
+      const response = await fetch(knowledgeUrl);
+      if (!response.ok) {
+        return;
+      }
+      const payload = await response.json();
+      const apiBases = Array.isArray(payload.bases) ? payload.bases.map(fromApiBase) : [];
+      if (apiBases.length) {
+        setBases(apiBases);
+        setSelectedBaseId((current) => selectId || current || apiBases[0].id);
+      }
+    } catch {
+      // Keep the fallback seed on network error.
+    }
+  }, [knowledgeUrl]);
+
+  useEffect(() => {
+    loadBases();
+  }, [loadBases]);
 
   const groups = useMemo(
     () => groupBases(bases, activeFilter, searchQuery, sortMode),
@@ -279,43 +308,54 @@ export default function KnowledgePage() {
 
   const connectedCount = bases.filter((base) => base.status === 'connected').length;
 
-  const addBase = () => {
-    const index = bases.filter((base) => base.id.startsWith('new-base')).length + 1;
-    const draft = {
-      id: `new-base-${index}`,
-      name: `New knowledge base ${index}`,
-      status: 'idle',
-      scope: 'Mine',
-      owner: 'You',
-      color: '#58a6ff',
-      description: 'Newly created pgvector store. Sync a corpus to start embedding documents.',
-      embeddingModel: 'text-embedding-3-large',
-      dimensions: 3072,
-      indexType: 'HNSW',
-      metric: 'cosine',
-      host: '127.0.0.1:15433',
-      database: 'progenitor',
-      table: `kb_new_base_${index}`,
-      documents: 0,
-      chunks: 0,
-      sizeBytes: 0,
-      lastSynced: new Date().toISOString(),
-      tags: [],
-      collections: [],
-      pluggedInto: [],
-    };
-    setBases((current) => [draft, ...current]);
-    setSelectedBaseId(draft.id);
-    setActiveFilter('All');
-    setSearchQuery('');
+  // Create a real pgvector store in Postgres, seeded with mock documents, then
+  // refresh the list and select it. The seeded data is immediately recallable
+  // by the Progenitor `knowledge_search` tool.
+  const addBase = async () => {
+    if (creating) {
+      return;
+    }
+    setCreating(true);
+    const index = bases.filter((base) => /knowledge base \d+$/i.test(base.name)).length + 1;
+    try {
+      const response = await fetch(knowledgeUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: `Knowledge base ${index}`,
+          description: 'pgvector store seeded with sample documents for retrieval.',
+          seed: true,
+        }),
+      });
+      if (response.ok) {
+        const payload = await response.json();
+        const created = payload.base ? fromApiBase(payload.base) : null;
+        setActiveFilter('All');
+        setSearchQuery('');
+        await loadBases(created?.id || null);
+      }
+    } catch {
+      // Surface nothing destructive; the list simply won't change on failure.
+    } finally {
+      setCreating(false);
+    }
   };
 
-  const deleteSelected = () => {
+  const deleteSelected = async () => {
     if (!selectedBase) {
       return;
     }
-    setBases((current) => current.filter((base) => base.id !== selectedBase.id));
+    const id = selectedBase.id;
+    if (selectedBase.persisted) {
+      try {
+        await fetch(`${knowledgeUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      } catch {
+        // ignore; fall through to optimistic local removal
+      }
+    }
+    setBases((current) => current.filter((base) => base.id !== id));
     setSelectedBaseId(null);
+    loadBases();
   };
 
   const setSelectedStatus = (status) => {
@@ -346,6 +386,7 @@ export default function KnowledgePage() {
               onFilterChange={setActiveFilter}
               actionLabel="+ New"
               onAction={addBase}
+              actionDisabled={creating}
             />
             <PaneListToolbar>
               <PaneListSearch value={searchQuery} placeholder="Search vector stores" onChange={setSearchQuery} />
