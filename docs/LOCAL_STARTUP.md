@@ -35,7 +35,11 @@ CHAT_SERVER_API_TITLE="Progenitor Chat API"
 
 ## Start Postgres locally
 
-If PostgreSQL is not installed on the host, `nix-shell` works:
+If PostgreSQL is not installed on the host, `nix-shell` works. The Knowledge
+tab stores embeddings with the [`pgvector`](https://github.com/pgvector/pgvector)
+extension, so use a Postgres build that bundles it (`postgresql_13.withPackages`)
+for **every** start — not just the first init. Starting the same data directory
+with a plain `postgresql` build leaves the `vector` type unloadable.
 
 ```bash
 PGROOT="$HOME/.copilot/session-state/local-progenitor-postgres"
@@ -52,10 +56,17 @@ printf 'progenitor\n' > "$PASSFILE"
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
 
-nix-shell -p postgresql --run "initdb -D '$DATA' --username=progenitor --pwfile='$PASSFILE' --auth-host=scram-sha-256 --auth-local=trust --locale=C --encoding=UTF8"
-nix-shell -p postgresql --run "pg_ctl -D '$DATA' -l '$LOG' -o \"-h 127.0.0.1 -p 15433 -k '$SOCK'\" start"
-nix-shell -p postgresql --run "createdb -h '$SOCK' -p 15433 -U progenitor progenitor" || true
+PG='postgresql_13.withPackages (ps: [ ps.pgvector ])'
+nix-shell -p "$PG" --run "initdb -D '$DATA' --username=progenitor --pwfile='$PASSFILE' --auth-host=scram-sha-256 --auth-local=trust --locale=C --encoding=UTF8"
+nix-shell -p "$PG" --run "pg_ctl -D '$DATA' -l '$LOG' -o \"-h 127.0.0.1 -p 15433 -k '$SOCK'\" start"
+nix-shell -p "$PG" --run "createdb -h '$SOCK' -p 15433 -U progenitor progenitor" || true
+# The knowledge store creates the extension automatically, but you can pre-create it:
+nix-shell -p "$PG" --run "psql 'postgresql://progenitor:progenitor@127.0.0.1:15433/progenitor' -c 'CREATE EXTENSION IF NOT EXISTS vector;'"
 ```
+
+To restart an existing data directory with pgvector available (e.g. after a
+reboot), reuse the same `pg_ctl ... start` line above — do not re-run `initdb`,
+which would wipe the data.
 
 If Postgres is already installed locally, the important part is just matching the app config:
 
