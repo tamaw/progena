@@ -9,9 +9,11 @@ processes.
 
 from __future__ import annotations
 
+import os
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psycopg
@@ -35,10 +37,17 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
         embedding_model text NOT NULL DEFAULT '{EMBED_MODEL_NAME}',
         dimensions      integer NOT NULL DEFAULT {EMBED_DIM},
         metric          text NOT NULL DEFAULT 'cosine',
+        index_type      text NOT NULL DEFAULT 'Flat',
+        tags            text[] NOT NULL DEFAULT '{{}}',
+        connection_string text NOT NULL DEFAULT '',
         created_at      timestamptz NOT NULL DEFAULT now(),
         updated_at      timestamptz NOT NULL DEFAULT now()
     )
     """,
+    # Backfill columns on bases created before these fields existed.
+    "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS tags text[] NOT NULL DEFAULT '{}'",
+    "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS connection_string text NOT NULL DEFAULT ''",
+    "ALTER TABLE knowledge_bases ADD COLUMN IF NOT EXISTS index_type text NOT NULL DEFAULT 'Flat'",
     f"""
     CREATE TABLE IF NOT EXISTS knowledge_documents (
         id          bigserial PRIMARY KEY,
@@ -52,57 +61,70 @@ SCHEMA_STATEMENTS: tuple[str, ...] = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS knowledge_documents_base_idx ON knowledge_documents (base_id)",
+    # Documents ingested from a folder source carry its id so re-indexing can
+    # replace just that source's documents.
+    "ALTER TABLE knowledge_documents ADD COLUMN IF NOT EXISTS source_id text",
+    """
+    CREATE TABLE IF NOT EXISTS knowledge_sources (
+        id              text PRIMARY KEY,
+        base_id         text NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
+        path            text NOT NULL,
+        status          text NOT NULL DEFAULT 'pending',
+        document_count  integer NOT NULL DEFAULT 0,
+        error           text NOT NULL DEFAULT '',
+        last_indexed_at timestamptz,
+        created_at      timestamptz NOT NULL DEFAULT now()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS knowledge_sources_base_idx ON knowledge_sources (base_id)",
 )
 
-# A small, distinctive mock corpus seeded into every new base so the agent has
-# something concrete to recall. "Project Lighthouse"/"Dana Reyes" are invented
-# facts the model cannot already know, which makes a successful recall proof that
-# the tool actually read from the store.
-SEED_DOCUMENTS: tuple[dict[str, str], ...] = (
+# Folder indexing limits and the text file types we read. Binary/asset files and
+# noisy build directories are skipped so indexing stays bounded and useful.
+_INDEX_EXTENSIONS = frozenset(
     {
-        "collection": "facts",
-        "title": "Project Lighthouse",
-        "content": (
-            "Project Lighthouse is the internal codename for Progenitor's Q3 2026 "
-            "vector-search rollout. It is owned by Dana Reyes and targets a "
-            "September 2026 launch."
-        ),
-    },
-    {
-        "collection": "facts",
-        "title": "Knowledge storage",
-        "content": (
-            "The Progenitor knowledge subsystem stores document embeddings in "
-            "Postgres using the pgvector extension and ranks results by cosine "
-            "similarity."
-        ),
-    },
-    {
-        "collection": "facts",
-        "title": "Attaching knowledge to agents",
-        "content": (
-            "A knowledge base can be attached to a Progenitor agent as the "
-            "knowledge_search retrieval tool so the agent can recall stored facts "
-            "during a conversation."
-        ),
-    },
-    {
-        "collection": "facts",
-        "title": "Embedding model",
-        "content": (
-            "The mock embedding model used for local development is "
-            "progenitor-hash-256, a deterministic 256-dimensional hashing embedder."
-        ),
-    },
-    {
-        "collection": "people",
-        "title": "Dana Reyes",
-        "content": (
-            "Dana Reyes leads the Knowledge Platform team and can be reached at "
-            "dana.reyes@progenitor.local."
-        ),
-    },
+        ".txt",
+        ".md",
+        ".markdown",
+        ".rst",
+        ".py",
+        ".js",
+        ".jsx",
+        ".ts",
+        ".tsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".html",
+        ".css",
+        ".csv",
+        ".log",
+        ".sql",
+        ".sh",
+    }
 )
+_SKIP_DIRS = frozenset(
+    {
+        ".git",
+        "node_modules",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".idea",
+        ".vscode",
+    }
+)
+_MAX_INDEX_FILES = 500
+_MAX_FILE_BYTES = 200_000
+_MAX_DOC_CHARS = 20_000
 
 _SEARCH_SQL = """
     SELECT
@@ -171,6 +193,8 @@ def add_documents(
     conn: psycopg.Connection,
     base_id: str,
     documents: list[dict[str, Any]],
+    *,
+    source_id: str | None = None,
 ) -> int:
     if not documents:
         return 0
@@ -188,10 +212,10 @@ def add_documents(
             cur.execute(
                 """
                 INSERT INTO knowledge_documents (base_id, collection, title, content,
-                                                 metadata, embedding)
-                VALUES (%s, %s, %s, %s, %s, %s::vector)
+                                                 metadata, embedding, source_id)
+                VALUES (%s, %s, %s, %s, %s, %s::vector, %s)
                 """,
-                (base_id, collection, title, content, Jsonb(metadata), embedding),
+                (base_id, collection, title, content, Jsonb(metadata), embedding, source_id),
             )
             inserted += 1
         cur.execute(
@@ -200,11 +224,6 @@ def add_documents(
         )
     conn.commit()
     return inserted
-
-
-def seed_base(conn: psycopg.Connection, base_id: str) -> int:
-    """Insert the distinctive mock corpus into a base."""
-    return add_documents(conn, base_id, [dict(doc) for doc in SEED_DOCUMENTS])
 
 
 def _base_stats_sql() -> str:
@@ -237,6 +256,245 @@ def get_base(conn: psycopg.Connection, base_id: str) -> dict[str, Any] | None:
         cur.execute(_base_stats_sql() + " WHERE b.id = %s", (base_id,))
         row = cur.fetchone()
     return dict(row) if row else None
+
+
+def set_tags(conn: psycopg.Connection, base_id: str, tags: list[str]) -> dict[str, Any] | None:
+    """Replace a base's tags with the given list (deduped, trimmed, order-kept)."""
+    ensure_schema(conn)
+    seen: set[str] = set()
+    clean: list[str] = []
+    for tag in tags:
+        label = str(tag or "").strip()
+        if label and label.lower() not in seen:
+            seen.add(label.lower())
+            clean.append(label)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE knowledge_bases SET tags = %s, updated_at = %s WHERE id = %s",
+            (clean, datetime.now(UTC), base_id),
+        )
+        updated = cur.rowcount
+    conn.commit()
+    if not updated:
+        return None
+    return get_base(conn, base_id)
+
+
+# --------------------------------------------------------------------------- #
+# Folder sources (indexable document origins)
+# --------------------------------------------------------------------------- #
+def get_source(conn: psycopg.Connection, source_id: str) -> dict[str, Any] | None:
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute("SELECT * FROM knowledge_sources WHERE id = %s", (source_id,))
+        row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def list_sources(conn: psycopg.Connection, base_id: str) -> list[dict[str, Any]]:
+    ensure_schema(conn)
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "SELECT * FROM knowledge_sources WHERE base_id = %s ORDER BY created_at",
+            (base_id,),
+        )
+        return [dict(row) for row in cur.fetchall()]
+
+
+def add_source(conn: psycopg.Connection, base_id: str, path: str) -> dict[str, Any]:
+    ensure_schema(conn)
+    source_id = f"src-{uuid.uuid4().hex[:10]}"
+    with conn.cursor(row_factory=dict_row) as cur:
+        cur.execute(
+            "INSERT INTO knowledge_sources (id, base_id, path) VALUES (%s, %s, %s) RETURNING *",
+            (source_id, base_id, str(path or "").strip()),
+        )
+        row = cur.fetchone()
+    conn.commit()
+    return dict(row) if row else {}
+
+
+def delete_source(conn: psycopg.Connection, source_id: str) -> bool:
+    ensure_schema(conn)
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM knowledge_documents WHERE source_id = %s", (source_id,))
+        cur.execute("DELETE FROM knowledge_sources WHERE id = %s", (source_id,))
+        deleted = cur.rowcount
+    conn.commit()
+    return bool(deleted)
+
+
+def _iter_index_files(root: Path) -> list[Path]:
+    """Walk ``root`` for indexable text files, skipping junk dirs and big files."""
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if d not in _SKIP_DIRS and not d.startswith("."))
+        for name in sorted(filenames):
+            file = Path(dirpath) / name
+            if file.suffix.lower() not in _INDEX_EXTENSIONS:
+                continue
+            try:
+                if file.stat().st_size > _MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            found.append(file)
+            if len(found) >= _MAX_INDEX_FILES:
+                return found
+    return found
+
+
+def _finish_source(
+    conn: psycopg.Connection,
+    source_id: str,
+    *,
+    status: str,
+    error: str,
+    count: int,
+) -> dict[str, Any] | None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE knowledge_sources
+               SET status = %s, error = %s, document_count = %s, last_indexed_at = %s
+             WHERE id = %s
+            """,
+            (status, error, count, datetime.now(UTC), source_id),
+        )
+    conn.commit()
+    return get_source(conn, source_id)
+
+
+def index_source(conn: psycopg.Connection, source_id: str) -> dict[str, Any] | None:
+    """(Re)index a folder source: read its text files and embed them as documents.
+
+    Documents from a prior index of the same source are removed first, so this is
+    idempotent. Each file becomes one document in a collection named after the
+    folder; ``source_id`` ties them back to this source.
+    """
+    ensure_schema(conn)
+    source = get_source(conn, source_id)
+    if source is None:
+        return None
+
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM knowledge_documents WHERE source_id = %s", (source_id,))
+    conn.commit()
+
+    root = Path(str(source["path"])).expanduser()
+    if not root.is_dir():
+        return _finish_source(
+            conn, source_id, status="error", error=f"Folder not found: {root}", count=0
+        )
+
+    collection = root.name or "folder"
+    documents: list[dict[str, Any]] = []
+    for file in _iter_index_files(root):
+        try:
+            text = file.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        if not text.strip():
+            continue
+        documents.append(
+            {
+                "collection": collection,
+                "title": str(file.relative_to(root)),
+                "content": text[:_MAX_DOC_CHARS],
+                "metadata": {"path": str(file)},
+            }
+        )
+
+    try:
+        count = add_documents(conn, str(source["base_id"]), documents, source_id=source_id)
+    except Exception as exc:  # pragma: no cover - filesystem/db edge cases
+        return _finish_source(conn, source_id, status="error", error=str(exc), count=0)
+    return _finish_source(conn, source_id, status="indexed", error="", count=count)
+
+
+def set_embedding(
+    conn: psycopg.Connection,
+    base_id: str,
+    *,
+    embedding_model: str,
+    dimensions: int,
+    metric: str,
+    index_type: str,
+) -> dict[str, Any] | None:
+    """Update a base's embedding configuration (model/dimensions/metric/index)."""
+    ensure_schema(conn)
+    model = str(embedding_model or "").strip() or EMBED_MODEL_NAME
+    dims = max(1, min(int(dimensions or EMBED_DIM), 4096))
+    metric_value = str(metric or "").strip() or "cosine"
+    index_value = str(index_type or "").strip() or "Flat"
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            UPDATE knowledge_bases
+               SET embedding_model = %s, dimensions = %s, metric = %s,
+                   index_type = %s, updated_at = %s
+             WHERE id = %s
+            """,
+            (model, dims, metric_value, index_value, datetime.now(UTC), base_id),
+        )
+        updated = cur.rowcount
+    conn.commit()
+    if not updated:
+        return None
+    return get_base(conn, base_id)
+
+
+def set_name(conn: psycopg.Connection, base_id: str, name: str) -> dict[str, Any] | None:
+    """Rename a base. No-ops to None if the trimmed name is empty."""
+    ensure_schema(conn)
+    value = str(name or "").strip()
+    if not value:
+        return None
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE knowledge_bases SET name = %s, updated_at = %s WHERE id = %s",
+            (value, datetime.now(UTC), base_id),
+        )
+        updated = cur.rowcount
+    conn.commit()
+    if not updated:
+        return None
+    return get_base(conn, base_id)
+
+
+def set_description(
+    conn: psycopg.Connection, base_id: str, description: str
+) -> dict[str, Any] | None:
+    """Update a base's description."""
+    ensure_schema(conn)
+    value = str(description or "").strip()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE knowledge_bases SET description = %s, updated_at = %s WHERE id = %s",
+            (value, datetime.now(UTC), base_id),
+        )
+        updated = cur.rowcount
+    conn.commit()
+    if not updated:
+        return None
+    return get_base(conn, base_id)
+
+
+def set_connection_string(
+    conn: psycopg.Connection, base_id: str, connection_string: str
+) -> dict[str, Any] | None:
+    """Record the connection string shown for this base (metadata, trimmed)."""
+    ensure_schema(conn)
+    value = str(connection_string or "").strip()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE knowledge_bases SET connection_string = %s, updated_at = %s WHERE id = %s",
+            (value, datetime.now(UTC), base_id),
+        )
+        updated = cur.rowcount
+    conn.commit()
+    if not updated:
+        return None
+    return get_base(conn, base_id)
 
 
 def delete_base(conn: psycopg.Connection, base_id: str) -> bool:
