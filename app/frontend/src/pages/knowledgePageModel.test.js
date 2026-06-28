@@ -88,23 +88,33 @@ describe('filterBases', () => {
 });
 
 describe('sortBases', () => {
-  it('sorts by recent, name and documents', () => {
-    expect(sortBases(bases, 'Recent').map((b) => b.id)).toEqual(['arch', 'runbooks', 'mcp']);
-    expect(sortBases(bases, 'Name').map((b) => b.id)).toEqual(['runbooks', 'mcp', 'arch']);
-    expect(sortBases(bases, 'Documents').map((b) => b.id)).toEqual(['arch', 'mcp', 'runbooks']);
+  it('sorts alphabetically by name', () => {
+    expect(sortBases(bases).map((b) => b.id)).toEqual(['runbooks', 'mcp', 'arch']);
   });
 });
 
 describe('groupBases', () => {
   it('buckets by status in order, omitting empty groups', () => {
-    const groups = groupBases(bases, 'All', '', 'Recent');
+    const groups = groupBases(bases, 'All', '', 'Status');
     expect(groups.map((g) => g.key)).toEqual(['connected', 'syncing', 'error']);
     expect(groups[0].bases.map((b) => b.id)).toEqual(['arch']);
   });
 
   it('honours the active filter', () => {
-    const groups = groupBases(bases, 'Error', '', 'Recent');
+    const groups = groupBases(bases, 'Error', '', 'Status');
     expect(groups.map((g) => g.key)).toEqual(['error']);
+  });
+
+  it('buckets by type, defaulting to pgvector', () => {
+    const typed = [{ ...bases[0], storeType: 'pgvector' }, { ...bases[1], storeType: 'qdrant' }];
+    const groups = groupBases(typed, 'All', '', 'Type');
+    expect(groups.map((g) => g.label)).toEqual(['pgvector', 'qdrant']);
+  });
+
+  it('collapses to a single sorted list by name', () => {
+    const groups = groupBases(bases, 'All', '', 'Name');
+    expect(groups.map((g) => g.key)).toEqual(['all']);
+    expect(groups[0].bases.map((b) => b.id)).toEqual(['runbooks', 'mcp', 'arch']);
   });
 });
 
@@ -145,6 +155,7 @@ describe('fromApiBase', () => {
       metric: 'cosine',
       documents: 5,
       collections: ['facts', 'people'],
+      tags: ['priority', 'ops'],
       updated_at: '2026-06-27T06:00:00Z',
     });
     expect(ui.id).toBe('kb-1');
@@ -154,7 +165,7 @@ describe('fromApiBase', () => {
     expect(ui.embeddingModel).toBe('progenitor-hash-256');
     expect(ui.dimensions).toBe(256);
     expect(ui.table).toBe('knowledge_documents');
-    expect(ui.tags).toEqual(['facts', 'people']);
+    expect(ui.tags).toEqual(['priority', 'ops']);
     expect(ui.collections.map((c) => c.name)).toEqual(['facts', 'people']);
     expect(ui.pluggedInto).toEqual(['Progenitor']);
     expect(ui.persisted).toBe(true);

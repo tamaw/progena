@@ -45,12 +45,24 @@ def test_store_roundtrip_and_search() -> None:
         base = kstore.create_base(conn, name="pytest knowledge", description="temp")
         base_id = base["id"]
         try:
-            seeded = kstore.seed_base(conn, base_id)
-            assert seeded == len(kstore.SEED_DOCUMENTS)
+            documents = [
+                {
+                    "collection": "facts",
+                    "title": "Project Lighthouse",
+                    "content": "Project Lighthouse is the codename for the Q3 vector-search rollout.",
+                },
+                {
+                    "collection": "facts",
+                    "title": "Bananas",
+                    "content": "Bananas are a good source of potassium.",
+                },
+            ]
+            added = kstore.add_documents(conn, base_id, documents)
+            assert added == len(documents)
 
             detail = kstore.get_base(conn, base_id)
             assert detail is not None
-            assert detail["documents"] == seeded
+            assert detail["documents"] == added
 
             results = kstore.search(
                 conn,

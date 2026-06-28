@@ -14,9 +14,10 @@ export const KB_STATUS_META = {
 // "All" plus one chip per actionable status.
 export const KB_FILTERS = ['All', 'Connected', 'Syncing', 'Error'];
 
-export const KB_SORTS = ['Recent', 'Name', 'Documents'];
+// Group/sort dimensions for the left pane.
+export const KB_SORTS = ['Status', 'Type', 'Name'];
 
-// Pane groups, in render order. Empty groups are dropped by groupBases().
+// Status groups, in render order. Empty groups are dropped by groupBases().
 const KB_GROUP_ORDER = [
   { status: 'connected', label: 'Connected' },
   { status: 'syncing', label: 'Syncing' },
@@ -66,31 +67,41 @@ export function filterBases(bases, filter, query) {
   return bases.filter((base) => matchesFilter(base, filter) && matchesQuery(base, query));
 }
 
-export function sortBases(bases, sortMode) {
-  const list = Array.isArray(bases) ? [...bases] : [];
-  const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
-  if (sortMode === 'Name') {
-    return list.sort(byName);
-  }
-  if (sortMode === 'Documents') {
-    return list.sort((a, b) => (Number(b.documents) || 0) - (Number(a.documents) || 0) || byName(a, b));
-  }
-  // Recent (default): most-recently synced first.
-  return list.sort((a, b) => {
-    const at = new Date(a.lastSynced || 0).getTime() || 0;
-    const bt = new Date(b.lastSynced || 0).getTime() || 0;
-    return bt - at || byName(a, b);
-  });
+// Alphabetical by name — the within-group ordering for every dimension.
+export function sortBases(bases) {
+  return [...(Array.isArray(bases) ? bases : [])].sort(
+    (a, b) => String(a.name || '').localeCompare(String(b.name || '')),
+  );
 }
 
-// Filter + search, then bucket by status into ordered, non-empty groups.
+function typeOf(base) {
+  return base.storeType || 'pgvector';
+}
+
+// Filter + search, then bucket into ordered, non-empty groups by the chosen
+// dimension: Status (default), Type (e.g. pgvector), or Name (single list).
 export function groupBases(bases, filter, query, sortMode) {
   const visible = filterBases(bases, filter, query);
+  if (!visible.length) {
+    return [];
+  }
+  if (sortMode === 'Type') {
+    const types = [...new Set(visible.map(typeOf))].sort((a, b) => a.localeCompare(b));
+    return types.map((type) => ({
+      key: `type:${type}`,
+      label: type,
+      bases: sortBases(visible.filter((base) => typeOf(base) === type)),
+    }));
+  }
+  if (sortMode === 'Name') {
+    return [{ key: 'all', label: 'All', bases: sortBases(visible) }];
+  }
+  // Status (default).
   return KB_GROUP_ORDER
     .map(({ status, label }) => ({
       key: status,
       label,
-      bases: sortBases(visible.filter((base) => base.status === status), sortMode),
+      bases: sortBases(visible.filter((base) => base.status === status)),
     }))
     .filter((group) => group.bases.length > 0);
 }
@@ -134,6 +145,8 @@ export function fromApiBase(apiBase) {
   const collections = Array.isArray(apiBase.collections) ? apiBase.collections : [];
   const documents = Number(apiBase.documents) || 0;
   const lastSynced = apiBase.updated_at || apiBase.created_at || null;
+  const host = '127.0.0.1:15433';
+  const database = 'progenitor';
   return {
     id: apiBase.id,
     name: apiBase.name || apiBase.id,
@@ -143,17 +156,19 @@ export function fromApiBase(apiBase) {
     color: colorForId(apiBase.id),
     description: apiBase.description || 'pgvector knowledge base.',
     embeddingModel: apiBase.embedding_model || 'progenitor-hash-256',
+    storeType: apiBase.store_type || 'pgvector',
     dimensions: Number(apiBase.dimensions) || 256,
-    indexType: 'Flat',
+    indexType: apiBase.index_type || 'Flat',
     metric: apiBase.metric || 'cosine',
-    host: '127.0.0.1:15433',
-    database: 'progenitor',
+    host,
+    database,
     table: 'knowledge_documents',
+    connectionString: apiBase.connection_string || `postgresql://progenitor@${host}/${database}`,
     documents,
     chunks: documents,
     sizeBytes: documents * 4096,
     lastSynced,
-    tags: collections,
+    tags: Array.isArray(apiBase.tags) ? apiBase.tags : [],
     collections: collections.map((name) => ({ name, chunks: 0, updated: lastSynced })),
     pluggedInto: ['Progenitor'],
     persisted: true,
