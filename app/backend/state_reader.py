@@ -401,6 +401,10 @@ class StateSnapshot:
     # catches in-place edits (enable/disable, url/description) that leave the
     # count unchanged.
     mcp_fingerprint: str = ""
+    # Content fingerprint of the knowledge state document, so an agent edit to
+    # /state/knowledge.json (which leaves all the counted fields above unchanged)
+    # is still detected and pushed live to the Knowledge page.
+    knowledge_fingerprint: str = ""
 
 
 class StateReader:
@@ -902,6 +906,23 @@ class StateReader:
             serialized = str(material)
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
+    def _knowledge_fingerprint(self) -> str:
+        """Stable hash of the ``knowledge`` state document (base settings)."""
+        if self.document_store is None:
+            return ""
+        try:
+            document = self.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "knowledge", {"bases": []}
+            )
+        except Exception:
+            return ""
+        payload = document.payload if document is not None else {"bases": []}
+        try:
+            serialized = json.dumps(payload, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            serialized = str(payload)
+        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -924,6 +945,7 @@ class StateReader:
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
             mcp_fingerprint=self._mcp_fingerprint(),
+            knowledge_fingerprint=self._knowledge_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1736,6 +1758,8 @@ class StateReader:
         if len(new.schedule) != len(old.schedule):
             return True
         if len(new.backlog) != len(old.backlog):
+            return True
+        if new.knowledge_fingerprint != old.knowledge_fingerprint:
             return True
         if new.mcp_fingerprint != old.mcp_fingerprint:
             return True

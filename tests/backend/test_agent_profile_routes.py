@@ -100,11 +100,13 @@ def harness(monkeypatch):
         events.append((event_type, payload))
         return None
 
-    # The list/detail routes read A2A agents through from Progenitor's registry;
-    # keep tests hermetic by returning no A2A agents.
+    # The list/detail routes read A2A/ACP agents through from Progenitor's
+    # registry; keep tests hermetic by returning no remote agent profiles by
+    # default.
     import app.backend.agent_profile_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
+    monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
 
     app = FastAPI()
     app.include_router(

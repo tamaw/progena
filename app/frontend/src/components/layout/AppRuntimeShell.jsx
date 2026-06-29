@@ -133,10 +133,8 @@ const defaultQuickChatConfig = {
   prompts: quickPrompts,
 };
 const scheduleQuickChatConfig = {
+  ...defaultQuickChatConfig,
   mode: 'schedule-create',
-  title: 'Create schedule',
-  subtitle: 'Describe the timing and what Progenitor should do. New schedules appear here live when the event stream updates.',
-  placeholder: 'Describe the schedule you want Progenitor to create...',
   prompts: scheduleQuickPrompts,
 };
 const mcpQuickPrompts = [
@@ -145,10 +143,8 @@ const mcpQuickPrompts = [
   'Disable the GitHub MCP server.',
 ];
 const mcpQuickChatConfig = {
+  ...defaultQuickChatConfig,
   mode: 'mcp-create',
-  title: 'Add MCP server',
-  subtitle: 'Describe the MCP server to connect. It appears on the Tools page live once the config updates.',
-  placeholder: 'Describe the MCP server you want Progenitor to connect...',
   prompts: mcpQuickPrompts,
 };
 const taskQuickPrompts = [
@@ -157,11 +153,21 @@ const taskQuickPrompts = [
   'New task in build: ship the kanban tool, assign builder_progenitor.',
 ];
 const taskQuickChatConfig = {
+  ...defaultQuickChatConfig,
   mode: 'task-create',
-  title: 'Create task',
-  subtitle: 'Describe the task. It appears on the Tasks board live once Progenitor saves it.',
-  placeholder: 'Describe the task you want Progenitor to create...',
   prompts: taskQuickPrompts,
+};
+const knowledgeQuickPrompts = [
+  'Create a knowledge base called Release Notes for changelog snippets, tagged release.',
+  'Add a knowledge base named Runbooks with the tags ops, oncall.',
+  'Create a knowledge base "Research Notes" and add the folder /data/research as a source.',
+];
+// Looks like the default quick chat (icon + header, no descriptive text block) —
+// just seeded with example prompts and the knowledge-create outbound wrapping.
+const knowledgeQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'knowledge-create',
+  prompts: knowledgeQuickPrompts,
 };
 
 function normalizeQuickChatConfig(config) {
@@ -172,7 +178,9 @@ function normalizeQuickChatConfig(config) {
       ? mcpQuickChatConfig
       : candidate.mode === 'task-create'
         ? taskQuickChatConfig
-        : defaultQuickChatConfig;
+        : candidate.mode === 'knowledge-create'
+          ? knowledgeQuickChatConfig
+          : defaultQuickChatConfig;
   const prompts = Array.isArray(candidate.prompts)
     ? candidate.prompts.filter((prompt) => typeof prompt === 'string' && prompt.trim())
     : [];
@@ -208,6 +216,20 @@ function buildQuickChatOutboundMessage(mode, text) {
       'live (board.json tracks the card order automatically).',
       'Only ask a follow-up question if the task title is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created task title and column.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
+  if (mode === 'knowledge-create') {
+    return [
+      'Create a new knowledge base from the following user request.',
+      'Follow the managing-knowledge skill: read /state/knowledge.json, then append',
+      'an object to the bases array with at least a name (omit id — it is generated),',
+      'plus any description, tags, or folder source paths the request implies.',
+      'Saving the file persists it and the Knowledge page updates live; folder',
+      'sources still need indexing from the Knowledge page UI.',
+      'Only ask a follow-up question if the base name is unclear; otherwise create it.',
+      'Reply with one short sentence confirming the created knowledge base name.',
       '',
       `User request: ${text}`,
     ].join('\n');
@@ -1171,14 +1193,19 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   );
 }
 
+// Persist the quick chat conversation across panel open/close (the panel unmounts
+// when closed) and config/mode changes, so reopening resumes the same conversation.
+// Cleared only by "New chat" (resetQuickChat). Resets naturally on full page reload.
+const quickChatMemory = { history: [], session: null };
+
 function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
   const { createSession, sendMessageStream, cancelStream } = useApi();
   const { config } = useConfig();
   const navigate = useNavigate();
   const location = useLocation();
   const isOnChatPage = location.pathname === '/';
-  const [history, setHistory] = useState([]);
-  const [scratchSession, setScratchSession] = useState(null);
+  const [history, setHistory] = useState(quickChatMemory.history);
+  const [scratchSession, setScratchSession] = useState(quickChatMemory.session);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
@@ -1212,16 +1239,32 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     return sessionPromise;
   }, [createSession]);
 
+  // Mirror conversation state into module-level memory so it survives the
+  // panel unmounting on close. Streaming turns are stored as settled so a
+  // mid-stream close doesn't resume as a stuck "Thinking…" bubble.
+  useEffect(() => {
+    quickChatMemory.history = history.map((turn) => (turn.isStreaming ? { ...turn, isStreaming: false } : turn));
+  }, [history]);
+  useEffect(() => {
+    quickChatMemory.session = scratchSession;
+  }, [scratchSession]);
+
   useEffect(() => {
     isQuickChatMountedRef.current = true;
     let cancelled = false;
-    startFreshQuickSession()
-      .then((session) => {
-        if (!cancelled && session) {
-          setScratchSession(session);
-        }
-        return session;
-      });
+    // Resume the persisted conversation; only spin up a fresh session the first
+    // time (or after "New chat" cleared it).
+    if (quickChatMemory.session) {
+      sessionPromiseRef.current = Promise.resolve(quickChatMemory.session);
+    } else {
+      startFreshQuickSession()
+        .then((session) => {
+          if (!cancelled && session) {
+            setScratchSession(session);
+          }
+          return session;
+        });
+    }
 
     return () => {
       cancelled = true;
@@ -1370,6 +1413,8 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const resetQuickChat = useCallback(() => {
     cancelStream();
     activeAssistantIdRef.current = null;
+    quickChatMemory.history = [];
+    quickChatMemory.session = null;
     setHistory([]);
     setIsSending(false);
     setError('');
@@ -1410,7 +1455,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
       isOpen={isOpen}
       actions={(
         <>
-          <PanelIconButton label="Reset" onClick={resetQuickChat} disabled={isSending}>
+          <PanelIconButton label="New chat" onClick={resetQuickChat} disabled={isSending}>
             <RefreshIcon />
           </PanelIconButton>
           <PanelIconButton label="Open in chat" onClick={openInChat} disabled={isSending}>
@@ -1892,10 +1937,20 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
 
   if (!displayed) return null;
 
+  // Settings and Account are modal popups (centered window), not the right-side
+  // slide-in used by the other chrome tools — they are never pinned.
+  const isModalPanel = displayed === 'settings' || displayed === 'account';
   // Scrim: visible for the full lifetime of the pane (including enter/exit
   // transitions) so clicks never pass through while the panel is animating.
-  const scrim = !isPinned ? (
-    <button type="button" className="topnav-scrim is-open" aria-label="Close panel" onClick={closePanel} />
+  // Modal panels get a full-width backdrop; the side panels leave the docked
+  // column clickable when pinned.
+  const scrim = (isModalPanel || !isPinned) ? (
+    <button
+      type="button"
+      className={`topnav-scrim is-open${isModalPanel ? ' topnav-scrim--modal' : ''}`}
+      aria-label="Close panel"
+      onClick={closePanel}
+    />
   ) : null;
 
   const shared = { isOpen, isPinned, onTogglePin };
@@ -1906,7 +1961,6 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
       <>
         {scrim}
         <QuickChatPanel
-          key={`${quickChatConfig.mode}:${quickChatConfig.title}`}
           onClose={closePanel}
           panelConfig={quickChatConfig}
           {...shared}
@@ -1914,8 +1968,8 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
       </>
     );
   }
-  if (displayed === 'settings') return <>{scrim}<SettingsPanel onClose={closePanel} {...shared} /></>;
-  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} {...shared} /></>;
+  if (displayed === 'settings') return <>{scrim}<SettingsPanel onClose={closePanel} isOpen={isOpen} /></>;
+  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} isOpen={isOpen} /></>;
   if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} {...shared} /></>;
   if (displayed === 'insights') return <>{scrim}<InsightsPanel runtime={runtime} onClose={closePanel} {...shared} /></>;
   return null;
