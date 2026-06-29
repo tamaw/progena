@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
-from .embedding import EMBED_DIM, embed_text, to_pgvector
+from .embedding import embed_text, to_pgvector
 from .schema import (
     KnowledgeBaseModel,
     generate_base_id,
@@ -30,22 +30,22 @@ from .schema import (
 # ``vector`` type exists. Both statements are idempotent so callers can run this
 # on each access. The base *settings* are not a table — they live in the
 # ``knowledge`` state document — so ``base_id`` here is a plain column (no FK).
-SCHEMA_STATEMENTS: tuple[str, ...] = (
+SCHEMA_STATEMENTS: tuple[LiteralString, ...] = (
     "CREATE EXTENSION IF NOT EXISTS vector",
     # Base settings moved to the ``knowledge`` state document, so the legacy
     # tables are dropped. CASCADE also removes the old foreign key that
     # ``knowledge_documents.base_id`` had on ``knowledge_bases``.
     "DROP TABLE IF EXISTS knowledge_sources CASCADE",
     "DROP TABLE IF EXISTS knowledge_bases CASCADE",
-    f"""
+    """
     CREATE TABLE IF NOT EXISTS knowledge_documents (
         id          bigserial PRIMARY KEY,
         base_id     text NOT NULL,
         collection  text NOT NULL DEFAULT 'default',
         title       text NOT NULL DEFAULT '',
         content     text NOT NULL,
-        metadata    jsonb NOT NULL DEFAULT '{{}}'::jsonb,
-        embedding   vector({EMBED_DIM}),
+        metadata    jsonb NOT NULL DEFAULT '{}'::jsonb,
+        embedding   vector(256),
         source_id   text,
         created_at  timestamptz NOT NULL DEFAULT now()
     )
@@ -102,7 +102,7 @@ _MAX_INDEX_FILES = 500
 _MAX_FILE_BYTES = 200_000
 _MAX_DOC_CHARS = 20_000
 
-_SEARCH_SQL = """
+_SEARCH_SQL: LiteralString = """
     SELECT
         d.base_id,
         d.collection,
