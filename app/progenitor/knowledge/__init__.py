@@ -1,0 +1,56 @@
+"""Postgres + pgvector knowledge base storage and retrieval."""
+
+from .embedding import EMBED_DIM, EMBED_MODEL_NAME, embed_text, to_pgvector
+from .schema import (
+    KnowledgeBaseModel,
+    KnowledgePayload,
+    KnowledgeSourceModel,
+    generate_base_id,
+    generate_source_id,
+    now_isoformat,
+    slugify,
+    validate_knowledge_document,
+    validate_knowledge_payload,
+)
+from .store import (
+    add_documents,
+    base_document_stats,
+    delete_documents_for_base,
+    delete_documents_for_source,
+    ensure_schema,
+    find_base,
+    index_folder,
+    load_bases_async,
+    new_base,
+    resolve_base_ref,
+    search,
+    search_async,
+)
+
+__all__ = [
+    "EMBED_DIM",
+    "EMBED_MODEL_NAME",
+    "embed_text",
+    "to_pgvector",
+    "KnowledgeBaseModel",
+    "KnowledgePayload",
+    "KnowledgeSourceModel",
+    "generate_base_id",
+    "generate_source_id",
+    "now_isoformat",
+    "slugify",
+    "validate_knowledge_document",
+    "validate_knowledge_payload",
+    "add_documents",
+    "base_document_stats",
+    "delete_documents_for_base",
+    "delete_documents_for_source",
+    "ensure_schema",
+    "find_base",
+    "index_folder",
+    "load_bases_async",
+    "new_base",
+    "resolve_base_ref",
+    "search",
+    "search_async",
+]

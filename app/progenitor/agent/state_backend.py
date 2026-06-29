@@ -82,6 +82,13 @@ def validate_mcp_document(content: str) -> JsonDoc:
     return data
 
 
+def validate_knowledge_document(content: str) -> JsonDoc:
+    """Parse + validate a ``knowledge.json`` payload (knowledge-base settings)."""
+    from ..knowledge import validate_knowledge_document as _validate
+
+    return _validate(content)
+
+
 def validate_kanban_structure(content: str) -> JsonDoc:
     """Parse + validate a ``tasks/board.json`` (board structure) payload.
 
@@ -275,6 +282,35 @@ def create_mcp_state_file(
         load=load,
         save=save,
         validate=validate_mcp_document,
+        on_change=on_change,
+    )
+
+
+def create_knowledge_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``knowledge.json`` state file backed by the StateManager.
+
+    Editing it is the supported way for the agent to manage knowledge-base
+    settings; the documents/vectors themselves live in SQL and are ingested via
+    the UI. Every write is validated and persists through the normal store path,
+    so the Knowledge page updates live via the LISTEN/NOTIFY pipeline.
+    """
+
+    async def load() -> JsonDoc:
+        result = await state_manager.get_knowledge_config()
+        return result if isinstance(result, dict) else {"bases": []}
+
+    async def save(doc: JsonDoc) -> None:
+        await state_manager.save_knowledge_config(doc)
+
+    return StateFile(
+        name="knowledge.json",
+        load=load,
+        save=save,
+        validate=validate_knowledge_document,
         on_change=on_change,
     )
 

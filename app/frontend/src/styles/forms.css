@@ -46,3 +46,76 @@
   background: var(--color-bg-secondary);
   color: var(--color-text-primary);
 }
+
+/* App-wide numeric stepper (the <NumberStepper> component). Native number-input
+   spinners don't honour the dark theme, so we hide them and provide −/+ buttons
+   around a centred, editable value. */
+.app-stepper {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: stretch;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: var(--border-radius-sm);
+  background: var(--color-bg-primary);
+}
+
+.app-stepper:focus-within {
+  border-color: var(--color-accent);
+}
+
+.app-stepper__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  padding: 0;
+  border: none;
+  background: var(--color-bg-tertiary, var(--color-bg-secondary));
+  color: var(--color-text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.app-stepper__btn:hover:not(:disabled) {
+  background: var(--color-accent);
+  color: #fff;
+}
+
+.app-stepper__btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.app-stepper__input {
+  width: 50px;
+  height: 32px;
+  padding: 0 4px;
+  border: none;
+  border-right: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.app-stepper__input:focus {
+  outline: none;
+}
+
+/* Hide the native spinner arrows — they don't honour the dark theme. */
+.app-stepper__input::-webkit-outer-spin-button,
+.app-stepper__input::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.app-stepper__input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
