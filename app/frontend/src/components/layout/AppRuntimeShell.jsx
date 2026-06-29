@@ -6,7 +6,7 @@ import { useAlertCenter } from '../../context/AlertCenterContext';
 import { useChromeRuntime } from '../../context/ChromeRuntimeContext';
 import { useConfig } from '../../context/ConfigContext';
 import { useTheme } from '../../hooks/useTheme';
-import { useApi } from '../../hooks/useApi';
+import { useChatApi } from '../../hooks/api/useChatApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
@@ -1199,7 +1199,7 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 const quickChatMemory = { history: [], session: null };
 
 function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
-  const { createSession, sendMessageStream, cancelStream } = useApi();
+  const { createSession, sendMessageStream, cancelStream } = useChatApi();
   const { config } = useConfig();
   const navigate = useNavigate();
   const location = useLocation();

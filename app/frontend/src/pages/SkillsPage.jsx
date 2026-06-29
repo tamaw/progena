@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useApi } from '../hooks/useApi';
+import { useSkillsApi } from '../hooks/api/useSkillsApi';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   PaneCollapseSeam,
@@ -88,7 +88,7 @@ function SkillRow({ skill, selectedPath, onSelectSkill }) {
 }
 
 export default function SkillsPage() {
-  const { getSkills, updateSkillContent, createSkill } = useApi();
+  const { getSkills, updateSkillContent, createSkill } = useSkillsApi();
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('skills-sidebar prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
   const [skills, setSkills] = useState([]);

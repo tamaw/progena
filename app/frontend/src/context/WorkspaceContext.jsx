@@ -9,7 +9,9 @@ import {
   useMemo,
 } from 'react';
 import { addEdge, applyEdgeChanges, applyNodeChanges } from '@xyflow/react';
-import { useApi } from '../hooks/useApi';
+import { useWorkspaceApi } from '../hooks/api/useWorkspaceApi';
+import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
+import { useSchedulesApi } from '../hooks/api/useSchedulesApi';
 import { loadWorkspaceState, saveWorkspaceState } from '../lib/indexedDb';
 
 const WorkspaceGraphContext = createContext(null);
@@ -849,18 +851,9 @@ function persistDismissedWidgetIds(idSet) {
 }
 
 export function WorkspaceProvider({ children }) {
-  const {
-    getWorkspace,
-    getWidgets,
-    getWidgetSchemas,
-    refreshWidget,
-    updateWidget,
-    deleteWidget,
-    createSchedule,
-    createEvent,
-    runAction,
-    generateAction,
-  } = useApi();
+  const { getWorkspace, runAction, generateAction, createEvent } = useWorkspaceApi();
+  const { getWidgets, getWidgetSchemas, refreshWidget, updateWidget, deleteWidget } = useWidgetsApi();
+  const { createSchedule } = useSchedulesApi();
   const [nodes, setNodes] = useState([]);
   const [viewport, setViewportState] = useState({ x: 0, y: 0, zoom: 1 });
   const [viewportVersion, setViewportVersion] = useState(0);

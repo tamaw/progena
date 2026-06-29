@@ -13,13 +13,16 @@ function buildUrl(baseUrl, path) {
 }
 
 /**
- * Hook for connecting to the /events SSE stream.
- * Receives IPC events: scheduled_response, agent_message, agent_question,
- * message_queued, alert, task, agent.
+ * Shared SSE connection hook.
  *
- * Uses shared HealthContext for health status - no duplicate health checks.
+ * Opens a single EventSource to `path`, attaches a listener for each named type
+ * in `eventTypes`, and forwards parsed payloads to `onEvent` as `{ type, data }`.
+ * Connects while the app is healthy (via HealthContext) and tears down otherwise.
+ *
+ * `eventTypes` must be a stable reference (define it at module scope) so the
+ * connection is not rebuilt on every render.
  */
-export function useEventsSSE(onEvent) {
+export function useSSEConnection(path, eventTypes, onEvent) {
   const { config } = useConfig();
   const { isHealthy } = useHealth();
   const eventSourceRef = useRef(null);
@@ -42,7 +45,7 @@ export function useEventsSSE(onEvent) {
     }
     isConnectingRef.current = true;
 
-    const url = buildUrl(baseUrl, '/api/ui/events');
+    const url = buildUrl(baseUrl, path);
     const es = new EventSource(url);
     eventSourceRef.current = es;
 
@@ -60,36 +63,24 @@ export function useEventsSSE(onEvent) {
       }
     };
 
-    es.addEventListener('connected', handleEvent('connected'));
-    es.addEventListener('heartbeat', handleEvent('heartbeat'));
-    es.addEventListener('alert', handleEvent('alert'));
-    es.addEventListener('task', handleEvent('task'));
-    es.addEventListener('agent', handleEvent('agent'));
-    es.addEventListener('shutdown', handleEvent('shutdown'));
-    es.addEventListener('scheduled_response', handleEvent('scheduled_response'));
-    es.addEventListener('agent_message', handleEvent('agent_message'));
-    es.addEventListener('agent_question', handleEvent('agent_question'));
-    es.addEventListener('message_queued', handleEvent('message_queued'));
-
+    for (const type of eventTypes) {
+      es.addEventListener(type, handleEvent(type));
+    }
     es.onmessage = handleEvent('message');
 
-    es.onerror = (err) => {
-      console.error('[useEventsSSE] Connection error:', err);
+    es.onerror = () => {
       setIsConnected(false);
       isConnectingRef.current = false;
       es.close();
       eventSourceRef.current = null;
     };
-  }, [baseUrl, onEvent]);
+  }, [baseUrl, path, eventTypes, onEvent]);
 
   // Connect when healthy, disconnect when not
   useEffect(() => {
-    console.log('[useEventsSSE] isHealthy:', isHealthy, 'hasES:', !!eventSourceRef.current);
     if (isHealthy && !eventSourceRef.current && !isConnectingRef.current) {
-      console.log('[useEventsSSE] Connecting to /events...');
       connect();
     } else if (!isHealthy && eventSourceRef.current) {
-      console.log('[useEventsSSE] Disconnecting (unhealthy)');
       cleanup();
       queueMicrotask(() => setIsConnected(false));
     }
@@ -110,89 +101,11 @@ export function useEventsSSE(onEvent) {
 
 /**
  * Hook for connecting to the /status SSE stream.
- * Receives status-side events: status, heartbeat, alerts.
+ * Receives status-side events: status, heartbeat, alerts, widgets.
  * The alerts event carries the full alert-center payload.
- *
- * Uses shared HealthContext for health status - no duplicate health checks.
  */
+const STATUS_EVENT_TYPES = ['connected', 'status', 'heartbeat', 'alerts', 'widgets', 'shutdown'];
+
 export function useStatusSSE(onEvent) {
-  const { config } = useConfig();
-  const { isHealthy } = useHealth();
-  const eventSourceRef = useRef(null);
-  const isConnectingRef = useRef(false);
-  const [isConnected, setIsConnected] = useState(false);
-
-  const baseUrl = config.api.baseUrl;
-
-  const cleanup = useCallback(() => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close();
-      eventSourceRef.current = null;
-    }
-    isConnectingRef.current = false;
-  }, []);
-
-  const connect = useCallback(() => {
-    if (eventSourceRef.current || isConnectingRef.current) {
-      return;
-    }
-    isConnectingRef.current = true;
-
-    const url = buildUrl(baseUrl, '/api/ui/status');
-    console.log('[useStatusSSE] Connecting to', url);
-    const es = new EventSource(url);
-    eventSourceRef.current = es;
-
-    es.onopen = () => {
-      setIsConnected(true);
-      isConnectingRef.current = false;
-    };
-
-    const handleEvent = (type) => (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onEvent?.({ type, data });
-      } catch {
-        // Ignore parse errors
-      }
-    };
-
-    es.addEventListener('connected', handleEvent('connected'));
-    es.addEventListener('status', handleEvent('status'));
-    es.addEventListener('heartbeat', handleEvent('heartbeat'));
-    es.addEventListener('alerts', handleEvent('alerts'));
-    es.addEventListener('widgets', handleEvent('widgets'));
-    es.addEventListener('shutdown', handleEvent('shutdown'));
-
-    es.onmessage = handleEvent('message');
-
-    es.onerror = () => {
-      setIsConnected(false);
-      isConnectingRef.current = false;
-      es.close();
-      eventSourceRef.current = null;
-    };
-  }, [baseUrl, onEvent]);
-
-  // Connect when healthy, disconnect when not
-  useEffect(() => {
-    if (isHealthy && !eventSourceRef.current && !isConnectingRef.current) {
-      connect();
-    } else if (!isHealthy && eventSourceRef.current) {
-      cleanup();
-      queueMicrotask(() => setIsConnected(false));
-    }
-  }, [isHealthy, connect, cleanup]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => cleanup();
-  }, [cleanup]);
-
-  const disconnect = useCallback(() => {
-    cleanup();
-    setIsConnected(false);
-  }, [cleanup]);
-
-  return { isConnected, isHealthy, connect, disconnect };
+  return useSSEConnection('/api/ui/status', STATUS_EVENT_TYPES, onEvent);
 }
