@@ -1,4 +1,4 @@
-"""Tests for the pgvector knowledge store and embedding."""
+"""Tests for the pgvector knowledge store, schema, and embedding."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import psycopg
 import pytest
 
 from app.progenitor.knowledge import embedding
+from app.progenitor.knowledge import schema as kschema
 from app.progenitor.knowledge import store as kstore
 
 pytestmark = pytest.mark.filterwarnings("ignore")
@@ -32,6 +33,71 @@ def test_embedding_similarity_rewards_overlap() -> None:
     assert cosine(query, related) > cosine(query, unrelated)
 
 
+# --------------------------------------------------------------------------- #
+# Schema validation (no database needed)
+# --------------------------------------------------------------------------- #
+def test_validate_payload_normalizes_and_fills() -> None:
+    result = kschema.validate_knowledge_payload(
+        {
+            "bases": [
+                {
+                    "name": "Notes",
+                    "tags": ["a", "a", " b "],
+                    "metric": "COSINE",
+                    "index_type": "hnsw",
+                    "documents": 99,  # derived/unknown field is dropped
+                    "sources": [{"path": "/tmp/docs"}],
+                }
+            ]
+        }
+    )
+    base = result["bases"][0]
+    assert base["id"]  # generated from the name
+    assert base["created_at"] and base["updated_at"]
+    assert base["tags"] == ["a", "b"]
+    assert base["metric"] == "cosine"
+    assert base["index_type"] == "HNSW"
+    assert "documents" not in base
+    assert base["sources"][0]["id"].startswith("src-")
+
+
+def test_validate_payload_rejects_bad_values() -> None:
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_payload({"bases": [{"name": "x", "metric": "bogus"}]})
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_payload({"bases": [{"name": "x", "index_type": "tree"}]})
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_payload({"bases": [{"description": "no name"}]})
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_payload(["not", "an", "object"])
+
+
+def test_validate_payload_rejects_duplicate_ids() -> None:
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_payload(
+            {"bases": [{"id": "dup", "name": "A"}, {"id": "dup", "name": "B"}]}
+        )
+
+
+def test_validate_document_rejects_bad_json() -> None:
+    with pytest.raises(ValueError):
+        kschema.validate_knowledge_document("{not json}")
+
+
+def test_pure_helpers() -> None:
+    base = kstore.new_base(name="My KB", description="hi")
+    assert base["id"] and base["name"] == "My KB"
+    bases = [base]
+    assert kstore.find_base(bases, base["id"]) is base
+    assert kstore.find_base(bases, "missing") is None
+    assert kstore.resolve_base_ref(bases, base["id"]) == base["id"]
+    assert kstore.resolve_base_ref(bases, "my kb") == base["id"]  # by name, case-insensitive
+    assert kstore.resolve_base_ref(bases, "nope") is None
+
+
+# --------------------------------------------------------------------------- #
+# Document SQL (requires a database)
+# --------------------------------------------------------------------------- #
 def _database_url() -> str | None:
     return (os.getenv("PROGENITOR_DATABASE_URL") or os.getenv("DATABASE_URL") or "").strip() or None
 
@@ -40,10 +106,9 @@ def _database_url() -> str | None:
 def test_store_roundtrip_and_search() -> None:
     url = _database_url()
     assert url is not None
+    base_id = kstore.new_base(name="pytest knowledge")["id"]
     with psycopg.connect(url) as conn:
         kstore.ensure_schema(conn)
-        base = kstore.create_base(conn, name="pytest knowledge", description="temp")
-        base_id = base["id"]
         try:
             documents = [
                 {
@@ -60,9 +125,9 @@ def test_store_roundtrip_and_search() -> None:
             added = kstore.add_documents(conn, base_id, documents)
             assert added == len(documents)
 
-            detail = kstore.get_base(conn, base_id)
-            assert detail is not None
-            assert detail["documents"] == added
+            stats = kstore.base_document_stats(conn)
+            assert stats[base_id]["documents"] == added
+            assert "facts" in stats[base_id]["collections"]
 
             results = kstore.search(
                 conn,
@@ -75,5 +140,27 @@ def test_store_roundtrip_and_search() -> None:
             assert "Lighthouse" in top["content"]
             assert top["score"] > 0.0
         finally:
-            kstore.delete_base(conn, base_id)
-            assert kstore.get_base(conn, base_id) is None
+            assert kstore.delete_documents_for_base(conn, base_id) >= 0
+            assert kstore.base_document_stats(conn).get(base_id) is None
+
+
+@pytest.mark.skipif(_database_url() is None, reason="requires PROGENITOR_DATABASE_URL")
+def test_index_folder(tmp_path) -> None:
+    url = _database_url()
+    assert url is not None
+    (tmp_path / "note.md").write_text("Project Lighthouse rollout notes.", encoding="utf-8")
+    (tmp_path / "skip.bin").write_bytes(b"\x00\x01\x02")
+    base_id = kstore.new_base(name="folder kb")["id"]
+    source_id = kschema.generate_source_id()
+    with psycopg.connect(url) as conn:
+        kstore.ensure_schema(conn)
+        try:
+            result = kstore.index_folder(
+                conn, base_id=base_id, source_id=source_id, path=str(tmp_path)
+            )
+            assert result["status"] == "indexed"
+            assert result["document_count"] == 1  # the .bin file is skipped
+            stats = kstore.base_document_stats(conn)
+            assert stats[base_id]["documents"] == 1
+        finally:
+            kstore.delete_documents_for_source(conn, source_id)

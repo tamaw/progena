@@ -106,18 +106,6 @@ export function groupBases(bases, filter, query, sortMode) {
     .filter((group) => group.bases.length > 0);
 }
 
-export function formatBytes(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value) || value <= 0) {
-    return '0 B';
-  }
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const exponent = Math.min(Math.floor(Math.log(value) / Math.log(1024)), units.length - 1);
-  const scaled = value / 1024 ** exponent;
-  const rounded = scaled >= 100 || exponent === 0 ? Math.round(scaled) : Math.round(scaled * 10) / 10;
-  return `${rounded} ${units[exponent]}`;
-}
-
 export function formatCount(value) {
   const num = Number(value);
   if (!Number.isFinite(num)) {
@@ -126,21 +114,10 @@ export function formatCount(value) {
   return new Intl.NumberFormat().format(num);
 }
 
-const KB_COLORS = ['#2f7dff', '#9b7cff', '#20b486', '#ff7a30', '#ff5f57', '#58a6ff', '#3fb950'];
-
-// Stable colour pick so a base keeps the same accent across reloads.
-export function colorForId(id) {
-  const text = String(id || '');
-  let hash = 0;
-  for (let i = 0; i < text.length; i += 1) {
-    hash = (hash * 31 + text.charCodeAt(i)) >>> 0;
-  }
-  return KB_COLORS[hash % KB_COLORS.length];
-}
-
 // Adapt a backend knowledge-base row (snake_case, pgvector-oriented) into the
 // shape the page renders. Every knowledge base is reachable by the runtime
-// `knowledge_search` tool, so each one reports as plugged into Progenitor.
+// `knowledge_search` tool, so each one reports as plugged into Progenitor. The
+// raw `sources` array is passed through unchanged so edits can PUT it back.
 export function fromApiBase(apiBase) {
   const collections = Array.isArray(apiBase.collections) ? apiBase.collections : [];
   const documents = Number(apiBase.documents) || 0;
@@ -151,9 +128,7 @@ export function fromApiBase(apiBase) {
     id: apiBase.id,
     name: apiBase.name || apiBase.id,
     status: apiBase.status || 'connected',
-    scope: apiBase.scope || 'Mine',
     owner: apiBase.owner || 'user',
-    color: colorForId(apiBase.id),
     description: apiBase.description || 'pgvector knowledge base.',
     embeddingModel: apiBase.embedding_model || 'progenitor-hash-256',
     storeType: apiBase.store_type || 'pgvector',
@@ -165,13 +140,11 @@ export function fromApiBase(apiBase) {
     table: 'knowledge_documents',
     connectionString: apiBase.connection_string || `postgresql://progenitor@${host}/${database}`,
     documents,
-    chunks: documents,
-    sizeBytes: documents * 4096,
     lastSynced,
     tags: Array.isArray(apiBase.tags) ? apiBase.tags : [],
-    collections: collections.map((name) => ({ name, chunks: 0, updated: lastSynced })),
+    sources: Array.isArray(apiBase.sources) ? apiBase.sources : [],
+    collections: collections.map((name) => ({ name, updated: lastSynced })),
     pluggedInto: ['Progenitor'],
-    persisted: true,
   };
 }
 

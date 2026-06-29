@@ -56,6 +56,7 @@ from .alerts import (
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
 from .chat_sessions import UiEventEnvelope
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
+from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .prompt_service import PromptService
 from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
@@ -4332,6 +4333,8 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
                 broadcast_mcp_snapshot()
             if changed_key in (None, "schedule"):
                 broadcast_schedule_snapshot()
+            if changed_key in (None, "knowledge"):
+                broadcast_knowledge_snapshot()
             if changed_key is None:
                 board = _read_kanban_board(get_state_reader())
                 for card in board["cards"]:
@@ -4878,6 +4881,22 @@ def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEvent
     source = _mcp_widget_items() if items is None else items
     payload = [item.model_dump(mode="json") for item in source]
     return broadcast_ui_event("mcp.snapshot", {"items": payload})
+
+
+def broadcast_knowledge_snapshot(
+    bases: list[dict[str, Any]] | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current knowledge-base list to /api/ui/stream subscribers.
+
+    Emitted after backend-side knowledge mutations and whenever the ``knowledge``
+    state document changes (UI ``PUT`` or an agent edit to ``/state/knowledge.json``
+    surfaced via the Postgres NOTIFY watcher), so the Knowledge page reflects
+    changes live without refetching. Callers that already built the list can pass
+    it in to avoid a second snapshot query and keep the event consistent with the
+    HTTP response.
+    """
+    payload = snapshot_knowledge_bases() if bases is None else bases
+    return broadcast_ui_event("knowledge.snapshot", {"bases": payload})
 
 
 def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:

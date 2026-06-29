@@ -1939,6 +1939,55 @@ body,
   box-shadow: none;
 }
 
+/* Settings & Account are centered modal popups, not the right-side slide-in used
+   by the other chrome tools (quick chat, alerts, search, insights). This reverts
+   them to their pre-right-pane behaviour. Placed after the base/.is-open rules so
+   the centered transform wins. */
+.topnav-pane--settings,
+.topnav-pane--account {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  width: min(560px, calc(100vw - 48px));
+  max-height: min(680px, calc(100vh - 80px));
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 24px 64px rgba(15, 18, 25, 0.28),
+    0 4px 16px rgba(15, 18, 25, 0.12);
+  transform: translate(-50%, -46%);
+  opacity: 0;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease;
+}
+
+.topnav-pane--settings.is-open,
+.topnav-pane--account.is-open {
+  transform: translate(-50%, -50%);
+  opacity: 1;
+}
+
+/* Settings is wider and a fixed height (its own pre-right-pane size), so the
+   left options column runs full height and the content pane scrolls. */
+.topnav-pane--settings {
+  width: min(820px, calc(100vw - 48px));
+  height: min(580px, calc(100vh - 80px));
+  max-height: calc(100vh - 80px);
+}
+
+[data-theme="dark"] .topnav-pane--settings,
+[data-theme="dark"] .topnav-pane--account {
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.5),
+    0 4px 16px rgba(0, 0, 0, 0.3);
+}
+
+/* Full-width backdrop for the modal popups (the side scrim leaves a gap). */
+.topnav-scrim--modal {
+  right: 0;
+}
+
 .account-pane {
   display: flex;
   flex-direction: column;
@@ -4038,22 +4087,20 @@ body,
 }
 
 .settings-pane__body {
-  display: flex;
+  display: grid;
   flex: 1 1 auto;
-  flex-direction: column;
+  grid-template-columns: 200px 1fr;
   min-height: 0;
 }
 
 .settings-nav {
   display: flex;
-  flex-direction: row;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 1px;
   overflow-y: auto;
-  padding: 8px 8px 0;
+  padding: 10px 8px;
   background: var(--color-bg-tertiary);
-  border-bottom: 1px solid var(--color-border);
-  flex-shrink: 0;
+  border-right: 1px solid var(--color-border);
 }
 
 .set-nav__item {
@@ -4095,8 +4142,6 @@ body,
 }
 
 .settings-content {
-  flex: 1 1 auto;
-  min-height: 0;
   min-width: 0;
   overflow-y: auto;
   padding: 4px;
@@ -7233,6 +7278,7 @@ body,
   }
 
   .settings-pane__body {
+    display: flex;
     flex-direction: column;
   }
 

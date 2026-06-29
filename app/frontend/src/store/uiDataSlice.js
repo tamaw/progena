@@ -121,6 +121,63 @@ export const fetchMcp = createAsyncThunk(
   },
 );
 
+// Acknowledge a knowledge-base list request; the snapshot arrives on the
+// realtime stream as `knowledge.snapshot` (the GET also triggers the broadcast).
+// The response carries the bases too, so the page populates even before the SSE
+// frame lands.
+export const fetchKnowledge = createAsyncThunk(
+  'uiData/fetchKnowledge',
+  async ({ knowledgeUrl }) => {
+    const response = await fetch(knowledgeUrl, { headers: { Accept: 'application/json' } });
+    if (!response.ok) {
+      throw new Error(`Failed to load knowledge bases (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
+// Persist the full knowledge-base settings document. The backend validates it,
+// saves it, and broadcasts `knowledge.snapshot`; the response also carries the
+// snapshot so callers can read back the server-assigned ids.
+export const saveKnowledge = createAsyncThunk(
+  'uiData/saveKnowledge',
+  async ({ knowledgeUrl, bases }) => {
+    const response = await fetch(knowledgeUrl, {
+      method: 'PUT',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ bases }),
+    });
+    if (!response.ok) {
+      let detail = `(${response.status})`;
+      try {
+        const body = await response.json();
+        if (body?.detail) {
+          detail = typeof body.detail === 'string' ? body.detail : JSON.stringify(body.detail);
+        }
+      } catch {
+        // non-JSON error body; keep the status-code detail
+      }
+      throw new Error(`Failed to save knowledge bases: ${detail}`);
+    }
+    return response.json();
+  },
+);
+
+// Walk + embed one folder source into SQL on the server, then update the doc.
+export const indexKnowledgeSource = createAsyncThunk(
+  'uiData/indexKnowledgeSource',
+  async ({ knowledgeUrl, baseId, sourceId }) => {
+    const response = await fetch(
+      `${knowledgeUrl}/${encodeURIComponent(baseId)}/sources/${encodeURIComponent(sourceId)}/index`,
+      { method: 'POST', headers: { Accept: 'application/json' } },
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to index source (${response.status})`);
+    }
+    return response.json();
+  },
+);
+
 export const fetchKanbanBoard = createAsyncThunk(
   'uiData/fetchKanbanBoard',
   async ({ kanbanUrl }) => {
@@ -262,7 +319,23 @@ const initialState = {
     contentById: {},
     activityById: {},
   },
+  // Knowledge bases (settings), kept live by `knowledge.snapshot` events on
+  // /api/ui/stream and seeded via REST when the Knowledge page mounts. Each base
+  // is the raw API shape (snake_case) so edits can PUT the document back.
+  knowledge: {
+    bases: [],
+    loaded: false,
+    loading: false,
+    error: null,
+  },
 };
+
+function applyKnowledgeBases(state, bases) {
+  state.knowledge.bases = Array.isArray(bases) ? bases : [];
+  state.knowledge.loaded = true;
+  state.knowledge.loading = false;
+  state.knowledge.error = null;
+}
 
 function sessionIdFor(session) {
   return typeof session?.chat_session_id === 'string' && session.chat_session_id
@@ -480,6 +553,10 @@ const uiDataSlice = createSlice({
         state.mcp.error = null;
         return;
       }
+      if (event?.type === 'knowledge.snapshot') {
+        applyKnowledgeBases(state, payload.bases);
+        return;
+      }
       if (event?.type === 'kanban.snapshot') {
         state.tasks.board = payload || null;
         state.tasks.loaded = true;
@@ -659,6 +736,23 @@ const uiDataSlice = createSlice({
         state.mcp.loading = false;
         state.mcp.error = action.error?.message || 'Failed to load MCP servers';
       })
+      .addCase(fetchKnowledge.pending, (state) => {
+        state.knowledge.loading = true;
+        state.knowledge.error = null;
+      })
+      .addCase(fetchKnowledge.fulfilled, (state, action) => {
+        applyKnowledgeBases(state, action.payload?.bases);
+      })
+      .addCase(fetchKnowledge.rejected, (state, action) => {
+        state.knowledge.loading = false;
+        state.knowledge.error = action.error?.message || 'Failed to load knowledge bases';
+      })
+      .addCase(saveKnowledge.fulfilled, (state, action) => {
+        applyKnowledgeBases(state, action.payload?.bases);
+      })
+      .addCase(indexKnowledgeSource.fulfilled, (state, action) => {
+        applyKnowledgeBases(state, action.payload?.bases);
+      })
       .addCase(fetchKanbanBoard.pending, (state) => {
         state.tasks.loading = true;
         state.tasks.error = null;
@@ -712,6 +806,8 @@ export const selectUiWidgets = (state) => state.uiData.widgets;
 export const selectMcpServers = (state) => state.uiData.mcp.servers;
 export const selectMcpState = (state) => state.uiData.mcp;
 export const selectSchedules = (state) => state.uiData.schedule;
+export const selectKnowledgeBases = (state) => state.uiData.knowledge.bases;
+export const selectKnowledgeState = (state) => state.uiData.knowledge;
 export const selectKanbanBoard = (state) => state.uiData.tasks.board;
 export const selectTasksState = (state) => state.uiData.tasks;
 export const selectTaskContentEntry = (state, cardId) => (
