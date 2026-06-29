@@ -25,7 +25,7 @@ import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
-import { useApi } from '../hooks/useApi';
+import { useTasksApi } from '../hooks/api/useTasksApi';
 import {
   fetchKanbanBoard,
   fetchTaskActivity,
@@ -575,11 +575,7 @@ function buildDependencyDraft(value, board) {
 }
 
 export default function TasksPage({ context = null }) {
-  const {
-    updateKanbanCard,
-    deleteKanbanCard,
-    createTaskActivity,
-  } = useApi();
+  const { updateKanbanCard, deleteKanbanCard, createTaskActivity } = useTasksApi();
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const dispatch = useDispatch();

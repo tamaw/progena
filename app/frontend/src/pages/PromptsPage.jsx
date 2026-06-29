@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useApi } from '../hooks/useApi';
+import { usePromptsApi } from '../hooks/api/usePromptsApi';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   PaneCollapseSeam,
@@ -130,7 +130,7 @@ function PromptTreeBranch({
 }
 
 export default function PromptsPage() {
-  const { getPrompts, updatePromptContent } = useApi();
+  const { getPrompts, updatePromptContent } = usePromptsApi();
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
   const [prompts, setPrompts] = useState([]);

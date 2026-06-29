@@ -20,7 +20,7 @@ import DetailHeader, {
   PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
-import { useApi } from '../hooks/useApi';
+import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { useConfig } from '../context/ConfigContext';
 import { fetchMcp, selectMcpServers } from '../store/uiDataSlice';
 import { selectRealtime } from '../store/realtimeSlice';
@@ -135,7 +135,7 @@ export default function ToolsPage() {
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
-  const { updateWidget, deleteWidget } = useApi();
+  const { updateWidget, deleteWidget } = useWidgetsApi();
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
