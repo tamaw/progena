@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
+import {
+  fetchKnowledge,
+  indexKnowledgeSource,
+  saveKnowledge,
+  selectKnowledgeBases,
+  selectKnowledgeState,
+} from '../store/uiDataSlice';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -25,7 +33,6 @@ import NumberStepper from '../components/common/NumberStepper';
 import {
   KB_FILTERS,
   KB_SORTS,
-  formatBytes,
   formatCount,
   formatRelativeTime,
   fromApiBase,
@@ -43,8 +50,23 @@ const EMBED_MODELS = [
   { value: 'text-embedding-3-large', dimensions: 3072 },
   { value: 'text-embedding-ada-002', dimensions: 1536 },
 ];
-const EMBED_METRICS = ['cosine', 'inner product', 'euclidean'];
+// Values must match the validator (cosine / l2 / inner_product).
+const EMBED_METRICS = [
+  { value: 'cosine', label: 'cosine' },
+  { value: 'inner_product', label: 'inner product' },
+  { value: 'l2', label: 'euclidean' },
+];
 const EMBED_INDEXES = ['Flat', 'IVFFlat', 'HNSW'];
+
+// Generate a client-side source id so the folder can be registered (PUT) and then
+// indexed (POST) in one user action. The validator keeps provided source ids.
+function generateSourceId() {
+  const raw = (globalThis.crypto?.randomUUID?.() || Math.random().toString(16).slice(2)).replace(
+    /-/g,
+    '',
+  );
+  return `src-${raw.slice(0, 10)}`;
+}
 
 function KnowledgeCard({ base, selected, onSelect }) {
   const meta = statusMeta(base.status);
@@ -91,23 +113,21 @@ function InfoRow({ title, sub, chip }) {
 
 export default function KnowledgePage() {
   const { getApiUrl } = useConfig();
-  const [bases, setBases] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+  const dispatch = useDispatch();
+  // The page renders from the realtime store: `knowledge.snapshot` events keep
+  // `rawBases` live; the GET on mount just seeds + triggers the first broadcast.
+  const rawBases = useSelector(selectKnowledgeBases);
+  const { loaded } = useSelector(selectKnowledgeState);
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
   const [selectedBaseId, setSelectedBaseId] = useState(null);
   const [detailTab, setDetailTab] = useState('Overview');
-  const [creating, setCreating] = useState(false);
   const [testQuery, setTestQuery] = useState('');
   const [testResults, setTestResults] = useState(null);
   const [testLoading, setTestLoading] = useState(false);
   const [testError, setTestError] = useState('');
   const [config, setConfig] = useState({ limit: 5, minScore: 0 });
-  const [addingSource, setAddingSource] = useState(false);
-  const [sourceDraft, setSourceDraft] = useState({ name: '', title: '', content: '' });
-  const [savingSource, setSavingSource] = useState(false);
-  const [sourceError, setSourceError] = useState('');
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
   const [savingTag, setSavingTag] = useState(false);
@@ -128,7 +148,6 @@ export default function KnowledgePage() {
   const [descDraft, setDescDraft] = useState('');
   const [savingDesc, setSavingDesc] = useState(false);
   const [descError, setDescError] = useState('');
-  const [sources, setSources] = useState([]);
   const [folderFormOpen, setFolderFormOpen] = useState(false);
   const [pathDraft, setPathDraft] = useState('');
   const [addingFolder, setAddingFolder] = useState(false);
@@ -138,62 +157,16 @@ export default function KnowledgePage() {
 
   const knowledgeUrl = getApiUrl('/api/ui/knowledge');
 
-  // Load the live pgvector-backed bases. No mock fallback — the page reflects
-  // exactly what exists in Postgres.
-  const loadBases = useCallback(async (selectId = null) => {
-    try {
-      const response = await fetch(knowledgeUrl);
-      if (!response.ok) {
-        return;
-      }
-      const payload = await response.json();
-      const apiBases = Array.isArray(payload.bases) ? payload.bases.map(fromApiBase) : [];
-      setBases(apiBases);
-      setSelectedBaseId((current) => {
-        if (selectId) {
-          return selectId;
-        }
-        if (current && apiBases.some((base) => base.id === current)) {
-          return current;
-        }
-        return apiBases.length ? apiBases[0].id : null;
-      });
-    } catch {
-      // Leave the current list in place on a transient network error.
-    } finally {
-      setLoaded(true);
-    }
-  }, [knowledgeUrl]);
-
   useEffect(() => {
-    loadBases();
-  }, [loadBases]);
+    dispatch(fetchKnowledge({ knowledgeUrl }));
+  }, [dispatch, knowledgeUrl]);
 
-  // Folder sources for the selected store (loaded per base, shown on the Sources tab).
-  const loadSources = useCallback(async (baseId) => {
-    if (!baseId) {
-      setSources([]);
-      return;
-    }
-    try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(baseId)}/sources`);
-      if (!response.ok) {
-        return;
-      }
-      const payload = await response.json();
-      setSources(Array.isArray(payload.sources) ? payload.sources : []);
-    } catch {
-      // Leave the current list on a transient error.
-    }
-  }, [knowledgeUrl]);
+  const bases = useMemo(() => rawBases.map(fromApiBase), [rawBases]);
 
-  // Clear any test-query and add-source state when switching to a different store.
+  // Clear any test-query and edit state when switching to a different store.
   useEffect(() => {
     setTestResults(null);
     setTestError('');
-    setAddingSource(false);
-    setSourceDraft({ name: '', title: '', content: '' });
-    setSourceError('');
     setAddingTag(false);
     setTagDraft('');
     setTagError('');
@@ -229,6 +202,7 @@ export default function KnowledgePage() {
   );
 
   const connectedCount = bases.filter((base) => base.status === 'connected').length;
+  const sources = selectedBase?.sources || [];
 
   // Keep the editable connection-string draft in sync with the selected store.
   const selectedConnectionString = selectedBase?.connectionString || '';
@@ -246,43 +220,22 @@ export default function KnowledgePage() {
     setEditingDesc(false);
   }, [selectedDescription, selectedBaseId]);
 
-  // Load folder sources whenever the selected store changes.
-  const selectedBaseRef = selectedBase?.id || null;
-  useEffect(() => {
-    loadSources(selectedBaseRef);
-  }, [selectedBaseRef, loadSources]);
+  // PUT the whole settings document; the backend validates + broadcasts, so the
+  // store (and this page) update from the resulting `knowledge.snapshot`.
+  const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
+  const patchSelected = (patch) => putBases(
+    rawBases.map((base) => (base.id === selectedBase?.id
+      ? { ...base, ...patch, updated_at: new Date().toISOString() }
+      : base)),
+  );
 
-  // Create an empty pgvector store in Postgres, then refresh the list and select
-  // it. Populate it via the Collections / Sources tabs.
-  const addBase = async () => {
-    if (creating) {
-      return;
-    }
-    setCreating(true);
-    // Next free number, based on the highest existing "Knowledge base N".
-    const used = bases
-      .map((base) => /knowledge base (\d+)$/i.exec(base.name))
-      .filter(Boolean)
-      .map((match) => Number(match[1]));
-    const index = (used.length ? Math.max(...used) : 0) + 1;
-    try {
-      const response = await fetch(knowledgeUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Knowledge base ${index}` }),
-      });
-      if (response.ok) {
-        const payload = await response.json();
-        const created = payload.base ? fromApiBase(payload.base) : null;
-        setActiveFilter('All');
-        setSearchQuery('');
-        await loadBases(created?.id || null);
-      }
-    } catch {
-      // Surface nothing destructive; the list simply won't change on failure.
-    } finally {
-      setCreating(false);
-    }
+  // Open the quick chat prefilled to create a knowledge base — Progenitor edits
+  // /state/knowledge.json (managing-knowledge skill) and the new base appears
+  // here live via the knowledge.snapshot event.
+  const openCreateChat = () => {
+    window.dispatchEvent(
+      new CustomEvent('progenitor:open-quick-chat', { detail: { mode: 'knowledge-create' } }),
+    );
   };
 
   const deleteSelected = async () => {
@@ -290,21 +243,16 @@ export default function KnowledgePage() {
       return;
     }
     const id = selectedBase.id;
-    if (selectedBase.persisted) {
-      try {
-        await fetch(`${knowledgeUrl}/${encodeURIComponent(id)}`, { method: 'DELETE' });
-      } catch {
-        // ignore; fall through to optimistic local removal
-      }
-    }
-    setBases((current) => current.filter((base) => base.id !== id));
     setSelectedBaseId(null);
-    loadBases();
+    try {
+      await putBases(rawBases.filter((base) => base.id !== id));
+    } catch {
+      // ignore; the snapshot will reconcile the list
+    }
   };
 
   // Run a live pgvector search against this store via the backend, which queries
-  // Postgres directly. Lets you sanity-check what the agent's knowledge_search
-  // tool would return.
+  // Postgres directly — the same path the agent's knowledge_search tool uses.
   const runTestQuery = async (event) => {
     event?.preventDefault?.();
     if (!selectedBase || !testQuery.trim() || testLoading) {
@@ -318,9 +266,7 @@ export default function KnowledgePage() {
       const response = await fetch(url);
       if (!response.ok) {
         setTestResults(null);
-        setTestError(response.status === 404
-          ? 'This store is not persisted in Postgres yet — create one with "+ New" to run a live query.'
-          : `Search failed (${response.status}).`);
+        setTestError(`Search failed (${response.status}).`);
         return;
       }
       const payload = await response.json();
@@ -337,47 +283,7 @@ export default function KnowledgePage() {
     }
   };
 
-  // Add a source: a named grouping (collection) the pasted document is embedded
-  // under. Hits the backend ingest endpoint, so the new passage is immediately
-  // searchable by the agent's knowledge_search tool.
-  const addSource = async (event) => {
-    event?.preventDefault?.();
-    if (!selectedBase || savingSource) {
-      return;
-    }
-    const content = sourceDraft.content.trim();
-    if (!content) {
-      setSourceError('Add some document text for the source.');
-      return;
-    }
-    const collection = sourceDraft.name.trim() || 'default';
-    setSavingSource(true);
-    setSourceError('');
-    try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/documents`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          documents: [{ collection, title: sourceDraft.title.trim(), content }],
-        }),
-      });
-      if (!response.ok) {
-        setSourceError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to add source (${response.status}).`);
-        return;
-      }
-      setSourceDraft({ name: '', title: '', content: '' });
-      setAddingSource(false);
-      await loadBases(selectedBase.id);
-    } catch {
-      setSourceError('Could not reach the knowledge database.');
-    } finally {
-      setSavingSource(false);
-    }
-  };
-
-  // Persist the full tag list to Postgres, then refresh from the server.
+  // Persist the full tag list, then let the broadcast refresh the view.
   const saveTags = async (nextTags) => {
     if (!selectedBase || savingTag) {
       return false;
@@ -385,21 +291,10 @@ export default function KnowledgePage() {
     setSavingTag(true);
     setTagError('');
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/tags`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tags: nextTags }),
-      });
-      if (!response.ok) {
-        setTagError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to update tags (${response.status}).`);
-        return false;
-      }
-      await loadBases(selectedBase.id);
+      await patchSelected({ tags: nextTags });
       return true;
-    } catch {
-      setTagError('Could not reach the knowledge database.');
+    } catch (error) {
+      setTagError(error.message || 'Failed to update tags.');
       return false;
     } finally {
       setSavingTag(false);
@@ -442,7 +337,6 @@ export default function KnowledgePage() {
     setEditingConn(false);
   };
 
-  // Persist the (metadata) connection string for this store.
   const saveConnection = async (event) => {
     event?.preventDefault?.();
     if (!selectedBase || savingConn) {
@@ -451,21 +345,10 @@ export default function KnowledgePage() {
     setSavingConn(true);
     setConnError('');
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/connection`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ connection_string: connDraft.trim() }),
-      });
-      if (!response.ok) {
-        setConnError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to update connection (${response.status}).`);
-        return;
-      }
+      await patchSelected({ connection_string: connDraft.trim() });
       setEditingConn(false);
-      await loadBases(selectedBase.id);
-    } catch {
-      setConnError('Could not reach the knowledge database.');
+    } catch (error) {
+      setConnError(error.message || 'Failed to update connection.');
     } finally {
       setSavingConn(false);
     }
@@ -492,15 +375,8 @@ export default function KnowledgePage() {
     }
     setSavingName(true);
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/name`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: next }),
-      });
-      if (response.ok) {
-        setEditingName(false);
-        await loadBases(selectedBase.id);
-      }
+      await patchSelected({ name: next });
+      setEditingName(false);
     } catch {
       // Leave edit mode open so the draft isn't lost on a transient error.
     } finally {
@@ -531,26 +407,15 @@ export default function KnowledgePage() {
     setSavingEmbed(true);
     setEmbedError('');
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/embedding`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          embedding_model: embedDraft.embeddingModel,
-          dimensions: embedDraft.dimensions,
-          metric: embedDraft.metric,
-          index_type: embedDraft.indexType,
-        }),
+      await patchSelected({
+        embedding_model: embedDraft.embeddingModel,
+        dimensions: embedDraft.dimensions,
+        metric: embedDraft.metric,
+        index_type: embedDraft.indexType,
       });
-      if (!response.ok) {
-        setEmbedError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to update embedding (${response.status}).`);
-        return;
-      }
       setEditingEmbed(false);
-      await loadBases(selectedBase.id);
-    } catch {
-      setEmbedError('Could not reach the knowledge database.');
+    } catch (error) {
+      setEmbedError(error.message || 'Failed to update embedding.');
     } finally {
       setSavingEmbed(false);
     }
@@ -576,28 +441,17 @@ export default function KnowledgePage() {
     setSavingDesc(true);
     setDescError('');
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/description`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ description: descDraft.trim() }),
-      });
-      if (!response.ok) {
-        setDescError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to update description (${response.status}).`);
-        return;
-      }
+      await patchSelected({ description: descDraft.trim() });
       setEditingDesc(false);
-      await loadBases(selectedBase.id);
-    } catch {
-      setDescError('Could not reach the knowledge database.');
+    } catch (error) {
+      setDescError(error.message || 'Failed to update description.');
     } finally {
       setSavingDesc(false);
     }
   };
 
-  // Register a folder and index its files immediately. Refreshes both the source
-  // list and the base (its document/collection counts change).
+  // Register a folder (PUT the new source) then index it (walk + embed on the
+  // server). Both update the document, so the snapshot refreshes the view.
   const addFolder = async (event) => {
     event?.preventDefault?.();
     const path = pathDraft.trim();
@@ -606,23 +460,16 @@ export default function KnowledgePage() {
     }
     setAddingFolder(true);
     setFolderError('');
+    const sourceId = generateSourceId();
     try {
-      const response = await fetch(`${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/sources`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path }),
-      });
-      if (!response.ok) {
-        setFolderError(response.status === 404
-          ? 'This store is not persisted in Postgres yet.'
-          : `Failed to add folder (${response.status}).`);
-        return;
-      }
+      await patchSelected({ sources: [...sources, { id: sourceId, path }] });
+      await dispatch(
+        indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId }),
+      ).unwrap();
       setPathDraft('');
       setFolderFormOpen(false);
-      await Promise.all([loadSources(selectedBase.id), loadBases(selectedBase.id)]);
-    } catch {
-      setFolderError('Could not reach the knowledge database.');
+    } catch (error) {
+      setFolderError(error.message || 'Could not reach the knowledge database.');
     } finally {
       setAddingFolder(false);
     }
@@ -635,17 +482,11 @@ export default function KnowledgePage() {
     setBusySourceId(sourceId);
     setFolderError('');
     try {
-      const response = await fetch(
-        `${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/sources/${encodeURIComponent(sourceId)}/index`,
-        { method: 'POST' },
-      );
-      if (!response.ok) {
-        setFolderError(`Re-index failed (${response.status}).`);
-        return;
-      }
-      await Promise.all([loadSources(selectedBase.id), loadBases(selectedBase.id)]);
-    } catch {
-      setFolderError('Could not reach the knowledge database.');
+      await dispatch(
+        indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId }),
+      ).unwrap();
+    } catch (error) {
+      setFolderError(error.message || 'Re-index failed.');
     } finally {
       setBusySourceId(null);
     }
@@ -658,13 +499,9 @@ export default function KnowledgePage() {
     setBusySourceId(sourceId);
     setFolderError('');
     try {
-      await fetch(
-        `${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/sources/${encodeURIComponent(sourceId)}`,
-        { method: 'DELETE' },
-      );
-      await Promise.all([loadSources(selectedBase.id), loadBases(selectedBase.id)]);
-    } catch {
-      setFolderError('Could not reach the knowledge database.');
+      await patchSelected({ sources: sources.filter((source) => source.id !== sourceId) });
+    } catch (error) {
+      setFolderError(error.message || 'Could not reach the knowledge database.');
     } finally {
       setBusySourceId(null);
     }
@@ -686,8 +523,7 @@ export default function KnowledgePage() {
               activeFilter={activeFilter}
               onFilterChange={setActiveFilter}
               actionLabel="+ New"
-              onAction={addBase}
-              actionDisabled={creating}
+              onAction={openCreateChat}
             />
             <PaneListToolbar>
               <PaneListSearch value={searchQuery} placeholder="Search vector stores" onChange={setSearchQuery} />
@@ -805,13 +641,9 @@ export default function KnowledgePage() {
             <div className="task-detail__body">
               {detailTab === 'Overview' ? (
                 <>
-                  {selectedBase.lastError ? (
-                    <div className="agents-empty-state">{selectedBase.lastError}</div>
-                  ) : null}
-
                   <div className="agents-metrics">
                     <MetricCard label="Documents" value={formatCount(selectedBase.documents)} detail="stored passages" />
-                    <MetricCard label="Vectors" value={formatCount(selectedBase.chunks)} detail={`${formatCount(selectedBase.dimensions)} dims`} />
+                    <MetricCard label="Vectors" value={formatCount(selectedBase.documents)} detail={`${formatCount(selectedBase.dimensions)} dims`} />
                     <MetricCard label="Agents" value={formatCount(selectedBase.pluggedInto.length)} detail="connected" />
                     <MetricCard label="Last sync" value={formatRelativeTime(selectedBase.lastSynced)} detail={statusMeta(selectedBase.status).label.toLowerCase()} />
                   </div>
@@ -987,47 +819,7 @@ export default function KnowledgePage() {
                 <section className="agents-section">
                   <header className="agents-section__head">
                     <h2>Collections <span>{selectedBase.collections.length} collection{selectedBase.collections.length === 1 ? '' : 's'}</span></h2>
-                    <div>
-                      <button
-                        type="button"
-                        className="repo-btn repo-btn--ghost"
-                        onClick={() => { setAddingSource((open) => !open); setSourceError(''); }}
-                      >
-                        {addingSource ? 'Cancel' : '+ Add collection'}
-                      </button>
-                    </div>
                   </header>
-
-                  {addingSource ? (
-                    <form className="kb-source-form" onSubmit={addSource}>
-                      <input
-                        className="kb-source-form__input"
-                        placeholder="Collection name (e.g. handbook, faq, notes)"
-                        value={sourceDraft.name}
-                        onChange={(event) => setSourceDraft((draft) => ({ ...draft, name: event.target.value }))}
-                      />
-                      <input
-                        className="kb-source-form__input"
-                        placeholder="Document title (optional)"
-                        value={sourceDraft.title}
-                        onChange={(event) => setSourceDraft((draft) => ({ ...draft, title: event.target.value }))}
-                      />
-                      <textarea
-                        className="kb-source-form__textarea"
-                        rows={4}
-                        placeholder="Paste the document text to embed into this collection…"
-                        value={sourceDraft.content}
-                        onChange={(event) => setSourceDraft((draft) => ({ ...draft, content: event.target.value }))}
-                      />
-                      {sourceError ? <div className="task-alert">{sourceError}</div> : null}
-                      <div className="kb-source-form__actions">
-                        <button type="submit" className="repo-btn" disabled={savingSource || !sourceDraft.content.trim()}>
-                          {savingSource ? 'Adding…' : 'Add collection'}
-                        </button>
-                      </div>
-                    </form>
-                  ) : null}
-
                   {selectedBase.collections.length ? (
                     <div className="agents-mini-list">
                       {selectedBase.collections.map((collection) => (
@@ -1036,14 +828,12 @@ export default function KnowledgePage() {
                             <strong>{collection.name}</strong>
                             <p>synced {formatRelativeTime(collection.updated)}</p>
                           </div>
-                          {collection.chunks > 0 ? (
-                            <span className="agents-chip agents-chip--info">{formatCount(collection.chunks)} vectors</span>
-                          ) : <span className="agents-chip agents-chip--muted">collection</span>}
+                          <span className="agents-chip agents-chip--muted">collection</span>
                         </div>
                       ))}
                     </div>
-                  ) : <div className="agents-empty-state">No collections yet — add one to start populating this store.</div>}
-                  <p className="task-meta-sub">Named groupings of the documents embedded into this store (including those from folder sources).</p>
+                  ) : <div className="agents-empty-state">No collections yet — add a folder source to populate this store.</div>}
+                  <p className="task-meta-sub">Named groupings of the documents embedded into this store (from folder sources).</p>
                 </section>
                 </>
               ) : null}
@@ -1200,7 +990,7 @@ export default function KnowledgePage() {
                               value={embedDraft.metric}
                               onChange={(event) => setEmbedDraft((draft) => ({ ...draft, metric: event.target.value }))}
                             >
-                              {EMBED_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
+                              {EMBED_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
                             </select>
                           </div>
                           <div className="kb-config__row">
@@ -1247,11 +1037,6 @@ export default function KnowledgePage() {
                         title={`${selectedBase.indexType} index`}
                         sub={`${selectedBase.metric} similarity`}
                         chip={`${formatCount(selectedBase.dimensions)} dims`}
-                      />
-                      <InfoRow
-                        title={formatBytes(selectedBase.sizeBytes)}
-                        sub={`On disk · owner ${selectedBase.owner}`}
-                        chip="storage"
                       />
                     </div>
                   </section>

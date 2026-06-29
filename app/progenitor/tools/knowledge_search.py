@@ -8,7 +8,7 @@ import os
 import psycopg
 from pydantic import BaseModel, Field
 
-from ..knowledge import resolve_base_id_async, search_async
+from ..knowledge import load_bases_async, resolve_base_ref, search_async
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -87,9 +87,13 @@ class KnowledgeSearchTool(BaseSystemTool):
             return ToolResult.fail(f"Could not connect to the knowledge database: {exc}")
 
         try:
+            # Base names/settings live in the ``knowledge`` document, not a table,
+            # so resolve the reference and map ids→names from there.
+            bases = await load_bases_async(aconn)
+            name_by_id = {str(base.get("id")): base.get("name") for base in bases}
             base_id: str | None = None
             if base_ref:
-                base_id = await resolve_base_id_async(aconn, str(base_ref))
+                base_id = resolve_base_ref(bases, str(base_ref))
                 if base_id is None:
                     return ToolResult.ok(
                         {
@@ -119,7 +123,7 @@ class KnowledgeSearchTool(BaseSystemTool):
 
         results = [
             {
-                "knowledge_base": row.get("base_name"),
+                "knowledge_base": name_by_id.get(str(row.get("base_id"))),
                 "knowledge_base_id": row.get("base_id"),
                 "collection": row.get("collection"),
                 "title": row.get("title"),

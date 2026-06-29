@@ -345,6 +345,27 @@ class StateManager:
             return
         self._state_cache["mcp"] = normalized
 
+    async def get_knowledge_config(self) -> dict[str, Any]:
+        """Return the ``knowledge`` document (knowledge-base settings).
+
+        Read straight from the shared store (not the cache): the backend (UI)
+        edits this same document via ``PUT /api/ui/knowledge``, so a cached copy
+        would hide cross-process changes. See get_mcp_config for the rationale.
+        """
+        default: dict[str, Any] = {"bases": []}
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.get_document("knowledge", default)
+            return payload if isinstance(payload, dict) else dict(default)
+        payload = self._state_cache.get("knowledge", default)
+        return payload if isinstance(payload, dict) else dict(default)
+
+    async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
+        """Persist the ``knowledge`` document (knowledge-base settings)."""
+        if self._runtime_store is not None:
+            await self._save_runtime_document("knowledge", payload)
+            return
+        self._state_cache["knowledge"] = payload
+
     async def get_kanban_structure(self) -> dict[str, Any]:
         """Return the kanban board structure document (columns + ``card_order``).
 

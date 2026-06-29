@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  colorForId,
   filterBases,
-  formatBytes,
   formatCount,
   formatRelativeTime,
   fromApiBase,
@@ -118,26 +116,10 @@ describe('groupBases', () => {
   });
 });
 
-describe('formatBytes', () => {
-  it('scales to human units', () => {
-    expect(formatBytes(0)).toBe('0 B');
-    expect(formatBytes(512)).toBe('512 B');
-    expect(formatBytes(2048)).toBe('2 KB');
-    expect(formatBytes(1572864)).toBe('1.5 MB');
-  });
-});
-
 describe('formatCount', () => {
   it('groups thousands', () => {
     expect(formatCount(1500)).toBe('1,500');
     expect(formatCount('x')).toBe('0');
-  });
-});
-
-describe('colorForId', () => {
-  it('is stable and returns a hex colour', () => {
-    expect(colorForId('abc')).toBe(colorForId('abc'));
-    expect(colorForId('abc')).toMatch(/^#[0-9a-f]{6}$/i);
   });
 });
 
@@ -156,19 +138,19 @@ describe('fromApiBase', () => {
       documents: 5,
       collections: ['facts', 'people'],
       tags: ['priority', 'ops'],
+      sources: [{ id: 'src-1', path: '/tmp/docs', status: 'indexed', document_count: 2 }],
       updated_at: '2026-06-27T06:00:00Z',
     });
     expect(ui.id).toBe('kb-1');
     expect(ui.name).toBe('Ops notes');
     expect(ui.documents).toBe(5);
-    expect(ui.chunks).toBe(5);
     expect(ui.embeddingModel).toBe('progenitor-hash-256');
     expect(ui.dimensions).toBe(256);
     expect(ui.table).toBe('knowledge_documents');
     expect(ui.tags).toEqual(['priority', 'ops']);
     expect(ui.collections.map((c) => c.name)).toEqual(['facts', 'people']);
+    expect(ui.sources).toEqual([{ id: 'src-1', path: '/tmp/docs', status: 'indexed', document_count: 2 }]);
     expect(ui.pluggedInto).toEqual(['Progenitor']);
-    expect(ui.persisted).toBe(true);
     expect(ui.lastSynced).toBe('2026-06-27T06:00:00Z');
   });
 
@@ -178,6 +160,7 @@ describe('fromApiBase', () => {
     expect(ui.documents).toBe(0);
     expect(ui.dimensions).toBe(256);
     expect(ui.tags).toEqual([]);
+    expect(ui.sources).toEqual([]);
   });
 });
 

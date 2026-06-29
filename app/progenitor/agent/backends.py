@@ -25,6 +25,7 @@ from deepagents.backends import (
 from .state_backend import (
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
+    create_knowledge_state_file,
     create_mcp_state_file,
 )
 
@@ -124,6 +125,7 @@ def create_progenitor_backend(
         routes["/state/"] = StateDocumentBackend(
             [
                 create_mcp_state_file(state_manager),
+                create_knowledge_state_file(state_manager),
             ]
         )
         routes["/state/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
