@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useApi } from '../hooks/useApi';
+import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
@@ -213,13 +213,7 @@ function ConversationPage() {
   const dispatch = useDispatch();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
-  const {
-    connectionState,
-    sendMessageStream,
-    cancelStream,
-    getSession,
-    createSession,
-  } = useApi();
+  const { connectionState, sendMessageStream, cancelStream, getSession, createSession } = useChatApi();
   const { show } = useNotifications();
   const lastUiEvent = useSelector(selectLastUiEvent);
   const backendChatSessions = useSelector(selectChatSessions);

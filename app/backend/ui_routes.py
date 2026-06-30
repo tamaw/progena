@@ -3794,6 +3794,11 @@ async def get_prompts(agent: str | None = None):
         PromptFileResponse.model_validate(prompt, from_attributes=True)
         for prompt in service.list_prompts(agent=agent)
     ]
+    if agent is None:
+        # Seed every /api/ui/stream subscriber with the full list (the prompts
+        # store slice renders from `prompts.snapshot`). Skip filtered queries so
+        # the broadcast always carries the complete catalogue.
+        broadcast_prompts_snapshot(prompts)
     return PromptsResponse(prompts=prompts, total=len(prompts))
 
 
@@ -3814,7 +3819,7 @@ async def get_prompt_content(path: str = Query(..., min_length=1)):
 async def update_prompt_content(request: PromptUpdateRequest):
     """Persist edits to an existing prompt file."""
     try:
-        return PromptFileResponse.model_validate(
+        saved = PromptFileResponse.model_validate(
             PromptService().save_prompt(request.path, request.content),
             from_attributes=True,
         )
@@ -3822,6 +3827,8 @@ async def update_prompt_content(request: PromptUpdateRequest):
         raise HTTPException(status_code=404, detail=f"Prompt '{request.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_prompts_snapshot()
+    return saved
 
 
 @router.get("/skills", response_model=SkillsResponse)
@@ -3834,6 +3841,11 @@ async def get_skills(agent: str | None = None):
         ]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if agent is None:
+        # Seed every /api/ui/stream subscriber with the full list (the skills
+        # store slice renders from `skills.snapshot`). Skip filtered queries so
+        # the broadcast always carries the complete catalogue.
+        broadcast_skills_snapshot(skills)
     return SkillsResponse(skills=skills, total=len(skills))
 
 
@@ -3854,7 +3866,7 @@ async def get_skill_content(path: str = Query(..., min_length=1)):
 async def update_skill_content(request: SkillUpdateRequest):
     """Persist edits to an existing skill file."""
     try:
-        return SkillFileResponse.model_validate(
+        saved = SkillFileResponse.model_validate(
             SkillService().save_skill(request.path, request.content),
             from_attributes=True,
         )
@@ -3862,13 +3874,15 @@ async def update_skill_content(request: SkillUpdateRequest):
         raise HTTPException(status_code=404, detail=f"Skill '{request.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_skills_snapshot()
+    return saved
 
 
 @router.post("/skills", response_model=SkillFileResponse, status_code=201)
 async def create_skill(request: SkillCreateRequest):
     """Create a new DeepAgent skill file."""
     try:
-        return SkillFileResponse.model_validate(
+        created = SkillFileResponse.model_validate(
             SkillService().create_skill(request.agent, request.name, request.content),
             from_attributes=True,
         )
@@ -3876,6 +3890,8 @@ async def create_skill(request: SkillCreateRequest):
         raise HTTPException(status_code=409, detail=f"Skill '{exc}' already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_skills_snapshot()
+    return created
 
 
 @router.get("/logs")
@@ -4897,6 +4913,44 @@ def broadcast_knowledge_snapshot(
     """
     payload = snapshot_knowledge_bases() if bases is None else bases
     return broadcast_ui_event("knowledge.snapshot", {"bases": payload})
+
+
+def broadcast_skills_snapshot(
+    skills: list[SkillFileResponse] | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current skill list to /api/ui/stream subscribers.
+
+    Emitted after the Skills page requests the list and after UI-driven skill
+    edits/creates, so the Skills page (and other open tabs) reflect changes live.
+    Callers that already built the list can pass it in to avoid a second
+    filesystem scan and keep the event consistent with the HTTP response.
+    """
+    if skills is None:
+        skills = [
+            SkillFileResponse.model_validate(skill, from_attributes=True)
+            for skill in SkillService().list_skills()
+        ]
+    payload = [item.model_dump(mode="json") for item in skills]
+    return broadcast_ui_event("skills.snapshot", {"skills": payload})
+
+
+def broadcast_prompts_snapshot(
+    prompts: list[PromptFileResponse] | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current prompt list to /api/ui/stream subscribers.
+
+    Emitted after the Prompts page requests the list and after UI-driven prompt
+    edits, so the Prompts page (and other open tabs) reflect changes live.
+    Callers that already built the list can pass it in to avoid a second
+    filesystem scan and keep the event consistent with the HTTP response.
+    """
+    if prompts is None:
+        prompts = [
+            PromptFileResponse.model_validate(prompt, from_attributes=True)
+            for prompt in PromptService().list_prompts()
+        ]
+    payload = [item.model_dump(mode="json") for item in prompts]
+    return broadcast_ui_event("prompts.snapshot", {"prompts": payload})
 
 
 def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
