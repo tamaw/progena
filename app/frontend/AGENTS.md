@@ -1,93 +1,131 @@
-# Frontend - GitHub Copilot Agent
+# Frontend — Agent Guide
 
-## React/Vite Frontend Agent
+React + Vite SPA for Progenitor. This file is the orientation for the next agent:
+the real architecture, the conventions to follow, and the gotchas to avoid.
 
-Modern React application providing the chat interface for Progenitor.
+## Stack
 
-### Agent Capabilities
-- React 18 component development
-- Vite build tooling and configuration
-- TypeScript/JavaScript development
-- CSS/styling (Tailwind, styled-components, etc.)
-- API integration with backend
-- Real-time streaming chat UI
+- **React 19** (function components + hooks only; no class components)
+- **Vite 7** dev server / build (`type: module`, JSX in `.jsx`)
+- **Redux Toolkit 2** + **react-redux 9** for shared/realtime state
+- **react-router-dom 7** for routing (`App.jsx` wraps routes in `AppRuntimeShell`)
+- **@xyflow/react** (React Flow) for the workflow/sequence canvases
+- **chart.js / react-chartjs-2** for dashboards
+- **vitest 3** for unit tests, **@playwright/test** for e2e
+- **ESLint 9** flat config (`eslint.config.js`)
 
-### Architecture
-```
-frontend/
-├── src/
-│   ├── components/      # React components
-│   ├── pages/           # Page components
-│   ├── hooks/           # Custom React hooks
-│   ├── utils/           # Utility functions
-│   ├── App.jsx          # Main app component
-│   └── main.jsx         # Entry point
-├── public/              # Static assets
-├── index.html           # HTML template
-├── vite.config.js       # Vite configuration
-└── package.json         # Dependencies
-```
+No TypeScript, no Tailwind/styled-components — styling is plain CSS + CSS Modules.
 
-### Development
+## Commands (run from `app/frontend`)
+
 ```bash
-cd app/frontend
-
-# Install dependencies
-npm install
-
-# Run dev server
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
+npm install            # after pulling dependency changes
+npm run dev            # Vite dev server on :5173 (proxies to backend :8000)
+npm run build          # production build (must stay green)
+npm run lint           # eslint . — must stay clean
+npm run test           # vitest run (unit tests)
+npm run test:watch     # vitest watch
+npm run test:e2e       # playwright (needs the full stack running)
 ```
 
-### Key Features
-- Chat interface with message history
-- Streaming response support
-- Code highlighting and formatting
-- Copy-to-clipboard functionality
-- Responsive design
+> Shell note: the workspace shell is **fish**, not bash. Avoid bash-only syntax
+> (`for..do..done`, `(cmd || cmd)` in command position, `/dev/tcp`).
 
-### Integration Points
-- **Backend API**: Proxies to `http://localhost:8000` in dev mode
-- **Chat Endpoint**: `/v1/responses`
-- **Streaming**: SSE for real-time responses
+## Backend wiring
 
-### Development Server
-- Port: `5173` (default Vite port)
-- Auto-reload on file changes
-- Hot Module Replacement (HMR)
+The frontend never talks to the runtime directly. `vite.config.js` has a custom
+proxy plugin that forwards `/health`, `/api/*`, and `/v1/*` to the backend at
+`http://127.0.0.1:8000` (dev **and** preview). Everything else is served by Vite.
 
-### Key Patterns
-- Functional components with hooks
-- Async/await for API calls
-- Component composition
-- State management (React hooks or context)
+## Directory map (`src/`)
 
-### Configuration
-- `vite.config.js` - Vite configuration
-- `package.json` - Dependencies and scripts
-- Proxy configured to forward API calls to backend
-
-### Important Notes
-- Run `npm install` after pulling changes
-- Dev server must run concurrently with backend
-- Production build creates optimized static files
-- Assets served from `public/` directory
-
-### Testing
-```bash
-# Run tests (if configured)
-npm test
-
-# Run linting
-npm run lint
+```
+App.jsx                 # routes + global CSS imports, wrapped in AppRuntimeShell
+main.jsx                # entry point
+components/
+  layout/               # app chrome + shared master-detail primitives
+    AppRuntimeShell.jsx #   the chrome (rail, header, panels) — large, behaviour-heavy
+    navIcons.jsx        #   presentational SVG icons used by the shell
+    quickChatConfig.js  #   quick-chat panel config + outbound-message helpers (pure)
+    PaneList.jsx        #   list-pane primitives (PaneListSearch/Filters/Group/...)
+    DetailHeader.jsx    #   detail-pane header + shared action icons
+    DetailPane.jsx / PageShell.jsx / Sidebar.jsx
+  common/               # DetailCards (MetricCard/CardFact/CapabilityChip), NumberStepper,
+                        #   NotificationContainer (+ co-located .module.css)
+  chat/                 # chat input/messages + pure models (conversationModel, etc.)
+  workspace/            # React Flow nodes + panels for the Workflows canvas
+  agents/               # AgentGraph (React Flow), AgentDetailBodies, agentFormat
+  dashboard/
+context/                # React context providers
+  WorkspaceContext.jsx  #   workflow graph state/effects (the provider only)
+  workspaceGraph.js     #   pure, React-free graph helpers extracted from the context
+  ConfigContext, HealthContext, AlertCenterContext, ChromeRuntimeContext, NotificationContext
+hooks/
+  api/                  # API layer (see "API hooks" below)
+  useListSelection.js   #   shared list filter/group/select hook used by master-detail pages
+  useChatStream.js, useSSE.js, useTheme.js, useChatSessionPrefs.js
+pages/                  # one component per route; pure logic lives in *PageModel.js siblings
+store/                  # Redux Toolkit (see "State & realtime" below)
+lib/                    # markdown, indexedDb, low-level utils
+styles/                 # global stylesheets imported by App.jsx (+ workspace/nodes by components)
 ```
 
-### References
-- Vite docs: https://vitejs.dev
-- React docs: https://react.dev
+## Core conventions (follow these)
+
+### API hooks — `hooks/api/`
+One core client + per-domain hooks. `useApiClient.js` owns fetch/headers/errors;
+domain hooks (`useChatApi`, `useWidgetsApi`, `useWorkspaceApi`, `useSchedulesApi`,
+`usePromptsApi`, `useSkillsApi`, `useTasksApi`, `useLogsApi`, `useAlertsApi`) build on
+it. Add new endpoints to the matching domain hook — do **not** reintroduce a god hook.
+
+### State & realtime — `store/`
+- `store.js` wires the Redux store; `uiDataSlice.js` is split into per-domain modules
+  under `store/uiData/` (`agents`, `chats`, `tasks`, `knowledge`, `mcp`, `runtime`).
+- **Single SSE source**: `realtimeListener.js` owns the one `EventSource` and dedupes
+  by event id (`realtimeSlice.js`); incoming events update `uiData*` reducers.
+  Pages should read via selectors — **don't** open their own streams.
+- `http.js` holds shared fetch helpers for the store layer.
+
+### Master-detail pages — `pages/`
+Most list/detail pages compose the same primitives instead of re-rolling layout:
+`PaneList*` (left list), `DetailHeader` + `DetailPane` (right detail),
+`DetailCards` (metric/fact/chip cards), and `useListSelection` (filter/group/select).
+Examples: `ChannelsPage`, `ModelsPage`, `RepositoriesPage`, `SessionsPage`,
+`SkillsPage`, `PromptsPage`, `KnowledgePage`, `TasksPage`.
+Don't build a generic `<MasterDetailPage>` — the primitives are the abstraction.
+
+### Keep components thin — extract pure logic
+Pure, React-free logic lives in sibling modules so it stays testable and the
+component stays focused on rendering/state:
+- Page logic → `pages/<name>PageModel.js` (+ `.test.js`), e.g. `tasksPageModel.js`,
+  `knowledgePageModel.js`.
+- Chat parsing/formatting → `components/chat/*Model.js`.
+- Workflow graph helpers → `context/workspaceGraph.js` (the provider imports them).
+- Presentational icon sets / static config → dedicated modules
+  (`components/layout/navIcons.jsx`, `quickChatConfig.js`).
+When you delete a component's last caller of an imported helper, drop the import
+too (eslint `no-unused-vars` will flag it).
+
+### CSS
+- Global stylesheets are imported once in `App.jsx` (`main.css` is the design-token
+  base — keep it). `workspace.css` / `nodes.css` are imported by their components.
+- New component styles should be **CSS Modules** co-located next to the component
+  (`Foo.module.css`), like `components/common/NotificationContainer.module.css`.
+- `styles/chrome-frame.css` is a large monolith — migrate off it incrementally with
+  visual QA, not in one pass. The Kanban page intentionally keeps hardcoded colours
+  for now (not wired up yet).
+
+## Testing
+
+- Unit tests are `*.test.js` / `*.unit.test.js` next to the code; run with
+  `npm run test`. Mirror the pattern in `pages/tasksPageModel.test.js` — test the
+  pure model module, not the React component.
+- Playwright e2e lives in `e2e/*.spec.js` (not picked up by vitest) and runs against
+  the **live** local stack (postgres :15433, runtime :9500, backend :8000, frontend
+  :5173). `e2e/discovery.spec.js` mounts every route and asserts no uncaught errors.
+
+## Repo safety
+
+Create PRs and let a human merge — do not merge PRs or trigger deployments. The
+realtime/agent data loads asynchronously over SSE, so e2e/visual checks should wait
+for content (the agents list can take several seconds to populate).

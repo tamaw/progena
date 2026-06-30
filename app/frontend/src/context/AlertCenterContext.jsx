@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useApi } from '../hooks/useApi';
+import { useAlertsApi } from '../hooks/api/useAlertsApi';
 
 const AlertCenterContext = createContext(null);
 
@@ -17,7 +17,7 @@ function sortAlerts(alerts = []) {
 }
 
 export function AlertCenterProvider({ children }) {
-  const { getAlerts, markAlertsViewed } = useApi();
+  const { getAlerts, markAlertsViewed } = useAlertsApi();
   const [alerts, setAlerts] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [isPanelOpen, setIsPanelOpen] = useState(false);

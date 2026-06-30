@@ -1,7 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
-import { useApi } from '../hooks/useApi';
+import { useConfig } from '../context/ConfigContext';
+import {
+  fetchSkills,
+  saveSkill,
+  createSkill,
+  selectSkills,
+  selectSkillsState,
+} from '../store/uiDataSlice';
 import { renderMarkdownToHtml } from '../lib/markdown';
+import DetailHeader, {
+  DetailHeaderAction,
+  DetailHeaderActions,
+  DetailStatus,
+  EditActionIcon,
+  ReconnectActionIcon,
+  SaveActionIcon,
+} from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
   PaneExpandRail,
@@ -88,13 +104,15 @@ function SkillRow({ skill, selectedPath, onSelectSkill }) {
 }
 
 export default function SkillsPage() {
-  const { getSkills, updateSkillContent, createSkill } = useApi();
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const skillsUrl = getApiUrl('skills');
+  const skills = useSelector(selectSkills);
+  const skillsState = useSelector(selectSkillsState);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('skills-sidebar prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [skills, setSkills] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [draftContent, setDraftContent] = useState('');
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState(null);
@@ -105,36 +123,21 @@ export default function SkillsPage() {
   const [newAgent, setNewAgent] = useState('progenitor');
   const [newSkillName, setNewSkillName] = useState('new-skill');
   const requestedPath = searchParams.get('path') || '';
+  const loading = skillsState.loading && !skillsState.loaded;
 
-  const loadSkills = useCallback(async (isActive = () => true) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await getSkills();
-      if (!isActive()) {
-        return;
-      }
-      const items = response.skills || [];
-      setSkills(items);
-      setSelectedPath((currentSelected) => {
-        const nextSelected = items.find((skill) => skill.path === requestedPath)?.path
-          || items.find((skill) => skill.path === currentSelected)?.path
-          || items[0]?.path
-          || '';
-        const nextSkill = items.find((skill) => skill.path === nextSelected);
-        setDraftContent(nextSkill?.content || '');
-        return nextSelected;
-      });
-    } catch (loadError) {
-      if (isActive()) {
-        setError(loadError);
-      }
-    } finally {
-      if (isActive()) {
-        setLoading(false);
-      }
-    }
-  }, [getSkills, requestedPath]);
+  // Load the catalogue into the store; the list arrives via the fetch response
+  // and stays live through `skills.snapshot` events on /api/ui/stream. The
+  // `isActive` guard avoids a setError after the page unmounts mid-request.
+  const loadSkills = useCallback(
+    (isActive = () => true) => dispatch(fetchSkills({ skillsUrl }))
+      .unwrap()
+      .catch((loadError) => {
+        if (isActive()) {
+          setError(loadError);
+        }
+      }),
+    [dispatch, skillsUrl],
+  );
 
   useEffect(() => {
     let active = true;
@@ -143,6 +146,26 @@ export default function SkillsPage() {
       active = false;
     };
   }, [loadSkills]);
+
+  // Seed (or re-seed) the selection from the store list whenever it changes via
+  // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
+  // current selection. Runs on `skills`/`requestedPath` changes only (not on
+  // user clicks), so selecting a row never gets clobbered.
+  useEffect(() => {
+    if (creating || skills.length === 0) {
+      return;
+    }
+    setSelectedPath((current) => {
+      const next = skills.find((skill) => skill.path === requestedPath)?.path
+        || skills.find((skill) => skill.path === current)?.path
+        || skills[0]?.path
+        || '';
+      if (next !== current) {
+        setDraftContent(skills.find((skill) => skill.path === next)?.content || '');
+      }
+      return next;
+    });
+  }, [skills, requestedPath, creating]);
 
   useEffect(() => {
     const currentPath = searchParams.get('path') || '';
@@ -228,10 +251,9 @@ export default function SkillsPage() {
     setError(null);
     setStatusMessage('');
     try {
-      const updatedSkill = await updateSkillContent(selectedSkill.path, draftContent);
-      setSkills((current) => current.map((skill) => (
-        skill.path === updatedSkill.path ? updatedSkill : skill
-      )));
+      const updatedSkill = await dispatch(
+        saveSkill({ skillsUrl, path: selectedSkill.path, content: draftContent }),
+      ).unwrap();
       setDraftContent(updatedSkill.content || '');
       setStatusMessage(`Saved ${updatedSkill.path}.`);
     } catch (saveError) {
@@ -250,12 +272,14 @@ export default function SkillsPage() {
     setError(null);
     setStatusMessage('');
     try {
-      const createdSkill = await createSkill({
-        agent: normalizedNewAgent,
-        name: normalizedNewSkillName,
-        content: draftContent,
-      });
-      setSkills((current) => [...current.filter((skill) => skill.path !== createdSkill.path), createdSkill]);
+      const createdSkill = await dispatch(
+        createSkill({
+          skillsUrl,
+          agent: normalizedNewAgent,
+          name: normalizedNewSkillName,
+          content: draftContent,
+        }),
+      ).unwrap();
       setCreating(false);
       setSelectedPath(createdSkill.path);
       setDraftContent(createdSkill.content || '');
@@ -334,105 +358,104 @@ export default function SkillsPage() {
 
         {(selectedSkill || creating) && (
           <>
-            <div className="prompts-editor-header">
-              <div className="skills-editor-title">
-                <h2>{creating ? 'New skill' : (selectedSkill.title || selectedSkill.name)}</h2>
-                {creating ? (
-                  <div className="skills-create-form">
-                    <label>
-                      <span>Agent</span>
-                      <input
-                        value={newAgent}
-                        onChange={(event) => setNewAgent(event.target.value)}
-                        placeholder="progenitor"
+            <DetailHeader
+              title={creating ? 'New skill' : (selectedSkill.title || selectedSkill.name)}
+              meta={[
+                <DetailStatus key="status" tone={creating ? 'muted' : (hasUnsavedChanges ? 'info' : 'ok')}>
+                  {creating ? 'Draft skill' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}
+                </DetailStatus>,
+                creating ? null : <span key="agent" className="taskid">{selectedSkill.agent}</span>,
+                creating ? null : <span key="name" className="taskid">{selectedSkill.name}</span>,
+                <span key="path" className="taskid">
+                  {creating
+                    ? (canCreateSkill ? `${normalizedNewAgent}/${normalizedNewSkillName}/SKILL.md` : 'Use lowercase slugs')
+                    : selectedSkill.path}
+                </span>,
+              ]}
+              actions={(
+                <DetailHeaderActions>
+                  {creating ? (
+                    <DetailHeaderAction
+                      icon={<SaveActionIcon />}
+                      label="Create"
+                      tooltip="Create skill"
+                      ariaLabel="Create skill"
+                      variant="primary"
+                      onClick={handleCreateSkill}
+                      disabled={!canCreateSkill || saving}
+                    />
+                  ) : (
+                    <>
+                      <DetailHeaderAction
+                        icon={<EditActionIcon />}
+                        label={editorMode === 'edit' ? 'Preview' : 'Edit'}
+                        tooltip={editorMode === 'edit' ? 'Preview skill' : 'Edit skill'}
+                        ariaLabel={editorMode === 'edit' ? 'Preview skill' : 'Edit skill'}
+                        onClick={() => setEditorMode((mode) => (mode === 'edit' ? 'preview' : 'edit'))}
                       />
-                    </label>
-                    <label>
-                      <span>Skill</span>
-                      <input
-                        value={newSkillName}
-                        onChange={(event) => setNewSkillName(event.target.value)}
-                        placeholder="triage-workflow"
+                      <DetailHeaderAction
+                        icon={<ReconnectActionIcon />}
+                        label="Revert"
+                        tooltip="Revert unsaved changes"
+                        ariaLabel="Revert unsaved changes"
+                        onClick={handleReload}
+                        disabled={!hasUnsavedChanges || saving}
                       />
-                    </label>
-                    <span className="prompts-editor-path">
-                      {canCreateSkill ? `${normalizedNewAgent}/${normalizedNewSkillName}/SKILL.md` : 'Use lowercase slugs'}
-                    </span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="prompts-editor-path">{selectedSkill.path}</div>
-                    <div className="prompts-editor-badges">
-                      <span className="prompts-editor-badge">{selectedSkill.agent}</span>
-                      <span className="prompts-editor-badge">{selectedSkill.name}</span>
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="prompts-editor-actions">
-                <div className="prompts-editor-mode" role="tablist" aria-label="Skill display mode">
-                  <button
-                    type="button"
-                    className={`chat-pane-tab prompts-editor-mode__button ${editorMode === 'preview' ? 'is-active' : ''}`}
-                    onClick={() => setEditorMode('preview')}
-                  >
-                    Preview
-                  </button>
-                  <button
-                    type="button"
-                    className={`chat-pane-tab prompts-editor-mode__button ${editorMode === 'edit' ? 'is-active' : ''}`}
-                    onClick={() => setEditorMode('edit')}
-                  >
-                    Edit
-                  </button>
+                      <DetailHeaderAction
+                        icon={<SaveActionIcon />}
+                        label="Save"
+                        tooltip="Save skill"
+                        ariaLabel="Save skill"
+                        variant="primary"
+                        onClick={handleSave}
+                        disabled={!hasUnsavedChanges || saving}
+                      />
+                    </>
+                  )}
+                </DetailHeaderActions>
+              )}
+            />
+
+            <div className="skills-detail__body">
+              {creating ? (
+                <div className="skills-create-form">
+                  <label>
+                    <span>Agent</span>
+                    <input
+                      value={newAgent}
+                      onChange={(event) => setNewAgent(event.target.value)}
+                      placeholder="progenitor"
+                    />
+                  </label>
+                  <label>
+                    <span>Skill</span>
+                    <input
+                      value={newSkillName}
+                      onChange={(event) => setNewSkillName(event.target.value)}
+                      placeholder="triage-workflow"
+                    />
+                  </label>
                 </div>
-                {creating ? (
-                  <button className="node-action-btn primary" onClick={handleCreateSkill} disabled={!canCreateSkill || saving}>
-                    {saving ? 'Creating...' : 'Create'}
-                  </button>
-                ) : (
-                  <>
-                    <button className="node-action-btn" onClick={handleReload} disabled={!hasUnsavedChanges || saving}>
-                      Revert
-                    </button>
-                    <button className="node-action-btn primary" onClick={handleSave} disabled={!hasUnsavedChanges || saving}>
-                      {saving ? 'Saving...' : 'Save'}
-                    </button>
-                  </>
-                )}
-              </div>
+              ) : (
+                <p className="task-description skills-detail__description">
+                  {selectedSkill.description || 'No description yet.'}
+                </p>
+              )}
+
+              {editorMode === 'preview' && !creating ? (
+                <div
+                  className="prompts-markdown-preview message-content"
+                  dangerouslySetInnerHTML={{ __html: renderedDraftContent }}
+                />
+              ) : (
+                <textarea
+                  className="prompts-editor-textarea"
+                  value={draftContent}
+                  onChange={(event) => setDraftContent(event.target.value)}
+                  spellCheck={false}
+                />
+              )}
             </div>
-
-            {!creating && selectedSkill && (
-              <div className="skills-meta-grid">
-                <div>
-                  <span>Agent</span>
-                  <strong>{selectedSkill.agent}</strong>
-                </div>
-                <div>
-                  <span>Reusable as</span>
-                  <strong>{selectedSkill.name}</strong>
-                </div>
-                <div>
-                  <span>Purpose</span>
-                  <strong>{selectedSkill.description || 'No description yet'}</strong>
-                </div>
-              </div>
-            )}
-
-            {editorMode === 'preview' ? (
-              <div
-                className="prompts-markdown-preview message-content"
-                dangerouslySetInnerHTML={{ __html: renderedDraftContent }}
-              />
-            ) : (
-              <textarea
-                className="prompts-editor-textarea"
-                value={draftContent}
-                onChange={(event) => setDraftContent(event.target.value)}
-                spellCheck={false}
-              />
-            )}
 
             <div className="prompts-editor-footer">
               <span>{creating ? 'Draft skill' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}</span>

@@ -45,7 +45,6 @@ export function HealthProvider({ children }) {
       if (!mounted) return;
 
       try {
-        console.log('[HealthContext] Checking health...');
         const response = await fetch(buildUrl(baseUrl, '/health'), {
           method: 'GET',
           headers: { 'Accept': 'application/json' },
@@ -56,8 +55,6 @@ export function HealthProvider({ children }) {
         const data = await response.json().catch(() => null);
         const status = data?.status;
         const healthy = status === 'ok' || status === 'healthy';
-
-        console.log('[HealthContext] Result:', status ?? response.status, '→ healthy:', healthy);
 
         isHealthyRef.current = healthy;
         setIsHealthy(healthy);
@@ -75,16 +72,13 @@ export function HealthProvider({ children }) {
 
       // Schedule next check
       if (mounted) {
-        console.log('[HealthContext] Next check in', currentInterval / 1000, 's');
         scheduleNext(currentInterval);
       }
     };
 
-    console.log('[HealthContext] Starting health check loop');
     runCheck(); // Initial check
 
     return () => {
-      console.log('[HealthContext] Cleanup');
       mounted = false;
       if (intervalIdRef.current) {
         clearTimeout(intervalIdRef.current);
