@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
-import { usePromptsApi } from '../hooks/api/usePromptsApi';
+import { useConfig } from '../context/ConfigContext';
+import {
+  fetchPrompts,
+  savePrompt,
+  selectPrompts,
+  selectPromptsState,
+} from '../store/uiDataSlice';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   PaneCollapseSeam,
@@ -130,13 +137,15 @@ function PromptTreeBranch({
 }
 
 export default function PromptsPage() {
-  const { getPrompts, updatePromptContent } = usePromptsApi();
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const promptsUrl = getApiUrl('prompts');
+  const prompts = useSelector(selectPrompts);
+  const promptsState = useSelector(selectPromptsState);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('prompts-sidebar sess-list');
   const [searchParams, setSearchParams] = useSearchParams();
-  const [prompts, setPrompts] = useState([]);
   const [selectedPath, setSelectedPath] = useState('');
   const [draftContent, setDraftContent] = useState('');
-  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
@@ -145,44 +154,38 @@ export default function PromptsPage() {
   const [query, setQuery] = useState('');
   const [editorMode, setEditorMode] = useState('preview');
   const requestedPath = searchParams.get('path') || '';
+  const loading = promptsState.loading && !promptsState.loaded;
 
-  const loadPrompts = useCallback(async (isActive = () => true) => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await getPrompts();
-      if (!isActive()) {
-        return;
-      }
-      const items = response.prompts || [];
-      setPrompts(items);
-      setSelectedPath((currentSelected) => {
-        const nextSelected = items.find((prompt) => prompt.path === requestedPath)?.path
-          || items.find((prompt) => prompt.path === currentSelected)?.path
-          || items[0]?.path
-          || '';
-        const nextPrompt = items.find((prompt) => prompt.path === nextSelected);
-        setDraftContent(nextPrompt?.content || '');
-        return nextSelected;
-      });
-    } catch (loadError) {
-      if (isActive()) {
-        setError(loadError);
-      }
-    } finally {
-      if (isActive()) {
-        setLoading(false);
-      }
-    }
-  }, [getPrompts, requestedPath]);
+  // Load the catalogue into the store; the list arrives via the fetch response
+  // and stays live through `prompts.snapshot` events on /api/ui/stream.
+  const loadPrompts = useCallback(
+    () => dispatch(fetchPrompts({ promptsUrl })).unwrap().catch((loadError) => setError(loadError)),
+    [dispatch, promptsUrl],
+  );
 
   useEffect(() => {
-    let active = true;
-    loadPrompts(() => active);
-    return () => {
-      active = false;
-    };
+    loadPrompts();
   }, [loadPrompts]);
+
+  // Seed (or re-seed) the selection from the store list whenever it changes via
+  // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
+  // current selection. Runs on `prompts`/`requestedPath` changes only (not on
+  // user clicks), so selecting a row never gets clobbered.
+  useEffect(() => {
+    if (prompts.length === 0) {
+      return;
+    }
+    setSelectedPath((current) => {
+      const next = prompts.find((prompt) => prompt.path === requestedPath)?.path
+        || prompts.find((prompt) => prompt.path === current)?.path
+        || prompts[0]?.path
+        || '';
+      if (next !== current) {
+        setDraftContent(prompts.find((prompt) => prompt.path === next)?.content || '');
+      }
+      return next;
+    });
+  }, [prompts, requestedPath]);
 
   useEffect(() => {
     const currentPath = searchParams.get('path') || '';
@@ -258,10 +261,9 @@ export default function PromptsPage() {
     setError(null);
     setStatusMessage('');
     try {
-      const updatedPrompt = await updatePromptContent(selectedPrompt.path, draftContent);
-      setPrompts((current) => current.map((prompt) => (
-        prompt.path === updatedPrompt.path ? updatedPrompt : prompt
-      )));
+      const updatedPrompt = await dispatch(
+        savePrompt({ promptsUrl, path: selectedPrompt.path, content: draftContent }),
+      ).unwrap();
       setDraftContent(updatedPrompt.content || '');
       setStatusMessage(`Saved ${updatedPrompt.path}.`);
     } catch (saveError) {
