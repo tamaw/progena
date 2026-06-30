@@ -18,8 +18,8 @@ import {
   WorkspaceProvider,
   useWorkspaceActions,
   useWorkspaceGraph,
-  createPersistedGraph,
 } from '../context/WorkspaceContext';
+import { createPersistedGraph } from '../context/workspaceGraph';
 import { WorkflowJsonDock, WorkflowJsonEditor } from '../components/workspace/WorkflowJsonPanel';
 
 import PromptNode from '../components/workspace/nodes/PromptNode';
