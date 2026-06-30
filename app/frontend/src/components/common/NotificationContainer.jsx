@@ -22,7 +22,14 @@ function NotificationContainer() {
             <div className={styles['notification-title']}>{notification.title}</div>
             <div className={styles['notification-message']}>{notification.message}</div>
           </div>
-          <button className={styles['notification-close']} onClick={() => dismiss(notification.id)}>×</button>
+          <button
+            type="button"
+            className={styles['notification-close']}
+            onClick={(event) => {
+              event.stopPropagation();
+              dismiss(notification.id);
+            }}
+          >×</button>
         </div>
       ))}
     </div>

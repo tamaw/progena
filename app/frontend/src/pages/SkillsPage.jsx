@@ -126,14 +126,25 @@ export default function SkillsPage() {
   const loading = skillsState.loading && !skillsState.loaded;
 
   // Load the catalogue into the store; the list arrives via the fetch response
-  // and stays live through `skills.snapshot` events on /api/ui/stream.
+  // and stays live through `skills.snapshot` events on /api/ui/stream. The
+  // `isActive` guard avoids a setError after the page unmounts mid-request.
   const loadSkills = useCallback(
-    () => dispatch(fetchSkills({ skillsUrl })).unwrap().catch((loadError) => setError(loadError)),
+    (isActive = () => true) => dispatch(fetchSkills({ skillsUrl }))
+      .unwrap()
+      .catch((loadError) => {
+        if (isActive()) {
+          setError(loadError);
+        }
+      }),
     [dispatch, skillsUrl],
   );
 
   useEffect(() => {
-    loadSkills();
+    let active = true;
+    loadSkills(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadSkills]);
 
   // Seed (or re-seed) the selection from the store list whenever it changes via

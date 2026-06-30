@@ -157,14 +157,25 @@ export default function PromptsPage() {
   const loading = promptsState.loading && !promptsState.loaded;
 
   // Load the catalogue into the store; the list arrives via the fetch response
-  // and stays live through `prompts.snapshot` events on /api/ui/stream.
+  // and stays live through `prompts.snapshot` events on /api/ui/stream. The
+  // `isActive` guard avoids a setError after the page unmounts mid-request.
   const loadPrompts = useCallback(
-    () => dispatch(fetchPrompts({ promptsUrl })).unwrap().catch((loadError) => setError(loadError)),
+    (isActive = () => true) => dispatch(fetchPrompts({ promptsUrl }))
+      .unwrap()
+      .catch((loadError) => {
+        if (isActive()) {
+          setError(loadError);
+        }
+      }),
     [dispatch, promptsUrl],
   );
 
   useEffect(() => {
-    loadPrompts();
+    let active = true;
+    loadPrompts(() => active);
+    return () => {
+      active = false;
+    };
   }, [loadPrompts]);
 
   // Seed (or re-seed) the selection from the store list whenever it changes via

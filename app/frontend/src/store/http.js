@@ -25,6 +25,7 @@ export async function requestJson(url, { method = 'GET', body, errorLabel = 'Req
   const response = await fetch(url, {
     method,
     headers,
+    credentials: 'include',
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   });
 
@@ -47,7 +48,16 @@ export async function requestJson(url, { method = 'GET', body, errorLabel = 'Req
     throw new Error(`${errorLabel} ${detail}`);
   }
 
-  return text ? JSON.parse(text) : null;
+  if (!text) {
+    return null;
+  }
+  // Tolerate a non-JSON success body (e.g. an HTML page injected by a proxy)
+  // rather than throwing on an otherwise-ok response.
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 /**
