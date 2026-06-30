@@ -19,10 +19,12 @@ import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
 import * as knowledge from './uiData/knowledge';
+import * as skills from './uiData/skills';
+import * as prompts from './uiData/prompts';
 import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
 
-const domains = [runtime, mcp, knowledge, tasks, agents, chats];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, agents, chats];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -122,6 +124,21 @@ export {
   selectKnowledgeBases,
   selectKnowledgeState,
 } from './uiData/knowledge';
+
+export {
+  fetchSkills,
+  saveSkill,
+  createSkill,
+  selectSkills,
+  selectSkillsState,
+} from './uiData/skills';
+
+export {
+  fetchPrompts,
+  savePrompt,
+  selectPrompts,
+  selectPromptsState,
+} from './uiData/prompts';
 
 export {
   fetchMcp,
