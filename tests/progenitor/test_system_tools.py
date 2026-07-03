@@ -14,16 +14,8 @@ import app.progenitor.tools.list_agents as list_agents_module
 from app.progenitor.state.models import ProgenitorState
 from app.progenitor.tools.current_time import CurrentTimeTool
 from app.progenitor.tools.list_agents import ListAgentsTool
-from app.progenitor.tools.list_schedule import ListScheduleTool
 from app.progenitor.tools.list_tools import ListToolsTool
 from app.progenitor.tools.protocol import BaseSystemTool, ToolContext, ToolResult
-from app.progenitor.tools.schedule import (
-    DeleteScheduleTool,
-    PauseScheduleTool,
-    ResumeScheduleTool,
-    UpdateScheduleTool,
-)
-from app.progenitor.tools.schedule_task import ScheduleTaskTool
 from app.progenitor.tools.self_reflect_tool import SelfReflectTool
 from app.progenitor.tools.system_registry import execute_system_tool
 
@@ -240,136 +232,6 @@ class TestCurrentTimeTool:
         assert result.success is True
 
 
-class TestListScheduleTool:
-    """Tests for ListScheduleTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return ListScheduleTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "list_schedule"
-
-    async def test_execute_empty_schedule(self, tool):
-        """Should handle empty schedule."""
-        mock_state_manager = MagicMock()
-        mock_state_manager.get_schedule = AsyncMock(return_value=[])
-
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-            state={"schedule": []},
-            state_manager=mock_state_manager,
-        )
-        result = await tool.execute(ctx)
-        assert result.success is True
-
-    async def test_execute_prefers_state_manager_over_graph_state(self, tool):
-        """Should read the persisted schedule from state_manager when available."""
-        mock_state_manager = MagicMock()
-        mock_state_manager.get_schedule = AsyncMock(
-            return_value=[
-                {
-                    "id": "sched_live",
-                    "message": "Live schedule",
-                    "cron_expression": "0 8 * * *",
-                    "created_at": "2026-01-01T00:00:00+00:00",
-                    "last_run": None,
-                }
-            ]
-        )
-
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=MagicMock(),
-            state={"schedule": [{"id": "sched_stale", "message": "Stale schedule"}]},
-            state_manager=mock_state_manager,
-        )
-
-        result = await tool.execute(ctx)
-
-        assert result.success is True
-        assert result.data is not None
-        assert result.data["scheduled_tasks"][0]["id"] == "sched_live"
-
-
-class TestScheduleLifecycleTools:
-    """Tests for schedule lifecycle system tool wrappers."""
-
-    @pytest.mark.parametrize(
-        ("tool_cls", "expected_name"),
-        [
-            (DeleteScheduleTool, "delete_schedule"),
-            (UpdateScheduleTool, "update_schedule"),
-            (PauseScheduleTool, "pause_schedule"),
-            (ResumeScheduleTool, "resume_schedule"),
-        ],
-    )
-    def test_name(self, tool_cls, expected_name):
-        tool = tool_cls()
-        assert tool.name == expected_name
-
-
-class TestScheduleTaskTool:
-    """Tests for ScheduleTaskTool implementation."""
-
-    @pytest.fixture
-    def tool(self):
-        return ScheduleTaskTool()
-
-    def test_name(self, tool):
-        """Should have correct name."""
-        assert tool.name == "schedule_task"
-
-    async def test_execute_fails_without_schedule_fields(self, tool):
-        """Should fail without explicit cron_expression or scheduled_at."""
-        mock_llm = MagicMock()
-        mock_state_manager = AsyncMock()
-
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=mock_llm,
-            state=cast(ProgenitorState, {"schedule": []}),
-            state_manager=mock_state_manager,
-            tool_args={
-                "user_request": "remind me to stretch in 5 minutes",
-                "instruction": "Stretch",
-            },
-        )
-
-        result = await tool.execute(ctx)
-
-        assert result.success is False
-        assert "exactly one" in str(result.error).lower()
-
-    async def test_execute_uses_explicit_tool_call_fields(self, tool):
-        """Should create schedules from explicit tool-call fields without LLM extraction."""
-        mock_llm = MagicMock()
-        mock_llm.chat_structured = AsyncMock()
-        mock_llm.chat = AsyncMock()
-        mock_state_manager = AsyncMock()
-
-        ctx = ToolContext(
-            tool_registry=MagicMock(),
-            llm_client=mock_llm,
-            state=cast(ProgenitorState, {"schedule": []}),
-            state_manager=mock_state_manager,
-            tool_args={
-                "user_request": "can you schedule to say hi to me tomorrow",
-                "instruction": "Say hi to the user",
-                "description": "Say hi reminder",
-                "scheduled_at": "2026-03-20T09:42:27Z",
-            },
-        )
-
-        result = await tool.execute(ctx)
-
-        assert result.success is True
-        mock_llm.chat_structured.assert_not_awaited()
-        mock_llm.chat.assert_not_awaited()
-
-
 class TestListAgentsTool:
     """Tests for ListAgentsTool implementation."""
 
@@ -469,25 +331,3 @@ class TestExecuteSystemTool:
         assert error is None
         assert result is not None
         assert should_retry is False
-
-    async def test_execute_delete_schedule_uses_state_manager(self):
-        """Should execute delete_schedule through the discoverable system tool wrapper."""
-        mock_registry = MagicMock()
-        mock_llm = MagicMock()
-        state_manager = AsyncMock()
-        state_manager.remove_schedule_entry = AsyncMock(return_value=True)
-
-        result, error, state_updates, should_retry = await execute_system_tool(
-            "delete_schedule",
-            mock_registry,
-            mock_llm,
-            state={},
-            state_manager=state_manager,
-            tool_args={"schedule_id": "sched_abc123"},
-        )
-
-        assert error is None
-        assert result is not None
-        assert result["schedule_id"] == "sched_abc123"
-        assert should_retry is False
-        state_manager.remove_schedule_entry.assert_awaited_once_with("sched_abc123")

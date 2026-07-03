@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "MCP server entry",
+  "description": "One server object under 'mcpServers' in the 'mcp' state document. Only remote HTTP transport is supported.",
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "description": "Remote HTTP(S) endpoint URL. May contain ${ENV_VAR} templates resolved at load time."
+    },
+    "transport": {
+      "type": "string",
+      "enum": ["http"],
+      "description": "Transport protocol. Only 'http' is supported.",
+      "default": "http"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether the server is active.",
+      "default": true
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the server."
+    },
+    "headers": {
+      "type": "object",
+      "description": "Optional HTTP headers (e.g. Authorization). Values may contain ${ENV_VAR} templates.",
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "required": ["url"],
+  "additionalProperties": false
+}

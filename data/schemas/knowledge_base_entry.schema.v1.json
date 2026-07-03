@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Knowledge base entry",
+  "description": "One object under 'bases' in the 'knowledge' state document. Omit 'id' and a source's 'id' on a brand-new base/source - the backend generates them from the name/path.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Stable identifier. Omit when creating a new base; preserve verbatim when editing one."
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name.",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "description": "What this knowledge base is for."
+    },
+    "owner": { "type": "string", "default": "user" },
+    "scope": { "type": "string", "default": "Mine" },
+    "status": {
+      "type": "string",
+      "enum": ["connected", "syncing", "error", "idle"],
+      "default": "connected"
+    },
+    "embedding_model": { "type": "string" },
+    "dimensions": { "type": "integer", "minimum": 1, "maximum": 4096 },
+    "metric": {
+      "type": "string",
+      "enum": ["cosine", "l2", "inner_product"],
+      "default": "cosine"
+    },
+    "index_type": {
+      "type": "string",
+      "enum": ["Flat", "HNSW", "IVFFlat"],
+      "default": "Flat"
+    },
+    "tags": {
+      "type": "array",
+      "description": "Free-form tags (trimmed/deduped by the backend).",
+      "items": { "type": "string" }
+    },
+    "connection_string": { "type": "string" },
+    "sources": {
+      "type": "array",
+      "description": "Folder sources indexed into this base.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Omit when adding a new source; preserve verbatim when editing one."
+          },
+          "path": { "type": "string", "minLength": 1 }
+        },
+        "required": ["path"],
+        "additionalProperties": true
+      }
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": true
+}

@@ -42,7 +42,7 @@ class TestBackendFactory:
 
             runtime_free_cls = self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data", "data/prompts", "logs", "repos"):
+            for rel in ("app", "data", "data/prompts", "data/schemas", "logs", "repos"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             backend = create_progenitor_backend(project_root=tmpdir, worktree_dir=root / "repos")
@@ -54,12 +54,14 @@ class TestBackendFactory:
             assert "/data/" in backend.routes
             assert "/logs/" in backend.routes
             assert "/prompts/" in backend.routes
+            assert "/schemas/" in backend.routes
             assert isinstance(backend.routes["/memories/"], FilesystemBackend)
             assert isinstance(backend.routes["/self/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/repos/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/data/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/logs/"], ReadOnlyFilesystemBackend)
             assert isinstance(backend.routes["/prompts/"], ReadOnlyFilesystemBackend)
+            assert isinstance(backend.routes["/schemas/"], ReadOnlyFilesystemBackend)
             assert (root / "data" / "memories").is_dir()
 
     def test_factory_defaults_to_cwd(self, monkeypatch):
@@ -68,15 +70,21 @@ class TestBackendFactory:
         backend = create_progenitor_backend()
         assert backend is not None
 
-    def test_memories_route_persists_written_files(self, monkeypatch):
-        """Writes to /memories are persisted under data/memories on disk."""
+    def test_memories_write_and_schemas_read_round_trip(self, monkeypatch):
+        """/memories/ (read-write) and /schemas/ (read-only) both work end to end."""
+        import json
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmpdir:
             self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data", "data/prompts", "logs"):
+            for rel in ("app", "data", "data/prompts", "data/schemas", "logs"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
+
+            schema = {"type": "object", "properties": {"id": {"type": "string"}}}
+            (root / "data" / "schemas" / "widget.schema.v1.json").write_text(
+                json.dumps(schema), encoding="utf-8"
+            )
 
             backend = create_progenitor_backend(project_root=tmpdir)
 
@@ -85,10 +93,14 @@ class TestBackendFactory:
                 [("/memories/patterns/testing.md", content.encode("utf-8"))]
             )
             persisted_path = root / "data" / "memories" / "patterns" / "testing.md"
-            downloads = backend.download_files(["/memories/patterns/testing.md"])
+            downloads = backend.download_files(
+                ["/memories/patterns/testing.md", "/schemas/widget.schema.v1.json"]
+            )
 
             assert len(uploads) == 1
             assert uploads[0].error is None
             assert persisted_path.read_text(encoding="utf-8") == content
             assert downloads[0].error is None
             assert downloads[0].content.decode("utf-8") == content
+            assert downloads[1].error is None
+            assert json.loads(downloads[1].content.decode("utf-8")) == schema

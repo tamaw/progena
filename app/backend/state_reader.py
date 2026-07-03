@@ -405,6 +405,11 @@ class StateSnapshot:
     # /state/knowledge.json (which leaves all the counted fields above unchanged)
     # is still detected and pushed live to the Knowledge page.
     knowledge_fingerprint: str = ""
+    # Content fingerprint of the schedule state document. ``schedule`` count
+    # catches add/remove; this additionally catches in-place edits (pause/resume,
+    # message/cron changes) so an agent edit is pushed live to the Schedules
+    # page even when the entry count is unchanged.
+    schedule_fingerprint: str = ""
 
 
 class StateReader:
@@ -923,6 +928,27 @@ class StateReader:
             serialized = str(payload)
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
+    def _schedule_fingerprint(self) -> str:
+        """Stable hash of the ``schedule`` state document (the whole entry list).
+
+        The schedule count is checked separately for add/remove; this hash
+        additionally catches in-place edits (pause/resume, message/cron changes)
+        that leave the count unchanged, so the change is still pushed live to
+        the Schedules page. Mirrors ``_knowledge_fingerprint``.
+        """
+        if self.document_store is None:
+            return ""
+        try:
+            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        except Exception:
+            return ""
+        payload = document.payload if document is not None else []
+        try:
+            serialized = json.dumps(payload, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            serialized = str(payload)
+        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -946,6 +972,7 @@ class StateReader:
             sessions=self.get_sessions_summary(),
             mcp_fingerprint=self._mcp_fingerprint(),
             knowledge_fingerprint=self._knowledge_fingerprint(),
+            schedule_fingerprint=self._schedule_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1762,6 +1789,8 @@ class StateReader:
         if new.knowledge_fingerprint != old.knowledge_fingerprint:
             return True
         if new.mcp_fingerprint != old.mcp_fingerprint:
+            return True
+        if new.schedule_fingerprint != old.schedule_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0

@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import yaml
+from croniter import croniter
 from deepagents.backends.protocol import (
     EditResult,
     FileData,
@@ -36,9 +37,13 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 
+from ..schedule.engine import parse_schedule_datetime
+from ..state.models import ScheduleEntry
+from ..utils import utcnow
+
 logger = logging.getLogger(__name__)
 
-JsonDoc = dict[str, Any]
+JsonDoc = dict[str, Any] | list[Any]
 
 
 @dataclass
@@ -79,6 +84,40 @@ def validate_mcp_document(content: str) -> JsonDoc:
             raise ValueError(
                 f"server '{name}' transport '{transport}' is unsupported (remote HTTP only)"
             )
+    return data
+
+
+def validate_registry_document(content: str) -> JsonDoc:
+    """Parse + validate an ``agents.json`` payload (the ``registry`` document).
+
+    Shape: ``{"agents": [...], "tools": [...]}``, no other top-level keys.
+    Each agent's shape mirrors ``data/schemas/agent_entry.schema.v1.json``.
+    ``tools`` is runtime-managed (MCP-derived); this only checks its shape, not
+    its contents.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("top level must be a JSON object")
+    extra_keys = set(data) - {"agents", "tools"}
+    if extra_keys:
+        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+
+    agents = data.get("agents")
+    if not isinstance(agents, list):
+        raise ValueError("missing 'agents' array")
+    for index, agent in enumerate(agents):
+        if not isinstance(agent, dict):
+            raise ValueError(f"agent {index} must be an object")
+        if not str(agent.get("name") or "").strip():
+            raise ValueError(f"agent {index} is missing 'name'")
+
+    tools = data.get("tools")
+    if not isinstance(tools, list):
+        raise ValueError("missing 'tools' array")
+
     return data
 
 
@@ -131,7 +170,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return data, "\n".join(lines[end + 1 :])
 
 
-def card_to_markdown(card: JsonDoc) -> str:
+def card_to_markdown(card: dict[str, Any]) -> str:
     """Render one card as YAML frontmatter (fields) + markdown body (description)."""
     fields = {k: v for k, v in card.items() if k != "description"}
     body = str(card.get("description") or "").strip("\n")
@@ -143,16 +182,23 @@ def card_to_markdown(card: JsonDoc) -> str:
     return f"---\n{frontmatter}\n---\n"
 
 
-def markdown_to_card(content: str, card_id: str) -> JsonDoc:
-    """Parse a ``tasks/<id>.md`` file into a card dict.
+def markdown_to_card(content: str, card_id: str, project_id: str | None = None) -> dict[str, Any]:
+    """Parse a ``tasks/<id>.md`` or ``tasks/<project>/<id>.md`` file into a card dict.
 
-    The filename is authoritative for ``id``; the markdown body becomes the
-    card ``description``. Validation is light (a title is required) since the
-    backend re-normalizes the assembled board on read.
+    The file's location is authoritative, same as e.g. the registry's
+    ``name``-as-key convention: the filename sets ``id`` and the enclosing
+    directory (if any) sets ``project_id``, overriding whatever the frontmatter
+    says. The markdown body becomes the card ``description``. Validation is
+    light (a title is required) since the backend re-normalizes the assembled
+    board on read.
     """
     fields, body = _split_frontmatter(content)
-    card: JsonDoc = dict(fields)
+    card: dict[str, Any] = dict(fields)
     card["id"] = card_id
+    if project_id is not None:
+        card["project_id"] = project_id
+    else:
+        card.pop("project_id", None)
     body = body.strip("\n")
     if body:
         card["description"] = body
@@ -286,6 +332,36 @@ def create_mcp_state_file(
     )
 
 
+def create_registry_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``agents.json`` state file backed by the StateManager.
+
+    Backs the ``registry`` document (``{"agents": [...], "tools": [...]}``);
+    named ``agents.json`` to match the backend's existing external naming for
+    this document (see ``StateReader._document_for_path``).
+    """
+
+    async def load() -> JsonDoc:
+        result = await state_manager.get_registry()
+        return result if isinstance(result, dict) else {"agents": [], "tools": []}
+
+    async def save(doc: JsonDoc) -> None:
+        if not isinstance(doc, dict):
+            raise ValueError("agents.json must be a JSON object")
+        await state_manager.save_registry(doc)
+
+    return StateFile(
+        name="agents.json",
+        load=load,
+        save=save,
+        validate=validate_registry_document,
+        on_change=on_change,
+    )
+
+
 def create_knowledge_state_file(
     state_manager: Any,
     *,
@@ -322,12 +398,22 @@ class KanbanTaskDirectoryBackend:
     """Async DeepAgent backend exposing the kanban board as a task directory.
 
     Mounted at ``/state/tasks/``: ``board.json`` is the structure document
-    (columns + ``card_order``) and every card is one ``<id>.md`` file (YAML
+    (columns + ``card_order``) and every card is one ``.md`` file (YAML
     frontmatter for the fields, markdown body for the description). Each card is
     its own ``kanban_card:<id>`` document in the shared Postgres store, so the
     agent edits one task per file and a write touches a single row. Persistence
     flows through the StateManager, so the existing LISTEN/NOTIFY pipeline pushes
     ``kanban.snapshot`` to the Tasks UI with no bespoke tool.
+
+    Cards may optionally belong to a project, grouped by directory: an unscoped
+    card lives at ``<id>.md``; a card in a project lives at
+    ``<project_id>/<id>.md``. There is no project registry document — a project
+    is just whatever value cards carry in their ``project_id`` field, so the
+    directory materializes when the first card is written into it and
+    disappears once the last one leaves (mirrors how there's no index document
+    for the cards themselves, just ``card_order``). The enclosing directory is
+    authoritative for ``project_id``, the same way the filename is authoritative
+    for ``id``.
     """
 
     _ASYNC_ONLY = "KanbanTaskDirectoryBackend is async-only; use the async file tools."
@@ -341,23 +427,44 @@ class KanbanTaskDirectoryBackend:
         return file_path.lstrip("/").removeprefix("tasks/")
 
     @staticmethod
-    def _card_id(name: str) -> str | None:
+    def _parse_card_name(name: str) -> tuple[str | None, str] | None:
+        """Split a task filename into ``(project_id, card_id)``, or ``None``.
+
+        ``None`` means the name isn't a card path at all (e.g. ``board.json``,
+        or a nested path more than one directory deep).
+        """
+        project_id: str | None = None
+        if "/" in name:
+            project_id, _, name = name.partition("/")
+            if not project_id or "/" in name:
+                return None
         if name == _BOARD_FILE or not name.endswith(".md"):
             return None
-        return name[: -len(".md")]
+        return project_id, name[: -len(".md")]
 
     async def _structure_text(self) -> str:
         return _doc_to_text(await self._sm.get_kanban_structure())
+
+    async def _resolve_card(self, name: str) -> tuple[str, dict[str, Any]] | None:
+        """Look up the card a virtual path names, requiring its directory to match."""
+        parsed = self._parse_card_name(name)
+        if parsed is None:
+            return None
+        project_id, card_id = parsed
+        card = await self._sm.get_kanban_card(card_id)
+        if card is None or (card.get("project_id") or None) != project_id:
+            return None
+        return card_id, card
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         name = self._name(file_path)
         if name == _BOARD_FILE:
             text = await self._structure_text()
         else:
-            card_id = self._card_id(name)
-            card = await self._sm.get_kanban_card(card_id) if card_id else None
-            if card is None:
+            resolved = await self._resolve_card(name)
+            if resolved is None:
                 return ReadResult(error=f"File '{file_path}' not found")
+            _, card = resolved
             text = card_to_markdown(card)
         file_data = create_file_data(text)
         sliced = slice_read_response(file_data, offset, limit)
@@ -376,11 +483,14 @@ class KanbanTaskDirectoryBackend:
                 return WriteResult(error=f"Invalid board.json: {exc}")
             await self._sm.save_kanban_structure(structure)
             return WriteResult(path=file_path)
-        card_id = self._card_id(name)
-        if not card_id:
-            return WriteResult(error=f"Unknown task file '{file_path}' (expected <id>.md)")
+        parsed = self._parse_card_name(name)
+        if parsed is None:
+            return WriteResult(
+                error=f"Unknown task file '{file_path}' (expected <id>.md or <project>/<id>.md)"
+            )
+        project_id, card_id = parsed
         try:
-            card = markdown_to_card(content, card_id)
+            card = markdown_to_card(content, card_id, project_id)
         except ValueError as exc:
             return WriteResult(error=f"Invalid task {name}: {exc}")
         await self._sm.save_kanban_card(card_id, card)
@@ -407,16 +517,37 @@ class KanbanTaskDirectoryBackend:
         return EditResult(path=file_path, occurrences=int(occurrences))
 
     async def adelete(self, file_path: str) -> WriteResult:
-        card_id = self._card_id(self._name(file_path))
-        if not card_id:
-            return WriteResult(error=f"Cannot delete '{file_path}'")
+        resolved = await self._resolve_card(self._name(file_path))
+        if resolved is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        card_id, _ = resolved
         await self._sm.delete_kanban_card(card_id)
         return WriteResult(path=file_path)
 
     async def als(self, path: str) -> LsResult:
-        names = [_BOARD_FILE]
-        names.extend(f"{cid}.md" for cid in await self._sm.list_kanban_card_ids())
-        return LsResult(entries=[FileInfo(path=f"/{name}", is_dir=False) for name in names])
+        board = await self._sm.get_kanban_board()
+        cards = [card for card in board.get("cards") or [] if isinstance(card, dict)]
+        scope = path.strip("/")
+        if not scope:
+            names = [_BOARD_FILE]
+            projects: set[str] = set()
+            for card in cards:
+                project_id = str(card.get("project_id") or "").strip()
+                if project_id:
+                    projects.add(project_id)
+                else:
+                    names.append(f"{card['id']}.md")
+            entries = [FileInfo(path=f"/{name}", is_dir=False) for name in names]
+            entries.extend(
+                FileInfo(path=f"/{project_id}/", is_dir=True) for project_id in sorted(projects)
+            )
+            return LsResult(entries=entries)
+        entries = [
+            FileInfo(path=f"/{scope}/{card['id']}.md", is_dir=False)
+            for card in cards
+            if str(card.get("project_id") or "").strip() == scope
+        ]
+        return LsResult(entries=entries)
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
         return GlobResult(matches=[])
@@ -443,3 +574,87 @@ class KanbanTaskDirectoryBackend:
 
     def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
         raise NotImplementedError(self._ASYNC_ONLY)
+
+
+def validate_schedule_document(content: str) -> JsonDoc:
+    """Parse + validate the whole ``schedule.json`` payload.
+
+    ``schedule.json`` is a JSON object keyed by schedule id (mirrors
+    ``mcp.json``'s ``mcpServers`` map): an entry's key is authoritative for its
+    id, so entry bodies do not repeat it. Also checks that each entry's
+    ``cron_expression``/``scheduled_at`` is actually parseable, not just a
+    string - this is the only validation a write gets, since there's no
+    dedicated create/update/delete tool; the ``managing-schedules`` skill
+    reads, edits, and writes this one file directly, the same way
+    ``managing-mcp`` does for ``mcp.json``.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("top level must be a JSON object keyed by schedule id")
+
+    for entry_id, item in data.items():
+        if not isinstance(item, dict):
+            raise ValueError(f"entry '{entry_id}' must be an object")
+        if not str(item.get("message") or "").strip():
+            raise ValueError(f"entry '{entry_id}' is missing 'message'")
+
+        cron_expression = item.get("cron_expression")
+        if cron_expression:
+            try:
+                croniter(str(cron_expression), utcnow())
+            except Exception as exc:
+                raise ValueError(
+                    f"entry '{entry_id}' has invalid cron_expression: {cron_expression}"
+                ) from exc
+
+        scheduled_at = item.get("scheduled_at")
+        if scheduled_at and parse_schedule_datetime(scheduled_at) is None:
+            raise ValueError(
+                f"entry '{entry_id}' has invalid scheduled_at timestamp: {scheduled_at}"
+            )
+
+    return data
+
+
+def create_schedule_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``schedule.json`` state file backed by the StateManager.
+
+    Exposed to the agent as an object keyed by id (``{"<id>": {...}, ...}``),
+    not the array ``StateManager.get_schedule()``/``save_schedule()`` use
+    internally - only this load/save boundary converts between the two, so
+    the scheduler, backend, and Schedules UI (which talk to the StateManager
+    directly) are unaffected by this file's shape.
+    """
+
+    async def load() -> JsonDoc:
+        entries = await state_manager.get_schedule()
+        return {
+            entry.id: {k: v for k, v in entry.model_dump(mode="json").items() if k != "id"}
+            for entry in entries
+        }
+
+    async def save(doc: JsonDoc) -> None:
+        if not isinstance(doc, dict):
+            raise ValueError("schedule.json must be a JSON object keyed by schedule id")
+        entries = []
+        for entry_id, item in doc.items():
+            if not isinstance(item, dict):
+                raise ValueError(f"entry '{entry_id}' must be an object")
+            fields = {k: v for k, v in item.items() if k != "id"}
+            entries.append(ScheduleEntry(id=entry_id, **fields))
+        await state_manager.save_schedule(entries)
+
+    return StateFile(
+        name="schedule.json",
+        load=load,
+        save=save,
+        validate=validate_schedule_document,
+        on_change=on_change,
+    )

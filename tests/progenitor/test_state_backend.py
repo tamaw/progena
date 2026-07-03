@@ -6,15 +6,22 @@ import copy
 import json
 from typing import Any
 
+import pytest
+
 from app.progenitor.agent.state_backend import (
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
     card_to_markdown,
     create_mcp_state_file,
+    create_registry_state_file,
+    create_schedule_state_file,
     markdown_to_card,
     validate_kanban_structure,
     validate_mcp_document,
+    validate_registry_document,
+    validate_schedule_document,
 )
+from app.progenitor.state.models import ScheduleEntry
 
 
 class _FakeStateManager:
@@ -179,6 +186,16 @@ class _FakeKanbanStateManager:
             cid for cid in self.structure["card_order"] if cid != card_id
         ]
 
+    async def get_kanban_board(self) -> dict[str, Any]:
+        cards = [
+            copy.deepcopy(self.cards[cid])
+            for cid in self.structure.get("card_order", [])
+            if cid in self.cards
+        ]
+        board = {k: v for k, v in self.structure.items() if k != "card_order"}
+        board["cards"] = cards
+        return board
+
 
 def _kanban_backend(cards=None) -> tuple[KanbanTaskDirectoryBackend, _FakeKanbanStateManager]:
     sm = _FakeKanbanStateManager(cards)
@@ -267,3 +284,250 @@ async def test_kanban_adelete_removes_card():
     assert result.error is None
     assert "card_1" not in sm.cards
     assert "card_1" not in sm.structure["card_order"]
+
+
+# ---- kanban (project-scoped directories) ------------------------------------
+
+
+async def test_kanban_als_groups_by_project():
+    backend, _sm = _kanban_backend(
+        [
+            {"id": "card_1", "title": "Unscoped"},
+            {"id": "card_2", "title": "Scoped", "project_id": "acme"},
+        ]
+    )
+    listed = await backend.als("/")
+    paths = {entry["path"] for entry in listed.entries}
+    assert paths == {"/board.json", "/card_1.md", "/acme/"}
+    assert next(e for e in listed.entries if e["path"] == "/acme/")["is_dir"] is True
+
+    scoped = await backend.als("/acme/")
+    assert [entry["path"] for entry in scoped.entries] == ["/acme/card_2.md"]
+
+
+async def test_kanban_aread_project_scoped_card():
+    backend, _sm = _kanban_backend([{"id": "card_2", "title": "Scoped", "project_id": "acme"}])
+    result = await backend.aread("/acme/card_2.md")
+    assert result.error is None
+    assert markdown_to_card(result.file_data["content"], "card_2", "acme")["title"] == "Scoped"
+    # Wrong (or missing) project prefix doesn't resolve to the same card.
+    assert (await backend.aread("/card_2.md")).error is not None
+    assert (await backend.aread("/other/card_2.md")).error is not None
+
+
+async def test_kanban_awrite_new_card_under_project_stamps_project_id():
+    backend, sm = _kanban_backend([])
+    md = "---\ntitle: New in project\ncolumn_id: backlog\n---\n"
+    result = await backend.awrite("/acme/card_9.md", md)
+    assert result.error is None
+    assert sm.cards["card_9"]["project_id"] == "acme"
+
+
+async def test_kanban_awrite_moves_card_between_projects():
+    backend, sm = _kanban_backend([{"id": "card_1", "title": "Ship", "project_id": "acme"}])
+    md = "---\ntitle: Ship\n---\n"
+    result = await backend.awrite("/beta/card_1.md", md)
+    assert result.error is None
+    assert sm.cards["card_1"]["project_id"] == "beta"
+    # The old project path no longer resolves once the card has moved.
+    assert (await backend.aread("/acme/card_1.md")).error is not None
+
+
+async def test_kanban_adelete_project_scoped_requires_matching_path():
+    backend, sm = _kanban_backend([{"id": "card_1", "title": "Ship", "project_id": "acme"}])
+    mismatched = await backend.adelete("/card_1.md")
+    assert mismatched.error is not None
+    assert "card_1" in sm.cards
+    result = await backend.adelete("/acme/card_1.md")
+    assert result.error is None
+    assert "card_1" not in sm.cards
+
+
+# ---- schedule (single file, object keyed by id) ------------------------------
+
+
+class _FakeScheduleStateManager:
+    def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
+        self.entries: list[ScheduleEntry] = list(entries or [])
+
+    async def get_schedule(self) -> list[ScheduleEntry]:
+        return list(self.entries)
+
+    async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
+        self.entries = list(schedule)
+
+
+def _schedule_backend(
+    entries=None,
+) -> tuple[StateDocumentBackend, _FakeScheduleStateManager]:
+    sm = _FakeScheduleStateManager(entries)
+    backend = StateDocumentBackend([create_schedule_state_file(sm)])
+    return backend, sm
+
+
+def test_validate_schedule_document_accepts_valid():
+    doc = validate_schedule_document(
+        '{"sched_1": {"message": "do it", "cron_expression": "0 9 * * *"}}'
+    )
+    assert doc["sched_1"]["message"] == "do it"
+
+
+def test_validate_schedule_document_rejects_bad_shapes():
+    for bad in (
+        "{not json",
+        "[]",  # top level must be an object
+        '{"sched_1": "not an object"}',
+        '{"sched_1": {}}',  # message is required
+    ):
+        try:
+            validate_schedule_document(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad}")
+
+
+def test_validate_schedule_document_rejects_invalid_cron_expression():
+    with pytest.raises(ValueError, match="cron_expression"):
+        validate_schedule_document(
+            '{"sched_1": {"message": "do it", "cron_expression": "not a cron"}}'
+        )
+
+
+def test_validate_schedule_document_rejects_invalid_scheduled_at():
+    with pytest.raises(ValueError, match="scheduled_at"):
+        validate_schedule_document(
+            '{"sched_1": {"message": "do it", "scheduled_at": "not a timestamp"}}'
+        )
+
+
+async def test_schedule_aread_and_ls():
+    backend, _sm = _schedule_backend(
+        [ScheduleEntry(id="sched_1", message="do it", cron_expression="0 9 * * *")]
+    )
+    listed = await backend.als("/")
+    paths = [entry["path"] for entry in listed.entries]
+    assert paths == ["/schedule.json"]
+    result = await backend.aread("/schedule.json")
+    assert result.error is None
+    doc = json.loads(result.file_data["content"])
+    assert doc["sched_1"]["message"] == "do it"
+    assert "id" not in doc["sched_1"]
+
+
+async def test_schedule_aread_unknown_errors():
+    backend, _sm = _schedule_backend([])
+    result = await backend.aread("/nope.json")
+    assert result.error and "not found" in result.error
+
+
+async def test_schedule_awrite_persists_new_entry():
+    backend, sm = _schedule_backend([])
+    body = json.dumps({"sched_9": {"message": "new task", "cron_expression": "0 8 * * *"}})
+    result = await backend.awrite("/schedule.json", body)
+    assert result.error is None
+    assert sm.entries[0].id == "sched_9"
+    assert sm.entries[0].message == "new task"
+
+
+async def test_schedule_awrite_invalid_does_not_persist():
+    backend, sm = _schedule_backend([])
+    result = await backend.awrite("/schedule.json", '{"sched_9": {}}')  # missing message
+    assert result.error and "Invalid" in result.error
+    assert sm.entries == []
+
+
+async def test_schedule_aedit_updates_single_entry():
+    backend, sm = _schedule_backend(
+        [ScheduleEntry(id="sched_1", message="old", cron_expression="0 9 * * *")]
+    )
+    result = await backend.aedit("/schedule.json", '"old"', '"new"')
+    assert result.error is None
+    assert sm.entries[0].message == "new"
+
+
+async def test_schedule_awrite_removes_entry():
+    backend, sm = _schedule_backend(
+        [ScheduleEntry(id="sched_1", message="do it", cron_expression="0 9 * * *")]
+    )
+    result = await backend.awrite("/schedule.json", "{}")
+    assert result.error is None
+    assert sm.entries == []
+
+
+# ---- registry (single whole-document file) -----------------------------------
+
+
+class _FakeRegistryStateManager:
+    def __init__(self, registry: dict[str, Any] | None = None) -> None:
+        self.registry: dict[str, Any] = registry or {"agents": [], "tools": []}
+
+    async def get_registry(self) -> dict[str, Any]:
+        return copy.deepcopy(self.registry)
+
+    async def save_registry(self, registry: dict[str, Any]) -> None:
+        self.registry = copy.deepcopy(registry)
+
+
+def _registry_backend(
+    registry=None,
+) -> tuple[StateDocumentBackend, _FakeRegistryStateManager]:
+    sm = _FakeRegistryStateManager(registry)
+    backend = StateDocumentBackend([create_registry_state_file(sm)])
+    return backend, sm
+
+
+def test_validate_registry_document_accepts_valid():
+    doc = validate_registry_document(
+        '{"agents": [{"name": "jina", "kind": "a2a_agent"}], "tools": []}'
+    )
+    assert doc["agents"][0]["name"] == "jina"
+
+
+def test_validate_registry_document_rejects_bad_shapes():
+    for bad in (
+        "{not json",
+        "[]",  # top level must be object
+        '{"agents": [{}], "tools": []}',  # agent missing name
+        '{"agents": []}',  # missing tools
+        '{"tools": []}',  # missing agents
+        '{"agents": [], "tools": [], "extra": 1}',  # unexpected top-level key
+    ):
+        try:
+            validate_registry_document(bad)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"expected ValueError for {bad}")
+
+
+async def test_registry_aread_and_ls():
+    backend, _sm = _registry_backend({"agents": [{"name": "jina"}], "tools": []})
+    listed = await backend.als("/")
+    paths = [entry["path"] for entry in listed.entries]
+    assert "/agents.json" in paths
+    result = await backend.aread("/agents.json")
+    assert result.error is None
+    assert json.loads(result.file_data["content"])["agents"][0]["name"] == "jina"
+
+
+async def test_registry_awrite_persists_new_agent():
+    backend, sm = _registry_backend({"agents": [], "tools": []})
+    body = json.dumps({"agents": [{"name": "new-agent", "enabled": True}], "tools": []})
+    result = await backend.awrite("/agents.json", body)
+    assert result.error is None
+    assert sm.registry["agents"][0]["name"] == "new-agent"
+
+
+async def test_registry_awrite_invalid_does_not_persist():
+    backend, sm = _registry_backend({"agents": [], "tools": []})
+    result = await backend.awrite("/agents.json", '{"agents": [{}], "tools": []}')
+    assert result.error and "Invalid" in result.error
+    assert sm.registry == {"agents": [], "tools": []}
+
+
+async def test_registry_aedit_updates_single_agent():
+    backend, sm = _registry_backend({"agents": [{"name": "jina", "enabled": True}], "tools": []})
+    result = await backend.aedit("/agents.json", '"enabled": true', '"enabled": false')
+    assert result.error is None
+    assert sm.registry["agents"][0]["enabled"] is False

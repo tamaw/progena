@@ -686,6 +686,34 @@ class TestUIRoutes:
         assert board["cards"][0]["id"] == created["id"]
         assert board["cards"][0]["column_id"] == "build"
 
+    def test_kanban_card_project_id_persists_and_patches(self, client, tasks_state_reader):
+        create_response = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Scoped card", "project_id": "acme"},
+        )
+        assert create_response.status_code == 200
+        created = create_response.json()
+        assert created["project_id"] == "acme"
+
+        stored_card = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None
+        )
+        assert stored_card.payload["project_id"] == "acme"
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"project_id": "beta"},
+        )
+        assert patch_response.status_code == 200
+        assert patch_response.json()["project_id"] == "beta"
+
+        cleared = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"project_id": ""},
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["project_id"] is None
+
     def test_kanban_card_metadata_persists_subtasks_and_dependencies(self, client):
         created = client.post(
             "/api/ui/kanban/cards",
