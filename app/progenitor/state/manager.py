@@ -366,6 +366,29 @@ class StateManager:
             return
         self._state_cache["knowledge"] = payload
 
+    async def get_state_document(self, name: str, default: Any = None) -> Any:
+        """Return an arbitrary runtime state document by name.
+
+        Generic accessor used by ``delete_state`` (to check existence before
+        deleting a document with no dedicated typed method). Reads straight
+        from the store rather than the cache so cross-process edits (backend UI
+        writes) are visible. See get_mcp_config for the same rationale.
+        """
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.get_document(name, default)
+            self._state_cache[name] = payload
+            return payload
+        return self._state_cache.get(name, default)
+
+    async def delete_state_document(self, name: str) -> None:
+        """Delete an arbitrary runtime state document by name (no-op if absent).
+
+        Generic deleter companion to :meth:`get_state_document`.
+        """
+        self._state_cache.pop(name, None)
+        if self._runtime_store is not None:
+            await self._runtime_store.delete_document(name)
+
     async def get_kanban_structure(self) -> dict[str, Any]:
         """Return the kanban board structure document (columns + ``card_order``).
 

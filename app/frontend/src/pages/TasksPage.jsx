@@ -135,7 +135,7 @@ function sortCards(sortMode) {
   };
 }
 
-function groupVisibleCards(board, filter, query, sortMode) {
+function groupVisibleCards(board, filter, query, sortMode, projectId) {
   if (!board) {
     return [];
   }
@@ -145,6 +145,7 @@ function groupVisibleCards(board, filter, query, sortMode) {
   return board.columns.map((column) => {
     const cards = board.cards
       .filter((card) => card.column_id === column.id && !isArchivedCard(card))
+      .filter((card) => !projectId || card.project_id === projectId)
       .filter((card) => {
         if (filter === 'mine' && card.owner !== 'user') {
           return false;
@@ -623,8 +624,8 @@ export default function TasksPage({ context = null }) {
   }, [loadBoard]);
 
   const groupedColumns = useMemo(
-    () => groupVisibleCards(board, taskFilter, searchQuery, sortMode),
-    [board, searchQuery, taskFilter, sortMode],
+    () => groupVisibleCards(board, taskFilter, searchQuery, sortMode, context?.projectId),
+    [board, searchQuery, taskFilter, sortMode, context?.projectId],
   );
 
   const visibleCards = useMemo(
@@ -689,9 +690,13 @@ export default function TasksPage({ context = null }) {
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
-      detail: { mode: 'task-create' },
+      detail: {
+        mode: 'task-create',
+        projectId: context?.projectId,
+        projectName: context?.projectName,
+      },
     }));
-  }, []);
+  }, [context?.projectId, context?.projectName]);
 
   useEffect(() => {
     if (!selectedCard?.id) {

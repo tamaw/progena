@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, TypeVar, cast
 from urllib.parse import urlsplit, urlunsplit
 
@@ -76,6 +77,34 @@ def _build_json_schema_format(response_model: Any, schema_name: str) -> dict[str
             "name": schema_name,
             "schema": schema,
             "strict": True,
+        },
+    }
+
+
+def _build_json_schema_format_from_dict(
+    json_schema: dict[str, Any], schema_name: str, *, strict: bool = True
+) -> dict[str, Any]:
+    """Build a response_format dict from a raw JSON Schema document.
+
+    Companion to :func:`_build_json_schema_format` for callers that load a
+    schema from a file at runtime instead of a Pydantic model. The schema is
+    deep-copied so the caller's dict is left untouched.
+
+    When ``strict`` is True the schema is rewritten into the closed-object form
+    the provider's strict mode requires. When False the schema is passed through
+    as-is, which is necessary for schemas that use features strict mode forbids
+    (e.g. arbitrary-key maps via ``additionalProperties``).
+    """
+    schema = deepcopy(json_schema)
+    if strict:
+        _close_object_schemas(schema)
+
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema_name,
+            "schema": schema,
+            "strict": strict,
         },
     }
 
@@ -651,6 +680,14 @@ class LLMClient:
                 response.raise_for_status()
                 data = response.json()
             else:
+                # httpx's own message omits the response body, which is where the
+                # provider explains *why* (bad field, content filter, quota, ...).
+                # Log it here since every caller up the stack only sees str(exc).
+                logger.error(
+                    "LLM request failed: %s %s",
+                    exc.response.status_code,
+                    exc.response.text,
+                )
                 raise
 
         # Tool calling loop (MCP + system tools)
@@ -850,3 +887,33 @@ class LLMClient:
 
         raw_data = json.loads(response)
         return response_model.model_validate(raw_data)
+
+    async def chat_structured_json(
+        self,
+        prompt: str | list[dict[str, str]],
+        json_schema: dict[str, Any],
+        schema_name: str,
+        system_prompt: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        strict: bool = True,
+    ) -> Any:
+        """Run a structured-output call against a raw JSON Schema.
+
+        Unlike :meth:`chat_structured`, the schema is supplied as a plain dict
+        (typically loaded from a file) rather than a Pydantic model, so the
+        result is returned as parsed JSON rather than a validated model. Set
+        ``strict=False`` for schemas that use features the provider's strict
+        mode forbids (arbitrary-key maps, etc.).
+        """
+        response_format = _build_json_schema_format_from_dict(
+            json_schema, schema_name, strict=strict
+        )
+        response = await self.chat(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+        )
+        return json.loads(response)

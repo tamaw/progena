@@ -5,16 +5,11 @@ These tests use a real StateManager backed by temporary directories and the
 real Scheduler class.  No LLM or network access is required.
 """
 
+import uuid
+
 import pytest
 
-from app.progenitor.schedule import (
-    Scheduler,
-    add_scheduled_task,
-    delete_scheduled_task,
-    pause_scheduled_task,
-    resume_scheduled_task,
-    update_scheduled_task,
-)
+from app.progenitor.schedule import Scheduler
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.utils import utcnow
@@ -49,19 +44,15 @@ def scheduler():
 
 async def _add_and_persist(state_manager: StateManager) -> str:
     """Create a recurring task and persist it; return the schedule_id."""
-    result, entry_data = await add_scheduled_task(
-        user_request="test lifecycle task",
-        instruction="Run the lifecycle test.",
-        description="Lifecycle test task",
+    schedule_id = f"sched_{uuid.uuid4().hex[:12]}"
+    entry = ScheduleEntry(
+        id=schedule_id,
+        message="Lifecycle test task - Run the lifecycle test.",
         cron_expression="0 9 * * *",
+        created_at=utcnow(),
     )
-    assert result.success, f"add_scheduled_task failed: {result.message}"
-    assert entry_data is not None
-
-    # Persist via state_manager (mirrors what ScheduleTaskTool.execute does)
-    entry = ScheduleEntry(**entry_data)
     await state_manager.add_schedule_entry(entry)
-    return result.schedule_id
+    return schedule_id
 
 
 # ---------------------------------------------------------------------------
@@ -86,12 +77,11 @@ class TestSchedulerLifecycle:
         assert entry.cron_expression == "0 9 * * *"
 
         # ---- 2. UPDATE -------------------------------------------------------
-        result = await update_scheduled_task(
+        updated = await state_manager.update_schedule_entry(
             schedule_id,
             {"message": "Updated lifecycle task", "cron_expression": "0 10 * * *"},
-            state_manager=state_manager,
         )
-        assert result.success, f"update failed: {result.message}"
+        assert updated, "update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
         entry = next(e for e in schedule if e.id == schedule_id)
@@ -99,12 +89,12 @@ class TestSchedulerLifecycle:
         assert entry.cron_expression == "0 10 * * *"
 
         # ---- 3. PAUSE --------------------------------------------------------
-        result = await pause_scheduled_task(schedule_id, state_manager=state_manager)
-        assert result.success, f"pause failed: {result.message}"
+        paused = await state_manager.update_schedule_entry(schedule_id, {"paused": True})
+        assert paused, "pause via update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
         entry = next(e for e in schedule if e.id == schedule_id)
-        assert entry.paused is True, "Entry should be paused after pause_scheduled_task"
+        assert entry.paused is True, "Entry should be paused after update_schedule_entry"
 
         # Confirm Scheduler skips paused entries
         now = utcnow()
@@ -115,16 +105,16 @@ class TestSchedulerLifecycle:
         )
 
         # ---- 4. RESUME -------------------------------------------------------
-        result = await resume_scheduled_task(schedule_id, state_manager=state_manager)
-        assert result.success, f"resume failed: {result.message}"
+        resumed = await state_manager.update_schedule_entry(schedule_id, {"paused": False})
+        assert resumed, "resume via update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
         entry = next(e for e in schedule if e.id == schedule_id)
         assert entry.paused is False, "Entry should not be paused after resume"
 
         # ---- 5. DELETE -------------------------------------------------------
-        result = await delete_scheduled_task(schedule_id, state_manager=state_manager)
-        assert result.success, f"delete failed: {result.message}"
+        removed = await state_manager.remove_schedule_entry(schedule_id)
+        assert removed, "remove_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
         ids_after = [e.id for e in schedule]
@@ -132,29 +122,29 @@ class TestSchedulerLifecycle:
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_returns_failure(self, state_manager: StateManager):
-        result = await delete_scheduled_task("sched_does_not_exist", state_manager=state_manager)
-        assert result.success is False
-        assert "not found" in result.message.lower()
+        removed = await state_manager.remove_schedule_entry("sched_does_not_exist")
+        assert removed is False
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_failure(self, state_manager: StateManager):
-        result = await update_scheduled_task(
-            "sched_does_not_exist",
-            {"message": "irrelevant"},
-            state_manager=state_manager,
+        updated = await state_manager.update_schedule_entry(
+            "sched_does_not_exist", {"message": "irrelevant"}
         )
-        assert result.success is False
-        assert "not found" in result.message.lower()
+        assert updated is False
 
     @pytest.mark.asyncio
     async def test_pause_nonexistent_returns_failure(self, state_manager: StateManager):
-        result = await pause_scheduled_task("sched_does_not_exist", state_manager=state_manager)
-        assert result.success is False
+        updated = await state_manager.update_schedule_entry(
+            "sched_does_not_exist", {"paused": True}
+        )
+        assert updated is False
 
     @pytest.mark.asyncio
     async def test_resume_nonexistent_returns_failure(self, state_manager: StateManager):
-        result = await resume_scheduled_task("sched_does_not_exist", state_manager=state_manager)
-        assert result.success is False
+        updated = await state_manager.update_schedule_entry(
+            "sched_does_not_exist", {"paused": False}
+        )
+        assert updated is False
 
     @pytest.mark.asyncio
     async def test_paused_entry_skipped_by_scheduler(
@@ -162,7 +152,7 @@ class TestSchedulerLifecycle:
     ):
         """A paused entry must not appear in get_due_items even when past its run time."""
         schedule_id = await _add_and_persist(state_manager)
-        await pause_scheduled_task(schedule_id, state_manager=state_manager)
+        await state_manager.update_schedule_entry(schedule_id, {"paused": True})
 
         schedule = await state_manager.get_schedule()
         entry = next(e for e in schedule if e.id == schedule_id)
@@ -181,8 +171,8 @@ class TestSchedulerLifecycle:
     ):
         """A resumed entry with a past cron should appear in get_due_items."""
         schedule_id = await _add_and_persist(state_manager)
-        await pause_scheduled_task(schedule_id, state_manager=state_manager)
-        await resume_scheduled_task(schedule_id, state_manager=state_manager)
+        await state_manager.update_schedule_entry(schedule_id, {"paused": True})
+        await state_manager.update_schedule_entry(schedule_id, {"paused": False})
 
         schedule = await state_manager.get_schedule()
         entry = next(e for e in schedule if e.id == schedule_id)

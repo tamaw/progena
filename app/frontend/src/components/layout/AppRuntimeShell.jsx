@@ -191,7 +191,7 @@ function normalizeQuickChatConfig(config) {
   };
 }
 
-function buildQuickChatOutboundMessage(mode, text) {
+function buildQuickChatOutboundMessage(mode, text, config = {}) {
   if (mode === 'mcp-create') {
     return [
       'Connect a new MCP server from the following user request.',
@@ -205,15 +205,22 @@ function buildQuickChatOutboundMessage(mode, text) {
     ].join('\n');
   }
   if (mode === 'task-create') {
+    const taskPath = config.projectId
+      ? `/state/tasks/${config.projectId}/<id>.md`
+      : '/state/tasks/<id>.md';
+    const projectLine = config.projectId
+      ? `This task belongs to the "${config.projectName || config.projectId}" project, so its directory IS the project: write it to exactly that path (not the top-level /state/tasks/<id>.md).`
+      : null;
     return [
       'Create a new task on the kanban board from the following user request.',
-      'Write a new file /state/tasks/<id>.md where <id> is a unique slug',
+      `Write a new file ${taskPath} where <id> is a unique slug`,
       '(e.g. card_<short-hex>). The file is YAML frontmatter + a markdown body:',
       'frontmatter keys: title (concise), column_id (default "backlog"),',
       'status (default "draft"), owner (default "user"), and any agent_name plus',
       'free-form labels (tags) the request implies; the markdown body is the task',
       'description. Writing the file persists the task and the Tasks board updates',
       'live (board.json tracks the card order automatically).',
+      ...(projectLine ? [projectLine] : []),
       'Only ask a follow-up question if the task title is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created task title and column.',
       '',
@@ -963,11 +970,12 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
   const chatIndicators = useSelector(selectChatIndicators);
   const counts = useMemo(() => {
     const agentCount = runtime.widgets.filter((widget) => widget.type === 'agent').length;
+    const scheduleCount = runtime.widgets.filter((widget) => widget.type === 'schedule').length;
     return {
       agents: Math.max(7, agentCount),
       knowledge: Math.max(6, runtime.widgets.length),
       repositories: 6,
-      schedules: 6,
+      schedules: Math.max(6, scheduleCount),
       sessions: Math.max(3, agentCount),
       skills: 14,
       tasks: runtime.widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length,
@@ -1292,7 +1300,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const submit = useCallback(async (message) => {
     const text = message.trim();
     if (!text || isSending) return;
-    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text);
+    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text, normalizedConfig);
 
     const now = Date.now();
     const assistantId = `qchat_assistant_${now + 1}`;
@@ -1375,7 +1383,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
       }
       setIsSending(false);
     }
-  }, [ensureQuickSession, history, isSending, normalizedConfig.mode, sendMessageStream]);
+  }, [ensureQuickSession, history, isSending, normalizedConfig, sendMessageStream]);
 
   const openInChat = useCallback(() => {
     if (history.length > 0) {

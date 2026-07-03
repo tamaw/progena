@@ -38,7 +38,7 @@ from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 
-from .agent_profile_routes import create_agent_profile_router
+from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agent_profile_router
 from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
@@ -452,6 +452,7 @@ class KanbanCardResponse(BaseModel):
     status: str
     agent_name: str
     owner: str = "user"
+    project_id: str | None = None
     labels: list[str] = Field(default_factory=list)
     spec_path: str | None = None
     branch_name: str | None = None
@@ -486,6 +487,7 @@ class KanbanCardCreateRequest(BaseModel):
     summary: str = ""
     description: str = ""
     owner: str = "user"
+    project_id: str | None = None
     labels: list[str] = Field(default_factory=list)
 
 
@@ -499,6 +501,7 @@ class KanbanCardPatchRequest(BaseModel):
     status: str | None = None
     agent_name: str | None = None
     owner: str | None = None
+    project_id: str | None = None
     labels: list[str] | None = None
     spec_path: str | None = None
     branch_name: str | None = None
@@ -1497,6 +1500,7 @@ def _kanban_card_schema(columns: list[dict]) -> KanbanCardSchemaResponse:
             ),
             KanbanFieldSchemaResponse(key="agent_name", label="Assigned Agent"),
             KanbanFieldSchemaResponse(key="owner", label="Owner"),
+            KanbanFieldSchemaResponse(key="project_id", label="Project"),
             KanbanFieldSchemaResponse(key="spec_path", label="Spec File"),
             KanbanFieldSchemaResponse(key="branch_name", label="Branch"),
             KanbanFieldSchemaResponse(key="pr_url", label="Pull Request URL"),
@@ -1563,6 +1567,7 @@ def _normalize_kanban_card(card: dict, columns: dict[str, dict]) -> dict:
         "status": status,
         "agent_name": str(card.get("agent_name") or columns[column_id]["agent_name"]),
         "owner": str(card.get("owner") or "user"),
+        "project_id": str(card.get("project_id") or "").strip() or None,
         "labels": _normalize_string_list(card.get("labels")),
         "spec_path": str(card.get("spec_path") or "").strip() or None,
         "branch_name": str(card.get("branch_name") or "").strip() or None,
@@ -2919,10 +2924,12 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
     """Reschedule a task from a natural-language description.
 
     Rather than editing cron fields by hand, the user describes the timing in
-    plain language ("friday at 15:00"). We hand that to the Progenitor agent on
-    a dedicated (non-chat) thread; it interprets the phrase and calls its
-    ``update_schedule`` tool, which writes the shared schedule document. We then
-    recompute ``next_run`` (the tool does not) and rebroadcast a snapshot.
+    plain language ("friday at 15:00"). We hand that to the Progenitor agent on a
+    dedicated (non-chat) thread carrying just the schedule id and the free text -
+    the loaded ``managing-schedules`` skill owns how a natural-language reschedule request
+    gets interpreted and applied to ``/state/schedule.json``, not a hardcoded
+    tool-call prescription here. We then recompute ``next_run`` (in case the
+    agent didn't) and rebroadcast a snapshot.
     """
     from . import main as chat_main
 
@@ -2941,21 +2948,10 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
     if entry is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    tz = entry.get("timezone") or default_timezone_name()
-    current = (
-        entry.get("schedule")
-        or entry.get("cron_expression")
-        or entry.get("scheduled_at")
-        or "unset"
-    )
     instruction = (
-        f'Reschedule the existing scheduled task with id "{schedule_id}". Its current '
-        f'trigger is "{current}" in timezone {tz}. The user wants it to run: "{text}". '
-        f"Interpret any clock times in the {tz} timezone. Convert the request into a cron "
-        "expression (for anything recurring) or an ISO8601 datetime (for a one-off), then "
-        f'call the update_schedule tool with schedule_id "{schedule_id}" and the new '
-        "cron_expression or scheduled_at. Do not change the task's instruction and do not "
-        "create a new task. Reply with one short sentence confirming the new timing."
+        f'Reschedule the task with id "{schedule_id}" under /state/schedule.json to run: '
+        f'"{text}". Do not change the task\'s message and do not create a new task. Reply '
+        "with one short sentence confirming the new timing."
     )
 
     thread_id = _resolve_action_thread_id(None)
@@ -2981,8 +2977,8 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
         raise HTTPException(status_code=502, detail=f"Agent reschedule failed: {exc}") from exc
     complete_thread(thread_id, "schedule updated", widget_id=f"schedule:{schedule_id}")
 
-    # The agent merged the new cron via update_schedule but does not recompute
-    # next_run; do it here so the UI's next-run/cadence reflect the change.
+    # The agent edits cron_expression/scheduled_at directly but may not recompute
+    # next_run or the display fields; reconcile them here so the UI stays coherent.
     state_reader.invalidate(schedule_path)
     _, schedule_data = _read_schedule_config(state_reader)
     updated = next(
@@ -2991,9 +2987,6 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
     )
     if updated is not None:
         updated["updated_at"] = utcnow().isoformat()
-        # update_schedule sets cron_expression/scheduled_at but leaves the
-        # display fields (schedule, schedule_type) and next_run stale, so
-        # reconcile them here to keep the stored entry coherent.
         if updated.get("scheduled_at"):
             updated["schedule_type"] = "once"
             updated["schedule"] = updated["scheduled_at"]
@@ -3095,6 +3088,7 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             "status": "draft",
             "agent_name": column_map["backlog"]["agent_name"],
             "owner": body.owner,
+            "project_id": body.project_id,
             "labels": body.labels,
             "created_at": now,
             "updated_at": now,
@@ -3169,6 +3163,8 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
             card["agent_name"] = body.agent_name.strip()
         if body.owner is not None:
             card["owner"] = body.owner.strip() or "user"
+        if body.project_id is not None:
+            card["project_id"] = body.project_id.strip() or None
         if body.labels is not None:
             card["labels"] = _normalize_string_list(body.labels)
         if body.spec_path is not None:
@@ -4315,6 +4311,13 @@ async def _broadcast_latest_status() -> None:
 _WIDGET_KEYS = frozenset({"mcp", "mcp_tools", "schedule", "registry", "event_widgets"})
 
 
+async def _broadcast_agent_profiles_safe() -> None:
+    try:
+        await broadcast_agent_profiles_snapshot(get_agent_store, broadcast_ui_event)
+    except Exception:
+        logger.debug("Failed to broadcast agent profiles snapshot", exc_info=True)
+
+
 def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _status_subscribers and not _ui_stream_subscribers:
@@ -4335,6 +4338,10 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
                 broadcast_schedule_snapshot()
             if changed_key in (None, "knowledge"):
                 broadcast_knowledge_snapshot()
+            if changed_key in (None, "registry"):
+                # Async (reads the agent store off-thread), so it's a fire-and-forget
+                # task rather than an inline call like the sync broadcasts above.
+                asyncio.create_task(_broadcast_agent_profiles_safe())
             if changed_key is None:
                 board = _read_kanban_board(get_state_reader())
                 for card in board["cards"]:

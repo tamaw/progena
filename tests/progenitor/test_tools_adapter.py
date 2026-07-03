@@ -98,20 +98,10 @@ def test_user_communication_tools_expose_structured_parameters() -> None:
     assert notify_schema.get("required") == ["title", "body"]
 
 
-def test_schedule_and_reflection_tools_expose_structured_parameters() -> None:
+def test_reflection_tool_exposes_structured_parameters() -> None:
     tools = create_deepagent_tools()
 
-    schedule_schema = _tool_by_name(tools, "schedule_task").args_schema.model_json_schema()
-    delete_schema = _tool_by_name(tools, "delete_schedule").args_schema.model_json_schema()
     reflect_schema = _tool_by_name(tools, "self_reflect").args_schema.model_json_schema()
-
-    assert {"user_request", "instruction", "cron_expression", "scheduled_at"} <= set(
-        schedule_schema.get("properties", {})
-    )
-    assert schedule_schema.get("required") == ["user_request", "instruction"]
-
-    assert "schedule_id" in delete_schema.get("properties", {})
-    assert delete_schema.get("required") == ["schedule_id"]
 
     reflect_properties = reflect_schema.get("properties", {})
     assert {"operation", "file_path", "query", "topic"} <= set(reflect_properties)
@@ -294,28 +284,6 @@ async def test_call_agent_without_agent_routes_via_tool_llm(monkeypatch) -> None
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
     llm_client.chat_structured.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_schedule_task_accepts_structured_arguments_without_llm_extraction() -> None:
-    state_manager = AsyncMock()
-    state_manager.get_current_state = AsyncMock(return_value={"schedule": []})
-    registry = MagicMock()
-    tools = create_deepagent_tools(tool_registry=registry, state_manager=state_manager)
-    t = _tool_by_name(tools, "schedule_task")
-
-    result = await t.ainvoke(
-        {
-            "user_request": "Remind me to stretch",
-            "instruction": "Tell the user to stretch.",
-            "description": "Stretch reminder",
-            "scheduled_at": "2026-03-20T09:42:27Z",
-        }
-    )
-
-    assert result["success"] is True
-    assert result["schedule_id"].startswith("cron_")
-    state_manager.add_schedule_entry.assert_awaited_once()
 
 
 @pytest.mark.asyncio

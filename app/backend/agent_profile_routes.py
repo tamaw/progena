@@ -198,6 +198,37 @@ def _nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
+    """Backend-owned subagents (editable) + A2A and ACP agents read through from
+    Progenitor's registry document (live status + card, no backend rows)."""
+    records = (
+        list(store.list_agents()) + a2a_profiles_from_registry() + acp_profiles_from_registry()
+    )
+    agents = [AgentProfile(**record) for record in records]
+    return AgentProfilesResponse(agents=agents, total=len(agents))
+
+
+async def broadcast_agent_profiles_snapshot(
+    get_agent_store: Callable[[], AgentStore | None],
+    broadcast_ui_event: BroadcastUiEvent,
+) -> AgentProfilesResponse | None:
+    """Rebuild and publish the agent-profiles snapshot on the UI stream.
+
+    Shared by the ``GET /agent-profiles`` handler and the ``registry`` document
+    change watcher (see ``ui_routes._queue_state_watch_status``), so an agent
+    editing ``/state/agents.json`` pushes live to the Agents page the same way
+    a UI-driven edit already does. Returns ``None`` (no-op) if the agent store
+    isn't configured yet rather than raising, since this also runs from a
+    background watcher with no request to fail.
+    """
+    store = get_agent_store()
+    if store is None:
+        return None
+    response = await asyncio.to_thread(build_agent_profiles, store)
+    broadcast_ui_event("agents.snapshot", response.model_dump())
+    return response
+
+
 def create_agent_profile_router(
     *,
     get_agent_store: Callable[[], AgentStore | None],
@@ -210,15 +241,6 @@ def create_agent_profile_router(
         if store is None:
             raise HTTPException(status_code=503, detail="Agent store is not configured")
         return store
-
-    def _build_profiles(store: AgentStore) -> AgentProfilesResponse:
-        # Backend-owned subagents (editable) + A2A and ACP agents read through from
-        # Progenitor's registry document (live status + card, no backend rows).
-        records = (
-            list(store.list_agents()) + a2a_profiles_from_registry() + acp_profiles_from_registry()
-        )
-        agents = [AgentProfile(**record) for record in records]
-        return AgentProfilesResponse(agents=agents, total=len(agents))
 
     def _resolve_profile(store: AgentStore, agent_id: str) -> dict[str, Any] | None:
         if agent_id.startswith("a2a-"):
@@ -242,7 +264,7 @@ def create_agent_profile_router(
         view (status + agent card) without the backend fetching cards itself.
         """
         store = _require_store()
-        response = await asyncio.to_thread(_build_profiles, store)
+        response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event("agents.snapshot", response.model_dump())
         return response
 

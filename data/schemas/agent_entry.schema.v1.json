@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Agent registry entry",
+  "description": "One object under 'agents' in the 'registry' state document.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Unique agent name / key."
+    },
+    "kind": {
+      "type": "string",
+      "description": "Agent kind (e.g. 'a2a_agent', 'acp_agent', 'mcp_tool').",
+      "default": "a2a_agent"
+    },
+    "description": {
+      "type": "string",
+      "description": "What the agent does."
+    },
+    "transport": {
+      "type": "string",
+      "description": "Transport protocol (e.g. 'http').",
+      "default": "http"
+    },
+    "url": {
+      "type": ["string", "null"],
+      "description": "Base URL of the agent server."
+    },
+    "agent_card_url": {
+      "type": ["string", "null"],
+      "description": "URL of the agent's well-known agent card."
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "Whether the agent is active.",
+      "default": true
+    },
+    "capabilities": {
+      "type": "array",
+      "description": "Capability tags used for agent discovery/routing.",
+      "items": { "type": "string" }
+    }
+  },
+  "required": ["name"],
+  "additionalProperties": true
+}

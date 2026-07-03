@@ -89,7 +89,7 @@ class TestSelfReflection:
     def test_find_relevant_files(self):
         """Test finding relevant files by topic."""
         reflection = SelfReflection()
-        files = reflection.find_relevant_files("scheduling")
+        files = reflection.find_relevant_files("schedule")
 
         assert len(files) > 0
         # Should find schedule-related files
@@ -163,10 +163,10 @@ class TestExecuteSelfReflect:
         """Test find_relevant operation."""
         result = await execute_self_reflect(
             operation="find_relevant",
-            topic="scheduling",
+            topic="schedule",
         )
 
-        assert result["topic"] == "scheduling"
+        assert result["topic"] == "schedule"
         assert len(result["relevant_files"]) > 0
 
     @pytest.mark.asyncio

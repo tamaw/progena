@@ -7,7 +7,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.progenitor.config import MCPConfig
-from app.progenitor.llm.client import LLMClient, _build_responses_endpoint
+from app.progenitor.llm.client import (
+    LLMClient,
+    _build_json_schema_format_from_dict,
+    _build_responses_endpoint,
+)
 from app.progenitor.mcp import MCPRuntime
 
 
@@ -21,6 +25,44 @@ def _client_with_runtime() -> LLMClient:
     client.mcp_config = MCPConfig(servers=[])
     client._mcp_runtime = MCPRuntime(client.mcp_config)
     return client
+
+
+def test_build_json_schema_format_from_dict_closes_objects_without_mutation():
+    source = {
+        "type": "object",
+        "properties": {"timezone": {"type": "string"}},
+    }
+    fmt = _build_json_schema_format_from_dict(source, "preferences")
+
+    assert fmt["type"] == "json_schema"
+    inner = fmt["json_schema"]
+    assert inner["name"] == "preferences"
+    assert inner["strict"] is True
+    # Strict object schema enforcement is applied to the copy...
+    assert inner["schema"]["additionalProperties"] is False
+    assert inner["schema"]["required"] == ["timezone"]
+    # ...and the caller's dict is left untouched.
+    assert "additionalProperties" not in source
+
+
+@pytest.mark.asyncio
+async def test_chat_structured_json_parses_and_forwards_schema():
+    client = LLMClient.__new__(LLMClient)
+    client.chat = AsyncMock(return_value='{"timezone": "UTC"}')
+
+    schema = {"type": "object", "properties": {"timezone": {"type": "string"}}}
+    result = await LLMClient.chat_structured_json(
+        client,
+        prompt="set timezone",
+        json_schema=schema,
+        schema_name="preferences",
+        system_prompt="be precise",
+    )
+
+    assert result == {"timezone": "UTC"}
+    _, kwargs = client.chat.call_args
+    assert kwargs["response_format"]["json_schema"]["name"] == "preferences"
+    assert kwargs["system_prompt"] == "be precise"
 
 
 def test_build_responses_endpoint_from_base_url():
