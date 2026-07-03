@@ -104,9 +104,13 @@ async def generate_structured(
     is_array_root = json_schema.get("type") == "array"
     request_schema = wrap_array_schema(json_schema) if is_array_root else json_schema
 
+    # Only wrap context that already matches the wrapped schema's shape (a
+    # "current array value" being edited). Free-form context like extraction
+    # source text is never a list here - passing it through unwrapped keeps it
+    # in the prompt instead of silently discarding it as an empty list.
     prompt_context: Any = context
-    if is_array_root and context is not None:
-        prompt_context = {ARRAY_WRAP_KEY: context if isinstance(context, list) else []}
+    if is_array_root and isinstance(context, list):
+        prompt_context = {ARRAY_WRAP_KEY: context}
 
     prompt = _build_prompt(request_schema, instruction, prompt_context, context_label)
 

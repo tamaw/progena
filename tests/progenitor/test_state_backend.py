@@ -333,6 +333,15 @@ async def test_kanban_awrite_moves_card_between_projects():
     assert (await backend.aread("/acme/card_1.md")).error is not None
 
 
+async def test_kanban_reserved_project_segments_do_not_resolve():
+    backend, _sm = _kanban_backend([{"id": "card_1", "title": "Ship", "project_id": ".."}])
+    # A card can't actually be scoped to "." or ".." - those paths never resolve,
+    # even to a card whose stored project_id happens to be that literal string.
+    assert (await backend.aread("/../card_1.md")).error is not None
+    assert (await backend.aread("/./card_1.md")).error is not None
+    assert (await backend.aread("/ /card_1.md")).error is not None
+
+
 async def test_kanban_adelete_project_scoped_requires_matching_path():
     backend, sm = _kanban_backend([{"id": "card_1", "title": "Ship", "project_id": "acme"}])
     mismatched = await backend.adelete("/card_1.md")

@@ -415,6 +415,7 @@ def create_knowledge_state_file(
 
 
 _BOARD_FILE = "board.json"
+_RESERVED_PROJECT_IDS = {".", ".."}
 
 
 class KanbanTaskDirectoryBackend:
@@ -459,7 +460,8 @@ class KanbanTaskDirectoryBackend:
         project_id: str | None = None
         if "/" in name:
             project_id, _, name = name.partition("/")
-            if not project_id or "/" in name:
+            project_id = project_id.strip()
+            if not project_id or project_id in _RESERVED_PROJECT_IDS or "/" in name:
                 return None
         if name == _BOARD_FILE or not name.endswith(".md"):
             return None
