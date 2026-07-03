@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useConfig } from '../context/ConfigContext';
-import { useApi } from '../hooks/useApi';
+import { useLogsApi } from '../hooks/api/useLogsApi';
 import { useStatusSSE } from '../hooks/useSSE';
 
 const COLLAPSED_ROW_HEIGHT = 38;
@@ -190,7 +190,7 @@ function findVisibleRange(items, scrollTop, viewportHeight) {
 }
 
 function LogsPage() {
-  const { getLogs } = useApi();
+  const { getLogs } = useLogsApi();
   const { getApiUrl } = useConfig();
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultRange = useMemo(() => defaultDateRange(), []);

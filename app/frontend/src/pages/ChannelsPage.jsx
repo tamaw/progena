@@ -1,4 +1,3 @@
-import { useMemo, useState } from 'react';
 import {
   PaneList,
   PaneListFilters,
@@ -18,6 +17,8 @@ import DetailHeader, {
   ReconnectActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
+import { MetricCard, CardFact, CapabilityChip } from '../components/common/DetailCards';
+import { useListSelection } from '../hooks/useListSelection';
 
 // Static catalogue of the channels agents can be reached through. Grouped by
 // category in the list, mirroring the Models / Agents page layout.
@@ -149,7 +150,7 @@ const CHANNEL_FILTERS = ['All', 'Connected', 'Team chat', 'Messaging'];
 const STATUS_DOT = { connected: 'running', disconnected: 'stopped', error: 'failed' };
 const STATUS_LABEL = { connected: 'Connected', disconnected: 'Not connected', error: 'Error' };
 
-function matchesChannel(channel, filter, search) {
+function matchesChannel(channel, { filter, search }) {
   if (filter === 'Connected' && channel.status !== 'connected') return false;
   if (filter === 'Team chat' && channel.category !== 'Team chat') return false;
   if (filter === 'Messaging' && channel.category !== 'Messaging') return false;
@@ -160,32 +161,7 @@ function matchesChannel(channel, filter, search) {
   return true;
 }
 
-function MetricCard({ label, value, detail }) {
-  return (
-    <div className="agents-metric-card">
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <small>{detail}</small>
-    </div>
-  );
-}
-
-function CardFact({ label, children }) {
-  return (
-    <div className="agents-card-fact">
-      <span className="agents-card-fact__label">{label}</span>
-      <span className="agents-card-fact__value">{children}</span>
-    </div>
-  );
-}
-
-function CapabilityChip({ label, on }) {
-  return (
-    <span className={`agents-chip ${on ? 'agents-chip--ok' : 'agents-chip--muted'}`}>
-      {label}: {on ? 'yes' : 'no'}
-    </span>
-  );
-}
+const channelCategory = (channel) => channel.category;
 
 function ChannelRow({ channel, selected, onSelect }) {
   return (
@@ -211,27 +187,19 @@ function ChannelRow({ channel, selected, onSelect }) {
 }
 
 export default function ChannelsPage() {
-  const [activeFilter, setActiveFilter] = useState('All');
-  const [search, setSearch] = useState('');
-  const [selectedId, setSelectedId] = useState(CHANNELS[0].id);
-
-  const visibleChannels = useMemo(
-    () => CHANNELS.filter((channel) => matchesChannel(channel, activeFilter, search)),
-    [activeFilter, search],
-  );
-  const categoryOrder = useMemo(
-    () => [...new Set(visibleChannels.map((channel) => channel.category))],
-    [visibleChannels],
-  );
-  const grouped = useMemo(() => {
-    const groups = {};
-    for (const channel of visibleChannels) {
-      (groups[channel.category] ??= []).push(channel);
-    }
-    return groups;
-  }, [visibleChannels]);
-
-  const selected = CHANNELS.find((channel) => channel.id === selectedId) || visibleChannels[0] || null;
+  const {
+    filter: activeFilter,
+    setFilter: setActiveFilter,
+    search,
+    setSearch,
+    setSelectedId,
+    visible: visibleChannels,
+    groups,
+    selected,
+  } = useListSelection(CHANNELS, {
+    match: matchesChannel,
+    groupBy: channelCategory,
+  });
 
   return (
     <PageShell>
@@ -243,9 +211,9 @@ export default function ChannelsPage() {
         </PaneListToolbar>
         <PaneListScroll>
           {visibleChannels.length ? (
-            categoryOrder.map((category) => (
-              <PaneListGroup key={category} title={category} count={grouped[category].length}>
-                {grouped[category].map((channel) => (
+            groups.order.map((category) => (
+              <PaneListGroup key={category} title={category} count={groups.byKey[category].length}>
+                {groups.byKey[category].map((channel) => (
                   <ChannelRow
                     key={channel.id}
                     channel={channel}

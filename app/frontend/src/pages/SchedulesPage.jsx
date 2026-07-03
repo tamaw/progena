@@ -19,7 +19,8 @@ import DetailHeader, {
   PauseActionIcon,
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
-import { useApi } from '../hooks/useApi';
+import { useSchedulesApi } from '../hooks/api/useSchedulesApi';
+import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { scheduleSnapshotReceived, selectSchedules } from '../store/uiDataSlice';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
@@ -267,7 +268,8 @@ function MetricCard({ label, value, detail }) {
 }
 
 function SchedulesPage() {
-  const { getSchedules, getWidgets, updateWidget, deleteWidget, retriggerSchedule } = useApi();
+  const { getSchedules, retriggerSchedule } = useSchedulesApi();
+  const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
   const dispatch = useDispatch();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only

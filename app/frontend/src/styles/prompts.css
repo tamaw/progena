@@ -212,6 +212,25 @@
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 16%, transparent);
 }
 
+/* Tasks-style detail body: a description block over the skill content editor. */
+.skills-detail__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.skills-detail__description {
+  margin: 0;
+  padding: var(--spacing-sm) var(--spacing-md);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.skills-detail__body .skills-create-form {
+  margin: 0;
+  padding: var(--spacing-md);
+}
+
 .skills-meta-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
