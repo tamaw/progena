@@ -74,6 +74,12 @@ include = ["app*", "src*"]
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+# Apply `exclude` even to files passed explicitly on the command line - ruff
+# otherwise formats any explicitly-named file regardless of extension (it will
+# happily "reformat" a .json file as if it were Python, corrupting it with
+# invalid trailing commas). Without this, exclude only affects directory
+# discovery, not explicit paths.
+force-exclude = true
 exclude = [
     ".git",
     ".venv",
@@ -81,6 +87,7 @@ exclude = [
     "node_modules",
     "app/chat-ui",
     "worktrees",
+    "*.json",
 ]
 
 [tool.ruff.lint]
