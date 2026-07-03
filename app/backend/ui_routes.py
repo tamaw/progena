@@ -4117,6 +4117,9 @@ _state_watch_push_task: asyncio.Task | None = None
 # Track active SSE response tasks so we can cancel them on shutdown
 _active_chat_tasks: list[asyncio.Task] = []
 _active_status_tasks: list[asyncio.Task] = []
+# Keep a strong reference to fire-and-forget agent-profile broadcasts so the
+# event loop's weak task reference can't let one get garbage-collected mid-run.
+_active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
 _active_ui_stream_tasks: list[asyncio.Task] = []
 
 
@@ -4341,7 +4344,12 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             if changed_key in (None, "registry"):
                 # Async (reads the agent store off-thread), so it's a fire-and-forget
                 # task rather than an inline call like the sync broadcasts above.
-                asyncio.create_task(_broadcast_agent_profiles_safe())
+                # A strong reference is kept in _active_agent_profile_broadcast_tasks
+                # (and dropped on completion) since asyncio only holds a weak
+                # reference to unreferenced tasks, which risks premature GC.
+                profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
+                _active_agent_profile_broadcast_tasks.add(profile_task)
+                profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)
             if changed_key is None:
                 board = _read_kanban_board(get_state_reader())
                 for card in board["cards"]:

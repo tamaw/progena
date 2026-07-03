@@ -349,12 +349,16 @@ async def test_kanban_adelete_project_scoped_requires_matching_path():
 class _FakeScheduleStateManager:
     def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
         self.entries: list[ScheduleEntry] = list(entries or [])
+        self.logged_events: list[dict[str, Any]] = []
 
     async def get_schedule(self) -> list[ScheduleEntry]:
         return list(self.entries)
 
     async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
         self.entries = list(schedule)
+
+    async def log_schedule_event(self, event: dict[str, Any]) -> None:
+        self.logged_events.append(event)
 
 
 def _schedule_backend(
@@ -399,6 +403,42 @@ def test_validate_schedule_document_rejects_invalid_scheduled_at():
         validate_schedule_document(
             '{"sched_1": {"message": "do it", "scheduled_at": "not a timestamp"}}'
         )
+
+
+def test_validate_schedule_document_rejects_non_string_message():
+    # A non-string message coerces to a truthy str() under the old hand-rolled
+    # check, then blows up pydantic.ValidationError inside ScheduleEntry(...)
+    # at save() time. It must now be rejected here, at validate() time.
+    with pytest.raises(ValueError):
+        validate_schedule_document('{"sched_1": {"message": 123, "cron_expression": "0 9 * * *"}}')
+
+
+def test_validate_schedule_document_rejects_both_cron_and_scheduled_at():
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_schedule_document(
+            '{"sched_1": {"message": "do it", "cron_expression": "0 9 * * *", '
+            '"scheduled_at": "2030-01-01T00:00:00Z"}}'
+        )
+
+
+def test_validate_schedule_document_rejects_neither_cron_nor_scheduled_at():
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_schedule_document('{"sched_1": {"message": "do it"}}')
+
+
+def test_validate_mcp_document_rejects_schema_invalid_extra_field():
+    # mcp_server_entry.schema.v1.json sets additionalProperties: false; the
+    # old hand-rolled checks only ever look at url/transport, so an unknown
+    # field like this would have passed them alone.
+    with pytest.raises(ValueError, match="schema"):
+        validate_mcp_document('{"mcpServers": {"x": {"url": "https://x/mcp", "bogus_field": "z"}}}')
+
+
+def test_validate_registry_document_rejects_schema_invalid_field_type():
+    # agent_entry.schema.v1.json types 'enabled' as a boolean; the old
+    # hand-rolled checks never look at 'enabled' at all.
+    with pytest.raises(ValueError, match="schema"):
+        validate_registry_document('{"agents": [{"name": "x", "enabled": "yes"}], "tools": []}')
 
 
 async def test_schedule_aread_and_ls():
@@ -453,6 +493,48 @@ async def test_schedule_awrite_removes_entry():
     result = await backend.awrite("/schedule.json", "{}")
     assert result.error is None
     assert sm.entries == []
+
+
+# ---- schedule (audit logging via the agent write path) ----------------------
+
+
+async def test_schedule_awrite_new_entry_logs_entry_added():
+    backend, sm = _schedule_backend([])
+    body = json.dumps({"sched_9": {"message": "new task", "cron_expression": "0 8 * * *"}})
+    result = await backend.awrite("/schedule.json", body)
+    assert result.error is None
+    assert sm.logged_events == [
+        {"event": "entry_added", "schedule_id": "sched_9", "description": None}
+    ]
+
+
+async def test_schedule_awrite_removed_entry_logs_entry_removed():
+    backend, sm = _schedule_backend(
+        [ScheduleEntry(id="sched_1", message="do it", cron_expression="0 9 * * *")]
+    )
+    result = await backend.awrite("/schedule.json", "{}")
+    assert result.error is None
+    assert sm.logged_events == [{"event": "entry_removed", "schedule_id": "sched_1"}]
+
+
+async def test_schedule_aedit_updated_entry_logs_entry_updated():
+    backend, sm = _schedule_backend(
+        [ScheduleEntry(id="sched_1", message="old", cron_expression="0 9 * * *")]
+    )
+    result = await backend.aedit("/schedule.json", '"old"', '"new"')
+    assert result.error is None
+    assert len(sm.logged_events) == 1
+    event = sm.logged_events[0]
+    assert event["event"] == "entry_updated"
+    assert event["schedule_id"] == "sched_1"
+    assert "message" in event["updates"]
+
+
+async def test_schedule_awrite_invalid_does_not_log():
+    backend, sm = _schedule_backend([])
+    result = await backend.awrite("/schedule.json", '{"sched_9": {}}')  # missing message
+    assert result.error is not None
+    assert sm.logged_events == []
 
 
 # ---- registry (single whole-document file) -----------------------------------

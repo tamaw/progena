@@ -43,6 +43,42 @@ def test_load_schema_missing_lists_available(schema_dir: Path) -> None:
     assert "preferences.schema.v1.json" in str(exc.value)
 
 
+@pytest.mark.parametrize(
+    "traversal",
+    [
+        "../secrets.json",
+        "../../etc/passwd.json",
+        "a/b.json",
+        "a\\b.json",
+        "..",
+        ".",
+        "",
+    ],
+)
+def test_resolve_schema_path_rejects_non_bare_filenames(schema_dir: Path, traversal: str) -> None:
+    """schema_file is agent-controlled; only a bare filename may be resolved."""
+    with pytest.raises(ValueError, match="bare filename"):
+        schemas.resolve_schema_path(traversal)
+
+
+def test_resolve_schema_path_cannot_escape_schema_root(tmp_path: Path, schema_dir: Path) -> None:
+    outside = tmp_path / "outside.json"
+    outside.write_text(json.dumps({"secret": True}), encoding="utf-8")
+    with pytest.raises(ValueError, match="bare filename"):
+        schemas.load_schema(f"../{outside.name}")
+
+
+def test_mcp_server_entry_schema_accepts_url_or_endpoint() -> None:
+    """validate_mcp_document and mcp/loader.py both accept 'endpoint' as a url alias."""
+    import jsonschema
+
+    schema = schemas.load_schema("mcp_server_entry")
+    jsonschema.validate({"url": "https://example.com/mcp"}, schema)
+    jsonschema.validate({"endpoint": "https://example.com/mcp"}, schema)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"transport": "http"}, schema)
+
+
 def test_shipped_schemas_are_valid_json_schema() -> None:
     """Every schema checked into data/schemas/ must be a valid JSON Schema."""
     import jsonschema

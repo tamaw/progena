@@ -26,7 +26,7 @@
       "default": false
     },
     "user_request": {
-      "type": "string",
+      "type": ["string", "null"],
       "description": "The original natural-language request that created this schedule."
     }
   },

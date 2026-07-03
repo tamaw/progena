@@ -91,7 +91,7 @@ class StructuredOutputTool(BaseSystemTool):
             return ToolResult.fail("Missing 'instruction' describing what to produce")
 
         has_file = bool(schema_file)
-        has_inline = isinstance(inline_schema, dict) and bool(inline_schema)
+        has_inline = isinstance(inline_schema, dict)
         if has_file == has_inline:
             return ToolResult.fail("Provide exactly one of 'schema_file' or 'json_schema'")
 
