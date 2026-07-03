@@ -3,9 +3,10 @@ Delete State Tool - remove an entire runtime state document from the store.
 
 The native file tools have no delete operation, so this is how the agent
 removes a whole per-id document (e.g. a single ``kanban_card:<id>``). Note: for
-documents that hold a list of entries (e.g. a schedule array), removing one
-entry is a native ``write``/``edit`` that rewrites the list without it -
-``delete_state`` wipes the WHOLE document, not one entry from a list.
+documents that hold multiple entries (e.g. ``mcp.json``'s ``mcpServers`` map or
+the object-keyed-by-id ``schedule.json``), removing one entry is a native
+``write``/``edit`` that deletes that one key - ``delete_state`` wipes the
+WHOLE document, not one entry within it.
 """
 
 import logging
@@ -23,8 +24,9 @@ class DeleteStateArgs(BaseModel):
     document: str = Field(
         description=(
             "Name of the state document to delete entirely (e.g. a "
-            "'kanban_card:<id>' document). For list documents like a schedule "
-            "array, remove a single entry with a native write/edit instead."
+            "'kanban_card:<id>' document). For multi-entry documents like "
+            "mcp.json or schedule.json, remove a single entry (key) with a "
+            "native write/edit instead."
         )
     )
 
@@ -45,8 +47,8 @@ class DeleteStateTool(BaseSystemTool):
         return (
             "Delete an ENTIRE runtime state document from the store. Use for "
             "removing a whole document (e.g. a single 'kanban_card:<id>'). To "
-            "remove one entry from a list document (like a schedule array), "
-            "rewrite the list without that entry with the native write/edit "
+            "remove one entry from a multi-entry document (like mcp.json or "
+            "schedule.json), delete that one key with the native write/edit "
             "file tools instead."
         )
 

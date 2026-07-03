@@ -106,3 +106,22 @@ async def test_structured_output_requires_exactly_one_schema_source() -> None:
     assert result.success is False
     assert result.error is not None and "exactly one" in result.error
     llm.chat_structured_json.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_structured_output_accepts_empty_inline_schema() -> None:
+    """An empty json_schema={} is a valid (accept-anything) schema, not 'missing'."""
+    llm = MagicMock()
+    llm.chat_structured_json = AsyncMock(return_value={"anything": "goes"})
+
+    ctx = ToolContext(
+        tool_registry=None,
+        llm_client=llm,
+        tool_args={"instruction": "extract whatever", "json_schema": {}},
+    )
+
+    result = await StructuredOutputTool().execute(ctx)
+
+    assert result.success is True
+    assert result.data is not None
+    assert result.data["value"] == {"anything": "goes"}

@@ -39,7 +39,13 @@ def resolve_schemas_dir(schemas_dir: Path | str | None = None) -> Path:
             )
         return resolved_env_dir
 
-    return resolve_data_dir() / "schemas"
+    resolved_default_dir = resolve_data_dir() / "schemas"
+    if not resolved_default_dir.exists():
+        raise FileNotFoundError(
+            f"Schemas directory not found: {resolved_default_dir}. "
+            "Ensure the data/schemas/ directory exists at the project root."
+        )
+    return resolved_default_dir
 
 
 def list_schemas(schemas_dir: Path | str | None = None) -> list[str]:
@@ -68,9 +74,16 @@ def resolve_schema_path(filename: str, *, schemas_dir: Path | str | None = None)
 
     Accepts either an exact filename (e.g. ``schedule_entry.schema.v1.json``)
     or a bare logical name (``schedule_entry``), which resolves to the highest
-    available version. Raises ``FileNotFoundError`` (listing available
-    schemas) when nothing matches.
+    available version. ``filename`` must be a bare name with no path
+    separators or ``..`` components — it is an agent-controlled tool
+    argument, so this is rejected outright rather than merely contained,
+    since it is never legitimate for a schema reference to point outside
+    ``schemas_dir``. Raises ``FileNotFoundError`` (listing available schemas)
+    when nothing matches.
     """
+    if not filename or filename in (".", "..") or "/" in filename or "\\" in filename:
+        raise ValueError(f"Schema reference must be a bare filename, got: {filename!r}")
+
     schema_root = resolve_schemas_dir(schemas_dir)
 
     if filename.endswith(".json"):

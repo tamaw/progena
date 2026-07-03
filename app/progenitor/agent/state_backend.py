@@ -38,7 +38,9 @@ from deepagents.backends.utils import (
 )
 
 from ..schedule.engine import parse_schedule_datetime
+from ..schemas import load_schema
 from ..state.models import ScheduleEntry
+from ..structured import validate_against_schema
 from ..utils import utcnow
 
 logger = logging.getLogger(__name__)
@@ -76,6 +78,7 @@ def validate_mcp_document(content: str) -> JsonDoc:
     for name, cfg in servers.items():
         if not isinstance(cfg, dict):
             raise ValueError(f"server '{name}' must be an object")
+        _check_entry_schema(f"server '{name}'", cfg, "mcp_server_entry")
         url = str(cfg.get("url") or cfg.get("endpoint") or "").strip()
         if not url:
             raise ValueError(f"server '{name}' is missing 'url'")
@@ -111,6 +114,7 @@ def validate_registry_document(content: str) -> JsonDoc:
     for index, agent in enumerate(agents):
         if not isinstance(agent, dict):
             raise ValueError(f"agent {index} must be an object")
+        _check_entry_schema(f"agent {index}", agent, "agent_entry")
         if not str(agent.get("name") or "").strip():
             raise ValueError(f"agent {index} is missing 'name'")
 
@@ -209,6 +213,25 @@ def markdown_to_card(content: str, card_id: str, project_id: str | None = None) 
 
 def _doc_to_text(doc: JsonDoc) -> str:
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+
+
+def _check_entry_schema(label: str, entry: dict[str, Any], schema_name: str) -> None:
+    """Validate one entry dict against its JSON Schema (the enforced floor).
+
+    The JSON Schema files under ``data/schemas/`` describe the same per-entry
+    shapes as this module's hand-rolled semantic checks (croniter parsing,
+    timestamp parsing, ...). Without this, the two sources of truth can
+    silently diverge; this makes the schema an enforced floor instead of just
+    documentation. Raises ``ValueError`` (matching this module's other
+    validators) on a schema violation or a missing/malformed schema file.
+    """
+    try:
+        schema = load_schema(schema_name)
+    except FileNotFoundError as exc:
+        raise ValueError(f"{label}: schema '{schema_name}' not found: {exc}") from exc
+    error = validate_against_schema(entry, schema)
+    if error is not None:
+        raise ValueError(f"{label} does not conform to schema: {error}")
 
 
 class StateDocumentBackend:
@@ -587,6 +610,14 @@ def validate_schedule_document(content: str) -> JsonDoc:
     dedicated create/update/delete tool; the ``managing-schedules`` skill
     reads, edits, and writes this one file directly, the same way
     ``managing-mcp`` does for ``mcp.json``.
+
+    Every field is type-checked with ``isinstance`` (not just coerced) so a
+    malformed entry (e.g. a non-string ``message``) is rejected here with a
+    clean ``ValueError`` rather than reaching ``ScheduleEntry(**fields)`` at
+    save time and raising an uncaught ``pydantic.ValidationError``. Exactly
+    one of ``cron_expression``/``scheduled_at`` must be set, mirroring the
+    check the old ``add_scheduled_task`` tool used to make before this
+    document became agent-editable.
     """
     try:
         data = json.loads(content)
@@ -598,10 +629,34 @@ def validate_schedule_document(content: str) -> JsonDoc:
     for entry_id, item in data.items():
         if not isinstance(item, dict):
             raise ValueError(f"entry '{entry_id}' must be an object")
-        if not str(item.get("message") or "").strip():
+        _check_entry_schema(f"entry '{entry_id}'", item, "schedule_entry")
+
+        message = item.get("message")
+        if not isinstance(message, str) or not message.strip():
             raise ValueError(f"entry '{entry_id}' is missing 'message'")
 
         cron_expression = item.get("cron_expression")
+        if cron_expression is not None and not isinstance(cron_expression, str):
+            raise ValueError(f"entry '{entry_id}' has a non-string cron_expression")
+        scheduled_at = item.get("scheduled_at")
+        if scheduled_at is not None and not isinstance(scheduled_at, str):
+            raise ValueError(f"entry '{entry_id}' has a non-string scheduled_at")
+        timezone = item.get("timezone")
+        if timezone is not None and not isinstance(timezone, str):
+            raise ValueError(f"entry '{entry_id}' has a non-string timezone")
+        user_request = item.get("user_request")
+        if user_request is not None and not isinstance(user_request, str):
+            raise ValueError(f"entry '{entry_id}' has a non-string user_request")
+        paused = item.get("paused", False)
+        if not isinstance(paused, bool):
+            raise ValueError(f"entry '{entry_id}' has a non-bool paused")
+
+        if bool(cron_expression) == bool(scheduled_at):
+            raise ValueError(
+                f"entry '{entry_id}' must set exactly one of "
+                "cron_expression/scheduled_at, not both or neither"
+            )
+
         if cron_expression:
             try:
                 croniter(str(cron_expression), utcnow())
@@ -610,7 +665,6 @@ def validate_schedule_document(content: str) -> JsonDoc:
                     f"entry '{entry_id}' has invalid cron_expression: {cron_expression}"
                 ) from exc
 
-        scheduled_at = item.get("scheduled_at")
         if scheduled_at and parse_schedule_datetime(scheduled_at) is None:
             raise ValueError(
                 f"entry '{entry_id}' has invalid scheduled_at timestamp: {scheduled_at}"
@@ -631,6 +685,15 @@ def create_schedule_state_file(
     internally - only this load/save boundary converts between the two, so
     the scheduler, backend, and Schedules UI (which talk to the StateManager
     directly) are unaffected by this file's shape.
+
+    ``save`` diffs the incoming entries against the current on-disk state and
+    emits the same ``log_schedule_event`` audit-trail entries
+    (``entry_added``/``entry_removed``/``entry_updated``) that
+    ``StateManager.add_schedule_entry``/``remove_schedule_entry``/
+    ``update_schedule_entry`` emit, so this agent-facing write path produces
+    the same audit trail regardless of which path made the change. One
+    ``get_schedule`` read + one ``save_schedule`` write + one log call per
+    changed entry - no redundant re-reads.
     """
 
     async def load() -> JsonDoc:
@@ -643,13 +706,40 @@ def create_schedule_state_file(
     async def save(doc: JsonDoc) -> None:
         if not isinstance(doc, dict):
             raise ValueError("schedule.json must be a JSON object keyed by schedule id")
-        entries = []
+        entries: list[ScheduleEntry] = []
         for entry_id, item in doc.items():
             if not isinstance(item, dict):
                 raise ValueError(f"entry '{entry_id}' must be an object")
             fields = {k: v for k, v in item.items() if k != "id"}
             entries.append(ScheduleEntry(id=entry_id, **fields))
+
+        previous = {
+            entry.id: entry.model_dump(mode="json") for entry in await state_manager.get_schedule()
+        }
         await state_manager.save_schedule(entries)
+
+        seen_ids: set[str] = set()
+        for entry in entries:
+            seen_ids.add(entry.id)
+            current = entry.model_dump(mode="json")
+            prior = previous.get(entry.id)
+            if prior is None:
+                await state_manager.log_schedule_event(
+                    {
+                        "event": "entry_added",
+                        "schedule_id": entry.id,
+                        "description": current.get("description"),
+                    }
+                )
+            elif prior != current:
+                changed = sorted(key for key in current if prior.get(key) != current.get(key))
+                await state_manager.log_schedule_event(
+                    {"event": "entry_updated", "schedule_id": entry.id, "updates": changed}
+                )
+        for removed_id in previous.keys() - seen_ids:
+            await state_manager.log_schedule_event(
+                {"event": "entry_removed", "schedule_id": removed_id}
+            )
 
     return StateFile(
         name="schedule.json",

@@ -51,8 +51,8 @@ top level must be a JSON object; every entry value must be an object with a
 1. **Never regenerate the whole file.** Only touch the one key you're adding,
    changing, or removing with `edit_file` — don't ask `structured_output` to produce
    the entire object, and don't hand-author multiple entries' worth of JSON yourself.
-2. **New entries get a generated id.** Call `generate_id prefix=sched` (one-off) or
-   `prefix=cron` (recurring) for the object key — don't invent ids yourself. The id
+2. **New entries get a generated id.** Call `generate_id prefix=cron` (one-off) or
+   `prefix=sched` (recurring) for the object key — don't invent ids yourself. The id
    is never repeated inside the entry's value.
 3. **Resolve times first.** Use `current_time` to turn "in 30 minutes" / "tomorrow
    9am" into a concrete `scheduled_at`, or into the right `cron_expression`.
@@ -65,7 +65,7 @@ top level must be a JSON object; every entry value must be an object with a
 ## Common Operations
 
 ### Add a task (recurring: "every day at 9am")
-1. `generate_id prefix=cron` → `<id>`
+1. `generate_id prefix=sched` → `<id>`
 2. `current_time` if you need to resolve relative wording into the cron expression.
 3. `read_file /schemas/schedule_entry.schema.v1.json`
 4. `structured_output json_schema=<content from step 3> instruction="Build a schedule entry with message '<what to do>' and cron_expression '0 9 * * *'."`
@@ -74,8 +74,9 @@ top level must be a JSON object; every entry value must be an object with a
    untouched.
 
 ### Add a task (one-off: "tomorrow at 3pm")
-Same as above, but resolve `current_time` to an absolute ISO8601 timestamp first and
-set `scheduled_at` instead of `cron_expression`.
+Same as above but with `generate_id prefix=cron` for the id, and resolve
+`current_time` to an absolute ISO8601 timestamp first and set `scheduled_at`
+instead of `cron_expression`.
 
 ### Enable / disable (pause / resume)
 Flip that entry's `paused` boolean with `edit_file` — a single-field change, no need

@@ -8,6 +8,10 @@
       "type": "string",
       "description": "Remote HTTP(S) endpoint URL. May contain ${ENV_VAR} templates resolved at load time."
     },
+    "endpoint": {
+      "type": "string",
+      "description": "Legacy alias for 'url'. Prefer 'url' for new entries; both are accepted at load time."
+    },
     "transport": {
       "type": "string",
       "enum": ["http"],
@@ -29,6 +33,6 @@
       "additionalProperties": { "type": "string" }
     }
   },
-  "required": ["url"],
+  "anyOf": [{ "required": ["url"] }, { "required": ["endpoint"] }],
   "additionalProperties": false
 }
