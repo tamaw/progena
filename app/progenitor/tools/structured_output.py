@@ -95,6 +95,8 @@ class StructuredOutputTool(BaseSystemTool):
         if has_file == has_inline:
             return ToolResult.fail("Provide exactly one of 'schema_file' or 'json_schema'")
 
+        schema: dict[str, Any]
+        schema_label: str
         if has_file:
             try:
                 schema = load_schema(schema_file)
@@ -103,9 +105,11 @@ class StructuredOutputTool(BaseSystemTool):
             except (ValueError, json.JSONDecodeError) as exc:
                 return ToolResult.fail(f"Invalid schema '{schema_file}': {exc}")
             schema_label = schema_file
-        else:
+        elif isinstance(inline_schema, dict):
             schema = inline_schema
             schema_label = "inline"
+        else:  # pragma: no cover - has_file == has_inline check above already excludes this
+            return ToolResult.fail("Provide exactly one of 'schema_file' or 'json_schema'")
 
         value, error = await generate_structured(
             context.llm_client,
