@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Kanban task card",
-  "description": "A single kanban task card, stored as the 'kanban_card:<id>' document. Note: creating a brand-new card also requires registering its id in the board's card_order; use the kanban tooling for new cards and write_state to edit existing ones.",
+  "description": "A single kanban task card, stored as the 'kanban_card:<id>' document and exposed as a virtual file at /state/tasks/<id>.md (or /state/tasks/<project_id>/<id>.md for a project-scoped card). Create or edit a card with the native write/edit file tools against that path; card_order and the Tasks UI update automatically.",
   "type": "object",
   "properties": {
     "id": {

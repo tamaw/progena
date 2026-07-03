@@ -70,6 +70,26 @@ async def test_generate_structured_array_wraps_and_unwraps() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generate_structured_array_schema_keeps_string_context() -> None:
+    """A non-list context (e.g. source text to extract from) must not be dropped."""
+    llm = MagicMock()
+    llm.chat_structured_json = AsyncMock(return_value={"items": ["a", "b"]})
+    schema = {"type": "array", "items": {"type": "string"}}
+
+    value, error = await structured.generate_structured(
+        llm,
+        json_schema=schema,
+        instruction="extract the tags",
+        context="please tag this as a and b",
+    )
+
+    assert error is None
+    assert value == ["a", "b"]
+    _, kwargs = llm.chat_structured_json.call_args
+    assert "please tag this as a and b" in kwargs["prompt"]
+
+
+@pytest.mark.asyncio
 async def test_generate_structured_validation_error() -> None:
     llm = MagicMock()
     llm.chat_structured_json = AsyncMock(return_value={"n": "not-an-int"})
