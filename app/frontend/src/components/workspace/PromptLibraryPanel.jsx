@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useApi } from '../../hooks/useApi';
+import { usePromptsApi } from '../../hooks/api/usePromptsApi';
 
 function groupPrompts(prompts, selectedAgent) {
   return prompts.reduce((groups, prompt) => {
@@ -36,7 +36,7 @@ function PromptLibraryPanel({
   onToggle,
   selectedAgent = '',
 }) {
-  const { getPrompts } = useApi();
+  const { getPrompts } = usePromptsApi();
   const navigate = useNavigate();
   const [prompts, setPrompts] = useState([]);
   const [loading, setLoading] = useState(true);
