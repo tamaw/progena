@@ -13,7 +13,6 @@ from ..config import ProgenitorConfig, get_config
 from ..ipc.server import IPCServer
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
-from ..nodes.health import write_health_status
 from ..registry import AgentRegistryRuntime
 from ..state.langgraph_store import LangGraphRuntimeStore
 from ..state.manager import StateManager
@@ -300,6 +299,5 @@ class Progenitor:
         await self._persistence_stack.aclose()
         self.log_store = None
         await self.llm_client.close()
-        await write_health_status(self.state_dir, "offline")
 
         logger.info("State persisted. Goodbye.")

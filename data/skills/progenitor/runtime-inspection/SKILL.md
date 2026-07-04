@@ -18,10 +18,10 @@ allowed-tools: read_file shell
 
 ## Fast Triage Sequence
 1. Check recent timestamps and liveness markers.
-2. Inspect `health.json` and current state artifacts.
-3. Scan latest errors/warnings in logs.
-4. Correlate state transitions with log events.
-5. Report probable root cause and concrete next check.
+2. Scan latest errors/warnings in logs (health/status/current-state are Postgres
+   documents now, not files under `/data/` - logs are the file-based evidence).
+3. Correlate state transitions with log events.
+4. Report probable root cause and concrete next check.
 
 ## Response Format
 - `Symptom`

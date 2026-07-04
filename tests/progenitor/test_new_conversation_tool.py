@@ -108,6 +108,7 @@ async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> 
     state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread_persisted"})
     state_manager.get_a2a_tasks = AsyncMock(return_value=[])
     state_manager.save_current_state = AsyncMock()
+    state_manager.save_health = AsyncMock()
     state_manager.state_dir = tmp_path
 
     loop = ProgenitorLoop(

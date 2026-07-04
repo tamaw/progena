@@ -13,7 +13,6 @@ class HeartbeatContext:
     agent_graph: Any
     live_state: dict[str, Any]
     state_manager: Any
-    health_state_dir: str | Path
     startup_audit_payload: dict[str, Any] | None
     tool_registry: Any
     project_root: Path | None
@@ -32,3 +31,5 @@ class HeartbeatContext:
     audit_log_sink: Any | None = None
     due_maintenance: set[str] = field(default_factory=set)
     startup_flags: set[str] = field(default_factory=set)
+    llm_model: str = ""
+    llm_reasoning_effort: str = ""

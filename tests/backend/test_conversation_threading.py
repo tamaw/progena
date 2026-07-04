@@ -2,6 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.main import app
 from app.backend.session import SessionConfig, SessionManager
 from app.backend.state_reader import StateReader
@@ -52,17 +53,17 @@ def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):
     config_dir.mkdir(parents=True)
     sessions_dir.mkdir(parents=True)
 
-    (state_dir / "health.json").write_text(
-        json.dumps(
-            {
-                "status": "running",
-                "last_active": "2026-04-20T00:00:00Z",
-                "thread_id": "thread_live",
-                "cycle_count": 12,
-                "pid": 4242,
-            }
-        ),
-        encoding="utf-8",
+    store = InMemoryDocumentStore()
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "health",
+        {
+            "status": "running",
+            "last_active": "2026-04-20T00:00:00Z",
+            "thread_id": "thread_live",
+            "cycle_count": 12,
+            "pid": 4242,
+        },
     )
     (state_dir / "current_state.json").write_text(
         json.dumps(
@@ -100,6 +101,7 @@ def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):
         state_dir=state_dir,
         config_dir=config_dir,
         sessions_dir=sessions_dir,
+        document_store=store,
     )
 
     health = reader.get_health()

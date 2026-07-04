@@ -1,6 +1,5 @@
 """Tests for graph-native A2A completion recording."""
 
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -12,7 +11,7 @@ from app.progenitor.state.models import A2ATaskRecord
 
 
 @pytest.mark.asyncio
-async def test_a2a_completion_node_persists_one_tool_message(tmp_path: Path) -> None:
+async def test_a2a_completion_node_persists_one_tool_message() -> None:
     state_manager = MagicMock()
     state_manager.log_conversation = AsyncMock()
     state_manager.save_messages = AsyncMock()
@@ -30,7 +29,6 @@ async def test_a2a_completion_node_persists_one_tool_message(tmp_path: Path) -> 
             agent_graph=MagicMock(),
             live_state={},
             state_manager=state_manager,
-            health_state_dir=tmp_path,
             startup_audit_payload=None,
             tool_registry=MagicMock(),
             project_root=None,

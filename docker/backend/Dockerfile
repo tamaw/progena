@@ -20,9 +20,9 @@ ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Create directories for mounted volumes
-RUN mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/tmp
+RUN mkdir -p /app/data/prompts /app/data/skills /app/logs /app/tmp
 
-VOLUME ["/app/data", "/app/logs"]
+VOLUME ["/app/data/prompts", "/app/data/skills", "/app/logs"]
 
 EXPOSE 8000
 
