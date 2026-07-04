@@ -12,6 +12,7 @@ from app.progenitor.agent.state_backend import (
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
     card_to_markdown,
+    create_health_state_file,
     create_mcp_state_file,
     create_registry_state_file,
     create_schedule_state_file,
@@ -622,3 +623,50 @@ async def test_registry_aedit_updates_single_agent():
     result = await backend.aedit("/agents.json", '"enabled": true', '"enabled": false')
     assert result.error is None
     assert sm.registry["agents"][0]["enabled"] is False
+
+
+class _FakeHealthStateManager:
+    def __init__(self, health: dict[str, Any] | None = None) -> None:
+        self.health: dict[str, Any] = health or {}
+
+    async def get_health(self) -> dict[str, Any]:
+        return copy.deepcopy(self.health)
+
+
+def _health_backend(health=None) -> tuple[StateDocumentBackend, _FakeHealthStateManager]:
+    sm = _FakeHealthStateManager(health)
+    backend = StateDocumentBackend([create_health_state_file(sm)])
+    return backend, sm
+
+
+async def test_health_aread_returns_status():
+    backend, _sm = _health_backend(
+        {"status": "running", "cycle_count": 12, "version": "abc123def456"}
+    )
+    result = await backend.aread("/health.json")
+    assert result.error is None
+    content = json.loads(result.file_data["content"])
+    assert content["status"] == "running"
+    assert content["cycle_count"] == 12
+    assert content["version"] == "abc123def456"
+
+
+async def test_health_aread_defaults_to_empty_object():
+    backend, _sm = _health_backend()
+    result = await backend.aread("/health.json")
+    assert result.error is None
+    assert json.loads(result.file_data["content"]) == {}
+
+
+async def test_health_awrite_is_rejected():
+    backend, sm = _health_backend({"status": "running"})
+    result = await backend.awrite("/health.json", '{"status": "stopped"}')
+    assert result.error and "read-only" in result.error
+    assert sm.health == {"status": "running"}
+
+
+async def test_health_aedit_is_rejected():
+    backend, sm = _health_backend({"status": "running"})
+    result = await backend.aedit("/health.json", '"running"', '"stopped"')
+    assert result.error and "read-only" in result.error
+    assert sm.health == {"status": "running"}
