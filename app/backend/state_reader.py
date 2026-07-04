@@ -410,6 +410,14 @@ class StateSnapshot:
     # message/cron changes) so an agent edit is pushed live to the Schedules
     # page even when the entry count is unchanged.
     schedule_fingerprint: str = ""
+    # Content fingerprint of the kanban board (structure + all per-card
+    # documents). Unlike mcp/knowledge/schedule, there is no other tracked
+    # field anywhere in this snapshot that changes when a task is added,
+    # edited, or removed (task count/content live only in Postgres, not in
+    # cycle_count/messages_count/etc.), so without this the change-detection
+    # in _state_changed() would never notice a kanban-only write and the
+    # Tasks page would only pick up new/edited cards on a manual refresh.
+    kanban_fingerprint: str = ""
 
 
 class StateReader:
@@ -957,6 +965,44 @@ class StateReader:
             serialized = str(payload)
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
+    def _kanban_fingerprint(self) -> str:
+        """Stable hash of the kanban board (structure + every per-card document).
+
+        Mirrors ``_schedule_fingerprint``, but unlike schedule/knowledge/mcp
+        there is no other snapshot field (cycle_count, messages_count, ...)
+        that ever changes when a task is only added, edited, or removed, so
+        this fingerprint is the sole signal ``_state_changed`` has for a
+        kanban-only write.
+        """
+        if self.document_store is None:
+            return ""
+        try:
+            structure_doc = self.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "kanban_board", None
+            )
+            structure = structure_doc.payload if structure_doc is not None else {}
+            order = structure.get("card_order") if isinstance(structure, dict) else None
+            card_order = (
+                [str(cid).strip() for cid in order if str(cid).strip()]
+                if isinstance(order, list)
+                else []
+            )
+            cards = []
+            for card_id in card_order:
+                card_doc = self.document_store.get_document(
+                    PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+                )
+                if card_doc is not None and isinstance(card_doc.payload, dict):
+                    cards.append(card_doc.payload)
+            material = {"structure": structure, "cards": cards}
+        except Exception:
+            return ""
+        try:
+            serialized = json.dumps(material, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            serialized = str(material)
+        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -981,6 +1027,7 @@ class StateReader:
             mcp_fingerprint=self._mcp_fingerprint(),
             knowledge_fingerprint=self._knowledge_fingerprint(),
             schedule_fingerprint=self._schedule_fingerprint(),
+            kanban_fingerprint=self._kanban_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1799,6 +1846,8 @@ class StateReader:
         if new.mcp_fingerprint != old.mcp_fingerprint:
             return True
         if new.schedule_fingerprint != old.schedule_fingerprint:
+            return True
+        if new.kanban_fingerprint != old.kanban_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0
