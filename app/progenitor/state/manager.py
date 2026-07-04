@@ -154,7 +154,7 @@ class StateManager:
 
         self._state_cache.setdefault("mcp", default_mcp_config_payload())
         self._state_cache.setdefault("mcp_tools", {"tools": []})
-        self._state_cache.setdefault("schedule", [])
+        self._state_cache.setdefault("schedule", {})
         self._state_cache.setdefault("schedule_runs", [])
 
     async def _ensure_runtime_store_initial_state(self) -> None:
@@ -272,28 +272,35 @@ class StateManager:
         await log_store.log_schedule_event(event=event, append_jsonl_fn=self.append_jsonl)
 
     # Schedule management (database-backed in production runtime)
-    async def get_schedule(self) -> list[ScheduleEntry]:
+    async def get_schedule(self) -> dict[str, ScheduleEntry]:
+        from ..config import normalize_schedule_payload
+
         if self._runtime_store is not None:
             # Read straight from the shared store rather than the in-memory
             # cache: schedules are also created/paused/deleted by the backend
             # (UI) writing the same Postgres document, so a cached copy would
             # hide those cross-process changes from the runtime scheduler.
-            payload = await self._runtime_store.get_document("schedule", [])
-            self._state_cache["schedule"] = payload
-            return [ScheduleEntry.model_validate(item) for item in payload]
-        payload = self._state_cache.get("schedule", [])
-        rows = payload if isinstance(payload, list) else []
-        return [ScheduleEntry.model_validate(item) for item in rows]
+            payload = await self._runtime_store.get_document("schedule", {})
+            normalized = normalize_schedule_payload(payload)
+            if normalized != payload:
+                # One-time migration from the legacy array shape (or any other
+                # process's stale write): persist immediately so every later
+                # read - by this process or the backend - sees the dict shape.
+                await self._runtime_store.save_document("schedule", normalized)
+            self._state_cache["schedule"] = normalized
+            return {k: ScheduleEntry.model_validate(v) for k, v in normalized.items()}
+        normalized = normalize_schedule_payload(self._state_cache.get("schedule", {}))
+        return {k: ScheduleEntry.model_validate(v) for k, v in normalized.items()}
 
-    async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
+    async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
+        payload = {k: v.model_dump(mode="json") for k, v in schedule.items()}
         if self._runtime_store is not None:
             # Write straight through to the shared store (and refresh the cache)
             # so backend reads and the runtime stay coherent. See get_schedule.
-            payload = [entry.model_dump(mode="json") for entry in schedule]
             self._state_cache["schedule"] = payload
             await self._runtime_store.save_document("schedule", payload)
             return
-        self._state_cache["schedule"] = [entry.model_dump(mode="json") for entry in schedule]
+        self._state_cache["schedule"] = payload
 
     # Registry management
     async def get_registry(self) -> dict[str, Any]:
@@ -365,29 +372,6 @@ class StateManager:
             await self._save_runtime_document("knowledge", payload)
             return
         self._state_cache["knowledge"] = payload
-
-    async def get_state_document(self, name: str, default: Any = None) -> Any:
-        """Return an arbitrary runtime state document by name.
-
-        Generic accessor used by ``delete_state`` (to check existence before
-        deleting a document with no dedicated typed method). Reads straight
-        from the store rather than the cache so cross-process edits (backend UI
-        writes) are visible. See get_mcp_config for the same rationale.
-        """
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.get_document(name, default)
-            self._state_cache[name] = payload
-            return payload
-        return self._state_cache.get(name, default)
-
-    async def delete_state_document(self, name: str) -> None:
-        """Delete an arbitrary runtime state document by name (no-op if absent).
-
-        Generic deleter companion to :meth:`get_state_document`.
-        """
-        self._state_cache.pop(name, None)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(name)
 
     async def get_kanban_structure(self) -> dict[str, Any]:
         """Return the kanban board structure document (columns + ``card_order``).

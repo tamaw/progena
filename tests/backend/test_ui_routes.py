@@ -979,7 +979,7 @@ class TestUIRoutes:
         created = create_response.json()
         schedule_path = kanban_state_reader.config_dir / "schedule.json"
         before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
-        assert [entry["id"] for entry in before_delete] == [created["id"].split(":", 1)[1]]
+        assert list(before_delete.keys()) == [created["id"].split(":", 1)[1]]
 
         delete_response = client.delete(f"/api/ui/widgets/{created['id']}")
 
@@ -991,7 +991,7 @@ class TestUIRoutes:
             "warning": None,
         }
         after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
-        assert after_delete == []
+        assert after_delete == {}
         widgets = client.get("/api/ui/widgets").json()
         assert created["id"] not in {widget["id"] for widget in widgets["items"]}
 
@@ -1377,8 +1377,8 @@ class TestScheduleEndpoint:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-future": {
                     "id": "sched-future",
                     "name": "Hourly ping",
                     "message": "ping",
@@ -1387,7 +1387,7 @@ class TestScheduleEndpoint:
                     "created_at": recent,
                     "paused": False,
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1403,7 +1403,7 @@ class TestScheduleEndpoint:
     def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
         """enabled drives the runtime-honoured paused flag on create and patch."""
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1419,7 +1419,7 @@ class TestScheduleEndpoint:
         )
         assert created.status_code == 200
         schedule_id = created.json()["id"].split(":", 1)[1]
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is False
 
         patched = client.patch(
@@ -1427,7 +1427,7 @@ class TestScheduleEndpoint:
             json={"enabled": False},
         )
         assert patched.status_code == 200
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is True
         assert entry["enabled"] is False
 
@@ -1440,8 +1440,8 @@ class TestScheduleEndpoint:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-live": {
                     "id": "sched-live",
                     "name": "Live schedule",
                     "message": "ping",
@@ -1449,7 +1449,7 @@ class TestScheduleEndpoint:
                     "created_at": created_at,
                     "paused": False,
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1707,8 +1707,8 @@ class TestWorkspaceBridgeActions:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-1": {
                     "id": "sched-1",
                     "name": "Daily check",
                     "message": "Run the daily review",
@@ -1718,7 +1718,7 @@ class TestWorkspaceBridgeActions:
                     "enabled": True,
                     "timezone": "UTC",
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1734,9 +1734,9 @@ class TestWorkspaceBridgeActions:
         )
 
         assert response.status_code == 200
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload[0]
+        updated = document.payload["sched-1"]
         assert updated["name"] == "Nightly check"
         assert updated["message"] == "Run the nightly review"
         assert updated["schedule"] == "0 1 * * *"
@@ -1913,7 +1913,7 @@ class TestWorkspaceBridgeActions:
 
     def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1934,19 +1934,20 @@ class TestWorkspaceBridgeActions:
         assert payload["type"] == "schedule"
         assert payload["title"] == "Morning Check-in"
         assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        schedule_id = payload["id"].split(":", 1)[1]
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload
-        assert updated[0]["name"] == "Morning Check-in"
-        assert updated[0]["message"] == "Summarize overnight alerts and prep the inbox."
-        assert updated[0]["id"].startswith("sched_")
-        assert updated[0]["cron_expression"] == "*/15 * * * *"
+        updated = document.payload[schedule_id]
+        assert updated["name"] == "Morning Check-in"
+        assert updated["message"] == "Summarize overnight alerts and prep the inbox."
+        assert updated["id"].startswith("sched_")
+        assert updated["cron_expression"] == "*/15 * * * *"
 
     def test_create_once_schedule_uses_cron_prefix_and_persists_scheduled_at(
         self, client, monkeypatch
     ):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1965,13 +1966,14 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 200
         payload = response.json()
         assert payload["id"].startswith("schedule:cron_")
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        schedule_id = payload["id"].split(":", 1)[1]
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload
-        assert updated[0]["id"].startswith("cron_")
-        assert updated[0]["schedule_type"] == "once"
-        assert updated[0]["scheduled_at"] == "2026-06-19T09:47:00+00:00"
-        assert "cron_expression" not in updated[0]
+        updated = document.payload[schedule_id]
+        assert updated["id"].startswith("cron_")
+        assert updated["schedule_type"] == "once"
+        assert updated["scheduled_at"] == "2026-06-19T09:47:00+00:00"
+        assert "cron_expression" not in updated
 
     def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
         response = client.post(

@@ -357,14 +357,14 @@ async def test_kanban_adelete_project_scoped_requires_matching_path():
 
 class _FakeScheduleStateManager:
     def __init__(self, entries: list[ScheduleEntry] | None = None) -> None:
-        self.entries: list[ScheduleEntry] = list(entries or [])
+        self.entries: dict[str, ScheduleEntry] = {e.id: e for e in entries or []}
         self.logged_events: list[dict[str, Any]] = []
 
-    async def get_schedule(self) -> list[ScheduleEntry]:
-        return list(self.entries)
+    async def get_schedule(self) -> dict[str, ScheduleEntry]:
+        return dict(self.entries)
 
-    async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
-        self.entries = list(schedule)
+    async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
+        self.entries = dict(schedule)
 
     async def log_schedule_event(self, event: dict[str, Any]) -> None:
         self.logged_events.append(event)
@@ -475,15 +475,15 @@ async def test_schedule_awrite_persists_new_entry():
     body = json.dumps({"sched_9": {"message": "new task", "cron_expression": "0 8 * * *"}})
     result = await backend.awrite("/schedule.json", body)
     assert result.error is None
-    assert sm.entries[0].id == "sched_9"
-    assert sm.entries[0].message == "new task"
+    assert sm.entries["sched_9"].id == "sched_9"
+    assert sm.entries["sched_9"].message == "new task"
 
 
 async def test_schedule_awrite_invalid_does_not_persist():
     backend, sm = _schedule_backend([])
     result = await backend.awrite("/schedule.json", '{"sched_9": {}}')  # missing message
     assert result.error and "Invalid" in result.error
-    assert sm.entries == []
+    assert sm.entries == {}
 
 
 async def test_schedule_aedit_updates_single_entry():
@@ -492,7 +492,7 @@ async def test_schedule_aedit_updates_single_entry():
     )
     result = await backend.aedit("/schedule.json", '"old"', '"new"')
     assert result.error is None
-    assert sm.entries[0].message == "new"
+    assert sm.entries["sched_1"].message == "new"
 
 
 async def test_schedule_awrite_removes_entry():
@@ -501,7 +501,7 @@ async def test_schedule_awrite_removes_entry():
     )
     result = await backend.awrite("/schedule.json", "{}")
     assert result.error is None
-    assert sm.entries == []
+    assert sm.entries == {}
 
 
 # ---- schedule (audit logging via the agent write path) ----------------------

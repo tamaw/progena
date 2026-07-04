@@ -62,7 +62,7 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         self.config = MockConfig()
         self.state_manager = MagicMock()
-        self.state_manager.get_schedule = AsyncMock(return_value=[])
+        self.state_manager.get_schedule = AsyncMock(return_value={})
         self.state_manager.remove_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.update_schedule_entry = AsyncMock(return_value=True)
         self.state_manager.upsert_schedule_run = AsyncMock(return_value=None)
@@ -200,18 +200,18 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.utils import utcnow
 
         due_time = utcnow().replace(microsecond=0).isoformat()
-        due_items = [
-            {
+        due_items = {
+            "sched-1": {
                 "id": "sched-1",
                 "message": "first task",
                 "scheduled_at": due_time,
             },
-            {
+            "sched-2": {
                 "id": "sched-2",
                 "message": "second task",
                 "scheduled_at": due_time,
             },
-        ]
+        }
 
         self.state_manager.get_schedule.return_value = due_items
 
@@ -271,15 +271,15 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         now = utcnow().replace(microsecond=0)
         due_time = (now - timedelta(minutes=1)).isoformat()
         self.state_manager.get_schedule = AsyncMock(
-            return_value=[
-                {
+            return_value={
+                "cron_one_off": {
                     "id": "cron_one_off",
                     "message": "say hello",
                     "scheduled_at": due_time,
                     "created_at": due_time,
                     "last_run": None,
                 }
-            ]
+            }
         )
         enqueue_input = AsyncMock(return_value=True)
         self.loop.heartbeat_context.queues.enqueue_input = enqueue_input
@@ -313,15 +313,15 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
 
         due_time = (utcnow() - timedelta(minutes=10)).replace(microsecond=0).isoformat()
         self.state_manager.get_schedule = AsyncMock(
-            return_value=[
-                {
+            return_value={
+                "sched_recurring": {
                     "id": "sched_recurring",
                     "message": "check status",
                     "cron_expression": "*/5 * * * *",
                     "created_at": due_time,
                     "last_run": None,
                 }
-            ]
+            }
         )
         enqueue_input = AsyncMock(return_value=True)
         self.loop.heartbeat_context.queues.enqueue_input = enqueue_input

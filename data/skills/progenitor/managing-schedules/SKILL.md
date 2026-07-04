@@ -1,7 +1,7 @@
 ---
 name: managing-schedules
 description: Create, update, pause/resume, reschedule, or remove scheduled tasks (one-off and recurring) by editing the /state/schedule.json config file. Use when users ask to schedule work, review upcoming jobs, pause/resume, reschedule, or debug task timing.
-allowed-tools: read_file write_file edit_file ls generate_id current_time structured_output delete_state
+allowed-tools: read_file write_file edit_file ls generate_id current_time structured_output
 ---
 
 # Managing Schedules
@@ -97,9 +97,7 @@ everything else preserved), `edit_file` that one key's value back in.
 
 ### Remove a task
 Delete its `"<id>": { ... }` key (and its trailing comma, if any) from the object
-with `edit_file`. `delete_state document=schedule` wipes the *entire* schedule
-document (every task) — only use it if the user explicitly asks to clear all
-schedules, never for removing one entry.
+with `edit_file`.
 
 ## Cron quick reference
 - `0 9 * * *` — daily 09:00
