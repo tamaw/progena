@@ -497,7 +497,6 @@ class ConversationState(TypedDict, total=False):
 class SchedulingState(TypedDict, total=False):
     """Scheduling and registry state."""
 
-    schedule: list[ScheduleEntry]
     new_schedule_entry: ScheduleEntry | None
     current_time: datetime | None
     due_items: list[str]

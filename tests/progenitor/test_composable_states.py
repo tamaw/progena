@@ -31,7 +31,7 @@ class TestComposableSubstates(unittest.TestCase):
 
         annotations = SchedulingState.__annotations__
 
-        assert "schedule" in annotations
+        assert "new_schedule_entry" in annotations
         assert "current_time" in annotations
         assert "due_items" in annotations
         assert "agents" in annotations

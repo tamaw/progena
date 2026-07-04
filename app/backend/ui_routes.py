@@ -34,6 +34,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.progenitor.config import normalize_schedule_payload
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -2202,32 +2203,27 @@ def _write_mcp_config(state_reader: StateReader, data: dict[str, Any]) -> None:
     state_reader.save_mcp_config(data)
 
 
-def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
-    """Read the live schedule config."""
+def _read_schedule_config(state_reader: StateReader) -> tuple[Path, dict]:
+    """Read the live schedule config, keyed by schedule id."""
     schedule_path = state_reader.schedule_config_path
     raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    if raw is None:
-        return schedule_path, []
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=500, detail="Schedule state is invalid")
-    return schedule_path, raw
+    normalized = normalize_schedule_payload(raw)
+    if raw is not None and normalized != raw:
+        # One-time migration from the legacy array shape. See
+        # StateManager.get_schedule for the same rationale.
+        _atomic_write_json(schedule_path, normalized, state_reader)
+        state_reader.invalidate(schedule_path)
+    return schedule_path, normalized
 
 
 def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     """Delete a persisted schedule entry and refresh the cached schedule file."""
     schedule_path, schedule_data = _read_schedule_config(state_reader)
-    remaining_entries: list = []
-    deleted = False
-    for entry in schedule_data:
-        if isinstance(entry, dict) and entry.get("id") == schedule_id:
-            deleted = True
-            continue
-        remaining_entries.append(entry)
-
-    if not deleted:
+    if schedule_id not in schedule_data:
         return False
 
-    _atomic_write_json(schedule_path, remaining_entries, state_reader)
+    del schedule_data[schedule_id]
+    _atomic_write_json(schedule_path, schedule_data, state_reader)
     state_reader.invalidate(schedule_path)
     return True
 
@@ -2597,12 +2593,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         schedule_id = widget_id.split(":", 1)[1]
         schedule_path, schedule_data = _read_schedule_config(state_reader)
 
+        entry = schedule_data.get(schedule_id)
         updated = None
-        for entry in schedule_data:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("id") != schedule_id:
-                continue
+        if isinstance(entry, dict):
             current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
             current_expression = (
                 body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
@@ -2639,7 +2632,6 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             entry["next_run"] = next_run.isoformat() if next_run else None
             entry["next_run_at"] = next_run.isoformat() if next_run else None
             updated = entry
-            break
 
         if updated is None:
             raise HTTPException(status_code=404, detail="Widget not found")
@@ -2888,7 +2880,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         enabled=body.enabled,
         created_at=created_at,
     )
-    schedule_data.append(entry)
+    schedule_data[schedule_id] = entry
 
     _atomic_write_json(schedule_path, schedule_data, state_reader)
     state_reader.invalidate(schedule_path)
@@ -2941,10 +2933,7 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
 
     state_reader = get_state_reader()
     schedule_path, schedule_data = _read_schedule_config(state_reader)
-    entry = next(
-        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
-        None,
-    )
+    entry = schedule_data.get(schedule_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
@@ -2981,10 +2970,7 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
     # next_run or the display fields; reconcile them here so the UI stays coherent.
     state_reader.invalidate(schedule_path)
     _, schedule_data = _read_schedule_config(state_reader)
-    updated = next(
-        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
-        None,
-    )
+    updated = schedule_data.get(schedule_id)
     if updated is not None:
         updated["updated_at"] = utcnow().isoformat()
         if updated.get("scheduled_at"):

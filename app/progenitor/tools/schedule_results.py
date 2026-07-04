@@ -277,15 +277,12 @@ class GetScheduleRunResultTool(BaseSystemTool):
         schedule_entry = None
         if hasattr(context.state_manager, "get_schedule"):
             schedule = await context.state_manager.get_schedule()
-            schedule_entry = next(
-                (
-                    _coerce_schedule_dict(entry)
-                    for entry in schedule
-                    if str(_coerce_schedule_dict(entry).get("id") or "")
-                    == str(target.get("schedule_id") or "")
-                ),
-                None,
+            match = (
+                schedule.get(str(target.get("schedule_id") or ""))
+                if isinstance(schedule, dict)
+                else None
             )
+            schedule_entry = _coerce_schedule_dict(match) if match is not None else None
 
         checkpoint = None
         checkpoint_note = None

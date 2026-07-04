@@ -90,9 +90,27 @@ def default_mcp_config_payload() -> dict[str, Any]:
     return {"mcpServers": {}}
 
 
-def default_schedule_config_payload() -> list[Any]:
+def default_schedule_config_payload() -> dict[str, Any]:
     """Return the default (empty) schedule document persisted in Postgres."""
-    return []
+    return {}
+
+
+def normalize_schedule_payload(payload: Any) -> dict[str, Any]:
+    """Normalize a schedule document into the canonical dict-keyed-by-id shape.
+
+    Tolerates the legacy list-of-entries row (pre-migration deployments) by
+    converting it to ``{entry["id"]: entry, ...}``; an already-dict payload
+    passes through, defensively dropping non-dict values.
+    """
+    if isinstance(payload, dict):
+        return {str(k): v for k, v in payload.items() if isinstance(v, dict)}
+    if isinstance(payload, list):
+        result: dict[str, Any] = {}
+        for item in payload:
+            if isinstance(item, dict) and str(item.get("id") or "").strip():
+                result[str(item["id"])] = item
+        return result
+    return {}
 
 
 @dataclass

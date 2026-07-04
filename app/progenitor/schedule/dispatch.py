@@ -16,8 +16,10 @@ from .engine import Scheduler
 SCHEDULED_INPUT_PREFIX = "[Scheduled Task]\n"
 
 
-def _schedule_entries_to_dicts(entries: list[Any]) -> list[dict[str, Any]]:
-    return [entry.model_dump() if hasattr(entry, "model_dump") else entry for entry in entries]
+def _schedule_entries_to_dicts(entries: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        entry.model_dump() if hasattr(entry, "model_dump") else entry for entry in entries.values()
+    ]
 
 
 async def get_due_schedule_ids(

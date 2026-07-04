@@ -21,7 +21,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import default_mcp_config_payload, resolve_schedule_config_path
+from app.progenitor.config import (
+    default_mcp_config_payload,
+    normalize_schedule_payload,
+    resolve_schedule_config_path,
+)
 from app.progenitor.mcp.loader import (
     load_mcp_servers,
     normalize_mcp_config_payload,
@@ -515,7 +519,7 @@ class StateReader:
         if name == "build_state.json":
             return PROGENITOR_STATE_PREFIX, "build_state", {}
         if name == "schedule.json":
-            return PROGENITOR_STATE_PREFIX, "schedule", []
+            return PROGENITOR_STATE_PREFIX, "schedule", {}
         if name == "health.json":
             return PROGENITOR_STATE_PREFIX, "health", {}
         if name == "agents.json":
@@ -772,9 +776,17 @@ class StateReader:
 
     def get_schedule(self) -> list[ScheduleItem]:
         data = self._read_json_from_path(self.schedule_config_path)
-        if not data or not isinstance(data, list):
-            return []
-        return [ScheduleItem.from_dict(item) for item in data if isinstance(item, dict)]
+        normalized = normalize_schedule_payload(data)
+        if data is not None and normalized != data:
+            # One-time migration from the legacy array shape - persist
+            # immediately so every later read (by this process or the
+            # runtime) sees the dict shape. See StateManager.get_schedule.
+            self._write_json_to_path(self.schedule_config_path, normalized)
+            self.invalidate(self.schedule_config_path)
+        return [
+            ScheduleItem.from_dict({**item, "id": item.get("id") or entry_id})
+            for entry_id, item in normalized.items()
+        ]
 
     def get_event_widgets(self) -> list[EventWidgetItem]:
         data = self._read_json_from_path(self.config_dir / "event_widgets.json")
@@ -929,7 +941,7 @@ class StateReader:
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
     def _schedule_fingerprint(self) -> str:
-        """Stable hash of the ``schedule`` state document (the whole entry list).
+        """Stable hash of the ``schedule`` state document (all entries, keyed by id).
 
         The schedule count is checked separately for add/remove; this hash
         additionally catches in-place edits (pause/resume, message/cron changes)
@@ -939,10 +951,10 @@ class StateReader:
         if self.document_store is None:
             return ""
         try:
-            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         except Exception:
             return ""
-        payload = document.payload if document is not None else []
+        payload = document.payload if document is not None else {}
         try:
             serialized = json.dumps(payload, sort_keys=True, default=str)
         except (TypeError, ValueError):

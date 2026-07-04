@@ -682,11 +682,11 @@ def create_schedule_state_file(
 ) -> StateFile:
     """Build the ``schedule.json`` state file backed by the StateManager.
 
-    Exposed to the agent as an object keyed by id (``{"<id>": {...}, ...}``),
-    not the array ``StateManager.get_schedule()``/``save_schedule()`` use
-    internally - only this load/save boundary converts between the two, so
-    the scheduler, backend, and Schedules UI (which talk to the StateManager
-    directly) are unaffected by this file's shape.
+    ``StateManager.get_schedule()``/``save_schedule()`` already use the same
+    object-keyed-by-id shape this file exposes to the agent - the only
+    presentation-layer difference is that ``id`` lives solely in the object
+    key here, not duplicated inside each entry's value (matching
+    ``data/schemas/schedule_entry.schema.v1.json``'s documented shape).
 
     ``save`` diffs the incoming entries against the current on-disk state and
     emits the same ``log_schedule_event`` audit-trail entries
@@ -701,42 +701,43 @@ def create_schedule_state_file(
     async def load() -> JsonDoc:
         entries = await state_manager.get_schedule()
         return {
-            entry.id: {k: v for k, v in entry.model_dump(mode="json").items() if k != "id"}
-            for entry in entries
+            entry_id: {k: v for k, v in entry.model_dump(mode="json").items() if k != "id"}
+            for entry_id, entry in entries.items()
         }
 
     async def save(doc: JsonDoc) -> None:
         if not isinstance(doc, dict):
             raise ValueError("schedule.json must be a JSON object keyed by schedule id")
-        entries: list[ScheduleEntry] = []
+        entries: dict[str, ScheduleEntry] = {}
         for entry_id, item in doc.items():
             if not isinstance(item, dict):
                 raise ValueError(f"entry '{entry_id}' must be an object")
             fields = {k: v for k, v in item.items() if k != "id"}
-            entries.append(ScheduleEntry(id=entry_id, **fields))
+            entries[entry_id] = ScheduleEntry(id=entry_id, **fields)
 
         previous = {
-            entry.id: entry.model_dump(mode="json") for entry in await state_manager.get_schedule()
+            entry_id: entry.model_dump(mode="json")
+            for entry_id, entry in (await state_manager.get_schedule()).items()
         }
         await state_manager.save_schedule(entries)
 
         seen_ids: set[str] = set()
-        for entry in entries:
-            seen_ids.add(entry.id)
+        for entry_id, entry in entries.items():
+            seen_ids.add(entry_id)
             current = entry.model_dump(mode="json")
-            prior = previous.get(entry.id)
+            prior = previous.get(entry_id)
             if prior is None:
                 await state_manager.log_schedule_event(
                     {
                         "event": "entry_added",
-                        "schedule_id": entry.id,
+                        "schedule_id": entry_id,
                         "description": current.get("description"),
                     }
                 )
             elif prior != current:
                 changed = sorted(key for key in current if prior.get(key) != current.get(key))
                 await state_manager.log_schedule_event(
-                    {"event": "entry_updated", "schedule_id": entry.id, "updates": changed}
+                    {"event": "entry_updated", "schedule_id": entry_id, "updates": changed}
                 )
         for removed_id in previous.keys() - seen_ids:
             await state_manager.log_schedule_event(

@@ -69,10 +69,9 @@ class TestSchedulerLifecycle:
         schedule_id = await _add_and_persist(state_manager)
 
         schedule = await state_manager.get_schedule()
-        ids = [e.id for e in schedule]
-        assert schedule_id in ids, "Entry should exist after creation"
+        assert schedule_id in schedule, "Entry should exist after creation"
 
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         assert entry.paused is False
         assert entry.cron_expression == "0 9 * * *"
 
@@ -84,7 +83,7 @@ class TestSchedulerLifecycle:
         assert updated, "update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         assert entry.message == "Updated lifecycle task"
         assert entry.cron_expression == "0 10 * * *"
 
@@ -93,7 +92,7 @@ class TestSchedulerLifecycle:
         assert paused, "pause via update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         assert entry.paused is True, "Entry should be paused after update_schedule_entry"
 
         # Confirm Scheduler skips paused entries
@@ -109,7 +108,7 @@ class TestSchedulerLifecycle:
         assert resumed, "resume via update_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         assert entry.paused is False, "Entry should not be paused after resume"
 
         # ---- 5. DELETE -------------------------------------------------------
@@ -117,8 +116,7 @@ class TestSchedulerLifecycle:
         assert removed, "remove_schedule_entry should report success"
 
         schedule = await state_manager.get_schedule()
-        ids_after = [e.id for e in schedule]
-        assert schedule_id not in ids_after, "Entry should be absent after deletion"
+        assert schedule_id not in schedule, "Entry should be absent after deletion"
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_returns_failure(self, state_manager: StateManager):
@@ -155,7 +153,7 @@ class TestSchedulerLifecycle:
         await state_manager.update_schedule_entry(schedule_id, {"paused": True})
 
         schedule = await state_manager.get_schedule()
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         entry_dict = entry.model_dump()
 
         # Force entry to appear as overdue
@@ -175,7 +173,7 @@ class TestSchedulerLifecycle:
         await state_manager.update_schedule_entry(schedule_id, {"paused": False})
 
         schedule = await state_manager.get_schedule()
-        entry = next(e for e in schedule if e.id == schedule_id)
+        entry = schedule[schedule_id]
         entry_dict = entry.model_dump()
 
         # Force entry to be overdue
