@@ -422,6 +422,33 @@ def create_knowledge_state_file(
     )
 
 
+def _reject_health_write(_content: Any) -> JsonDoc:
+    raise ValueError("health.json is read-only - it's written by the heartbeat loop, not the agent")
+
+
+def create_health_state_file(state_manager: Any) -> StateFile:
+    """Build the read-only ``health.json`` state file backed by the StateManager.
+
+    Surfaces the heartbeat loop's own system status (status, cycle_count,
+    thread_id, pid, git commit ``version``, ``started_at``, LLM model/reasoning
+    config) for self-inspection - the `checking-status` skill reads this to
+    answer "are you running / what version / what model" questions. Read-only:
+    the document is entirely runtime-owned, so both ``save`` and ``validate``
+    reject with the same explanatory error rather than silently no-op'ing.
+    """
+
+    async def save(_doc: JsonDoc) -> None:
+        _reject_health_write(_doc)
+
+    return _simple_state_file(
+        "health.json",
+        get=state_manager.get_health,
+        save=save,
+        validate=_reject_health_write,
+        default={},
+    )
+
+
 _BOARD_FILE = "board.json"
 _RESERVED_PROJECT_IDS = {".", ".."}
 

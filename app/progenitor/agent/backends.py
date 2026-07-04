@@ -15,6 +15,7 @@ Profile:
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +28,8 @@ from deepagents.backends import (
 from .state_backend import (
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
+    StateFile,
+    create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
     create_registry_state_file,
@@ -132,11 +135,12 @@ def create_progenitor_backend(
     # their own mount: a directory of per-task files (/state/tasks/<id>.md +
     # board.json) so the agent edits one task per file instead of a giant blob.
     if state_manager is not None:
-        state_file_factories = [
+        state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
             create_knowledge_state_file,
             create_schedule_state_file,
             create_registry_state_file,
+            create_health_state_file,
         ]
         routes["/state/"] = StateDocumentBackend(
             [factory(state_manager) for factory in state_file_factories]
