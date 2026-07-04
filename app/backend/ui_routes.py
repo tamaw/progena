@@ -22,7 +22,7 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -34,7 +34,6 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
-from app.progenitor.config import normalize_schedule_payload
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -2077,21 +2076,27 @@ def _normalize_event_widget_record(entry: dict) -> dict:
     }
 
 
-def _read_event_widget_records(state_reader: StateReader) -> list[dict]:
+def _read_event_widget_records(state_reader: StateReader) -> dict[str, dict]:
     event_path = _event_widget_path(state_reader)
     raw = state_reader._read_json_from_path(event_path)  # noqa: SLF001 - shared helper
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=500, detail="Event widget state is invalid")
-    return [_normalize_event_widget_record(entry) for entry in raw if isinstance(entry, dict)]
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        entry_id: _normalize_event_widget_record({**entry, "id": entry.get("id") or entry_id})
+        for entry_id, entry in raw.items()
+        if isinstance(entry, dict)
+    }
 
 
-def _write_event_widget_records(state_reader: StateReader, records: list[dict]) -> list[dict]:
+def _write_event_widget_records(
+    state_reader: StateReader, records: dict[str, dict]
+) -> dict[str, dict]:
     event_path = _event_widget_path(state_reader)
-    normalized = [
-        _normalize_event_widget_record(entry) for entry in records if isinstance(entry, dict)
-    ]
+    normalized = {
+        entry_id: _normalize_event_widget_record({**entry, "id": entry.get("id") or entry_id})
+        for entry_id, entry in records.items()
+        if isinstance(entry, dict)
+    }
     _atomic_write_json(event_path, normalized, state_reader)
     state_reader.invalidate(event_path)
     return normalized
@@ -2207,25 +2212,18 @@ def _read_schedule_config(state_reader: StateReader) -> tuple[Path, dict]:
     """Read the live schedule config, keyed by schedule id."""
     schedule_path = state_reader.schedule_config_path
     raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    normalized = normalize_schedule_payload(raw)
-    if raw is not None and normalized != raw:
-        # One-time migration from the legacy array shape. See
-        # StateManager.get_schedule for the same rationale.
-        _atomic_write_json(schedule_path, normalized, state_reader)
-        state_reader.invalidate(schedule_path)
-    return schedule_path, normalized
+    return schedule_path, raw if isinstance(raw, dict) else {}
 
 
 def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     """Delete a persisted schedule entry and refresh the cached schedule file."""
     schedule_path, schedule_data = _read_schedule_config(state_reader)
-    if schedule_id not in schedule_data:
-        return False
 
-    del schedule_data[schedule_id]
-    _atomic_write_json(schedule_path, schedule_data, state_reader)
-    state_reader.invalidate(schedule_path)
-    return True
+    def _save() -> None:
+        _atomic_write_json(schedule_path, schedule_data, state_reader)
+        state_reader.invalidate(schedule_path)
+
+    return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)
 
 
 def _broadcast_widget_refresh(state_reader) -> None:
@@ -2350,7 +2348,7 @@ def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]
         return
 
     changed = False
-    for widget in event_widgets:
+    for widget in event_widgets.values():
         if not widget.get("enabled", True):
             continue
 
@@ -2585,6 +2583,47 @@ async def refresh_widget(widget_id: str):
     )
 
 
+def _patch_document_entry(
+    *,
+    entries: dict,
+    entry_id: str,
+    apply: Callable[[dict], None],
+    save: Callable[[], None],
+    not_found_detail: str = "Widget not found",
+) -> dict:
+    """Mutate one dict-keyed entry in place, persist it, and return it.
+
+    ``entries`` is the already-read whole document (or the id-keyed
+    sub-document, e.g. mcp's ``mcpServers``); ``save`` persists whatever
+    container ``entries`` belongs to - the field-level mutation itself stays a
+    per-widget-type closure, since that logic genuinely differs per type.
+    """
+    entry = entries.get(entry_id)
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    apply(entry)
+    save()
+    return entry
+
+
+def _delete_document_entry(*, entries: dict, entry_id: str, save: Callable[[], None]) -> bool:
+    """Delete one dict-keyed entry if present, persist, and report whether it existed."""
+    if not isinstance(entries.get(entry_id), dict):
+        return False
+    del entries[entry_id]
+    save()
+    return True
+
+
+def _widget_or_fallback(
+    widget_id: str, state_reader: StateReader, build_fallback: Callable[[], dict]
+) -> dict:
+    """Return the freshly-computed widget if ``get_widgets()`` already reflects the
+    write, else a caller-supplied synthetic stand-in (cache staleness fallback)."""
+    refreshed = next((w for w in state_reader.get_widgets() if w["id"] == widget_id), None)
+    return refreshed if refreshed is not None else build_fallback()
+
+
 @router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
 async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     """Patch a backend-owned widget where a matching state file exists."""
@@ -2593,9 +2632,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         schedule_id = widget_id.split(":", 1)[1]
         schedule_path, schedule_data = _read_schedule_config(state_reader)
 
-        entry = schedule_data.get(schedule_id)
-        updated = None
-        if isinstance(entry, dict):
+        def _apply_schedule_patch(entry: dict) -> None:
             current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
             current_expression = (
                 body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
@@ -2631,19 +2668,22 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             next_run = Scheduler().next_run_for_entry(entry)
             entry["next_run"] = next_run.isoformat() if next_run else None
             entry["next_run_at"] = next_run.isoformat() if next_run else None
-            updated = entry
 
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Widget not found")
+        def _save_schedule() -> None:
+            _atomic_write_json(schedule_path, schedule_data, state_reader)
+            state_reader.invalidate(schedule_path)
 
-        _atomic_write_json(schedule_path, schedule_data, state_reader)
-        state_reader.invalidate(schedule_path)
-
-        refreshed = next(
-            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        updated = _patch_document_entry(
+            entries=schedule_data,
+            entry_id=schedule_id,
+            apply=_apply_schedule_patch,
+            save=_save_schedule,
         )
-        if refreshed is None:
-            refreshed = {
+
+        refreshed = _widget_or_fallback(
+            widget_id,
+            state_reader,
+            lambda: {
                 "id": widget_id,
                 "type": "schedule",
                 "name": updated.get("name", schedule_id),
@@ -2653,7 +2693,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 "summary": updated.get("message"),
                 "logs": [],
                 "updated_at": updated.get("created_at"),
-            }
+            },
+        )
 
         _broadcast_widget_refresh(state_reader)
         broadcast_schedule_snapshot()
@@ -2662,10 +2703,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     if widget_id.startswith("event:"):
         event_id = widget_id.split(":", 1)[1]
         event_widgets = _read_event_widget_records(state_reader)
-        updated = None
-        for entry in event_widgets:
-            if entry.get("id") != event_id:
-                continue
+
+        def _apply_event_patch(entry: dict) -> None:
             if body.enabled is not None:
                 entry["enabled"] = body.enabled
             if body.name is not None:
@@ -2678,18 +2717,21 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 if not entry.get("summary") or str(entry.get("summary")).startswith("Waiting for "):
                     entry["summary"] = f"Waiting for {entry['event_type']}"
             entry["updated_at"] = utcnow().isoformat()
-            updated = entry
-            break
 
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Widget not found")
+        def _save_event_widgets() -> None:
+            _write_event_widget_records(state_reader, event_widgets)
 
-        _write_event_widget_records(state_reader, event_widgets)
-        refreshed = next(
-            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        updated = _patch_document_entry(
+            entries=event_widgets,
+            entry_id=event_id,
+            apply=_apply_event_patch,
+            save=_save_event_widgets,
         )
-        if refreshed is None:
-            refreshed = {
+
+        refreshed = _widget_or_fallback(
+            widget_id,
+            state_reader,
+            lambda: {
                 "id": widget_id,
                 "type": "event",
                 "name": updated.get("name", event_id),
@@ -2705,7 +2747,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 "last_triggered_at": updated.get("last_triggered_at"),
                 "last_run_status": updated.get("last_run_status", "idle"),
                 "last_payload": updated.get("last_payload"),
-            }
+            },
+        )
 
         _broadcast_widget_refresh(state_reader)
         return _widget_to_response(refreshed)
@@ -2758,46 +2801,45 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         raw_servers = {}
         mcp_data["mcpServers"] = raw_servers
 
-    server = raw_servers.get(server_name)
-    if not isinstance(server, dict):
-        raise HTTPException(status_code=404, detail="Widget not found")
+    def _apply_mcp_patch(server: dict) -> None:
+        requested_name = (body.name or "").strip()
+        if requested_name and requested_name != server_name:
+            raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
+        if body.enabled is not None:
+            server["enabled"] = body.enabled
+        if body.description is not None:
+            server["description"] = body.description
+        if body.url is not None:
+            url = body.url.strip()
+            if not url:
+                raise HTTPException(status_code=400, detail="MCP server URL is required")
+            server["url"] = url
 
-    requested_name = (body.name or "").strip()
-    if requested_name and requested_name != server_name:
-        raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
-
-    if body.enabled is not None:
-        server["enabled"] = body.enabled
-    if body.description is not None:
-        server["description"] = body.description
-    if body.url is not None:
-        url = body.url.strip()
-        if not url:
-            raise HTTPException(status_code=400, detail="MCP server URL is required")
-        server["url"] = url
-
-    _write_mcp_config(state_reader, mcp_data)
-
-    refreshed = next(
-        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+    server = _patch_document_entry(
+        entries=raw_servers,
+        entry_id=server_name,
+        apply=_apply_mcp_patch,
+        save=lambda: _write_mcp_config(state_reader, mcp_data),
     )
-    if refreshed is None:
-        enabled = bool(server.get("enabled", True))
-        description = str(server.get("description") or "")
-        refreshed = {
+
+    refreshed = _widget_or_fallback(
+        widget_id,
+        state_reader,
+        lambda: {
             "id": widget_id,
             "type": "mcp",
             "name": server_name,
             "title": server_name,
-            "description": description,
-            "status": "enabled" if enabled else "disabled",
-            "summary": description or f"MCP {server_name}",
-            "enabled": enabled,
+            "description": str(server.get("description") or ""),
+            "status": "enabled" if bool(server.get("enabled", True)) else "disabled",
+            "summary": str(server.get("description") or "") or f"MCP {server_name}",
+            "enabled": bool(server.get("enabled", True)),
             "url": server.get("url"),
             "transport": server.get("transport", "http"),
             "logs": [],
             "updated_at": None,
-        }
+        },
+    )
 
     _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
@@ -2812,7 +2854,14 @@ async def delete_widget(widget_id: str):
         server_name = widget_id.split(":", 1)[1]
         mcp_data = _read_mcp_config(state_reader)
         raw_servers = mcp_data.get("mcpServers")
-        if not isinstance(raw_servers, dict) or server_name not in raw_servers:
+        if not isinstance(raw_servers, dict):
+            raw_servers = {}
+        deleted = _delete_document_entry(
+            entries=raw_servers,
+            entry_id=server_name,
+            save=lambda: _write_mcp_config(state_reader, mcp_data),
+        )
+        if not deleted:
             warning = f"Widget {widget_id} was already removed."
             logger.warning("MCP widget %s was already removed before delete request", widget_id)
             return WidgetDeleteResponse(
@@ -2821,8 +2870,6 @@ async def delete_widget(widget_id: str):
                 already_removed=True,
                 warning=warning,
             )
-        del raw_servers[server_name]
-        _write_mcp_config(state_reader, mcp_data)
         _broadcast_widget_refresh(state_reader)
         return WidgetDeleteResponse(widget_id=widget_id, removed=True)
 
@@ -3015,7 +3062,7 @@ async def create_event_widget(body: EventWidgetCreateRequest):
         enabled=body.enabled,
         created_at=created_at,
     )
-    event_widgets.append(entry)
+    event_widgets[event_widget_id] = entry
     _write_event_widget_records(state_reader, event_widgets)
 
     refreshed = next(

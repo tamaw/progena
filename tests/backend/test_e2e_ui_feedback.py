@@ -131,9 +131,14 @@ def mock_state_files(tmp_path):
     (state_dir / "build_state.json").write_text(json.dumps(build_state))
 
     # Schedule
-    schedule = [
-        {"id": "sched-1", "name": "Hourly galactic scan", "schedule": "0 * * * *", "enabled": True},
-    ]
+    schedule = {
+        "sched-1": {
+            "id": "sched-1",
+            "name": "Hourly galactic scan",
+            "schedule": "0 * * * *",
+            "enabled": True,
+        },
+    }
     (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)

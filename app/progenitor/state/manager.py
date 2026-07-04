@@ -273,24 +273,16 @@ class StateManager:
 
     # Schedule management (database-backed in production runtime)
     async def get_schedule(self) -> dict[str, ScheduleEntry]:
-        from ..config import normalize_schedule_payload
-
         if self._runtime_store is not None:
             # Read straight from the shared store rather than the in-memory
             # cache: schedules are also created/paused/deleted by the backend
             # (UI) writing the same Postgres document, so a cached copy would
             # hide those cross-process changes from the runtime scheduler.
             payload = await self._runtime_store.get_document("schedule", {})
-            normalized = normalize_schedule_payload(payload)
-            if normalized != payload:
-                # One-time migration from the legacy array shape (or any other
-                # process's stale write): persist immediately so every later
-                # read - by this process or the backend - sees the dict shape.
-                await self._runtime_store.save_document("schedule", normalized)
-            self._state_cache["schedule"] = normalized
-            return {k: ScheduleEntry.model_validate(v) for k, v in normalized.items()}
-        normalized = normalize_schedule_payload(self._state_cache.get("schedule", {}))
-        return {k: ScheduleEntry.model_validate(v) for k, v in normalized.items()}
+            self._state_cache["schedule"] = payload
+            return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
+        payload = self._state_cache.get("schedule", {})
+        return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
 
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
         payload = {k: v.model_dump(mode="json") for k, v in schedule.items()}

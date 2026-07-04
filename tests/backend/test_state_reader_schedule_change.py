@@ -15,7 +15,7 @@ from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocument
 from app.backend.state_reader import StateReader
 
 
-def _reader(tmp_path: Path, entries: list[dict]) -> tuple[StateReader, InMemoryDocumentStore]:
+def _reader(tmp_path: Path, entries: dict[str, dict]) -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "schedule", entries)
     for name in ("state", "config", "sessions", "logs"):
@@ -37,7 +37,7 @@ def _resnapshot(reader: StateReader) -> object:
 
 def test_store_change_threads_schedule_key_to_watchers(tmp_path):
     reader, _store = _reader(
-        tmp_path, [{"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}]
+        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     seen: list[tuple[object, object]] = []
     reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
@@ -51,7 +51,7 @@ def test_store_change_threads_schedule_key_to_watchers(tmp_path):
 
 def test_adding_a_schedule_entry_is_detected(tmp_path):
     reader, store = _reader(
-        tmp_path, [{"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}]
+        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1
@@ -59,10 +59,10 @@ def test_adding_a_schedule_entry_is_detected(tmp_path):
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         "schedule",
-        [
-            {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"},
-            {"id": "sched_b", "message": "bye", "cron_expression": "0 10 * * *"},
-        ],
+        {
+            "sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"},
+            "sched_b": {"id": "sched_b", "message": "bye", "cron_expression": "0 10 * * *"},
+        },
     )
     snap2 = _resnapshot(reader)
 
@@ -74,7 +74,14 @@ def test_in_place_pause_is_detected_via_fingerprint(tmp_path):
     # Same entry count, only a field flips - must still push live.
     reader, store = _reader(
         tmp_path,
-        [{"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *", "paused": False}],
+        {
+            "sched_a": {
+                "id": "sched_a",
+                "message": "hi",
+                "cron_expression": "0 9 * * *",
+                "paused": False,
+            }
+        },
     )
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1
@@ -82,7 +89,14 @@ def test_in_place_pause_is_detected_via_fingerprint(tmp_path):
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         "schedule",
-        [{"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *", "paused": True}],
+        {
+            "sched_a": {
+                "id": "sched_a",
+                "message": "hi",
+                "cron_expression": "0 9 * * *",
+                "paused": True,
+            }
+        },
     )
     snap2 = _resnapshot(reader)
 
@@ -93,7 +107,7 @@ def test_in_place_pause_is_detected_via_fingerprint(tmp_path):
 
 def test_unchanged_schedule_is_not_flagged(tmp_path):
     reader, _store = _reader(
-        tmp_path, [{"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}]
+        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1

@@ -1994,9 +1994,10 @@ class TestWorkspaceBridgeActions:
 
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         stored = json.loads(event_path.read_text(encoding="utf-8"))
-        assert stored[0]["name"] == "Card created trigger"
-        assert stored[0]["event_type"] == "kanban.card.created"
-        assert stored[0]["enabled"] is True
+        event_widget_id = payload["id"].split(":", 1)[1]
+        assert stored[event_widget_id]["name"] == "Card created trigger"
+        assert stored[event_widget_id]["event_type"] == "kanban.card.created"
+        assert stored[event_widget_id]["enabled"] is True
 
         widgets = client.get("/api/ui/widgets").json()["items"]
         assert any(widget["id"] == payload["id"] for widget in widgets)
@@ -2005,8 +2006,8 @@ class TestWorkspaceBridgeActions:
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         event_path.write_text(
             json.dumps(
-                [
-                    {
+                {
+                    "evt-1": {
                         "id": "evt-1",
                         "name": "Created trigger",
                         "event_type": "kanban.card.created",
@@ -2015,7 +2016,7 @@ class TestWorkspaceBridgeActions:
                         "last_run_status": "idle",
                         "logs": [],
                     }
-                ]
+                }
             ),
             encoding="utf-8",
         )
@@ -2037,9 +2038,9 @@ class TestWorkspaceBridgeActions:
         assert payload["data"]["enabled"] is False
 
         stored = json.loads(event_path.read_text(encoding="utf-8"))
-        assert stored[0]["name"] == "Deleted trigger"
-        assert stored[0]["event_type"] == "kanban.card.deleted"
-        assert stored[0]["enabled"] is False
+        assert stored["evt-1"]["name"] == "Deleted trigger"
+        assert stored["evt-1"]["event_type"] == "kanban.card.deleted"
+        assert stored["evt-1"]["enabled"] is False
 
     def test_kanban_create_and_update_events_trigger_matching_widgets(
         self, client, tasks_state_reader

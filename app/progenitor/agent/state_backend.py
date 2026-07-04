@@ -332,25 +332,43 @@ class StateDocumentBackend:
         raise NotImplementedError(self._ASYNC_ONLY)
 
 
+def _simple_state_file(
+    name: str,
+    *,
+    get: Callable[[], Awaitable[JsonDoc]],
+    save: Callable[[JsonDoc], Awaitable[None]],
+    validate: Callable[[str], JsonDoc],
+    default: JsonDoc,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build a ``StateFile`` for a document that's a thin get/save pass-through.
+
+    Covers the common case (mcp.json, knowledge.json, agents.json): load just
+    coerces a non-dict result to ``default``, save just forwards to the
+    StateManager setter. Schedule's factory is NOT built on this - it has real
+    unique logic (id-as-key convention, exactly-one-of validation, audit-log
+    diffing) this helper would have to special-case away.
+    """
+
+    async def load() -> JsonDoc:
+        result = await get()
+        return result if isinstance(result, dict) else default
+
+    return StateFile(name=name, load=load, save=save, validate=validate, on_change=on_change)
+
+
 def create_mcp_state_file(
     state_manager: Any,
     *,
     on_change: Callable[[], Awaitable[None]] | None = None,
 ) -> StateFile:
     """Build the ``mcp.json`` state file backed by the StateManager."""
-
-    async def load() -> JsonDoc:
-        result = await state_manager.get_mcp_config()
-        return result if isinstance(result, dict) else {"mcpServers": {}}
-
-    async def save(doc: JsonDoc) -> None:
-        await state_manager.save_mcp_config(doc)
-
-    return StateFile(
-        name="mcp.json",
-        load=load,
-        save=save,
+    return _simple_state_file(
+        "mcp.json",
+        get=state_manager.get_mcp_config,
+        save=state_manager.save_mcp_config,
         validate=validate_mcp_document,
+        default={"mcpServers": {}},
         on_change=on_change,
     )
 
@@ -367,20 +385,17 @@ def create_registry_state_file(
     this document (see ``StateReader._document_for_path``).
     """
 
-    async def load() -> JsonDoc:
-        result = await state_manager.get_registry()
-        return result if isinstance(result, dict) else {"agents": [], "tools": []}
-
     async def save(doc: JsonDoc) -> None:
         if not isinstance(doc, dict):
             raise ValueError("agents.json must be a JSON object")
         await state_manager.save_registry(doc)
 
-    return StateFile(
-        name="agents.json",
-        load=load,
+    return _simple_state_file(
+        "agents.json",
+        get=state_manager.get_registry,
         save=save,
         validate=validate_registry_document,
+        default={"agents": [], "tools": []},
         on_change=on_change,
     )
 
@@ -397,19 +412,12 @@ def create_knowledge_state_file(
     the UI. Every write is validated and persists through the normal store path,
     so the Knowledge page updates live via the LISTEN/NOTIFY pipeline.
     """
-
-    async def load() -> JsonDoc:
-        result = await state_manager.get_knowledge_config()
-        return result if isinstance(result, dict) else {"bases": []}
-
-    async def save(doc: JsonDoc) -> None:
-        await state_manager.save_knowledge_config(doc)
-
-    return StateFile(
-        name="knowledge.json",
-        load=load,
-        save=save,
+    return _simple_state_file(
+        "knowledge.json",
+        get=state_manager.get_knowledge_config,
+        save=state_manager.save_knowledge_config,
         validate=validate_knowledge_document,
+        default={"bases": []},
         on_change=on_change,
     )
 

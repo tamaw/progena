@@ -21,11 +21,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import (
-    default_mcp_config_payload,
-    normalize_schedule_payload,
-    resolve_schedule_config_path,
-)
+from app.progenitor.config import default_mcp_config_payload, resolve_schedule_config_path
 from app.progenitor.mcp.loader import (
     load_mcp_servers,
     normalize_mcp_config_payload,
@@ -525,7 +521,7 @@ class StateReader:
         if name == "agents.json":
             return PROGENITOR_STATE_PREFIX, "registry", {}
         if name == "event_widgets.json":
-            return BACKEND_STATE_PREFIX, "event_widgets", []
+            return BACKEND_STATE_PREFIX, "event_widgets", {}
         if name == "kanban.json":
             return BACKEND_STATE_PREFIX, "kanban", {}
         if name == "sessions.json":
@@ -776,23 +772,23 @@ class StateReader:
 
     def get_schedule(self) -> list[ScheduleItem]:
         data = self._read_json_from_path(self.schedule_config_path)
-        normalized = normalize_schedule_payload(data)
-        if data is not None and normalized != data:
-            # One-time migration from the legacy array shape - persist
-            # immediately so every later read (by this process or the
-            # runtime) sees the dict shape. See StateManager.get_schedule.
-            self._write_json_to_path(self.schedule_config_path, normalized)
-            self.invalidate(self.schedule_config_path)
+        if not isinstance(data, dict):
+            return []
         return [
             ScheduleItem.from_dict({**item, "id": item.get("id") or entry_id})
-            for entry_id, item in normalized.items()
+            for entry_id, item in data.items()
+            if isinstance(item, dict)
         ]
 
     def get_event_widgets(self) -> list[EventWidgetItem]:
         data = self._read_json_from_path(self.config_dir / "event_widgets.json")
-        if not data or not isinstance(data, list):
+        if not isinstance(data, dict):
             return []
-        return [EventWidgetItem.from_dict(item) for item in data if isinstance(item, dict)]
+        return [
+            EventWidgetItem.from_dict({**item, "id": item.get("id") or entry_id})
+            for entry_id, item in data.items()
+            if isinstance(item, dict)
+        ]
 
     def get_build_state(self) -> dict[str, Any]:
         data = self._read_json("build_state.json")
