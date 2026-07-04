@@ -849,6 +849,7 @@ async def lifespan(app: FastAPI):
     # Use the enhanced graceful shutdown manager
     await graceful_shutdown.initiate_shutdown()
 
+    client = None
     logger.info("Backend shutdown complete")
 
 
