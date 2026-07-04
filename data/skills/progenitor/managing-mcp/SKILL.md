@@ -1,7 +1,7 @@
 ---
 name: managing-mcp
 description: Add, remove, edit, enable, or disable external MCP servers by editing the /state/mcp.json config file. Use when a user asks to connect, register, update, or drop an MCP server, or to turn one on/off.
-allowed-tools: read_file edit_file write_file mcp mcp_refresh
+allowed-tools: read_file edit_file write_file structured_output mcp mcp_refresh
 ---
 
 # Managing MCP Servers
@@ -52,10 +52,17 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
 ## Common Operations
 
 ### Add a server
-Add a new key under `mcpServers`. Minimal:
+1. `read_file /state/mcp.json`
+2. `read_file /schemas/mcp_server_entry.schema.v1.json`
+3. `structured_output json_schema=<content from step 2> instruction="Build an MCP server entry for '<name>' at '<url>' with transport http."`
+4. `edit_file /state/mcp.json` to insert `"<name>": <result from step 3>` under
+   `mcpServers`, keeping every other server untouched. Minimal shape:
 ```json
 "github": { "url": "https://api.githubcopilot.com/mcp/", "transport": "http", "enabled": true }
 ```
+Only bother with `structured_output` when several fields are involved (e.g. headers
+with templated secrets) — for a one- or two-field server, hand-authoring the object is
+fine.
 
 ### Enable / disable
 Flip the `enabled` boolean for that server. Disabling keeps the config; the server's

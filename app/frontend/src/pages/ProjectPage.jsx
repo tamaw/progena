@@ -19,6 +19,7 @@ export default function ProjectPage() {
         context={{
           listTitle: 'Kanban',
           newCardLabel: '+ New card',
+          projectId,
           projectName,
           solutionName,
         }}

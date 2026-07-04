@@ -253,6 +253,40 @@ def test_store_unavailable_returns_503():
     assert TestClient(app).get("/api/ui/agent-profiles").status_code == 503
 
 
+class TestBroadcastAgentProfilesSnapshot:
+    """The standalone broadcast fn the registry-document watcher calls directly."""
+
+    async def test_publishes_snapshot(self, monkeypatch):
+        import app.backend.agent_profile_routes as routes
+
+        monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
+        monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
+
+        store = FakeAgentStore()
+        events: list[tuple[str, dict[str, Any]]] = []
+
+        def broadcast(event_type, payload, **_kwargs):
+            events.append((event_type, payload))
+            return None
+
+        response = await routes.broadcast_agent_profiles_snapshot(lambda: store, broadcast)
+
+        assert response is not None
+        assert response.total == 2
+        assert events[-1][0] == "agents.snapshot"
+
+    async def test_noop_when_store_unavailable(self):
+        import app.backend.agent_profile_routes as routes
+
+        events: list[tuple[str, dict[str, Any]]] = []
+        response = await routes.broadcast_agent_profiles_snapshot(
+            lambda: None, lambda *a, **k: events.append((a, k))
+        )
+
+        assert response is None
+        assert events == []
+
+
 class TestValidateAgentGraph:
     def test_accepts_valid_series_of_asks(self):
         validate_agent_graph(

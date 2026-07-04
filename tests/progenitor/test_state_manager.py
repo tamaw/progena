@@ -99,11 +99,11 @@ class TestStateManager:
             created_at=utcnow(),
         )
 
-        await manager.save_schedule([entry])
+        await manager.save_schedule({entry.id: entry})
         schedule = await manager.get_schedule()
 
         assert len(schedule) == 1
-        assert schedule[0].id == "schedule-1"
+        assert schedule["schedule-1"].id == "schedule-1"
 
     @pytest.mark.asyncio
     async def test_a2a_task_persistence(self, temp_dirs):
@@ -344,7 +344,7 @@ class TestStateManager:
         manager = StateManager(state_dir, logs_dir)
         await manager.initialize()
 
-        assert await manager.get_schedule() == []
+        assert await manager.get_schedule() == {}
         assert not (state_dir / "schedule.json").exists()
         assert not (state_dir.parent / "config" / "schedule.json").exists()
 

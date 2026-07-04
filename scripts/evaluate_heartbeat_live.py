@@ -254,50 +254,49 @@ def _wait_for_ipc_events(
     return observed
 
 
-def eval_idle_health_updates(state_dir: Path, timeout: float) -> EvaluationResult:
+def eval_idle_health_updates(http_base: str, timeout: float) -> EvaluationResult:
     name = "heartbeat_idle_health_updates"
     expectation = (
-        "With no forced input, the Heartbeat idle path periodically updates health.json "
-        "with running status, queue stats, and advancing idle activity."
+        "With no forced input, the Heartbeat idle path keeps ticking: the runtime's "
+        "own HTTP /health endpoint reports an advancing timestamp and cycle_count. "
+        "(Health is a Postgres document now, not a file - see nodes/health.py - so "
+        "this checks liveness via HTTP rather than reading a file directly.)"
     )
-    health_path = state_dir / "health.json"
-    before = _read_json(health_path, {})
-    if not isinstance(before, dict):
+    status, before = _http_json(f"{http_base}/health")
+    if status != 200 or not isinstance(before, dict):
         return _fail(
             name,
             expectation,
-            f"health file missing or invalid: {health_path}",
-            root_cause_area="nodes/health.py or runtime/heartbeat.py",
+            f"GET {http_base}/health returned status={status}",
+            root_cause_area="runtime/http.py",
         )
 
-    before_last_active = before.get("last_active")
-    before_idle = int(before.get("idle_cycles") or 0)
+    before_timestamp = before.get("timestamp")
+    before_cycle = int(before.get("cycle_count") or 0)
     deadline = time.time() + timeout
     after = before
     while time.time() < deadline:
         time.sleep(2.0)
-        candidate = _read_json(health_path, {})
-        if not isinstance(candidate, dict):
+        status, candidate = _http_json(f"{http_base}/health")
+        if status != 200 or not isinstance(candidate, dict):
             continue
         after = candidate
-        after_last_active = after.get("last_active")
-        after_idle = int(after.get("idle_cycles") or 0)
-        if after_last_active != before_last_active and after_idle >= before_idle:
-            queues = after.get("queues")
-            if after.get("status") == "running" and isinstance(queues, dict):
-                return _pass(
-                    name,
-                    expectation,
-                    "health.json advanced during idle heartbeat",
-                    before_last_active=before_last_active,
-                    after_last_active=after_last_active,
-                    before_idle=before_idle,
-                    after_idle=after_idle,
-                )
+        after_timestamp = after.get("timestamp")
+        after_cycle = int(after.get("cycle_count") or 0)
+        if after_timestamp != before_timestamp and after_cycle >= before_cycle:
+            return _pass(
+                name,
+                expectation,
+                "runtime /health advanced during idle heartbeat",
+                before_timestamp=before_timestamp,
+                after_timestamp=after_timestamp,
+                before_cycle=before_cycle,
+                after_cycle=after_cycle,
+            )
     return _fail(
         name,
         expectation,
-        "health.json did not visibly advance before timeout",
+        "runtime /health did not visibly advance before timeout",
         root_cause_area="nodes/health.py, graph/heartbeat_graph.py, or runtime/heartbeat.py",
         before=before,
         after=after,
@@ -856,7 +855,7 @@ def eval_async_a2a_task_heartbeat_flow(
 
 def run(args: argparse.Namespace) -> list[EvaluationResult]:
     return [
-        eval_idle_health_updates(args.state_dir, args.idle_timeout),
+        eval_idle_health_updates(args.http_base, args.idle_timeout),
         eval_queued_input_heartbeat_flow(
             args.ipc_host,
             args.ipc_port,

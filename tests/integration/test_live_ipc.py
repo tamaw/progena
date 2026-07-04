@@ -260,10 +260,7 @@ async def test_schedule_task(ipc_client):
     logger.info(f"Scheduling task for: {time_str} UTC (1 minute from now)")
 
     # Schedule a task for 1 minute from now
-    message = (
-        f"Schedule a task to run at {time_str} UTC today: 'Reply with the message: INTEGRATION_TEST_COMPLETED'. "
-        "Use the schedule_task tool."
-    )
+    message = f"Schedule a task to run at {time_str} UTC today: 'Reply with the message: INTEGRATION_TEST_COMPLETED'."
 
     result = await send_message_and_collect(
         ipc_client,

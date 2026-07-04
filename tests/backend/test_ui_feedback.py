@@ -324,6 +324,25 @@ class TestStateReader:
         )
         assert health.is_running()
 
+    def test_health_info_from_dict_parses_enriched_fields(self):
+        """version/started_at/llm_* round-trip through from_dict()."""
+        health = HealthInfo.from_dict(
+            {
+                "status": "running",
+                "cycle_count": 5,
+                "version": "abc123def456",
+                "started_at": "2026-01-01T00:00:00Z",
+                "llm_model": "gpt-5.3-chat",
+                "llm_reasoning_enabled": True,
+                "llm_reasoning_effort": "medium",
+            }
+        )
+        assert health.version == "abc123def456"
+        assert health.started_at == "2026-01-01T00:00:00Z"
+        assert health.llm_model == "gpt-5.3-chat"
+        assert health.llm_reasoning_enabled is True
+        assert health.llm_reasoning_effort == "medium"
+
     def test_health_info_stale_detection(self):
         """Test that stale progenitor is detected."""
         from datetime import timedelta
@@ -421,8 +440,8 @@ class TestStateReader:
 class TestStateReaderFileOperations:
     """Tests for StateReader file reading operations."""
 
-    def test_read_nonexistent_health_file(self, temp_state_dir):
-        """Test reading when health.json doesn't exist."""
+    def test_read_health_with_no_document_store(self, temp_state_dir):
+        """Test reading health when there's no document store at all."""
         reader = StateReader(state_dir=temp_state_dir)
         health = reader.get_health()
 
@@ -430,19 +449,17 @@ class TestStateReaderFileOperations:
         assert health.last_active is None
         assert not health.is_running()
 
-    def test_read_invalid_json(self, temp_state_dir):
-        """Test reading invalid JSON file."""
-        # Write invalid JSON
-        (temp_state_dir / "health.json").write_text("not valid json {{{")
-
-        reader = StateReader(state_dir=temp_state_dir)
+    def test_read_health_document_not_yet_written(self, temp_state_dir):
+        """Before the heartbeat loop ever writes a "health" document, get_health()
+        falls back to current_state (also absent here), landing on "unknown"."""
+        store = InMemoryDocumentStore()
+        reader = StateReader(state_dir=temp_state_dir, document_store=store)
         health = reader.get_health()
 
-        # Should return default values on parse error
         assert health.status == "unknown"
 
-    def test_read_valid_health_file(self, temp_state_dir):
-        """Test reading valid health.json."""
+    def test_read_valid_health_document(self, temp_state_dir):
+        """Test reading a valid "health" Postgres document."""
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
@@ -450,9 +467,9 @@ class TestStateReaderFileOperations:
             "cycle_count": 42,
             "pid": 9999,
         }
-        (temp_state_dir / "health.json").write_text(json.dumps(health_data))
-
-        reader = StateReader(state_dir=temp_state_dir)
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
+        reader = StateReader(state_dir=temp_state_dir, document_store=store)
         health = reader.get_health()
 
         assert health.status == "running"
@@ -531,36 +548,55 @@ class TestStateReaderFileOperations:
 
     def test_state_snapshot(self, temp_state_dir):
         """Test getting complete state snapshot."""
-        # Create all required state files
-        health_data = {
-            "status": "running",
-            "last_active": datetime.now(UTC).isoformat(),
-            "thread_id": "thread-123",
-            "cycle_count": 42,
-            "pid": 9999,
-        }
-        (temp_state_dir / "health.json").write_text(json.dumps(health_data))
-
-        build_state = {
-            "build_in_progress": True,
-            "build_phase": "verify",
-            "iteration": {"current": 2},
-            "verification": {"current_score": 0.5},
-            "build_messages": [],
-            "backlog": [
-                {"id": "1", "item_type": "task", "status": "pending", "description": "Test task"}
-            ],
-        }
-        (temp_state_dir / "build_state.json").write_text(json.dumps(build_state))
-
-        schedule = [
-            {"id": "sched-1", "name": "Daily check", "schedule": "0 0 * * *", "enabled": True}
-        ]
+        # Seed all state as Postgres documents (health/schedule/build_state are
+        # all resolved through the document store now, not disk files).
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "health",
+            {
+                "status": "running",
+                "last_active": datetime.now(UTC).isoformat(),
+                "thread_id": "thread-123",
+                "cycle_count": 42,
+                "pid": 9999,
+            },
+        )
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "build_state",
+            {
+                "build_in_progress": True,
+                "build_phase": "verify",
+                "iteration": {"current": 2},
+                "verification": {"current_score": 0.5},
+                "build_messages": [],
+                "backlog": [
+                    {
+                        "id": "1",
+                        "item_type": "task",
+                        "status": "pending",
+                        "description": "Test task",
+                    }
+                ],
+            },
+        )
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "schedule",
+            {
+                "sched-1": {
+                    "id": "sched-1",
+                    "name": "Daily check",
+                    "schedule": "0 0 * * *",
+                    "enabled": True,
+                }
+            },
+        )
         config_dir = temp_state_dir.parent / "config"
         config_dir.mkdir(exist_ok=True)
-        (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
-        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir)
+        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir, document_store=store)
         snapshot = reader.get_snapshot()
 
         assert snapshot.health.status == "running"

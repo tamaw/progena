@@ -254,9 +254,12 @@ class PostgresDocumentStore:
         """Install a NOTIFY trigger so state writes push to listeners without polling.
 
         Fires for both backend writes and the runtime's LangGraph store writes
-        (same ``store`` table). Scoped to state-namespace prefixes so the noisy
-        append-only ``progenitor.logs.*`` rows do not flood the channel.
-        ``CREATE OR REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
+        (same ``store`` table), including deletes (e.g. the agent removing a
+        task from ``/state/schedule.json`` in the separate runtime process,
+        which has no other way to tell the backend a row disappeared). Scoped
+        to state-namespace prefixes so the noisy append-only
+        ``progenitor.logs.*`` rows do not flood the channel. ``CREATE OR
+        REPLACE`` + ``DROP ... IF EXISTS`` keep this idempotent.
         """
         prefixes = ", ".join(f"'{prefix}'" for prefix in _STORE_CHANGE_PREFIXES)
         with self._cursor() as cur:
@@ -264,14 +267,17 @@ class PostgresDocumentStore:
                 f"""
                 CREATE OR REPLACE FUNCTION progenitor_notify_store_change()
                 RETURNS trigger AS $$
+                DECLARE
+                    row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
+                    row_key TEXT := COALESCE(NEW.key, OLD.key);
                 BEGIN
-                    IF NEW.prefix IN ({prefixes}) THEN
+                    IF row_prefix IN ({prefixes}) THEN
                         PERFORM pg_notify(
                             '{STORE_CHANGE_CHANNEL}',
-                            json_build_object('prefix', NEW.prefix, 'key', NEW.key)::text
+                            json_build_object('prefix', row_prefix, 'key', row_key)::text
                         );
                     END IF;
-                    RETURN NEW;
+                    RETURN COALESCE(NEW, OLD);
                 END;
                 $$ LANGUAGE plpgsql;
                 """
@@ -280,7 +286,7 @@ class PostgresDocumentStore:
             cur.execute(
                 """
                 CREATE TRIGGER progenitor_store_change
-                AFTER INSERT OR UPDATE ON store
+                AFTER INSERT OR UPDATE OR DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
                 """
             )

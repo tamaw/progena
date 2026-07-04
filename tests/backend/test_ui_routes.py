@@ -158,12 +158,17 @@ class TestUIRoutes:
         assert "total" in data
 
     def test_process_metrics_excludes_db_fields(self):
-        """The periodic tick carries only process metrics, never DB-derived state."""
+        """The periodic tick carries only process metrics, never DB-derived state.
+
+        progenitor_running belongs here too: it's a live IPC heartbeat check,
+        not a Postgres read (see main.get_progenitor_liveness()).
+        """
         from app.backend import ui_routes
 
         metrics = ui_routes._process_metrics()
-        assert set(metrics) == {"status", "uptime_seconds", "memory_mb"}
+        assert set(metrics) == {"status", "uptime_seconds", "memory_mb", "progenitor_running"}
         assert metrics["status"] in {"healthy", "draining"}
+        assert isinstance(metrics["progenitor_running"], bool)
         # None of the DB-derived fields leak into the metrics tick.
         assert "widgets" not in metrics
         assert "agents" not in metrics
@@ -686,6 +691,34 @@ class TestUIRoutes:
         assert board["cards"][0]["id"] == created["id"]
         assert board["cards"][0]["column_id"] == "build"
 
+    def test_kanban_card_project_id_persists_and_patches(self, client, tasks_state_reader):
+        create_response = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Scoped card", "project_id": "acme"},
+        )
+        assert create_response.status_code == 200
+        created = create_response.json()
+        assert created["project_id"] == "acme"
+
+        stored_card = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None
+        )
+        assert stored_card.payload["project_id"] == "acme"
+
+        patch_response = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"project_id": "beta"},
+        )
+        assert patch_response.status_code == 200
+        assert patch_response.json()["project_id"] == "beta"
+
+        cleared = client.patch(
+            f"/api/ui/kanban/cards/{created['id']}",
+            json={"project_id": ""},
+        )
+        assert cleared.status_code == 200
+        assert cleared.json()["project_id"] is None
+
     def test_kanban_card_metadata_persists_subtasks_and_dependencies(self, client):
         created = client.post(
             "/api/ui/kanban/cards",
@@ -951,7 +984,7 @@ class TestUIRoutes:
         created = create_response.json()
         schedule_path = kanban_state_reader.config_dir / "schedule.json"
         before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
-        assert [entry["id"] for entry in before_delete] == [created["id"].split(":", 1)[1]]
+        assert list(before_delete.keys()) == [created["id"].split(":", 1)[1]]
 
         delete_response = client.delete(f"/api/ui/widgets/{created['id']}")
 
@@ -963,7 +996,7 @@ class TestUIRoutes:
             "warning": None,
         }
         after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
-        assert after_delete == []
+        assert after_delete == {}
         widgets = client.get("/api/ui/widgets").json()
         assert created["id"] not in {widget["id"] for widget in widgets["items"]}
 
@@ -1349,8 +1382,8 @@ class TestScheduleEndpoint:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-future": {
                     "id": "sched-future",
                     "name": "Hourly ping",
                     "message": "ping",
@@ -1359,7 +1392,7 @@ class TestScheduleEndpoint:
                     "created_at": recent,
                     "paused": False,
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1375,7 +1408,7 @@ class TestScheduleEndpoint:
     def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
         """enabled drives the runtime-honoured paused flag on create and patch."""
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1391,7 +1424,7 @@ class TestScheduleEndpoint:
         )
         assert created.status_code == 200
         schedule_id = created.json()["id"].split(":", 1)[1]
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is False
 
         patched = client.patch(
@@ -1399,7 +1432,7 @@ class TestScheduleEndpoint:
             json={"enabled": False},
         )
         assert patched.status_code == 200
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", []).payload[0]
+        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is True
         assert entry["enabled"] is False
 
@@ -1412,8 +1445,8 @@ class TestScheduleEndpoint:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-live": {
                     "id": "sched-live",
                     "name": "Live schedule",
                     "message": "ping",
@@ -1421,7 +1454,7 @@ class TestScheduleEndpoint:
                     "created_at": created_at,
                     "paused": False,
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1679,8 +1712,8 @@ class TestWorkspaceBridgeActions:
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "schedule",
-            [
-                {
+            {
+                "sched-1": {
                     "id": "sched-1",
                     "name": "Daily check",
                     "message": "Run the daily review",
@@ -1690,7 +1723,7 @@ class TestWorkspaceBridgeActions:
                     "enabled": True,
                     "timezone": "UTC",
                 }
-            ],
+            },
         )
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1706,9 +1739,9 @@ class TestWorkspaceBridgeActions:
         )
 
         assert response.status_code == 200
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload[0]
+        updated = document.payload["sched-1"]
         assert updated["name"] == "Nightly check"
         assert updated["message"] == "Run the nightly review"
         assert updated["schedule"] == "0 1 * * *"
@@ -1767,10 +1800,6 @@ class TestWorkspaceBridgeActions:
         config_dir.mkdir(parents=True)
         sessions_dir.mkdir(parents=True)
         logs_dir.mkdir(parents=True)
-        (state_dir / "health.json").write_text(
-            json.dumps({"status": "running", "thread_id": "run_123"}),
-            encoding="utf-8",
-        )
         (config_dir / "agents.json").write_text(
             json.dumps(
                 {
@@ -1848,10 +1877,6 @@ class TestWorkspaceBridgeActions:
         config_dir.mkdir(parents=True)
         sessions_dir.mkdir(parents=True)
         logs_dir.mkdir(parents=True)
-        (state_dir / "health.json").write_text(
-            json.dumps({"status": "running", "thread_id": "run_456"}),
-            encoding="utf-8",
-        )
         (config_dir / "agents.json").write_text(json.dumps({"agents": []}), encoding="utf-8")
         store = InMemoryDocumentStore()
         store.save_document(
@@ -1885,7 +1910,7 @@ class TestWorkspaceBridgeActions:
 
     def test_create_schedule_writes_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1906,19 +1931,20 @@ class TestWorkspaceBridgeActions:
         assert payload["type"] == "schedule"
         assert payload["title"] == "Morning Check-in"
         assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        schedule_id = payload["id"].split(":", 1)[1]
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload
-        assert updated[0]["name"] == "Morning Check-in"
-        assert updated[0]["message"] == "Summarize overnight alerts and prep the inbox."
-        assert updated[0]["id"].startswith("sched_")
-        assert updated[0]["cron_expression"] == "*/15 * * * *"
+        updated = document.payload[schedule_id]
+        assert updated["name"] == "Morning Check-in"
+        assert updated["message"] == "Summarize overnight alerts and prep the inbox."
+        assert updated["id"].startswith("sched_")
+        assert updated["cron_expression"] == "*/15 * * * *"
 
     def test_create_once_schedule_uses_cron_prefix_and_persists_scheduled_at(
         self, client, monkeypatch
     ):
         store = InMemoryDocumentStore()
-        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         state_reader = StateReader(document_store=store)
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
@@ -1937,13 +1963,14 @@ class TestWorkspaceBridgeActions:
         assert response.status_code == 200
         payload = response.json()
         assert payload["id"].startswith("schedule:cron_")
-        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", [])
+        schedule_id = payload["id"].split(":", 1)[1]
+        document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
-        updated = document.payload
-        assert updated[0]["id"].startswith("cron_")
-        assert updated[0]["schedule_type"] == "once"
-        assert updated[0]["scheduled_at"] == "2026-06-19T09:47:00+00:00"
-        assert "cron_expression" not in updated[0]
+        updated = document.payload[schedule_id]
+        assert updated["id"].startswith("cron_")
+        assert updated["schedule_type"] == "once"
+        assert updated["scheduled_at"] == "2026-06-19T09:47:00+00:00"
+        assert "cron_expression" not in updated
 
     def test_create_event_widget_writes_event_widget_file(self, client, kanban_state_reader):
         response = client.post(
@@ -1964,9 +1991,10 @@ class TestWorkspaceBridgeActions:
 
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         stored = json.loads(event_path.read_text(encoding="utf-8"))
-        assert stored[0]["name"] == "Card created trigger"
-        assert stored[0]["event_type"] == "kanban.card.created"
-        assert stored[0]["enabled"] is True
+        event_widget_id = payload["id"].split(":", 1)[1]
+        assert stored[event_widget_id]["name"] == "Card created trigger"
+        assert stored[event_widget_id]["event_type"] == "kanban.card.created"
+        assert stored[event_widget_id]["enabled"] is True
 
         widgets = client.get("/api/ui/widgets").json()["items"]
         assert any(widget["id"] == payload["id"] for widget in widgets)
@@ -1975,8 +2003,8 @@ class TestWorkspaceBridgeActions:
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         event_path.write_text(
             json.dumps(
-                [
-                    {
+                {
+                    "evt-1": {
                         "id": "evt-1",
                         "name": "Created trigger",
                         "event_type": "kanban.card.created",
@@ -1985,7 +2013,7 @@ class TestWorkspaceBridgeActions:
                         "last_run_status": "idle",
                         "logs": [],
                     }
-                ]
+                }
             ),
             encoding="utf-8",
         )
@@ -2007,9 +2035,9 @@ class TestWorkspaceBridgeActions:
         assert payload["data"]["enabled"] is False
 
         stored = json.loads(event_path.read_text(encoding="utf-8"))
-        assert stored[0]["name"] == "Deleted trigger"
-        assert stored[0]["event_type"] == "kanban.card.deleted"
-        assert stored[0]["enabled"] is False
+        assert stored["evt-1"]["name"] == "Deleted trigger"
+        assert stored["evt-1"]["event_type"] == "kanban.card.deleted"
+        assert stored["evt-1"]["enabled"] is False
 
     def test_kanban_create_and_update_events_trigger_matching_widgets(
         self, client, tasks_state_reader

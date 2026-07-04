@@ -154,8 +154,9 @@ class StateManager:
 
         self._state_cache.setdefault("mcp", default_mcp_config_payload())
         self._state_cache.setdefault("mcp_tools", {"tools": []})
-        self._state_cache.setdefault("schedule", [])
+        self._state_cache.setdefault("schedule", {})
         self._state_cache.setdefault("schedule_runs", [])
+        self._state_cache.setdefault("health", {})
 
     async def _ensure_runtime_store_initial_state(self) -> None:
         """Ensure all state documents exist in the native runtime store."""
@@ -185,6 +186,7 @@ class StateManager:
             "mcp": default_mcp_config_payload(),
             "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
+            "health": {},
         }
         assert self._runtime_store is not None
         for name, default in defaults.items():
@@ -272,28 +274,43 @@ class StateManager:
         await log_store.log_schedule_event(event=event, append_jsonl_fn=self.append_jsonl)
 
     # Schedule management (database-backed in production runtime)
-    async def get_schedule(self) -> list[ScheduleEntry]:
+    async def get_schedule(self) -> dict[str, ScheduleEntry]:
         if self._runtime_store is not None:
             # Read straight from the shared store rather than the in-memory
             # cache: schedules are also created/paused/deleted by the backend
             # (UI) writing the same Postgres document, so a cached copy would
             # hide those cross-process changes from the runtime scheduler.
-            payload = await self._runtime_store.get_document("schedule", [])
+            payload = await self._runtime_store.get_document("schedule", {})
             self._state_cache["schedule"] = payload
-            return [ScheduleEntry.model_validate(item) for item in payload]
-        payload = self._state_cache.get("schedule", [])
-        rows = payload if isinstance(payload, list) else []
-        return [ScheduleEntry.model_validate(item) for item in rows]
+            return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
+        payload = self._state_cache.get("schedule", {})
+        return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
 
-    async def save_schedule(self, schedule: list[ScheduleEntry]) -> None:
+    async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
+        payload = {k: v.model_dump(mode="json") for k, v in schedule.items()}
         if self._runtime_store is not None:
             # Write straight through to the shared store (and refresh the cache)
             # so backend reads and the runtime stay coherent. See get_schedule.
-            payload = [entry.model_dump(mode="json") for entry in schedule]
             self._state_cache["schedule"] = payload
             await self._runtime_store.save_document("schedule", payload)
             return
-        self._state_cache["schedule"] = [entry.model_dump(mode="json") for entry in schedule]
+        self._state_cache["schedule"] = payload
+
+    # Health management (heartbeat-loop system status: cycle_count, idle
+    # state, queue stats, pid - liveness itself is sourced separately by the
+    # backend via the IPC heartbeat, not stored here)
+    async def get_health(self) -> dict[str, Any]:
+        if self._runtime_store is not None:
+            health = await self._get_runtime_document("health")
+            return dict(health) if isinstance(health, dict) else {}
+        payload = self._state_cache.get("health", {})
+        return dict(payload) if isinstance(payload, dict) else {}
+
+    async def save_health(self, payload: dict[str, Any]) -> None:
+        if self._runtime_store is not None:
+            await self._save_runtime_document("health", payload)
+            return
+        self._state_cache["health"] = payload
 
     # Registry management
     async def get_registry(self) -> dict[str, Any]:

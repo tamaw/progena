@@ -81,13 +81,13 @@ async def test_get_schedule_run_result_includes_checkpoint_snapshot() -> None:
         ]
     )
     state_manager.get_schedule = AsyncMock(
-        return_value=[
-            {
+        return_value={
+            "sched_report": {
                 "id": "sched_report",
                 "message": "Write report",
                 "cron_expression": "0 9 * * *",
             }
-        ]
+        }
     )
     tool = GetScheduleRunResultTool()
 
@@ -137,7 +137,7 @@ async def test_get_schedule_run_result_returns_checkpoint_note_when_unavailable(
             }
         ]
     )
-    state_manager.get_schedule = AsyncMock(return_value=[])
+    state_manager.get_schedule = AsyncMock(return_value={})
     tool = GetScheduleRunResultTool()
 
     with patch(

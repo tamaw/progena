@@ -4,7 +4,9 @@ Chat UI API Routes.
 Additional API endpoints specifically for the Chat UI frontend.
 
 Reads real state data from file-backed runtime artifacts plus shared backend-managed state:
-- health.json: Agent health status
+- health: system status (cycle_count, idle state, queue stats), persisted in the
+  shared Postgres document store; liveness itself comes from a live IPC heartbeat
+  check, not a stored document (see main.get_progenitor_liveness())
 - agents.json + the shared MCP state document: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
@@ -22,7 +24,7 @@ import re
 import tempfile
 import time
 import uuid
-from collections.abc import AsyncGenerator, Mapping
+from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from io import StringIO
 from pathlib import Path
@@ -38,7 +40,7 @@ from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
 
-from .agent_profile_routes import create_agent_profile_router
+from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agent_profile_router
 from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
@@ -100,7 +102,7 @@ class UIStatusResponse(BaseModel):
     connected: bool
     server_status: str
     progenitor_running: bool
-    progenitor_status: str = "unknown"  # Raw status from health.json
+    progenitor_status: str = "unknown"  # Raw status from the health document
     uptime_seconds: float
     version: str
     memory_mb: float | None = None
@@ -452,6 +454,7 @@ class KanbanCardResponse(BaseModel):
     status: str
     agent_name: str
     owner: str = "user"
+    project_id: str | None = None
     labels: list[str] = Field(default_factory=list)
     spec_path: str | None = None
     branch_name: str | None = None
@@ -486,6 +489,7 @@ class KanbanCardCreateRequest(BaseModel):
     summary: str = ""
     description: str = ""
     owner: str = "user"
+    project_id: str | None = None
     labels: list[str] = Field(default_factory=list)
 
 
@@ -499,6 +503,7 @@ class KanbanCardPatchRequest(BaseModel):
     status: str | None = None
     agent_name: str | None = None
     owner: str | None = None
+    project_id: str | None = None
     labels: list[str] | None = None
     spec_path: str | None = None
     branch_name: str | None = None
@@ -691,7 +696,7 @@ async def get_ui_status_snapshot():
             connected=True,
             server_status=health.get("status", "unknown"),
             progenitor_running=progenitor_running,
-            progenitor_status=snapshot.health.status,  # Raw status from health.json
+            progenitor_status=snapshot.health.status,  # Raw status from the health document
             uptime_seconds=health.get("uptime_seconds", 0),
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
@@ -1497,6 +1502,7 @@ def _kanban_card_schema(columns: list[dict]) -> KanbanCardSchemaResponse:
             ),
             KanbanFieldSchemaResponse(key="agent_name", label="Assigned Agent"),
             KanbanFieldSchemaResponse(key="owner", label="Owner"),
+            KanbanFieldSchemaResponse(key="project_id", label="Project"),
             KanbanFieldSchemaResponse(key="spec_path", label="Spec File"),
             KanbanFieldSchemaResponse(key="branch_name", label="Branch"),
             KanbanFieldSchemaResponse(key="pr_url", label="Pull Request URL"),
@@ -1563,6 +1569,7 @@ def _normalize_kanban_card(card: dict, columns: dict[str, dict]) -> dict:
         "status": status,
         "agent_name": str(card.get("agent_name") or columns[column_id]["agent_name"]),
         "owner": str(card.get("owner") or "user"),
+        "project_id": str(card.get("project_id") or "").strip() or None,
         "labels": _normalize_string_list(card.get("labels")),
         "spec_path": str(card.get("spec_path") or "").strip() or None,
         "branch_name": str(card.get("branch_name") or "").strip() or None,
@@ -2071,21 +2078,27 @@ def _normalize_event_widget_record(entry: dict) -> dict:
     }
 
 
-def _read_event_widget_records(state_reader: StateReader) -> list[dict]:
+def _read_event_widget_records(state_reader: StateReader) -> dict[str, dict]:
     event_path = _event_widget_path(state_reader)
     raw = state_reader._read_json_from_path(event_path)  # noqa: SLF001 - shared helper
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=500, detail="Event widget state is invalid")
-    return [_normalize_event_widget_record(entry) for entry in raw if isinstance(entry, dict)]
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        entry_id: _normalize_event_widget_record({**entry, "id": entry.get("id") or entry_id})
+        for entry_id, entry in raw.items()
+        if isinstance(entry, dict)
+    }
 
 
-def _write_event_widget_records(state_reader: StateReader, records: list[dict]) -> list[dict]:
+def _write_event_widget_records(
+    state_reader: StateReader, records: dict[str, dict]
+) -> dict[str, dict]:
     event_path = _event_widget_path(state_reader)
-    normalized = [
-        _normalize_event_widget_record(entry) for entry in records if isinstance(entry, dict)
-    ]
+    normalized = {
+        entry_id: _normalize_event_widget_record({**entry, "id": entry.get("id") or entry_id})
+        for entry_id, entry in records.items()
+        if isinstance(entry, dict)
+    }
     _atomic_write_json(event_path, normalized, state_reader)
     state_reader.invalidate(event_path)
     return normalized
@@ -2197,34 +2210,22 @@ def _write_mcp_config(state_reader: StateReader, data: dict[str, Any]) -> None:
     state_reader.save_mcp_config(data)
 
 
-def _read_schedule_config(state_reader: StateReader) -> tuple[Path, list]:
-    """Read the live schedule config."""
+def _read_schedule_config(state_reader: StateReader) -> tuple[Path, dict]:
+    """Read the live schedule config, keyed by schedule id."""
     schedule_path = state_reader.schedule_config_path
     raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    if raw is None:
-        return schedule_path, []
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=500, detail="Schedule state is invalid")
-    return schedule_path, raw
+    return schedule_path, raw if isinstance(raw, dict) else {}
 
 
 def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     """Delete a persisted schedule entry and refresh the cached schedule file."""
     schedule_path, schedule_data = _read_schedule_config(state_reader)
-    remaining_entries: list = []
-    deleted = False
-    for entry in schedule_data:
-        if isinstance(entry, dict) and entry.get("id") == schedule_id:
-            deleted = True
-            continue
-        remaining_entries.append(entry)
 
-    if not deleted:
-        return False
+    def _save() -> None:
+        _atomic_write_json(schedule_path, schedule_data, state_reader)
+        state_reader.invalidate(schedule_path)
 
-    _atomic_write_json(schedule_path, remaining_entries, state_reader)
-    state_reader.invalidate(schedule_path)
-    return True
+    return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)
 
 
 def _broadcast_widget_refresh(state_reader) -> None:
@@ -2349,7 +2350,7 @@ def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]
         return
 
     changed = False
-    for widget in event_widgets:
+    for widget in event_widgets.values():
         if not widget.get("enabled", True):
             continue
 
@@ -2584,6 +2585,47 @@ async def refresh_widget(widget_id: str):
     )
 
 
+def _patch_document_entry(
+    *,
+    entries: dict,
+    entry_id: str,
+    apply: Callable[[dict], None],
+    save: Callable[[], None],
+    not_found_detail: str = "Widget not found",
+) -> dict:
+    """Mutate one dict-keyed entry in place, persist it, and return it.
+
+    ``entries`` is the already-read whole document (or the id-keyed
+    sub-document, e.g. mcp's ``mcpServers``); ``save`` persists whatever
+    container ``entries`` belongs to - the field-level mutation itself stays a
+    per-widget-type closure, since that logic genuinely differs per type.
+    """
+    entry = entries.get(entry_id)
+    if not isinstance(entry, dict):
+        raise HTTPException(status_code=404, detail=not_found_detail)
+    apply(entry)
+    save()
+    return entry
+
+
+def _delete_document_entry(*, entries: dict, entry_id: str, save: Callable[[], None]) -> bool:
+    """Delete one dict-keyed entry if present, persist, and report whether it existed."""
+    if not isinstance(entries.get(entry_id), dict):
+        return False
+    del entries[entry_id]
+    save()
+    return True
+
+
+def _widget_or_fallback(
+    widget_id: str, state_reader: StateReader, build_fallback: Callable[[], dict]
+) -> dict:
+    """Return the freshly-computed widget if ``get_widgets()`` already reflects the
+    write, else a caller-supplied synthetic stand-in (cache staleness fallback)."""
+    refreshed = next((w for w in state_reader.get_widgets() if w["id"] == widget_id), None)
+    return refreshed if refreshed is not None else build_fallback()
+
+
 @router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
 async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     """Patch a backend-owned widget where a matching state file exists."""
@@ -2592,12 +2634,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         schedule_id = widget_id.split(":", 1)[1]
         schedule_path, schedule_data = _read_schedule_config(state_reader)
 
-        updated = None
-        for entry in schedule_data:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("id") != schedule_id:
-                continue
+        def _apply_schedule_patch(entry: dict) -> None:
             current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
             current_expression = (
                 body.expression or entry.get("schedule") or entry.get("cron_expression") or ""
@@ -2633,20 +2670,22 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             next_run = Scheduler().next_run_for_entry(entry)
             entry["next_run"] = next_run.isoformat() if next_run else None
             entry["next_run_at"] = next_run.isoformat() if next_run else None
-            updated = entry
-            break
 
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Widget not found")
+        def _save_schedule() -> None:
+            _atomic_write_json(schedule_path, schedule_data, state_reader)
+            state_reader.invalidate(schedule_path)
 
-        _atomic_write_json(schedule_path, schedule_data, state_reader)
-        state_reader.invalidate(schedule_path)
-
-        refreshed = next(
-            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        updated = _patch_document_entry(
+            entries=schedule_data,
+            entry_id=schedule_id,
+            apply=_apply_schedule_patch,
+            save=_save_schedule,
         )
-        if refreshed is None:
-            refreshed = {
+
+        refreshed = _widget_or_fallback(
+            widget_id,
+            state_reader,
+            lambda: {
                 "id": widget_id,
                 "type": "schedule",
                 "name": updated.get("name", schedule_id),
@@ -2656,7 +2695,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 "summary": updated.get("message"),
                 "logs": [],
                 "updated_at": updated.get("created_at"),
-            }
+            },
+        )
 
         _broadcast_widget_refresh(state_reader)
         broadcast_schedule_snapshot()
@@ -2665,10 +2705,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
     if widget_id.startswith("event:"):
         event_id = widget_id.split(":", 1)[1]
         event_widgets = _read_event_widget_records(state_reader)
-        updated = None
-        for entry in event_widgets:
-            if entry.get("id") != event_id:
-                continue
+
+        def _apply_event_patch(entry: dict) -> None:
             if body.enabled is not None:
                 entry["enabled"] = body.enabled
             if body.name is not None:
@@ -2681,18 +2719,21 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 if not entry.get("summary") or str(entry.get("summary")).startswith("Waiting for "):
                     entry["summary"] = f"Waiting for {entry['event_type']}"
             entry["updated_at"] = utcnow().isoformat()
-            updated = entry
-            break
 
-        if updated is None:
-            raise HTTPException(status_code=404, detail="Widget not found")
+        def _save_event_widgets() -> None:
+            _write_event_widget_records(state_reader, event_widgets)
 
-        _write_event_widget_records(state_reader, event_widgets)
-        refreshed = next(
-            (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+        updated = _patch_document_entry(
+            entries=event_widgets,
+            entry_id=event_id,
+            apply=_apply_event_patch,
+            save=_save_event_widgets,
         )
-        if refreshed is None:
-            refreshed = {
+
+        refreshed = _widget_or_fallback(
+            widget_id,
+            state_reader,
+            lambda: {
                 "id": widget_id,
                 "type": "event",
                 "name": updated.get("name", event_id),
@@ -2708,7 +2749,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
                 "last_triggered_at": updated.get("last_triggered_at"),
                 "last_run_status": updated.get("last_run_status", "idle"),
                 "last_payload": updated.get("last_payload"),
-            }
+            },
+        )
 
         _broadcast_widget_refresh(state_reader)
         return _widget_to_response(refreshed)
@@ -2761,46 +2803,45 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         raw_servers = {}
         mcp_data["mcpServers"] = raw_servers
 
-    server = raw_servers.get(server_name)
-    if not isinstance(server, dict):
-        raise HTTPException(status_code=404, detail="Widget not found")
+    def _apply_mcp_patch(server: dict) -> None:
+        requested_name = (body.name or "").strip()
+        if requested_name and requested_name != server_name:
+            raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
+        if body.enabled is not None:
+            server["enabled"] = body.enabled
+        if body.description is not None:
+            server["description"] = body.description
+        if body.url is not None:
+            url = body.url.strip()
+            if not url:
+                raise HTTPException(status_code=400, detail="MCP server URL is required")
+            server["url"] = url
 
-    requested_name = (body.name or "").strip()
-    if requested_name and requested_name != server_name:
-        raise HTTPException(status_code=400, detail="Renaming MCP servers is not supported")
-
-    if body.enabled is not None:
-        server["enabled"] = body.enabled
-    if body.description is not None:
-        server["description"] = body.description
-    if body.url is not None:
-        url = body.url.strip()
-        if not url:
-            raise HTTPException(status_code=400, detail="MCP server URL is required")
-        server["url"] = url
-
-    _write_mcp_config(state_reader, mcp_data)
-
-    refreshed = next(
-        (widget for widget in state_reader.get_widgets() if widget["id"] == widget_id), None
+    server = _patch_document_entry(
+        entries=raw_servers,
+        entry_id=server_name,
+        apply=_apply_mcp_patch,
+        save=lambda: _write_mcp_config(state_reader, mcp_data),
     )
-    if refreshed is None:
-        enabled = bool(server.get("enabled", True))
-        description = str(server.get("description") or "")
-        refreshed = {
+
+    refreshed = _widget_or_fallback(
+        widget_id,
+        state_reader,
+        lambda: {
             "id": widget_id,
             "type": "mcp",
             "name": server_name,
             "title": server_name,
-            "description": description,
-            "status": "enabled" if enabled else "disabled",
-            "summary": description or f"MCP {server_name}",
-            "enabled": enabled,
+            "description": str(server.get("description") or ""),
+            "status": "enabled" if bool(server.get("enabled", True)) else "disabled",
+            "summary": str(server.get("description") or "") or f"MCP {server_name}",
+            "enabled": bool(server.get("enabled", True)),
             "url": server.get("url"),
             "transport": server.get("transport", "http"),
             "logs": [],
             "updated_at": None,
-        }
+        },
+    )
 
     _broadcast_widget_refresh(state_reader)
     return _widget_to_response(refreshed)
@@ -2815,7 +2856,14 @@ async def delete_widget(widget_id: str):
         server_name = widget_id.split(":", 1)[1]
         mcp_data = _read_mcp_config(state_reader)
         raw_servers = mcp_data.get("mcpServers")
-        if not isinstance(raw_servers, dict) or server_name not in raw_servers:
+        if not isinstance(raw_servers, dict):
+            raw_servers = {}
+        deleted = _delete_document_entry(
+            entries=raw_servers,
+            entry_id=server_name,
+            save=lambda: _write_mcp_config(state_reader, mcp_data),
+        )
+        if not deleted:
             warning = f"Widget {widget_id} was already removed."
             logger.warning("MCP widget %s was already removed before delete request", widget_id)
             return WidgetDeleteResponse(
@@ -2824,8 +2872,6 @@ async def delete_widget(widget_id: str):
                 already_removed=True,
                 warning=warning,
             )
-        del raw_servers[server_name]
-        _write_mcp_config(state_reader, mcp_data)
         _broadcast_widget_refresh(state_reader)
         return WidgetDeleteResponse(widget_id=widget_id, removed=True)
 
@@ -2883,7 +2929,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         enabled=body.enabled,
         created_at=created_at,
     )
-    schedule_data.append(entry)
+    schedule_data[schedule_id] = entry
 
     _atomic_write_json(schedule_path, schedule_data, state_reader)
     state_reader.invalidate(schedule_path)
@@ -2919,10 +2965,12 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
     """Reschedule a task from a natural-language description.
 
     Rather than editing cron fields by hand, the user describes the timing in
-    plain language ("friday at 15:00"). We hand that to the Progenitor agent on
-    a dedicated (non-chat) thread; it interprets the phrase and calls its
-    ``update_schedule`` tool, which writes the shared schedule document. We then
-    recompute ``next_run`` (the tool does not) and rebroadcast a snapshot.
+    plain language ("friday at 15:00"). We hand that to the Progenitor agent on a
+    dedicated (non-chat) thread carrying just the schedule id and the free text -
+    the loaded ``managing-schedules`` skill owns how a natural-language reschedule request
+    gets interpreted and applied to ``/state/schedule.json``, not a hardcoded
+    tool-call prescription here. We then recompute ``next_run`` (in case the
+    agent didn't) and rebroadcast a snapshot.
     """
     from . import main as chat_main
 
@@ -2934,28 +2982,14 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
 
     state_reader = get_state_reader()
     schedule_path, schedule_data = _read_schedule_config(state_reader)
-    entry = next(
-        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
-        None,
-    )
+    entry = schedule_data.get(schedule_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
 
-    tz = entry.get("timezone") or default_timezone_name()
-    current = (
-        entry.get("schedule")
-        or entry.get("cron_expression")
-        or entry.get("scheduled_at")
-        or "unset"
-    )
     instruction = (
-        f'Reschedule the existing scheduled task with id "{schedule_id}". Its current '
-        f'trigger is "{current}" in timezone {tz}. The user wants it to run: "{text}". '
-        f"Interpret any clock times in the {tz} timezone. Convert the request into a cron "
-        "expression (for anything recurring) or an ISO8601 datetime (for a one-off), then "
-        f'call the update_schedule tool with schedule_id "{schedule_id}" and the new '
-        "cron_expression or scheduled_at. Do not change the task's instruction and do not "
-        "create a new task. Reply with one short sentence confirming the new timing."
+        f'Reschedule the task with id "{schedule_id}" under /state/schedule.json to run: '
+        f'"{text}". Do not change the task\'s message and do not create a new task. Reply '
+        "with one short sentence confirming the new timing."
     )
 
     thread_id = _resolve_action_thread_id(None)
@@ -2981,19 +3015,13 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
         raise HTTPException(status_code=502, detail=f"Agent reschedule failed: {exc}") from exc
     complete_thread(thread_id, "schedule updated", widget_id=f"schedule:{schedule_id}")
 
-    # The agent merged the new cron via update_schedule but does not recompute
-    # next_run; do it here so the UI's next-run/cadence reflect the change.
+    # The agent edits cron_expression/scheduled_at directly but may not recompute
+    # next_run or the display fields; reconcile them here so the UI stays coherent.
     state_reader.invalidate(schedule_path)
     _, schedule_data = _read_schedule_config(state_reader)
-    updated = next(
-        (e for e in schedule_data if isinstance(e, dict) and e.get("id") == schedule_id),
-        None,
-    )
+    updated = schedule_data.get(schedule_id)
     if updated is not None:
         updated["updated_at"] = utcnow().isoformat()
-        # update_schedule sets cron_expression/scheduled_at but leaves the
-        # display fields (schedule, schedule_type) and next_run stale, so
-        # reconcile them here to keep the stored entry coherent.
         if updated.get("scheduled_at"):
             updated["schedule_type"] = "once"
             updated["schedule"] = updated["scheduled_at"]
@@ -3036,7 +3064,7 @@ async def create_event_widget(body: EventWidgetCreateRequest):
         enabled=body.enabled,
         created_at=created_at,
     )
-    event_widgets.append(entry)
+    event_widgets[event_widget_id] = entry
     _write_event_widget_records(state_reader, event_widgets)
 
     refreshed = next(
@@ -3095,6 +3123,7 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             "status": "draft",
             "agent_name": column_map["backlog"]["agent_name"],
             "owner": body.owner,
+            "project_id": body.project_id,
             "labels": body.labels,
             "created_at": now,
             "updated_at": now,
@@ -3169,6 +3198,8 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
             card["agent_name"] = body.agent_name.strip()
         if body.owner is not None:
             card["owner"] = body.owner.strip() or "user"
+        if body.project_id is not None:
+            card["project_id"] = body.project_id.strip() or None
         if body.labels is not None:
             card["labels"] = _normalize_string_list(body.labels)
         if body.spec_path is not None:
@@ -4137,6 +4168,9 @@ _state_watch_push_task: asyncio.Task | None = None
 # Track active SSE response tasks so we can cancel them on shutdown
 _active_chat_tasks: list[asyncio.Task] = []
 _active_status_tasks: list[asyncio.Task] = []
+# Keep a strong reference to fire-and-forget agent-profile broadcasts so the
+# event loop's weak task reference can't let one get garbage-collected mid-run.
+_active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
 _active_ui_stream_tasks: list[asyncio.Task] = []
 
 
@@ -4179,7 +4213,7 @@ async def _get_current_status() -> dict:
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
         "progenitor_running": snapshot.health.is_running(),
-        "progenitor_status": snapshot.health.status,  # Raw status from health.json
+        "progenitor_status": snapshot.health.status,  # Raw status from the health document
         "version": getattr(chat_main.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
@@ -4187,6 +4221,14 @@ async def _get_current_status() -> dict:
         "messages_count": snapshot.messages_count,
         "pid": snapshot.health.pid,
         "last_active": snapshot.health.last_active,
+        # Distinct from "version" above (the backend's own api_version) - this
+        # is the runtime process's code commit, for spotting a stale-process
+        # running old code without cross-referencing Postgres by hand.
+        "progenitor_commit": snapshot.health.version,
+        "progenitor_started_at": snapshot.health.started_at,
+        "llm_model": snapshot.health.llm_model,
+        "llm_reasoning_enabled": snapshot.health.llm_reasoning_enabled,
+        "llm_reasoning_effort": snapshot.health.llm_reasoning_effort,
         # Loops
         "loops": [
             {
@@ -4267,6 +4309,12 @@ def _process_metrics() -> dict:
     every change via the Postgres NOTIFY watcher; this lightweight payload is
     merged into it by the periodic tick so we never re-read the DB just to
     refresh metrics.
+
+    Also includes ``progenitor_running``: a live IPC-heartbeat liveness check,
+    deliberately NOT stored in Postgres (see HealthInfo.live_reachable), so a
+    pure liveness flip - the runtime dying with no other document changing -
+    still reaches the frontend within this tick's cadence instead of only
+    surfacing on the next incidental Postgres write.
     """
     from . import main as chat_main
 
@@ -4278,6 +4326,7 @@ def _process_metrics() -> dict:
     metrics: dict = {
         "status": "draining" if draining else "healthy",
         "uptime_seconds": round(now - start_time, 1),
+        "progenitor_running": bool(chat_main.get_progenitor_liveness()),
     }
     try:
         import psutil
@@ -4331,6 +4380,13 @@ async def _broadcast_latest_status() -> None:
 _WIDGET_KEYS = frozenset({"mcp", "mcp_tools", "schedule", "registry", "event_widgets"})
 
 
+async def _broadcast_agent_profiles_safe() -> None:
+    try:
+        await broadcast_agent_profiles_snapshot(get_agent_store, broadcast_ui_event)
+    except Exception:
+        logger.debug("Failed to broadcast agent profiles snapshot", exc_info=True)
+
+
 def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _status_subscribers and not _ui_stream_subscribers:
@@ -4351,6 +4407,15 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
                 broadcast_schedule_snapshot()
             if changed_key in (None, "knowledge"):
                 broadcast_knowledge_snapshot()
+            if changed_key in (None, "registry"):
+                # Async (reads the agent store off-thread), so it's a fire-and-forget
+                # task rather than an inline call like the sync broadcasts above.
+                # A strong reference is kept in _active_agent_profile_broadcast_tasks
+                # (and dropped on completion) since asyncio only holds a weak
+                # reference to unreferenced tasks, which risks premature GC.
+                profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
+                _active_agent_profile_broadcast_tasks.add(profile_task)
+                profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)
             if changed_key is None:
                 board = _read_kanban_board(get_state_reader())
                 for card in board["cards"]:

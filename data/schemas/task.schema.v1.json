@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Kanban task card",
+  "description": "A single kanban task card, stored as the 'kanban_card:<id>' document and exposed as a virtual file at /state/tasks/<id>.md (or /state/tasks/<project_id>/<id>.md for a project-scoped card). Create or edit a card with the native write/edit file tools against that path; card_order and the Tasks UI update automatically.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique card identifier (matches the document suffix)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short card title."
+    },
+    "summary": {
+      "type": "string",
+      "description": "One-line summary."
+    },
+    "description": {
+      "type": "string",
+      "description": "Full task description."
+    },
+    "column_id": {
+      "type": "string",
+      "description": "Id of the board column the card belongs to."
+    },
+    "status": {
+      "type": "string",
+      "description": "Card status within the workflow."
+    },
+    "agent_name": {
+      "type": "string",
+      "description": "Agent responsible for the task."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Owner of the card.",
+      "default": "user"
+    },
+    "labels": {
+      "type": "array",
+      "description": "Free-form labels.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "position": {
+      "type": "integer",
+      "description": "Ordering position within the column.",
+      "default": 0
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO8601 creation timestamp."
+    },
+    "updated_at": {
+      "type": "string",
+      "description": "ISO8601 last-update timestamp."
+    }
+  },
+  "required": ["id", "title", "column_id", "status"],
+  "additionalProperties": true
+}

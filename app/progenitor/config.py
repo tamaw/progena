@@ -90,9 +90,9 @@ def default_mcp_config_payload() -> dict[str, Any]:
     return {"mcpServers": {}}
 
 
-def default_schedule_config_payload() -> list[Any]:
+def default_schedule_config_payload() -> dict[str, Any]:
     """Return the default (empty) schedule document persisted in Postgres."""
-    return []
+    return {}
 
 
 @dataclass
