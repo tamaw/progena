@@ -178,22 +178,22 @@ def complete_state_files(tmp_path):
     (state_dir / "build_state.json").write_text(json.dumps(build_state))
 
     # Schedule
-    schedule = [
-        {
+    schedule = {
+        "sched-1": {
             "id": "sched-1",
             "name": "Signal scan",
             "schedule": "*/5 * * * *",
             "enabled": True,
             "next_run": None,
         },
-        {
+        "sched-2": {
             "id": "sched-2",
             "name": "Protocol check",
             "schedule": "0 * * * *",
             "enabled": True,
             "next_run": None,
         },
-    ]
+    }
     (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)

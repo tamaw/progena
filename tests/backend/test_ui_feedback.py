@@ -553,9 +553,14 @@ class TestStateReaderFileOperations:
         }
         (temp_state_dir / "build_state.json").write_text(json.dumps(build_state))
 
-        schedule = [
-            {"id": "sched-1", "name": "Daily check", "schedule": "0 0 * * *", "enabled": True}
-        ]
+        schedule = {
+            "sched-1": {
+                "id": "sched-1",
+                "name": "Daily check",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+            }
+        }
         config_dir = temp_state_dir.parent / "config"
         config_dir.mkdir(exist_ok=True)
         (config_dir / "schedule.json").write_text(json.dumps(schedule))
