@@ -683,10 +683,13 @@ class LLMClient:
                 # httpx's own message omits the response body, which is where the
                 # provider explains *why* (bad field, content filter, quota, ...).
                 # Log it here since every caller up the stack only sees str(exc).
+                body_preview = (exc.response.text or "").strip()
+                if len(body_preview) > 2000:
+                    body_preview = body_preview[:2000] + "..."
                 logger.error(
                     "LLM request failed: %s %s",
                     exc.response.status_code,
-                    exc.response.text,
+                    body_preview,
                 )
                 raise
 
