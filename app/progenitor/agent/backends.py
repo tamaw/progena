@@ -10,9 +10,12 @@ Profile:
   - /data/ -> configured data dir (read-only)
   - /logs/ -> configured log dir (read-only)
   - /prompts/ -> configured prompts dir (read-only)
+  - /schemas/ -> configured schemas dir (read-only) - JSON Schema contracts a
+    skill reads before calling structured_output
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +28,12 @@ from deepagents.backends import (
 from .state_backend import (
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
+    StateFile,
+    create_health_state_file,
     create_knowledge_state_file,
     create_mcp_state_file,
+    create_registry_state_file,
+    create_schedule_state_file,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,6 +61,7 @@ def create_progenitor_backend(
     data_dir: str | Path | None = None,
     log_dir: str | Path | None = None,
     prompts_dir: str | Path | None = None,
+    schemas_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
 ) -> Any:
@@ -64,13 +72,15 @@ def create_progenitor_backend(
         data_dir: Persistent data directory. Defaults to ``<project_root>/data``.
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
         prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
+        schemas_dir: JSON Schema directory. Defaults to ``<data_dir>/schemas``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
         state_manager: When provided, mounts ``/state/`` with state documents
-            the agent can read/edit as files, including ``mcp.json`` plus the
-            ``/state/tasks/`` task directory (``board.json`` and per-task
-            ``<id>.md`` files). Writes persist via the StateManager; the
-            runtime's store listener handles live MCP re-discovery, so no
-            write-hook callback is needed here.
+            the agent can read/edit as files, including ``mcp.json``,
+            ``schedule.json``, and ``agents.json``, plus the ``/state/tasks/``
+            task directory (``board.json`` and per-task ``<id>.md`` files).
+            Writes persist via the StateManager; the runtime's store listener
+            handles live MCP re-discovery, so no write-hook callback is needed
+            here.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
@@ -78,6 +88,7 @@ def create_progenitor_backend(
     resolved_data_dir = Path(data_dir) if data_dir else root / "data"
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_prompts_dir = Path(prompts_dir) if prompts_dir else resolved_data_dir / "prompts"
+    resolved_schemas_dir = Path(schemas_dir) if schemas_dir else resolved_data_dir / "schemas"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "worktrees"
 
     def _route_backend(
@@ -111,22 +122,28 @@ def create_progenitor_backend(
         ("/data/", resolved_data_dir, True),
         ("/logs/", resolved_log_dir, True),
         ("/prompts/", resolved_prompts_dir, True),
+        ("/schemas/", resolved_schemas_dir, True),
     ]
     for route, mount_path, ro in mounts:
         backend = _route_backend(mount_path, read_only=ro)
         if backend is not None:
             routes[route] = backend
 
-    # State documents surfaced as virtual files (e.g. /state/mcp.json), backed by
-    # the runtime StateManager so writes persist through the normal store path.
-    # Tasks get their own mount: a directory of per-task files (/state/tasks/<id>.md
-    # + board.json) so the agent edits one task per file instead of a giant blob.
+    # State documents surfaced as virtual files (e.g. /state/mcp.json,
+    # /state/schedule.json, /state/agents.json), backed by the runtime
+    # StateManager so writes persist through the normal store path. Tasks get
+    # their own mount: a directory of per-task files (/state/tasks/<id>.md +
+    # board.json) so the agent edits one task per file instead of a giant blob.
     if state_manager is not None:
+        state_file_factories: list[Callable[[Any], StateFile]] = [
+            create_mcp_state_file,
+            create_knowledge_state_file,
+            create_schedule_state_file,
+            create_registry_state_file,
+            create_health_state_file,
+        ]
         routes["/state/"] = StateDocumentBackend(
-            [
-                create_mcp_state_file(state_manager),
-                create_knowledge_state_file(state_manager),
-            ]
+            [factory(state_manager) for factory in state_file_factories]
         )
         routes["/state/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
 

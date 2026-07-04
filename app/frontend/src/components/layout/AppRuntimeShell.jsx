@@ -469,11 +469,12 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
   const chatIndicators = useSelector(selectChatIndicators);
   const counts = useMemo(() => {
     const agentCount = runtime.widgets.filter((widget) => widget.type === 'agent').length;
+    const scheduleCount = runtime.widgets.filter((widget) => widget.type === 'schedule').length;
     return {
       agents: Math.max(7, agentCount),
       knowledge: Math.max(6, runtime.widgets.length),
       repositories: 6,
-      schedules: 6,
+      schedules: Math.max(6, scheduleCount),
       sessions: Math.max(3, agentCount),
       skills: 14,
       tasks: runtime.widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length,
@@ -798,7 +799,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const submit = useCallback(async (message) => {
     const text = message.trim();
     if (!text || isSending) return;
-    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text);
+    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text, normalizedConfig);
 
     const now = Date.now();
     const assistantId = `qchat_assistant_${now + 1}`;
@@ -881,7 +882,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
       }
       setIsSending(false);
     }
-  }, [ensureQuickSession, history, isSending, normalizedConfig.mode, sendMessageStream]);
+  }, [ensureQuickSession, history, isSending, normalizedConfig, sendMessageStream]);
 
   const openInChat = useCallback(() => {
     if (history.length > 0) {

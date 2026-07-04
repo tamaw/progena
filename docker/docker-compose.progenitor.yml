@@ -45,6 +45,8 @@ services:
     build:
       context: ..
       dockerfile: docker/progenitor/Dockerfile
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-}
     container_name: progenitor
     restart: unless-stopped
     depends_on:
@@ -72,7 +74,7 @@ services:
       - progenitor-net
       - progenitor_network
     healthcheck:
-      test: ["CMD", "python", "/app/scripts/healthcheck.py"]
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:${PROGENITOR_HTTP_PORT:-9501}/health || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -114,7 +116,6 @@ services:
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
       TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
     volumes:
-      - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro
       - ${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs

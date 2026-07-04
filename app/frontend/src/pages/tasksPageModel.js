@@ -110,7 +110,7 @@ export function sortCards(sortMode) {
   };
 }
 
-export function groupVisibleCards(board, filter, query, sortMode) {
+export function groupVisibleCards(board, filter, query, sortMode, projectId) {
   if (!board) {
     return [];
   }
@@ -120,6 +120,7 @@ export function groupVisibleCards(board, filter, query, sortMode) {
   return board.columns.map((column) => {
     const cards = board.cards
       .filter((card) => card.column_id === column.id && !isArchivedCard(card))
+      .filter((card) => !projectId || card.project_id === projectId)
       .filter((card) => {
         if (filter === 'mine' && card.owner !== 'user') {
           return false;

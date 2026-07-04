@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -125,9 +124,10 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> None:
+async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     state_manager = MagicMock()
     state_manager.save_current_state = AsyncMock()
+    state_manager.save_health = AsyncMock()
 
     tool_registry = _tool_registry()
 
@@ -149,7 +149,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
         agent_graph=_FakeAgentGraph(),
         live_state=live_state,
         state_manager=state_manager,
-        health_state_dir=tmp_path / "state",
         startup_audit_payload={"config": "redacted"},
         tool_registry=tool_registry,
         project_root=None,
@@ -162,7 +161,9 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
         registry_refresh_seconds=60.0,
         heartbeat_health_seconds=30.0,
         timezone="UTC",
-        reasoning_enabled=False,
+        reasoning_enabled=True,
+        llm_model="gpt-5.3-chat",
+        llm_reasoning_effort="medium",
         audit_log_sink=audit_log_sink,
     )
     graph = create_runtime_heartbeat_graph()
@@ -175,7 +176,11 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
     state_manager.save_current_state.assert_awaited_once()
     assert queues.last_input_timeout == 1.0
     queues.signal_cycle_complete_mock.assert_called_once()
-    assert (tmp_path / "state" / "health.json").exists()
+    state_manager.save_health.assert_awaited()
+    health_payload = state_manager.save_health.await_args.args[0]
+    assert health_payload["llm_model"] == "gpt-5.3-chat"
+    assert health_payload["llm_reasoning_enabled"] is True
+    assert health_payload["llm_reasoning_effort"] == "medium"
     assert audit_log_sink.write_log.await_count == 2
     checkpoint_log = audit_log_sink.write_log.await_args_list[-1].kwargs
     assert checkpoint_log["source"] == "checkpoints"
@@ -184,9 +189,10 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle(tmp_path) -> No
 
 
 @pytest.mark.asyncio
-async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input(tmp_path) -> None:
+async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input() -> None:
     state_manager = MagicMock()
     state_manager.save_current_state = AsyncMock()
+    state_manager.save_health = AsyncMock()
 
     tool_registry = _tool_registry()
 
@@ -213,7 +219,6 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input(t
         agent_graph=_FakeAgentGraph(),
         live_state=live_state,
         state_manager=state_manager,
-        health_state_dir=tmp_path / "state",
         startup_audit_payload={"config": "redacted"},
         tool_registry=tool_registry,
         project_root=None,
@@ -240,9 +245,10 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input(t
 
 
 @pytest.mark.asyncio
-async def test_runtime_heartbeat_graph_reports_startup_node_errors(tmp_path) -> None:
+async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
     state_manager = MagicMock()
     state_manager.save_current_state = AsyncMock()
+    state_manager.save_health = AsyncMock()
 
     tool_registry = _tool_registry()
 
@@ -269,7 +275,6 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors(tmp_path) -> 
             agent_graph=_FakeAgentGraph(),
             live_state=live_state,
             state_manager=state_manager,
-            health_state_dir=tmp_path / "state",
             startup_audit_payload={"config": "redacted"},
             tool_registry=tool_registry,
             project_root=None,
@@ -295,7 +300,8 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors(tmp_path) -> 
         {"heartbeat_node": "startup_audit"},
     )
     queues.signal_cycle_complete_mock.assert_called_once()
-    health_payload = json.loads((tmp_path / "state" / "health.json").read_text(encoding="utf-8"))
+    state_manager.save_health.assert_awaited()
+    health_payload = state_manager.save_health.await_args.args[0]
     assert health_payload["status"] == "error"
     assert health_payload["error"] == "Heartbeat node startup_audit failed: startup audit exploded"
 
@@ -315,7 +321,6 @@ def _heartbeat_context(**overrides):
         "agent_graph": MagicMock(),
         "live_state": {},
         "state_manager": MagicMock(),
-        "health_state_dir": ".",
         "startup_audit_payload": None,
         "tool_registry": _tool_registry(),
         "project_root": None,

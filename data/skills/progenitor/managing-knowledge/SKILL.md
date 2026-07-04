@@ -1,7 +1,7 @@
 ---
 name: managing-knowledge
 description: Create, rename, describe, tag, or configure knowledge bases, and add or remove folder sources, by editing the /state/knowledge.json file. Use when a user asks to add, rename, describe, tag, configure, or remove a knowledge base or one of its sources. To recall stored facts, use knowledge_search instead.
-allowed-tools: read_file edit_file write_file knowledge_search
+allowed-tools: read_file edit_file write_file structured_output knowledge_search
 ---
 
 # Managing Knowledge Bases
@@ -75,16 +75,28 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
 ## Common Operations
 
 ### Add a knowledge base
-Append an object to `bases` with at least a `name` (omit `id` to have one generated):
+1. `read_file /state/knowledge.json`
+2. `read_file /schemas/knowledge_base_entry.schema.v1.json`
+3. `structured_output json_schema=<content from step 2> instruction="Build a knowledge base entry named '<name>' with description '<what it's for>' and tags [<tags>]. Omit id."`
+4. `edit_file /state/knowledge.json` to append the object from step 3 to `bases`,
+   keeping every existing base untouched. Minimal shape (omit `id` to have one
+   generated):
 ```json
 { "name": "Release Notes", "description": "Changelog snippets.", "tags": ["release"] }
 ```
+For a name-only base, hand-authoring it directly is fine — reach for
+`structured_output` when several fields (embedding config, tags, sources) are
+involved.
 
 ### Rename / edit description / tags
 Change `name`, `description`, or the `tags` array in place with `edit_file`.
 
 ### Change embedding configuration
-Edit `embedding_model`, `dimensions`, `metric`, or `index_type` on that base.
+For one field, `edit_file` it directly. For several at once (`embedding_model`,
+`dimensions`, `metric`, `index_type`), `read_file` the schema and run
+`structured_output` with that base's current object as `input` and an instruction
+describing the new end state, preserving `id` and everything else, then `edit_file`
+the result back in.
 
 ### Add a folder source
 Add an object with a `path` to that base's `sources` array. The path is registered

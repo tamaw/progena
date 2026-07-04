@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Schedule entry",
+  "description": "One entry's value in the 'schedule' state document. The entry's id is its object key in /state/schedule.json, not a field in this value.",
+  "type": "object",
+  "properties": {
+    "message": {
+      "type": "string",
+      "description": "What the agent should do when this fires."
+    },
+    "cron_expression": {
+      "type": ["string", "null"],
+      "description": "Cron expression for a recurring schedule. Set exactly one of cron_expression/scheduled_at, leave the other null."
+    },
+    "scheduled_at": {
+      "type": ["string", "null"],
+      "description": "ISO8601 timestamp for a one-off schedule. Set exactly one of cron_expression/scheduled_at, leave the other null."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone cron_expression/scheduled_at is interpreted in."
+    },
+    "paused": {
+      "type": "boolean",
+      "description": "Whether this entry is suspended (skips firing without deleting it).",
+      "default": false
+    },
+    "user_request": {
+      "type": ["string", "null"],
+      "description": "The original natural-language request that created this schedule."
+    }
+  },
+  "required": ["message"],
+  "additionalProperties": true
+}

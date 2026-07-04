@@ -55,6 +55,11 @@ const TASK_FILTERS = [
   { value: 'mine', label: 'My tasks' },
   { value: 'watching', label: 'Watching' },
 ];
+// agentColors, formatRelativeTime, formatAgentName, normalizePriority,
+// priorityLabel, isArchivedCard, cardTags, getCardService, getCardAssignee,
+// buildCardBadges, sortCards, and groupVisibleCards were extracted to
+// tasksPageModel.js in the frontend-refactor branch (imported above);
+// groupVisibleCards there also gained the projectId filter this branch added.
 
 function ChevronRightIcon() {
   return (
@@ -503,8 +508,8 @@ export default function TasksPage({ context = null }) {
   }, [loadBoard]);
 
   const groupedColumns = useMemo(
-    () => groupVisibleCards(board, taskFilter, searchQuery, sortMode),
-    [board, searchQuery, taskFilter, sortMode],
+    () => groupVisibleCards(board, taskFilter, searchQuery, sortMode, context?.projectId),
+    [board, searchQuery, taskFilter, sortMode, context?.projectId],
   );
 
   const visibleCards = useMemo(
@@ -569,9 +574,13 @@ export default function TasksPage({ context = null }) {
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
-      detail: { mode: 'task-create' },
+      detail: {
+        mode: 'task-create',
+        projectId: context?.projectId,
+        projectName: context?.projectName,
+      },
     }));
-  }, []);
+  }, [context?.projectId, context?.projectName]);
 
   useEffect(() => {
     if (!selectedCard?.id) {

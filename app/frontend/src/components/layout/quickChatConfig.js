@@ -78,7 +78,7 @@ export function normalizeQuickChatConfig(config) {
   };
 }
 
-export function buildQuickChatOutboundMessage(mode, text) {
+export function buildQuickChatOutboundMessage(mode, text, config = {}) {
   if (mode === 'mcp-create') {
     return [
       'Connect a new MCP server from the following user request.',
@@ -92,15 +92,22 @@ export function buildQuickChatOutboundMessage(mode, text) {
     ].join('\n');
   }
   if (mode === 'task-create') {
+    const taskPath = config.projectId
+      ? `/state/tasks/${config.projectId}/<id>.md`
+      : '/state/tasks/<id>.md';
+    const projectLine = config.projectId
+      ? `This task belongs to the "${config.projectName || config.projectId}" project, so its directory IS the project: write it to exactly that path (not the top-level /state/tasks/<id>.md).`
+      : null;
     return [
       'Create a new task on the kanban board from the following user request.',
-      'Write a new file /state/tasks/<id>.md where <id> is a unique slug',
+      `Write a new file ${taskPath} where <id> is a unique slug`,
       '(e.g. card_<short-hex>). The file is YAML frontmatter + a markdown body:',
       'frontmatter keys: title (concise), column_id (default "backlog"),',
       'status (default "draft"), owner (default "user"), and any agent_name plus',
       'free-form labels (tags) the request implies; the markdown body is the task',
       'description. Writing the file persists the task and the Tasks board updates',
       'live (board.json tracks the card order automatically).',
+      ...(projectLine ? [projectLine] : []),
       'Only ask a follow-up question if the task title is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created task title and column.',
       '',
@@ -126,10 +133,11 @@ export function buildQuickChatOutboundMessage(mode, text) {
   }
   return [
     'Create a new schedule from the following user request.',
-    'Use the schedule_task tool.',
-    'If the request is one-off, provide scheduled_at.',
-    'If the request is recurring, provide cron_expression.',
-    'Choose a concise schedule name and preserve the requested intent as the instruction.',
+    'Follow the managing-schedules skill: generate an id (prefix=cron for a',
+    'one-off, prefix=sched for recurring), use current_time to resolve the',
+    'timing, then add an entry to /state/schedule.json keyed by that id with a',
+    'message and exactly one of cron_expression (recurring) or scheduled_at',
+    '(one-off). Saving the file persists it and the Schedules page updates live.',
     'Only ask a follow-up question if critical schedule details are missing; otherwise create it.',
     'Reply with one short sentence confirming the created schedule name and timing.',
     '',

@@ -181,8 +181,6 @@ def validate_heartbeat_context(context: HeartbeatContext) -> None:
         raise ValueError("live_state is required")
     if context.state_manager is None:
         raise ValueError("state_manager is required")
-    if not str(context.health_state_dir).strip():
-        raise ValueError("health_state_dir must not be empty")
     if context.idle_backoff_seconds < 0:
         raise ValueError("idle_backoff_seconds must be greater than or equal to 0")
     for interval_name, interval_value in (

@@ -100,6 +100,9 @@ def test_ensure_change_trigger_notifies_state_only():
     assert "progenitor_notify_store_change" in emitted
     assert "pg_notify" in emitted
     assert "CREATE TRIGGER progenitor_store_change" in emitted
+    # Deletes must notify too - the runtime process has no other way to tell the
+    # backend a row disappeared.
+    assert "AFTER INSERT OR UPDATE OR DELETE" in emitted
     # State prefixes notify; the high-frequency logs prefix is excluded.
     assert "progenitor.state" in emitted
     assert "backend.state" in emitted

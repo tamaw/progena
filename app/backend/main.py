@@ -96,6 +96,16 @@ config = ChatServerConfig.from_env()
 client: ProgenitorClient | IPCProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
 
+
+def get_progenitor_liveness() -> bool:
+    """Report whether the runtime is reachable right now, independent of Postgres.
+
+    Backed by the IPC heartbeat/ack (see IPCProgenitorClient.is_running), not a
+    stored timestamp - this is a live check, not a staleness heuristic.
+    """
+    return bool(client and client.is_running)
+
+
 # Enhanced feature managers
 session_manager: SessionManager = SessionManager(
     SessionConfig(
@@ -839,6 +849,7 @@ async def lifespan(app: FastAPI):
     # Use the enhanced graceful shutdown manager
     await graceful_shutdown.initiate_shutdown()
 
+    client = None
     logger.info("Backend shutdown complete")
 
 

@@ -189,8 +189,21 @@ export default function DashboardPage() {
           <div className="dashboard-kv-grid">
             <span>Thread</span><strong>{status?.thread_id || '--'}</strong>
             <span>PID</span><strong>{status?.pid || '--'}</strong>
-            <span>Version</span><strong>{status?.version || '--'}</strong>
+            <span>API version</span><strong>{status?.version || '--'}</strong>
             <span>Messages</span><strong>{status?.messages_count ?? 0}</strong>
+            {/* progenitor_commit/started_at come from the runtime's health
+                document (Postgres) - distinct from the backend's own api_version
+                above. Lets a stale process running old code be spotted at a
+                glance instead of cross-referencing Postgres by hand. */}
+            <span>Commit</span><strong>{status?.progenitor_commit || '--'}</strong>
+            <span>Started</span><strong>{formatLastActive(status?.progenitor_started_at)}</strong>
+            <span>Model</span><strong>{status?.llm_model || '--'}</strong>
+            <span>Reasoning</span>
+            <strong>
+              {status?.llm_reasoning_enabled
+                ? status?.llm_reasoning_effort || 'on'
+                : 'off'}
+            </strong>
           </div>
         </section>
 

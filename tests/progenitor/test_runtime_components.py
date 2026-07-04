@@ -10,6 +10,7 @@ import pytest
 from app.progenitor.config import ProgenitorConfig, StorageConfig
 from app.progenitor.ipc import IPCServer
 from app.progenitor.mcp import MCPRuntime
+from app.progenitor.nodes import health as health_module
 from app.progenitor.nodes.audit import write_startup_config_audit_to_sink
 from app.progenitor.nodes.health import write_health_status
 from app.progenitor.nodes.mcp import sync_mcp_runtime_context
@@ -70,13 +71,31 @@ async def test_audit_and_health_nodes_write_operational_files(tmp_path: Path) ->
         log_sink,
         config.to_dict(redact_secrets=True),
     )
-    await write_health_status(config.storage.state_dir, "offline")
 
-    health_path = tmp_path / "data" / "state" / "health.json"
+    state_manager = MagicMock()
+    state_manager.save_health = AsyncMock()
+    await write_health_status(state_manager, "offline")
 
     log_sink.write_log.assert_awaited_once()
     assert log_sink.write_log.await_args.kwargs["payload"]["event"] == "startup_config"
-    assert health_path.exists()
+    state_manager.save_health.assert_awaited_once()
+    saved = state_manager.save_health.await_args.args[0]
+    assert saved["status"] == "offline"
+    assert "started_at" in saved
+    # version is None outside a git checkout with no GIT_COMMIT env var set
+    # (e.g. some CI sandboxes); just confirm the key is present either way.
+    assert "version" in saved
+
+
+def test_detect_git_commit_prefers_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_COMMIT", "abc123def456extra")
+    assert health_module._detect_git_commit() == "abc123def456"
+
+
+def test_detect_git_commit_falls_back_to_github_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GIT_COMMIT", raising=False)
+    monkeypatch.setenv("GITHUB_SHA", "deadbeef0000")
+    assert health_module._detect_git_commit() == "deadbeef0000"
 
 
 @pytest.mark.asyncio

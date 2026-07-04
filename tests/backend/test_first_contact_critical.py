@@ -50,7 +50,7 @@ def complete_state_files(tmp_path):
     state_dir.mkdir()
     config_dir.mkdir()
 
-    # Health file - agent is running strong
+    # Health - agent is running strong (Postgres document, no file)
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
@@ -58,7 +58,8 @@ def complete_state_files(tmp_path):
         "cycle_count": 1337,
         "pid": 42424,
     }
-    (state_dir / "health.json").write_text(json.dumps(health_data))
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
     # Registry with multiple diverse agents
     agents_data = {
@@ -132,7 +133,6 @@ def complete_state_files(tmp_path):
         }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - actively working on first contact
@@ -178,22 +178,22 @@ def complete_state_files(tmp_path):
     (state_dir / "build_state.json").write_text(json.dumps(build_state))
 
     # Schedule
-    schedule = [
-        {
+    schedule = {
+        "sched-1": {
             "id": "sched-1",
             "name": "Signal scan",
             "schedule": "*/5 * * * *",
             "enabled": True,
             "next_run": None,
         },
-        {
+        "sched-2": {
             "id": "sched-2",
             "name": "Protocol check",
             "schedule": "0 * * * *",
             "enabled": True,
             "next_run": None,
         },
-    ]
+    }
     (config_dir / "schedule.json").write_text(json.dumps(schedule))
 
     return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)
@@ -387,11 +387,12 @@ class TestRealTimeFeedbackConsistency:
         assert snapshot1.health.cycle_count == 1337
 
         # Simulate progress
-        health_file = complete_state_files.state_dir / "health.json"
-        health = json.loads(health_file.read_text())
+        store = complete_state_files.document_store
+        health_doc = store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+        health = dict(health_doc.payload) if health_doc is not None else {}
         health["cycle_count"] = 1338
         health["last_active"] = datetime.now(UTC).isoformat()
-        health_file.write_text(json.dumps(health))
+        store.save_document(PROGENITOR_STATE_PREFIX, "health", health)
 
         # Clear cache to force re-read
         reader._cache.clear()
@@ -420,15 +421,17 @@ class TestErrorRecoveryAndGracefulDegradation:
         assert health.pid is None
 
     def test_corrupt_json_files(self, tmp_path):
-        """Corrupt JSON should be handled gracefully."""
+        """Corrupt JSON should be handled gracefully.
+
+        health has no on-disk fallback anymore (Postgres-only), so with no
+        document store configured here get_health() returns "unknown" simply
+        because there's nothing to read - build_state.json/agents.json/
+        schedule.json still exercise real corrupt-JSON parsing resilience.
+        """
         state_dir = tmp_path / "corrupt_state"
         state_dir.mkdir()
 
-        # Write corrupt JSON to all files
-        corrupt_files = ["health.json", "build_state.json"]
-
-        for filename in corrupt_files:
-            (state_dir / filename).write_text("{this is not valid json!!!")
+        (state_dir / "build_state.json").write_text("{this is not valid json!!!")
         config_dir = state_dir.parent / "config"
         config_dir.mkdir()
         (config_dir / "agents.json").write_text("{this is not valid json!!!")
@@ -459,7 +462,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir = tmp_path / "partial_state"
         state_dir.mkdir()
 
-        # Only write health file
+        # Only seed health (Postgres document, no file)
         health_data = {
             "status": "running",
             "last_active": datetime.now(UTC).isoformat(),
@@ -467,9 +470,10 @@ class TestErrorRecoveryAndGracefulDegradation:
             "cycle_count": 10,
             "pid": 1234,
         }
-        (state_dir / "health.json").write_text(json.dumps(health_data))
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
-        reader = StateReader(state_dir=state_dir)
+        reader = StateReader(state_dir=state_dir, document_store=store)
         snapshot = reader.get_snapshot()
 
         # Health should be correct
@@ -487,7 +491,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         state_dir = tmp_path / "stale_state"
         state_dir.mkdir()
 
-        # Write health with old last_active (2 minutes ago)
+        # Seed health with old last_active (2 minutes ago)
         old_time = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
         health_data = {
             "status": "running",
@@ -496,9 +500,10 @@ class TestErrorRecoveryAndGracefulDegradation:
             "cycle_count": 100,
             "pid": 5678,
         }
-        (state_dir / "health.json").write_text(json.dumps(health_data))
+        store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
-        reader = StateReader(state_dir=state_dir)
+        reader = StateReader(state_dir=state_dir, document_store=store)
         health = reader.get_health()
 
         # Status says running, but is_running() should be False
