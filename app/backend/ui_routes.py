@@ -4,7 +4,9 @@ Chat UI API Routes.
 Additional API endpoints specifically for the Chat UI frontend.
 
 Reads real state data from file-backed runtime artifacts plus shared backend-managed state:
-- health.json: Agent health status
+- health: system status (cycle_count, idle state, queue stats), persisted in the
+  shared Postgres document store; liveness itself comes from a live IPC heartbeat
+  check, not a stored document (see main.get_progenitor_liveness())
 - agents.json + the shared MCP state document: Registered agents and enabled MCP servers
 - build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
 - current_state.json: Progenitor agent state (chat history, tool calls) - user session
@@ -100,7 +102,7 @@ class UIStatusResponse(BaseModel):
     connected: bool
     server_status: str
     progenitor_running: bool
-    progenitor_status: str = "unknown"  # Raw status from health.json
+    progenitor_status: str = "unknown"  # Raw status from the health document
     uptime_seconds: float
     version: str
     memory_mb: float | None = None
@@ -694,7 +696,7 @@ async def get_ui_status_snapshot():
             connected=True,
             server_status=health.get("status", "unknown"),
             progenitor_running=progenitor_running,
-            progenitor_status=snapshot.health.status,  # Raw status from health.json
+            progenitor_status=snapshot.health.status,  # Raw status from the health document
             uptime_seconds=health.get("uptime_seconds", 0),
             version=health.get("version", "unknown"),
             memory_mb=health.get("memory", {}).get("rss_mb"),
@@ -4211,7 +4213,7 @@ async def _get_current_status() -> dict:
         "status": "healthy",
         "uptime_seconds": round(now - start_time, 1),
         "progenitor_running": snapshot.health.is_running(),
-        "progenitor_status": snapshot.health.status,  # Raw status from health.json
+        "progenitor_status": snapshot.health.status,  # Raw status from the health document
         "version": getattr(chat_main.config, "api_version", "0.1.0"),
         # State data
         "cycle_count": snapshot.health.cycle_count,  # Use health.cycle_count for accuracy
@@ -4219,6 +4221,14 @@ async def _get_current_status() -> dict:
         "messages_count": snapshot.messages_count,
         "pid": snapshot.health.pid,
         "last_active": snapshot.health.last_active,
+        # Distinct from "version" above (the backend's own api_version) - this
+        # is the runtime process's code commit, for spotting a stale-process
+        # running old code without cross-referencing Postgres by hand.
+        "progenitor_commit": snapshot.health.version,
+        "progenitor_started_at": snapshot.health.started_at,
+        "llm_model": snapshot.health.llm_model,
+        "llm_reasoning_enabled": snapshot.health.llm_reasoning_enabled,
+        "llm_reasoning_effort": snapshot.health.llm_reasoning_effort,
         # Loops
         "loops": [
             {
@@ -4299,6 +4309,12 @@ def _process_metrics() -> dict:
     every change via the Postgres NOTIFY watcher; this lightweight payload is
     merged into it by the periodic tick so we never re-read the DB just to
     refresh metrics.
+
+    Also includes ``progenitor_running``: a live IPC-heartbeat liveness check,
+    deliberately NOT stored in Postgres (see HealthInfo.live_reachable), so a
+    pure liveness flip - the runtime dying with no other document changing -
+    still reaches the frontend within this tick's cadence instead of only
+    surfacing on the next incidental Postgres write.
     """
     from . import main as chat_main
 
@@ -4310,6 +4326,7 @@ def _process_metrics() -> dict:
     metrics: dict = {
         "status": "draining" if draining else "healthy",
         "uptime_seconds": round(now - start_time, 1),
+        "progenitor_running": bool(chat_main.get_progenitor_liveness()),
     }
     try:
         import psutil

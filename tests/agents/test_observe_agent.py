@@ -66,7 +66,10 @@ async def test_observe_agent_uses_llm_and_tools(tmp_path: Path) -> None:
     state_dir.mkdir()
     logs_dir.mkdir()
 
-    (state_dir / "health.json").write_text(
+    # health is a Postgres document now (no file); build_state.json is still a
+    # real on-disk file this generic tool can read, so it exercises the same
+    # diagnostic-scenario shape without relying on a file that no longer exists.
+    (state_dir / "build_state.json").write_text(
         json.dumps({"status": "error", "error": "boom", "cycle_count": 12})
     )
     (logs_dir / "decisions.jsonl").write_text(
@@ -88,15 +91,15 @@ async def test_observe_agent_uses_llm_and_tools(tmp_path: Path) -> None:
                             "type": "tool_call",
                             "call_id": "1",
                             "name": "read_state_json",
-                            "arguments": json.dumps({"filename": "health.json"}),
+                            "arguments": json.dumps({"filename": "build_state.json"}),
                         }
                     ],
                 }
-            return {"output_text": "Progenitor is in error because health.json reports boom."}
+            return {"output_text": "Progenitor is in error because build_state.json reports boom."}
 
     agent = FakeObserveAgent(state_dir=state_dir, logs_dir=logs_dir)
     text = await agent.process("why did you error last time", {})
-    assert "health.json" in agent.tool_read_state_json("health.json")["path"]
+    assert "build_state.json" in agent.tool_read_state_json("build_state.json")["path"]
     assert "boom" in text.lower()
 
 

@@ -44,7 +44,7 @@ def mock_state_files(tmp_path):
     state_dir.mkdir()
     config_dir.mkdir()
 
-    # Health file - agent is running
+    # Health - agent is running (Postgres document, no file)
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
@@ -52,7 +52,8 @@ def mock_state_files(tmp_path):
         "cycle_count": 42,
         "pid": 12345,
     }
-    (state_dir / "health.json").write_text(json.dumps(health_data))
+    store = InMemoryDocumentStore()
+    store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
     # Registry with agents
     agents_data = {
@@ -96,7 +97,6 @@ def mock_state_files(tmp_path):
         }
     }
     (config_dir / "agents.json").write_text(json.dumps(agents_data))
-    store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - in progress
@@ -399,10 +399,14 @@ class TestLoopStatusFeedback:
         )
 
         # Update health to stopped
-        health_file = mock_state_files.state_dir / "health.json"
-        health = json.loads(health_file.read_text())
-        health["status"] = "stopped"
-        health_file.write_text(json.dumps(health))
+        health_doc = mock_state_files.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, "health", {}
+        )
+        health_payload = dict(health_doc.payload) if health_doc is not None else {}
+        health_payload["status"] = "stopped"
+        mock_state_files.document_store.save_document(
+            PROGENITOR_STATE_PREFIX, "health", health_payload
+        )
 
         reader._cache.clear()
 
@@ -428,18 +432,23 @@ class TestErrorFeedbackPath:
         assert not health.is_running()
 
     def test_graceful_handling_of_corrupt_json(self, tmp_path):
-        """Test graceful handling of corrupt state files."""
+        """Test graceful handling of corrupt state files.
+
+        health has no on-disk fallback anymore (it's Postgres-only, no
+        migration/legacy-shape tolerance needed), so this exercises a document
+        that still supports the disk-file fallback path: build_state.json.
+        """
         state_dir = tmp_path / "corrupt_state"
         state_dir.mkdir()
 
         # Write corrupt JSON
-        (state_dir / "health.json").write_text("{not valid json")
+        (state_dir / "build_state.json").write_text("{not valid json")
 
         reader = StateReader(state_dir=state_dir)
-        health = reader.get_health()
+        build_state = reader.get_build_state()
 
         # Should return default values, not crash
-        assert health.status == "unknown"
+        assert build_state == {}
 
     def test_alerts_endpoint_for_errors(self, client):
         """Test alerts endpoint is available for error notifications."""

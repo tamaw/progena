@@ -103,6 +103,29 @@ def _coerce_int(value: Any, default: int = 0) -> int:
         return default
 
 
+def _live_progenitor_reachable() -> bool | None:
+    """Live liveness check via the backend's IPC heartbeat, or None if unavailable.
+
+    Lazy import (mirrors ui_routes.py's ``_process_metrics()`` reaching into
+    ``main`` the same way) to avoid a circular import: main -> ui_routes ->
+    state_reader. Returns None (not a definite bool) whenever there's no IPC
+    client actually configured yet - not just "unreachable" - which is the
+    case in most tests and before backend startup wires one up. Only once a
+    client exists do we report a definite True/False, so callers correctly
+    fall back to the timestamp-staleness heuristic instead of every
+    unconfigured test reporting a false "down".
+    """
+    try:
+        from . import main as chat_main
+
+        client = getattr(chat_main, "client", None)
+        if client is None:
+            return None
+        return bool(client.is_running)
+    except Exception:
+        return None
+
+
 def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> datetime | None:
     if not value:
         return None
@@ -213,13 +236,26 @@ class ToolInfo:
 
 @dataclass
 class HealthInfo:
-    """Health information from health.json."""
+    """Health information from the ``health`` Postgres document."""
 
     status: str
     last_active: str | None
     thread_id: str | None
     cycle_count: int
     pid: int | None
+    # Set only by get_health(), from a live IPC heartbeat check - not part of
+    # the stored document. None means "no live signal available" (e.g. built
+    # directly in a test), in which case is_running() falls back to the
+    # timestamp-staleness heuristic below.
+    live_reachable: bool | None = None
+    # Short git commit SHA the runtime process was started from, and when it
+    # started - lets you spot a stale-process-running-old-code mismatch (the
+    # exact bug class this repo hit more than once) without DB archaeology.
+    version: str | None = None
+    started_at: str | None = None
+    llm_model: str | None = None
+    llm_reasoning_enabled: bool | None = None
+    llm_reasoning_effort: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> HealthInfo:
@@ -229,10 +265,17 @@ class HealthInfo:
             thread_id=data.get("thread_id"),
             cycle_count=data.get("cycle_count", 0),
             pid=data.get("pid"),
+            version=data.get("version"),
+            started_at=data.get("started_at"),
+            llm_model=data.get("llm_model"),
+            llm_reasoning_enabled=data.get("llm_reasoning_enabled"),
+            llm_reasoning_effort=data.get("llm_reasoning_effort"),
         )
 
     def is_running(self) -> bool:
         """Check if progenitor appears to be running."""
+        if self.live_reachable is not None:
+            return self.live_reachable
         if self.status != "running" or not self.last_active:
             return False
         try:
@@ -418,6 +461,10 @@ class StateSnapshot:
     # in _state_changed() would never notice a kanban-only write and the
     # Tasks page would only pick up new/edited cards on a manual refresh.
     kanban_fingerprint: str = ""
+    # Content fingerprint of the "health" Postgres document (status,
+    # cycle_count, thread_id, idle_cycles, queue_stats, pid - NOT liveness,
+    # which is a live IPC check pushed separately via _process_metrics()).
+    health_fingerprint: str = ""
 
 
 class StateReader:
@@ -524,14 +571,10 @@ class StateReader:
             return PROGENITOR_STATE_PREFIX, "build_state", {}
         if name == "schedule.json":
             return PROGENITOR_STATE_PREFIX, "schedule", {}
-        if name == "health.json":
-            return PROGENITOR_STATE_PREFIX, "health", {}
         if name == "agents.json":
             return PROGENITOR_STATE_PREFIX, "registry", {}
         if name == "event_widgets.json":
             return BACKEND_STATE_PREFIX, "event_widgets", {}
-        if name == "kanban.json":
-            return BACKEND_STATE_PREFIX, "kanban", {}
         if name == "sessions.json":
             return BACKEND_STATE_PREFIX, "sessions", []
         return None
@@ -550,10 +593,19 @@ class StateReader:
             return []
 
     def get_health(self) -> HealthInfo:
-        data = self._read_json("health.json")
-        if data:
-            return HealthInfo.from_dict(data)
+        health = self._get_health_document()
+        health.live_reachable = _live_progenitor_reachable()
+        return health
+
+    def _get_health_document(self) -> HealthInfo:
         if self.document_store is not None:
+            health_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+            data = health_doc.payload if health_doc is not None else {}
+            if isinstance(data, dict) and data:
+                return HealthInfo.from_dict(data)
+            # Brand-new DB, before the heartbeat loop has ever written a
+            # "health" document - fall back to current_state for a rough
+            # signal so the UI doesn't flash "unknown" on first boot.
             current_doc = self.document_store.get_document(
                 PROGENITOR_STATE_PREFIX, "current_state", {}
             )
@@ -1003,6 +1055,28 @@ class StateReader:
             serialized = str(material)
         return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
 
+    def _health_fingerprint(self) -> str:
+        """Stable hash of the ``health`` Postgres document's status fields.
+
+        Deliberately excludes liveness (``HealthInfo.live_reachable``) - that
+        signal is a live IPC check, not stored in Postgres, so a pure liveness
+        flip with nothing else changing would never trigger this fingerprint.
+        See ``_process_metrics()`` in ui_routes.py for how liveness reaches the
+        frontend instead (pushed on its own independent ~3s tick).
+        """
+        if self.document_store is None:
+            return ""
+        try:
+            health_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "health", {})
+            payload = health_doc.payload if health_doc is not None else {}
+        except Exception:
+            return ""
+        try:
+            serialized = json.dumps(payload, sort_keys=True, default=str)
+        except (TypeError, ValueError):
+            serialized = str(payload)
+        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
         agents, tools = self.get_registry()
@@ -1028,6 +1102,7 @@ class StateReader:
             knowledge_fingerprint=self._knowledge_fingerprint(),
             schedule_fingerprint=self._schedule_fingerprint(),
             kanban_fingerprint=self._kanban_fingerprint(),
+            health_fingerprint=self._health_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1678,6 +1753,11 @@ class StateReader:
                 "cycle_count": snapshot.health.cycle_count,
                 "pid": snapshot.health.pid,
                 "is_running": snapshot.health.is_running(),
+                "version": snapshot.health.version,
+                "started_at": snapshot.health.started_at,
+                "llm_model": snapshot.health.llm_model,
+                "llm_reasoning_enabled": snapshot.health.llm_reasoning_enabled,
+                "llm_reasoning_effort": snapshot.health.llm_reasoning_effort,
             },
             "widgets": self.get_widgets(),
             "workspace": {
@@ -1696,6 +1776,11 @@ class StateReader:
                 "cycle_count": snapshot.health.cycle_count,
                 "pid": snapshot.health.pid,
                 "is_running": snapshot.health.is_running(),
+                "version": snapshot.health.version,
+                "started_at": snapshot.health.started_at,
+                "llm_model": snapshot.health.llm_model,
+                "llm_reasoning_enabled": snapshot.health.llm_reasoning_enabled,
+                "llm_reasoning_effort": snapshot.health.llm_reasoning_effort,
             },
             "agents": [
                 {
@@ -1848,6 +1933,8 @@ class StateReader:
         if new.schedule_fingerprint != old.schedule_fingerprint:
             return True
         if new.kanban_fingerprint != old.kanban_fingerprint:
+            return True
+        if new.health_fingerprint != old.health_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0

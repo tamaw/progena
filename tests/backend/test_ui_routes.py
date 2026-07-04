@@ -158,12 +158,17 @@ class TestUIRoutes:
         assert "total" in data
 
     def test_process_metrics_excludes_db_fields(self):
-        """The periodic tick carries only process metrics, never DB-derived state."""
+        """The periodic tick carries only process metrics, never DB-derived state.
+
+        progenitor_running belongs here too: it's a live IPC heartbeat check,
+        not a Postgres read (see main.get_progenitor_liveness()).
+        """
         from app.backend import ui_routes
 
         metrics = ui_routes._process_metrics()
-        assert set(metrics) == {"status", "uptime_seconds", "memory_mb"}
+        assert set(metrics) == {"status", "uptime_seconds", "memory_mb", "progenitor_running"}
         assert metrics["status"] in {"healthy", "draining"}
+        assert isinstance(metrics["progenitor_running"], bool)
         # None of the DB-derived fields leak into the metrics tick.
         assert "widgets" not in metrics
         assert "agents" not in metrics
@@ -1795,10 +1800,6 @@ class TestWorkspaceBridgeActions:
         config_dir.mkdir(parents=True)
         sessions_dir.mkdir(parents=True)
         logs_dir.mkdir(parents=True)
-        (state_dir / "health.json").write_text(
-            json.dumps({"status": "running", "thread_id": "run_123"}),
-            encoding="utf-8",
-        )
         (config_dir / "agents.json").write_text(
             json.dumps(
                 {
@@ -1876,10 +1877,6 @@ class TestWorkspaceBridgeActions:
         config_dir.mkdir(parents=True)
         sessions_dir.mkdir(parents=True)
         logs_dir.mkdir(parents=True)
-        (state_dir / "health.json").write_text(
-            json.dumps({"status": "running", "thread_id": "run_456"}),
-            encoding="utf-8",
-        )
         (config_dir / "agents.json").write_text(json.dumps({"agents": []}), encoding="utf-8")
         store = InMemoryDocumentStore()
         store.save_document(

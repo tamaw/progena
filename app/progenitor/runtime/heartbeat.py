@@ -110,8 +110,6 @@ class ProgenitorLoop:
         self._queues = RuntimeQueues(config.runtime)
         self._graph_lock = asyncio.Lock()
         self._state: dict[str, Any] = {}
-        state_dir = getattr(self.state_manager, "state_dir", None)
-        self._state_dir = state_dir if isinstance(state_dir, (str, Path)) else Path(".")
         audit_payload: dict[str, Any] | None = None
         to_dict = getattr(config, "to_dict", None)
         if callable(to_dict):
@@ -123,7 +121,6 @@ class ProgenitorLoop:
             agent_graph=self.graph,
             live_state=self._state,
             state_manager=self.state_manager,
-            health_state_dir=self._state_dir,
             audit_log_sink=self.log_sink,
             startup_audit_payload=audit_payload,
             tool_registry=tool_registry,
@@ -142,6 +139,10 @@ class ProgenitorLoop:
             timezone=getattr(self.config.runtime, "timezone", "UTC"),
             reasoning_enabled=bool(
                 getattr(getattr(self.config, "llm", None), "reasoning_enabled", False)
+            ),
+            llm_model=str(getattr(getattr(self.config, "llm", None), "model_default", "") or ""),
+            llm_reasoning_effort=str(
+                getattr(getattr(self.config, "llm", None), "reasoning_effort", "") or ""
             ),
         )
         validate_heartbeat_context(self._heartbeat_context)
@@ -207,7 +208,7 @@ class ProgenitorLoop:
         )
         self._state.update(updates)
         await write_health_status(
-            self._state_dir,
+            self.state_manager,
             "stopped",
             thread_id=str(self._state.get("thread_id") or "") or None,
             cycle_count=int(self._state.get("cycle_count", 0) or 0),

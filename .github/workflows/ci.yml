@@ -144,6 +144,8 @@ jobs:
         with:
           context: .
           file: docker/progenitor/Dockerfile
+          build-args: |
+            GIT_COMMIT=${{ github.sha }}
           load: true
           labels: |
             com.progenitor.managed=true
