@@ -30,6 +30,17 @@ export function hasReasoningContent(event) {
   return typeof event?.content === 'string' && event.content.trim().length > 0;
 }
 
+export function countReasoningTimelineEntries(events, reasoningText) {
+  const streamEvents = Array.isArray(events) ? events : [];
+  const reasoningEventCount = streamEvents.filter((event) =>
+    isReasoningEvent(event) && hasReasoningContent(event)
+  ).length;
+  if (reasoningEventCount > 0) {
+    return reasoningEventCount;
+  }
+  return typeof reasoningText === 'string' && reasoningText.trim().length > 0 ? 1 : 0;
+}
+
 export function extractReasoningTokenCount(event) {
   const tokenCount = event?.metadata?.reasoning_tokens;
   return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;

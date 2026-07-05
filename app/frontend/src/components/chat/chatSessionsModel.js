@@ -109,11 +109,11 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     ?? 0;
   const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
   const summary = chat.preview || `${messageCount} ${messageCount === 1 ? 'message' : 'messages'}`;
-  const selected = selectedBackendChatId === chat.chat_session_id;
+  const selected = selectedBackendChatId === chat.thread_id;
 
   return {
-    id: chat.chat_session_id,
-    pinKey: chat.chat_session_id,
+    id: chat.thread_id,
+    pinKey: chat.thread_id,
     title: chat.title || 'Untitled chat',
     meta: formatRelativeAge(activityAt) || formatRelativeAge(chat.created_at) || '',
     detail: chat.archived ? 'Archived' : (chat.shared ? 'Shared' : ''),
@@ -122,21 +122,21 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     bucket: getTimeBucket(activityAt),
     preview: formatPreview(chat.preview),
     selected,
-    unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.chat_session_id) : false,
+    unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.thread_id) : false,
     // Generating whether the stream is in the foreground (the chat being
     // viewed) or carried on in the background — the card shows one dot either
     // way, so the two sources collapse into a single flag here.
     generating: (backgroundGeneratingChatIds instanceof Set
-      && backgroundGeneratingChatIds.has(chat.chat_session_id))
+      && backgroundGeneratingChatIds.has(chat.thread_id))
       || (Boolean(isGenerating) && selected),
     erroredInBackground: backgroundErrorChatIds instanceof Set
-      ? backgroundErrorChatIds.has(chat.chat_session_id)
+      ? backgroundErrorChatIds.has(chat.thread_id)
       : false,
     pinned: Boolean(chat.pinned),
     shared: Boolean(chat.shared),
     archived: Boolean(chat.archived),
     source: 'backend',
-    chatSessionId: chat.chat_session_id,
+    threadId: chat.thread_id,
     messageCount,
     toolCount: Number.isFinite(chat.tool_count) ? chat.tool_count : 0,
     errorCount: Number.isFinite(chat.error_count) ? chat.error_count : 0,
@@ -189,9 +189,8 @@ export function buildChatSessionItems({
   const localIds = new Set(localItems.map((item) => item.pinKey));
   const backendItems = backendChatSessions
     .filter((chat) => (
-      chat.chat_session_id
-      && !localIds.has(chat.chat_session_id)
-      && !localIds.has(chat.progenitor_session_id)
+      chat.thread_id
+      && !localIds.has(chat.thread_id)
       && !localIds.has(chat.thread_id)
     ))
     .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating));

@@ -64,6 +64,7 @@ import {
 } from '../components/chat/streamFilters';
 import {
   appendStreamEvent,
+  countReasoningTimelineEntries,
   finalizeSupersededAssistant,
   normalizeStreamEvent,
 } from '../components/chat/streamEventsModel';
@@ -294,12 +295,12 @@ function ConversationPage() {
   // Reload the currently-open backend chat's detail (used when a background
   // stream for the chat the user is viewing finishes — so the reply shows
   // without marking the open chat unread).
-  const reloadOpenChat = useCallback((chatSessionId) => {
+  const reloadOpenChat = useCallback((threadId) => {
     lastAppliedBackendChatIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
-      chatSessionId,
+      threadId,
       requestId,
     })).unwrap().catch((error) => show('error', 'Chat reload failed', error.message));
   }, [dispatch, getApiUrl, show]);
@@ -340,22 +341,22 @@ function ConversationPage() {
     reloadOpenChat,
   });
 
-  const openBackendChat = useCallback(async (chatSessionId) => {
-    if (!chatSessionId) {
+  const openBackendChat = useCallback(async (threadId) => {
+    if (!threadId) {
       return;
     }
     activeAssistantIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
-    setSelectedBackendChatId(chatSessionId);
-    dispatch(clearChatGenerating(chatSessionId));
-    dispatch(clearChatUnread(chatSessionId));
-    dispatch(clearChatErrored(chatSessionId));
+    setSelectedBackendChatId(threadId);
+    dispatch(clearChatGenerating(threadId));
+    dispatch(clearChatUnread(threadId));
+    dispatch(clearChatErrored(threadId));
     lastAppliedBackendChatIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
-      chatSessionId,
+      threadId,
       requestId,
     })).unwrap();
   }, [activeAssistantIdRef, dispatch, getApiUrl, setIsGenerating]);
@@ -365,9 +366,7 @@ function ConversationPage() {
       return null;
     }
     const existingBackendCard = backendChatSessions.find((chat) => (
-      chat.progenitor_session_id === sessionId
-      || chat.thread_id === sessionId
-      || chat.chat_session_id === sessionId
+      chat.thread_id === sessionId
     ));
     if (existingBackendCard) {
       return existingBackendCard;
@@ -375,7 +374,7 @@ function ConversationPage() {
     return dispatch(createChatSession({
       chatsUrl: getApiUrl('chats'),
       title,
-      progenitorSessionId: sessionId,
+      threadId: sessionId,
     })).unwrap();
   }, [backendChatSessions, dispatch, getApiUrl, sessionId]);
 
@@ -480,13 +479,13 @@ function ConversationPage() {
       try {
         const session = await getSession();
         if (!cancelled) {
-          setSessionId(session.session_id);
+          setSessionId(session.conversation_id || session.session_id);
         }
       } catch {
         try {
           const session = await createSession();
           if (!cancelled) {
-            setSessionId(session.session_id);
+            setSessionId(session.conversation_id || session.session_id);
           }
         } catch (error) {
           console.warn('[ConversationPage] Failed to initialize session:', error);
@@ -546,12 +545,12 @@ function ConversationPage() {
   }, [messages, selectedBackendChatId, config.storage.chatHistory]);
 
   useEffect(() => {
-    if (!activeBackendChat?.chat_session_id) {
+    if (!activeBackendChat?.thread_id) {
       return;
     }
     if (
-      selectedBackendChatId !== activeBackendChat.chat_session_id
-      || lastAppliedBackendChatIdRef.current === activeBackendChat.chat_session_id
+      selectedBackendChatId !== activeBackendChat.thread_id
+      || lastAppliedBackendChatIdRef.current === activeBackendChat.thread_id
     ) {
       return;
     }
@@ -562,9 +561,8 @@ function ConversationPage() {
         .filter(Boolean)
       : [];
     const nextSessionId =
-      activeBackendChat.progenitor_session_id
-      || activeBackendChat.thread_id
-      || activeBackendChat.chat_session_id;
+      activeBackendChat.thread_id
+      || null;
 
     activeAssistantIdRef.current = null;
     recentScheduledContent.current.clear();
@@ -576,18 +574,11 @@ function ConversationPage() {
     setTitleDraft(activeBackendChat.title || '');
     setIsEditingTitle(false);
     setSessionId(nextSessionId);
-    lastAppliedBackendChatIdRef.current = activeBackendChat.chat_session_id;
+    lastAppliedBackendChatIdRef.current = activeBackendChat.thread_id;
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
   }, [activeAssistantIdRef, activeBackendChat, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
-
-  useEffect(() => {
-    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
-      return;
-    }
-    dismissCurrentSession();
-  }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -712,21 +703,28 @@ function ConversationPage() {
     localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
   }, [activeAssistantIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
 
+  useEffect(() => {
+    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
+      return;
+    }
+    dismissCurrentSession();
+  }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
     let draftSessionId = sessionId;
     if (forceFreshSession || !draftSessionId) {
       const session = await createSession();
-      draftSessionId = session.session_id;
+      draftSessionId = session.conversation_id || session.session_id;
     }
 
     setActiveDetailTab('Chat');
     setIsEditingTitle(false);
     const draftChat = await dispatch(ensureDraftChatSession({
       chatsUrl: getApiUrl('chats'),
-      progenitorSessionId: draftSessionId,
+      threadId: draftSessionId,
     })).unwrap();
-    if (selectedBackendChatId !== draftChat.chat_session_id) {
-      await openBackendChat(draftChat.chat_session_id);
+    if (selectedBackendChatId !== draftChat.thread_id) {
+      await openBackendChat(draftChat.thread_id);
     }
     return draftChat;
   }, [
@@ -757,9 +755,7 @@ function ConversationPage() {
     try {
       const existingBackendCard = previousSessionId
         ? backendChatSessions.some((chat) => (
-          chat.progenitor_session_id === previousSessionId
-          || chat.thread_id === previousSessionId
-          || chat.chat_session_id === previousSessionId
+          chat.thread_id === previousSessionId
         ))
         : false;
       if (previousSessionId && !existingBackendCard && archivedMessages.length > 0) {
@@ -844,12 +840,12 @@ function ConversationPage() {
     const shouldReloadSelectedBackendChat =
       sessionItem.selected
       && sessionItem.source === 'backend'
-      && sessionItem.chatSessionId
+      && sessionItem.threadId
       && messages.length === 0;
     if (sessionItem.selected && !shouldReloadSelectedBackendChat) {
       return;
     }
-    if (sessionItem.source !== 'backend' || !sessionItem.chatSessionId) {
+    if (sessionItem.source !== 'backend' || !sessionItem.threadId) {
       clearBackendSelection();
       return;
     }
@@ -872,7 +868,7 @@ function ConversationPage() {
       dispatch(markChatGenerating(streamingOriginId));
     }
     try {
-      await openBackendChat(sessionItem.chatSessionId);
+      await openBackendChat(sessionItem.threadId);
     } catch (error) {
       show('error', 'Chat load failed', error.message);
     }
@@ -910,10 +906,14 @@ function ConversationPage() {
       if (message.role === 'user') { counts.user++; continue; }
       if (message.role === 'assistant') {
         counts.agent++;
-        if (message.reasoningText) counts.reasoning++;
+        counts.reasoning += countReasoningTimelineEntries(
+          message.streamEvents,
+          message.reasoningText,
+        );
       }
       for (const event of (Array.isArray(message.streamEvents) ? message.streamEvents : [])) {
         const cat = categoryForEventType(event.eventType);
+        if (cat === 'reasoning') continue;
         if (cat && cat in counts) counts[cat]++;
         if (Array.isArray(event.images) && event.images.length > 0) counts.images++;
       }
@@ -926,6 +926,11 @@ function ConversationPage() {
   );
   const isContentLoading =
     !backendChatSessionsState.loaded && messages.length === 0 && !selectedBackendChatId;
+  const isEmptyConversationPane =
+    backendChatSessionsState.loaded
+    && backendChatSessions.length === 0
+    && !selectedBackendChatId
+    && messages.length === 0;
   const sessionItems = useMemo(
     () => buildChatSessionItems({
       messages,
@@ -1029,7 +1034,7 @@ function ConversationPage() {
   }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
 
   const archiveSession = useCallback(async (sessionItem) => {
-    if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
+    if (sessionItem?.source === 'backend' && sessionItem.threadId) {
       const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
       const nextSessionItem = visibleIndex >= 0
         ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
@@ -1037,7 +1042,7 @@ function ConversationPage() {
       try {
         await dispatch(updateChatSessionMetadata({
           chatsUrl: getApiUrl('chats'),
-          chatSessionId: sessionItem.chatSessionId,
+          threadId: sessionItem.threadId,
           patch: { archived: true },
         })).unwrap();
       } catch (error) {
@@ -1045,7 +1050,7 @@ function ConversationPage() {
         return;
       }
       if (sessionItem.selected) {
-        if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
           await selectSessionItem(nextSessionItem);
           return;
         }
@@ -1069,7 +1074,7 @@ function ConversationPage() {
   ]);
 
   const deleteSession = useCallback(async (sessionItem) => {
-    if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
+    if (sessionItem?.source === 'backend' && sessionItem.threadId) {
       const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
       const nextSessionItem = visibleIndex >= 0
         ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
@@ -1077,14 +1082,14 @@ function ConversationPage() {
       try {
         await dispatch(deleteChatSession({
           chatsUrl: getApiUrl('chats'),
-          chatSessionId: sessionItem.chatSessionId,
+          threadId: sessionItem.threadId,
         })).unwrap();
       } catch (error) {
         show('error', 'Delete failed', error.message);
         return;
       }
       if (sessionItem.selected) {
-        if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
           await selectSessionItem(nextSessionItem);
           return;
         }
@@ -1100,7 +1105,7 @@ function ConversationPage() {
       ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
       : null;
     dismissCurrentSession();
-    if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+    if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
       await selectSessionItem(nextSessionItem);
       return;
     }
@@ -1304,7 +1309,9 @@ function ConversationPage() {
                   }}
                 />
               ) : (
-                <span className="chat-detail-header__title-text">{isContentLoading ? '' : chatTitle}</span>
+                <span className="chat-detail-header__title-text">
+                  {isContentLoading ? '' : (isEmptyConversationPane ? 'No conversation selected' : chatTitle)}
+                </span>
               )}
               <button
                 type="button"
@@ -1344,7 +1351,7 @@ function ConversationPage() {
               ))}
             </DetailHeaderActions>
           )}
-          meta={isContentLoading ? [] : [
+          meta={isContentLoading || isEmptyConversationPane ? [] : [
             <span key="model" className="chat-page-header__model">
               <span className="agent-dot agent-dot--purple" />
               {CHAT_AGENT_NAME}
@@ -1355,12 +1362,12 @@ function ConversationPage() {
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
             sessionId ? <span key="id" className="chat-session-id">{sessionId}</span> : null,
           ]}
-          tabs={isContentLoading ? [] : ['Chat', 'Text']}
+          tabs={isContentLoading || isEmptyConversationPane ? [] : ['Chat', 'Text']}
           activeTab={activeDetailTab}
           onTabChange={setActiveDetailTab}
           tabLabel="Conversation detail tabs"
         />
-        {!isContentLoading && activeDetailTab === 'Chat' && (
+        {!isContentLoading && !isEmptyConversationPane && activeDetailTab === 'Chat' && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
@@ -1373,6 +1380,11 @@ function ConversationPage() {
           <div className="chat-messages__inner">
             {isContentLoading ? (
               <div className="chat-loading">Loading...</div>
+            ) : isEmptyConversationPane ? (
+              <div className="welcome-message">
+                <h2>No conversations yet</h2>
+                <p className="muted">Click <strong>+ New</strong> to start a conversation.</p>
+              </div>
             ) : messages.length === 0 ? (
               <div className="welcome-message">
                 <h2>{welcomeMessage}</h2>

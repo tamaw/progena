@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
+from app.progenitor.runtime.messages import extract_reasoning_trace
 
 
 class _FakeGraph:
@@ -326,7 +327,82 @@ async def test_final_reasoning_summary_only_updates_tokens_after_streamed_deltas
         {
             "type": "stream_event",
             "event_type": "reasoning_summary",
-            "content": "",
-            "metadata": {"reasoning_tokens": 7, "text_length": 0},
+            "content": "First. Second.",
+            "metadata": {"reasoning_tokens": 7, "text_length": 14},
         }
     ]
+    assert bridge.last_reasoning_trace == "First. Second."
+
+
+@pytest.mark.asyncio
+async def test_streamed_reasoning_survives_when_final_message_drops_it():
+    graph = _FakeGraph(
+        [
+            (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content=[
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "Checked inputs. "}],
+                            }
+                        ]
+                    ),
+                    {"langgraph_node": "model"},
+                ),
+            ),
+            (
+                "messages",
+                (
+                    AIMessageChunk(
+                        content=[
+                            {
+                                "type": "reasoning",
+                                "summary": [{"type": "summary_text", "text": "Computed answer."}],
+                            },
+                            {"type": "text", "text": "Done"},
+                        ]
+                    ),
+                    {"langgraph_node": "model"},
+                ),
+            ),
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Done",
+                        "messages": [
+                            AIMessage(
+                                content=[{"type": "text", "text": "Done"}],
+                                usage_metadata={
+                                    "input_tokens": 1,
+                                    "output_tokens": 8,
+                                    "total_tokens": 9,
+                                    "output_token_details": {"reasoning": 7},
+                                },
+                            )
+                        ],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+
+    items = await _collect_items(bridge)
+
+    reasoning_summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
+
+    assert reasoning_summaries == [
+        {
+            "type": "stream_event",
+            "event_type": "reasoning_summary",
+            "content": "Checked inputs. Computed answer.",
+            "metadata": {"reasoning_tokens": 7, "text_length": 32},
+        }
+    ]
+    assert bridge.last_reasoning_trace == "Checked inputs. Computed answer."
+    assert (
+        extract_reasoning_trace(bridge.state["messages"][-1]) == "Checked inputs. Computed answer."
+    )

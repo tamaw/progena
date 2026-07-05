@@ -77,8 +77,8 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       backendChatSessions: [
-        { chat_session_id: 'c1', title: 'One' },
-        { chat_session_id: 'c2', title: 'Two' },
+        { thread_id: 'c1', title: 'One' },
+        { thread_id: 'c2', title: 'Two' },
       ],
       selectedBackendChatId: 'c1',
       unreadChatIds: new Set(['c2']),
@@ -97,8 +97,8 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       backendChatSessions: [
-        { chat_session_id: 'c1', title: 'One' },
-        { chat_session_id: 'c2', title: 'Two' },
+        { thread_id: 'c1', title: 'One' },
+        { thread_id: 'c2', title: 'Two' },
       ],
       selectedBackendChatId: 'c1',
       isGenerating: true,
@@ -118,8 +118,8 @@ describe('buildChatSessionItems', () => {
       firstMessageTime: 1,
       selectedBackendChatId: null,
       backendChatSessions: [
-        { chat_session_id: 'sess1', title: 'dup' },
-        { chat_session_id: 'other', title: 'other' },
+        { thread_id: 'sess1', title: 'dup' },
+        { thread_id: 'other', title: 'other' },
       ],
     });
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(true);
@@ -133,7 +133,7 @@ describe('buildChatSessionItems', () => {
       chatTitle: 'New chat',
       selectedBackendChatId: null,
       backendChatSessions: [
-        { chat_session_id: 'older', title: 'Earlier chat' },
+        { thread_id: 'older', title: 'Earlier chat' },
       ],
     });
     expect(items).toEqual([
