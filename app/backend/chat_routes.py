@@ -9,11 +9,13 @@ from fastapi import APIRouter, HTTPException
 
 from .chat_sessions import (
     ChatCreateRequest,
+    ChatDraftRequest,
     ChatMutationResponse,
     ChatPatchRequest,
     ChatSessionDetail,
     ChatSessionsResponse,
     UiEventEnvelope,
+    acquire_reusable_draft,
     create_chat_metadata,
     current_state_chat_detail,
     delete_chat_metadata,
@@ -113,6 +115,16 @@ def create_chat_router(
         if detail is None:
             raise HTTPException(status_code=500, detail="Created chat metadata could not be loaded")
         broadcast_ui_event("chat.session.created", {"session": detail.model_dump()}, scope="chat")
+        broadcast_snapshot()
+        return ChatMutationResponse(session=detail)
+
+    @router.post("/chats/draft", response_model=ChatMutationResponse)
+    async def acquire_draft_chat(request: ChatDraftRequest):
+        """Reuse the newest empty draft chat or create a new one."""
+        store = get_document_store()
+        detail, created = acquire_reusable_draft(store, request)
+        event_type = "chat.session.created" if created else "chat.session.metadata.updated"
+        broadcast_ui_event(event_type, {"session": detail.model_dump()}, scope="chat")
         broadcast_snapshot()
         return ChatMutationResponse(session=detail)
 

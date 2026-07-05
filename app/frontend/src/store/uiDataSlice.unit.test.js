@@ -5,12 +5,15 @@ import reducer, {
   clearChatGenerating,
   clearChatUnread,
   clearActiveChatSession,
+  deleteChatSession,
+  ensureDraftChatSession,
   kanbanSnapshotReceived,
   markChatErrored,
   markChatGenerating,
   markChatUnread,
   requestAgentDetail,
   requestChatSessionDetail,
+  updateChatSessionMetadata,
   selectActiveAgentProfile,
   selectAgentProfiles,
   selectChatIndicators,
@@ -62,6 +65,59 @@ describe('applyUiEvent reducer', () => {
     s = reducer(s, applyUiEvent({ type: 'chat.session.deleted', payload: { chat_session_id: 'a' } }));
     expect(s.chats.order).toEqual(['b']);
     expect(s.chats.byId.a).toBeUndefined();
+  });
+
+  it('deleteChatSession.fulfilled removes the chat immediately without waiting for realtime', () => {
+    let s = reducer(undefined, snapshot(['a', 'b']));
+    s = reducer(s, deleteChatSession.fulfilled({ chatSessionId: 'a' }, 'rid', {
+      chatsUrl: '/x',
+      chatSessionId: 'a',
+    }));
+    expect(s.chats.order).toEqual(['b']);
+    expect(s.chats.byId.a).toBeUndefined();
+  });
+
+  it('updateChatSessionMetadata.fulfilled applies archive state immediately', () => {
+    let s = reducer(undefined, snapshot(['a', 'b']));
+    s = reducer(s, updateChatSessionMetadata.fulfilled({
+      chat_session_id: 'a',
+      title: 'A',
+      archived: true,
+    }, 'rid', {
+      chatsUrl: '/x',
+      chatSessionId: 'a',
+      patch: { archived: true },
+    }));
+    expect(s.chats.byId.a.archived).toBe(true);
+    expect(s.chats.order).toEqual(['a', 'b']);
+  });
+
+  it('updateChatSessionMetadata.fulfilled can move a touched chat to the top immediately', () => {
+    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
+    s = reducer(s, updateChatSessionMetadata.fulfilled({
+      chat_session_id: 'c',
+      title: 'New chat',
+    }, 'rid', {
+      chatsUrl: '/x',
+      chatSessionId: 'c',
+      patch: { title: 'New chat', touch: true },
+    }));
+    expect(s.chats.order).toEqual(['c', 'a', 'b']);
+    expect(s.chats.byId.c.title).toBe('New chat');
+  });
+
+  it('ensureDraftChatSession.fulfilled moves the draft to the top immediately', () => {
+    let s = reducer(undefined, snapshot(['a', 'b', 'c']));
+    s = reducer(s, ensureDraftChatSession.fulfilled({
+      chat_session_id: 'b',
+      title: 'New chat',
+      message_count: 0,
+    }, 'rid', {
+      chatsUrl: '/x',
+      progenitorSessionId: 'sess-new',
+    }));
+    expect(s.chats.order).toEqual(['b', 'a', 'c']);
+    expect(s.chats.byId.b.title).toBe('New chat');
   });
 
   it('selected applies only when request_id matches the active request', () => {

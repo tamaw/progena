@@ -417,6 +417,47 @@ class TestUIRoutes:
             session["chat_session_id"] != chat_id for session in list_response.json()["sessions"]
         )
 
+    def test_chat_draft_endpoint_reuses_existing_empty_new_chat(self, client):
+        create_response = client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "progenitor_session_id": "sess-draft-1"},
+        )
+        assert create_response.status_code == 200
+        draft_id = create_response.json()["session"]["chat_session_id"]
+
+        draft_response = client.post(
+            "/api/ui/chats/draft",
+            json={"progenitor_session_id": "sess-draft-2"},
+        )
+
+        assert draft_response.status_code == 200
+        assert draft_response.json()["session"]["chat_session_id"] == draft_id
+        assert draft_response.json()["session"]["progenitor_session_id"] == "sess-draft-2"
+        assert draft_response.json()["session"]["thread_id"] == "thread_sess-draft-2"
+
+        list_response = client.get("/api/ui/chats?include_archived=true")
+        assert list_response.status_code == 200
+        assert len(list_response.json()["sessions"]) == 1
+        assert list_response.json()["sessions"][0]["chat_session_id"] == draft_id
+
+    def test_chat_draft_endpoint_creates_new_after_deleted_draft(self, client):
+        create_response = client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "progenitor_session_id": "sess-draft-delete"},
+        )
+        assert create_response.status_code == 200
+        deleted_id = create_response.json()["session"]["chat_session_id"]
+        delete_response = client.delete(f"/api/ui/chats/{deleted_id}")
+        assert delete_response.status_code == 204
+
+        draft_response = client.post(
+            "/api/ui/chats/draft",
+            json={"progenitor_session_id": "sess-draft-new"},
+        )
+
+        assert draft_response.status_code == 200
+        assert draft_response.json()["session"]["chat_session_id"] != deleted_id
+
     def test_chat_patch_and_delete_materialize_current_state_card(
         self,
         client,

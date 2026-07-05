@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHAT_AGENT_NAME,
+  DEFAULT_CHAT_TITLE,
   toValidTimestamp,
   deriveChatTitle,
   countToolInvocations,
@@ -24,8 +25,8 @@ describe('toValidTimestamp', () => {
 
 describe('deriveChatTitle', () => {
   it('defaults when there is no user message', () => {
-    expect(deriveChatTitle([])).toBe('New Progenitor conversation');
-    expect(deriveChatTitle([{ role: 'assistant', content: 'hi' }])).toBe('New Progenitor conversation');
+    expect(deriveChatTitle([])).toBe(DEFAULT_CHAT_TITLE);
+    expect(deriveChatTitle([{ role: 'assistant', content: 'hi' }])).toBe(DEFAULT_CHAT_TITLE);
   });
   it('uses the first user message, whitespace-collapsed', () => {
     expect(deriveChatTitle([{ role: 'user', content: '  hello   world ' }])).toBe('hello world');
@@ -82,5 +83,11 @@ describe('groupSessionItems', () => {
 describe('CHAT_AGENT_NAME', () => {
   it('is Progenitor', () => {
     expect(CHAT_AGENT_NAME).toBe('Progenitor');
+  });
+});
+
+describe('DEFAULT_CHAT_TITLE', () => {
+  it('keeps empty draft conversations consistent across the page', () => {
+    expect(DEFAULT_CHAT_TITLE).toBe('New chat');
   });
 });

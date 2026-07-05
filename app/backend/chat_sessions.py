@@ -19,6 +19,7 @@ from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
 CHAT_METADATA_PREFIX = "backend.chat.sessions"
 CHAT_INDEX_KEY = "__index__"
 CONVERSATION_ID_PREFIX = "conv_"
+DEFAULT_CHAT_TITLE = "New chat"
 SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
 BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
 
@@ -76,10 +77,17 @@ class ChatPatchRequest(BaseModel):
     pinned: bool | None = None
     shared: bool | None = None
     archived: bool | None = None
+    touch: bool | None = None
 
 
 class ChatMutationResponse(BaseModel):
     session: ChatSessionDetail
+
+
+class ChatDraftRequest(BaseModel):
+    progenitor_session_id: str | None = None
+    thread_id: str | None = None
+    checkpoint_id: str | None = None
 
 
 class UiEventEnvelope(BaseModel):
@@ -137,7 +145,7 @@ def create_chat_metadata(
     thread_id = request.thread_id or _thread_id_from_session_id(request.progenitor_session_id)
     metadata = {
         "chat_session_id": chat_session_id,
-        "title": (request.title or "New chat").strip() or "New chat",
+        "title": (request.title or DEFAULT_CHAT_TITLE).strip() or DEFAULT_CHAT_TITLE,
         "thread_id": thread_id,
         "progenitor_session_id": request.progenitor_session_id,
         "checkpoint_id": request.checkpoint_id,
@@ -150,6 +158,51 @@ def create_chat_metadata(
     }
     _save_metadata(store, chat_session_id, metadata)
     return metadata
+
+
+def _is_reusable_draft(session: ChatSessionSummary | ChatSessionDetail) -> bool:
+    return (
+        not session.archived and session.title == DEFAULT_CHAT_TITLE and session.message_count == 0
+    )
+
+
+def acquire_reusable_draft(
+    store: BackendDocumentStore,
+    request: ChatDraftRequest,
+) -> tuple[ChatSessionDetail, bool]:
+    for session in list_chat_sessions(store, include_archived=False):
+        if not _is_reusable_draft(session):
+            continue
+        metadata = _get_metadata(store, session.chat_session_id)
+        if metadata is None:
+            continue
+        metadata["title"] = DEFAULT_CHAT_TITLE
+        metadata["progenitor_session_id"] = request.progenitor_session_id
+        metadata["thread_id"] = request.thread_id or _thread_id_from_session_id(
+            request.progenitor_session_id
+        )
+        metadata["checkpoint_id"] = request.checkpoint_id
+        now = _now_iso()
+        metadata["updated_at"] = now
+        metadata["last_activity"] = now
+        _save_metadata(store, session.chat_session_id, metadata)
+        detail = get_chat_detail(store, session.chat_session_id)
+        if detail is not None:
+            return detail, False
+
+    metadata = create_chat_metadata(
+        store,
+        ChatCreateRequest(
+            title=DEFAULT_CHAT_TITLE,
+            progenitor_session_id=request.progenitor_session_id,
+            thread_id=request.thread_id,
+            checkpoint_id=request.checkpoint_id,
+        ),
+    )
+    detail = get_chat_detail(store, metadata["chat_session_id"])
+    if detail is None:
+        raise RuntimeError("Created draft chat metadata could not be loaded")
+    return detail, True
 
 
 def materialize_chat_metadata(
@@ -192,7 +245,10 @@ def patch_chat_metadata(
         metadata["shared"] = request.shared
     if request.archived is not None:
         metadata["archived"] = request.archived
-    metadata["updated_at"] = _now_iso()
+    now = _now_iso()
+    metadata["updated_at"] = now
+    if request.touch:
+        metadata["last_activity"] = now
     _save_metadata(store, chat_session_id, metadata)
     return metadata
 
@@ -531,7 +587,7 @@ def _metadata_without_messages(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def _display_title(raw_title: str, messages: list[ChatMessage]) -> str:
     title = raw_title.strip() or "Untitled chat"
-    if title.lower() not in {"new chat", "new conversation", "untitled chat"}:
+    if title.lower() not in {DEFAULT_CHAT_TITLE.lower(), "new conversation", "untitled chat"}:
         return title
     first_user_message = next(
         (message.content for message in messages if message.role == "user"), ""
@@ -585,7 +641,7 @@ def _checkpoint_metadata(snapshot: CheckpointThreadSnapshot) -> dict[str, Any]:
             if isinstance(session_id, str) and session_id.startswith("sess_")
             else session_id or snapshot.thread_id
         ),
-        "title": "New chat",
+        "title": DEFAULT_CHAT_TITLE,
         "thread_id": snapshot.thread_id,
         "progenitor_session_id": session_id,
         "checkpoint_id": snapshot.checkpoint_id,
