@@ -35,7 +35,7 @@ import reducer, {
 
 const snapshot = (ids) => applyUiEvent({
   type: 'chat.sessions.snapshot',
-  payload: { sessions: ids.map((id) => ({ chat_session_id: id })) },
+  payload: { sessions: ids.map((id) => ({ thread_id: id })) },
 });
 
 describe('applyUiEvent reducer', () => {
@@ -47,31 +47,31 @@ describe('applyUiEvent reducer', () => {
 
   it('created prepends a new chat', () => {
     let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.created', payload: { session: { chat_session_id: 'b', title: 'B' } } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b', title: 'B' } } }));
     expect(s.chats.order).toEqual(['b', 'a']);
     expect(s.chats.byId.b.title).toBe('B');
   });
 
   it('upserted adds only when missing and does not duplicate', () => {
     let s = reducer(undefined, snapshot(['a']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { chat_session_id: 'a', title: 'changed' } } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'a', title: 'changed' } } }));
     expect(s.chats.order).toEqual(['a']);
-    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { chat_session_id: 'c' } } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.upserted', payload: { session: { thread_id: 'c' } } }));
     expect(s.chats.order).toEqual(['c', 'a']);
   });
 
   it('deleted removes the chat and clears the active detail if it was selected', () => {
     let s = reducer(undefined, snapshot(['a', 'b']));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.deleted', payload: { chat_session_id: 'a' } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.deleted', payload: { thread_id: 'a' } }));
     expect(s.chats.order).toEqual(['b']);
     expect(s.chats.byId.a).toBeUndefined();
   });
 
   it('deleteChatSession.fulfilled removes the chat immediately without waiting for realtime', () => {
     let s = reducer(undefined, snapshot(['a', 'b']));
-    s = reducer(s, deleteChatSession.fulfilled({ chatSessionId: 'a' }, 'rid', {
+    s = reducer(s, deleteChatSession.fulfilled({ threadId: 'a' }, 'rid', {
       chatsUrl: '/x',
-      chatSessionId: 'a',
+      threadId: 'a',
     }));
     expect(s.chats.order).toEqual(['b']);
     expect(s.chats.byId.a).toBeUndefined();
@@ -80,12 +80,12 @@ describe('applyUiEvent reducer', () => {
   it('updateChatSessionMetadata.fulfilled applies archive state immediately', () => {
     let s = reducer(undefined, snapshot(['a', 'b']));
     s = reducer(s, updateChatSessionMetadata.fulfilled({
-      chat_session_id: 'a',
+      thread_id: 'a',
       title: 'A',
       archived: true,
     }, 'rid', {
       chatsUrl: '/x',
-      chatSessionId: 'a',
+      threadId: 'a',
       patch: { archived: true },
     }));
     expect(s.chats.byId.a.archived).toBe(true);
@@ -95,11 +95,11 @@ describe('applyUiEvent reducer', () => {
   it('updateChatSessionMetadata.fulfilled can move a touched chat to the top immediately', () => {
     let s = reducer(undefined, snapshot(['a', 'b', 'c']));
     s = reducer(s, updateChatSessionMetadata.fulfilled({
-      chat_session_id: 'c',
+      thread_id: 'c',
       title: 'New chat',
     }, 'rid', {
       chatsUrl: '/x',
-      chatSessionId: 'c',
+      threadId: 'c',
       patch: { title: 'New chat', touch: true },
     }));
     expect(s.chats.order).toEqual(['c', 'a', 'b']);
@@ -109,12 +109,12 @@ describe('applyUiEvent reducer', () => {
   it('ensureDraftChatSession.fulfilled moves the draft to the top immediately', () => {
     let s = reducer(undefined, snapshot(['a', 'b', 'c']));
     s = reducer(s, ensureDraftChatSession.fulfilled({
-      chat_session_id: 'b',
+      thread_id: 'b',
       title: 'New chat',
       message_count: 0,
     }, 'rid', {
       chatsUrl: '/x',
-      progenitorSessionId: 'sess-new',
+      threadId: 'thread_sess-new',
     }));
     expect(s.chats.order).toEqual(['b', 'a', 'c']);
     expect(s.chats.byId.b.title).toBe('New chat');
@@ -122,27 +122,43 @@ describe('applyUiEvent reducer', () => {
 
   it('selected applies only when request_id matches the active request', () => {
     let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
-      chatsUrl: '/x', chatSessionId: 'a', requestId: 'REQ1',
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
     }));
     expect(s.chats.active.requestId).toBe('REQ1');
 
     // mismatched request id is ignored
-    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ2' } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { thread_id: 'a' }, request_id: 'REQ2' } }));
     expect(s.chats.active.detail).toBeNull();
 
     // matching request id applies
-    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
-    expect(s.chats.active.detail).toEqual({ chat_session_id: 'a' });
+    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { thread_id: 'a' }, request_id: 'REQ1' } }));
+    expect(s.chats.active.detail).toEqual({ thread_id: 'a' });
+  });
+
+  it('requestChatSessionDetail.fulfilled hydrates active detail from the direct response body', () => {
+    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
+    }));
+    s = reducer(s, requestChatSessionDetail.fulfilled({
+      threadId: 'a',
+      requestId: 'REQ1',
+      session: { thread_id: 'a', title: 'Loaded chat' },
+    }, 'rid', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
+    }));
+    expect(s.chats.active.detail).toEqual({ thread_id: 'a', title: 'Loaded chat' });
+    expect(s.chats.active.threadId).toBe('a');
+    expect(s.chats.byId.a.title).toBe('Loaded chat');
   });
 
   it('clearActiveChatSession resets the active backend selection', () => {
     let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
-      chatsUrl: '/x', chatSessionId: 'a', requestId: 'REQ1',
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
     }));
-    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { chat_session_id: 'a' }, request_id: 'REQ1' } }));
+    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { thread_id: 'a' }, request_id: 'REQ1' } }));
     s = reducer(s, clearActiveChatSession());
     expect(s.chats.active).toEqual({
-      chatSessionId: null,
+      threadId: null,
       detail: null,
       loading: false,
       error: null,
@@ -219,10 +235,10 @@ describe('selectChatSessions (memoized)', () => {
   it('recomputes after the chat list changes', () => {
     const s1 = reducer(undefined, snapshot(['a']));
     const r1 = selectChatSessions({ uiData: s1 });
-    const s2 = reducer(s1, applyUiEvent({ type: 'chat.session.created', payload: { session: { chat_session_id: 'b' } } }));
+    const s2 = reducer(s1, applyUiEvent({ type: 'chat.session.created', payload: { session: { thread_id: 'b' } } }));
     const r2 = selectChatSessions({ uiData: s2 });
     expect(r2).not.toBe(r1);
-    expect(r2.map((c) => c.chat_session_id)).toEqual(['b', 'a']);
+    expect(r2.map((c) => c.thread_id)).toEqual(['b', 'a']);
   });
 });
 

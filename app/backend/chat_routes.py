@@ -83,7 +83,7 @@ def create_chat_router(
             include_archived=include_archived,
         )
 
-    def current_state_detail(chat_session_id: str) -> ChatSessionDetail | None:
+    def current_state_detail(thread_id: str) -> ChatSessionDetail | None:
         """The live (not-yet-persisted) current-session card, if it matches the id."""
         if get_current_state is None:
             return None
@@ -92,9 +92,33 @@ def create_chat_router(
         except Exception:  # nosec B110 - state is best-effort; absence just means no card
             return None
         detail = current_state_chat_detail(state)
-        if detail is not None and detail.chat_session_id == chat_session_id:
+        if detail is not None and detail.thread_id == thread_id:
             return detail
         return None
+
+    def detail_reasoning_score(detail: ChatSessionDetail | None) -> tuple[int, int]:
+        if detail is None:
+            return (0, 0)
+        populated = [
+            message
+            for message in detail.messages
+            if isinstance(message.reasoning_text, str) and message.reasoning_text.strip()
+        ]
+        return (len(populated), sum(len(message.reasoning_text.strip()) for message in populated))
+
+    def prefer_live_detail(
+        persisted: ChatSessionDetail | None,
+        live: ChatSessionDetail | None,
+    ) -> ChatSessionDetail | None:
+        if live is None:
+            return persisted
+        if persisted is None or live.thread_id != persisted.thread_id:
+            return live
+        if detail_reasoning_score(live) > detail_reasoning_score(persisted):
+            return live
+        if live.message_count > persisted.message_count:
+            return live
+        return persisted
 
     @router.get("/chats", response_model=ChatSessionsResponse)
     async def get_chats(include_archived: bool = False):
@@ -110,8 +134,11 @@ def create_chat_router(
     async def create_chat(request: ChatCreateRequest):
         """Create backend-owned chat UI metadata without duplicating transcripts."""
         store = get_document_store()
-        metadata = create_chat_metadata(store, request)
-        detail = get_chat_detail(store, metadata["chat_session_id"])
+        try:
+            metadata = create_chat_metadata(store, request)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        detail = get_chat_detail(store, metadata["thread_id"])
         if detail is None:
             raise HTTPException(status_code=500, detail="Created chat metadata could not be loaded")
         broadcast_ui_event("chat.session.created", {"session": detail.model_dump()}, scope="chat")
@@ -122,16 +149,22 @@ def create_chat_router(
     async def acquire_draft_chat(request: ChatDraftRequest):
         """Reuse the newest empty draft chat or create a new one."""
         store = get_document_store()
-        detail, created = acquire_reusable_draft(store, request)
+        try:
+            detail, created = acquire_reusable_draft(store, request)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         event_type = "chat.session.created" if created else "chat.session.metadata.updated"
         broadcast_ui_event(event_type, {"session": detail.model_dump()}, scope="chat")
         broadcast_snapshot()
         return ChatMutationResponse(session=detail)
 
-    @router.get("/chats/{chat_session_id}", response_model=ChatSessionDetail)
-    async def get_chat(chat_session_id: str, request_id: str | None = None):
+    @router.get("/chats/{thread_id}", response_model=ChatSessionDetail)
+    async def get_chat(thread_id: str, request_id: str | None = None):
         """Acknowledge chat detail requests and publish the detail on the UI stream."""
-        detail = get_chat_detail(get_document_store(), chat_session_id)
+        detail = prefer_live_detail(
+            get_chat_detail(get_document_store(), thread_id),
+            current_state_detail(thread_id),
+        )
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         broadcast_ui_event("chat.session.upserted", {"session": detail.model_dump()}, scope="chat")
@@ -139,55 +172,53 @@ def create_chat_router(
             "chat.session.selected",
             {"session": detail.model_dump(), "request_id": request_id},
             scope="chat",
-            session_id=chat_session_id,
+            session_id=thread_id,
         )
         return detail
 
-    @router.patch("/chats/{chat_session_id}", response_model=ChatMutationResponse)
-    async def patch_chat(chat_session_id: str, request: ChatPatchRequest):
+    @router.patch("/chats/{thread_id}", response_model=ChatMutationResponse)
+    async def patch_chat(thread_id: str, request: ChatPatchRequest):
         """Update backend-owned chat UI metadata."""
         store = get_document_store()
-        metadata = patch_chat_metadata(store, chat_session_id, request)
+        metadata = patch_chat_metadata(store, thread_id, request)
         if metadata is None:
-            detail_before_patch = get_chat_detail(store, chat_session_id) or current_state_detail(
-                chat_session_id
+            detail_before_patch = get_chat_detail(store, thread_id) or current_state_detail(
+                thread_id
             )
             if detail_before_patch is not None:
                 materialize_chat_metadata(store, detail_before_patch)
-                metadata = patch_chat_metadata(store, chat_session_id, request)
+                metadata = patch_chat_metadata(store, thread_id, request)
         if metadata is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        detail = get_chat_detail(store, chat_session_id)
+        detail = get_chat_detail(store, thread_id)
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
         broadcast_ui_event(
             "chat.session.metadata.updated",
             {"session": detail.model_dump()},
             scope="chat",
-            session_id=chat_session_id,
+            session_id=thread_id,
         )
         broadcast_snapshot()
         return ChatMutationResponse(session=detail)
 
-    @router.delete("/chats/{chat_session_id}", status_code=204)
-    async def delete_chat(chat_session_id: str):
+    @router.delete("/chats/{thread_id}", status_code=204)
+    async def delete_chat(thread_id: str):
         """Soft-delete backend chat UI metadata."""
         store = get_document_store()
-        deleted = delete_chat_metadata(store, chat_session_id)
+        deleted = delete_chat_metadata(store, thread_id)
         if not deleted:
-            detail = get_chat_detail(store, chat_session_id) or current_state_detail(
-                chat_session_id
-            )
+            detail = get_chat_detail(store, thread_id) or current_state_detail(thread_id)
             if detail is not None:
                 materialize_chat_metadata(store, detail)
-                deleted = delete_chat_metadata(store, chat_session_id)
+                deleted = delete_chat_metadata(store, thread_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Chat session not found")
         broadcast_ui_event(
             "chat.session.deleted",
-            {"chat_session_id": chat_session_id},
+            {"thread_id": thread_id},
             scope="chat",
-            session_id=chat_session_id,
+            session_id=thread_id,
         )
         broadcast_snapshot()
         return None

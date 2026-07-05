@@ -9,7 +9,7 @@ import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
 import { requestJson, withQuery } from '../http';
 
 const emptyActive = () => ({
-  chatSessionId: null,
+  threadId: null,
   detail: null,
   loading: false,
   error: null,
@@ -34,9 +34,9 @@ export const initialState = {
   },
 };
 
-function sessionIdFor(session) {
-  return typeof session?.chat_session_id === 'string' && session.chat_session_id
-    ? session.chat_session_id
+function threadIdFor(session) {
+  return typeof session?.thread_id === 'string' && session.thread_id
+    ? session.thread_id
     : null;
 }
 
@@ -44,58 +44,58 @@ function replaceChatList(chats, sessions) {
   chats.byId = {};
   chats.order = [];
   for (const session of Array.isArray(sessions) ? sessions : []) {
-    const chatSessionId = sessionIdFor(session);
-    if (!chatSessionId || chats.byId[chatSessionId]) {
+    const threadId = threadIdFor(session);
+    if (!threadId || chats.byId[threadId]) {
       continue;
     }
-    chats.byId[chatSessionId] = session;
-    chats.order.push(chatSessionId);
+    chats.byId[threadId] = session;
+    chats.order.push(threadId);
   }
 }
 
 function upsertChat(chats, session) {
-  const chatSessionId = sessionIdFor(session);
-  if (!chatSessionId) {
+  const threadId = threadIdFor(session);
+  if (!threadId) {
     return;
   }
-  if (!chats.byId[chatSessionId]) {
-    chats.order.unshift(chatSessionId);
+  if (!chats.byId[threadId]) {
+    chats.order.unshift(threadId);
   }
-  chats.byId[chatSessionId] = {
-    ...(chats.byId[chatSessionId] || {}),
+  chats.byId[threadId] = {
+    ...(chats.byId[threadId] || {}),
     ...session,
   };
 }
 
-function moveChatToFront(chats, chatSessionId) {
-  if (!chatSessionId || !Array.isArray(chats.order) || !chats.order.includes(chatSessionId)) {
+function moveChatToFront(chats, threadId) {
+  if (!threadId || !Array.isArray(chats.order) || !chats.order.includes(threadId)) {
     return;
   }
-  chats.order = [chatSessionId, ...chats.order.filter((item) => item !== chatSessionId)];
+  chats.order = [threadId, ...chats.order.filter((item) => item !== threadId)];
 }
 
 function addChatIfMissing(chats, session) {
-  const chatSessionId = sessionIdFor(session);
-  if (!chatSessionId || chats.byId[chatSessionId]) {
+  const threadId = threadIdFor(session);
+  if (!threadId || chats.byId[threadId]) {
     return;
   }
-  chats.byId[chatSessionId] = session;
-  chats.order.unshift(chatSessionId);
+  chats.byId[threadId] = session;
+  chats.order.unshift(threadId);
 }
 
-function deleteChatFromList(chats, chatSessionId) {
-  if (!chatSessionId) {
+function deleteChatFromList(chats, threadId) {
+  if (!threadId) {
     return;
   }
-  delete chats.byId[chatSessionId];
-  chats.order = chats.order.filter((item) => item !== chatSessionId);
+  delete chats.byId[threadId];
+  chats.order = chats.order.filter((item) => item !== threadId);
 }
 
 function mergeActiveDetail(active, session) {
-  if (!session?.chat_session_id) {
+  if (!session?.thread_id) {
     return;
   }
-  if (active.detail?.chat_session_id !== session.chat_session_id) {
+  if (active.detail?.thread_id !== session.thread_id) {
     return;
   }
   active.detail = {
@@ -112,18 +112,18 @@ function normalizeChatRuntimeIds(ids) {
   return [...new Set(ids.filter((id) => typeof id === 'string' && id))];
 }
 
-function addChatRuntimeId(ids, chatSessionId) {
-  if (typeof chatSessionId !== 'string' || !chatSessionId || ids.includes(chatSessionId)) {
+function addChatRuntimeId(ids, threadId) {
+  if (typeof threadId !== 'string' || !threadId || ids.includes(threadId)) {
     return ids;
   }
-  return [...ids, chatSessionId];
+  return [...ids, threadId];
 }
 
-function removeChatRuntimeId(ids, chatSessionId) {
-  if (typeof chatSessionId !== 'string' || !chatSessionId || !ids.includes(chatSessionId)) {
+function removeChatRuntimeId(ids, threadId) {
+  if (typeof threadId !== 'string' || !threadId || !ids.includes(threadId)) {
     return ids;
   }
-  return ids.filter((id) => id !== chatSessionId);
+  return ids.filter((id) => id !== threadId);
 }
 
 export const fetchChatSessions = createAsyncThunk(
@@ -143,31 +143,31 @@ function unwrapChatMutationSession(response) {
 
 export const requestChatSessionDetail = createAsyncThunk(
   'uiData/requestChatSessionDetail',
-  async ({ chatsUrl, chatSessionId, requestId }) => {
-    await requestJson(
-      withQuery(`${chatsUrl}/${encodeURIComponent(chatSessionId)}`, { request_id: requestId }),
+  async ({ chatsUrl, threadId, requestId }) => {
+    const session = await requestJson(
+      withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
       { errorLabel: 'Failed to load chat' },
     );
-    return { chatSessionId, requestId };
+    return { threadId, requestId, session };
   },
 );
 
 export const createChatSession = createAsyncThunk(
   'uiData/createChatSession',
-  async ({ chatsUrl, title, progenitorSessionId }) => unwrapChatMutationSession(await requestJson(chatsUrl, {
+  async ({ chatsUrl, title, threadId }) => unwrapChatMutationSession(await requestJson(chatsUrl, {
     method: 'POST',
-    body: { title, progenitor_session_id: progenitorSessionId },
+    body: { title, thread_id: threadId },
     errorLabel: 'Failed to create chat card',
   })),
 );
 
 export const ensureDraftChatSession = createAsyncThunk(
   'uiData/ensureDraftChatSession',
-  async ({ chatsUrl, progenitorSessionId }) => unwrapChatMutationSession(await requestJson(
+  async ({ chatsUrl, threadId }) => unwrapChatMutationSession(await requestJson(
     `${chatsUrl.replace(/\/$/, '')}/draft`,
     {
       method: 'POST',
-      body: { progenitor_session_id: progenitorSessionId },
+      body: { thread_id: threadId },
       errorLabel: 'Failed to open draft chat',
     },
   )),
@@ -175,20 +175,20 @@ export const ensureDraftChatSession = createAsyncThunk(
 
 export const updateChatSessionMetadata = createAsyncThunk(
   'uiData/updateChatSessionMetadata',
-  async ({ chatsUrl, chatSessionId, patch }) => unwrapChatMutationSession(await requestJson(
-    `${chatsUrl}/${encodeURIComponent(chatSessionId)}`,
+  async ({ chatsUrl, threadId, patch }) => unwrapChatMutationSession(await requestJson(
+    `${chatsUrl}/${encodeURIComponent(threadId)}`,
     { method: 'PATCH', body: patch, errorLabel: 'Failed to update chat' },
   )),
 );
 
 export const deleteChatSession = createAsyncThunk(
   'uiData/deleteChatSession',
-  async ({ chatsUrl, chatSessionId }) => {
-    await requestJson(`${chatsUrl}/${encodeURIComponent(chatSessionId)}`, {
+  async ({ chatsUrl, threadId }) => {
+    await requestJson(`${chatsUrl}/${encodeURIComponent(threadId)}`, {
       method: 'DELETE',
       errorLabel: 'Failed to delete chat',
     });
-    return { chatSessionId };
+    return { threadId };
   },
 );
 
@@ -255,13 +255,13 @@ export const eventHandlers = {
       return;
     }
     state.chats.active.detail = payload.session || null;
-    state.chats.active.chatSessionId = payload.session?.chat_session_id || null;
+    state.chats.active.threadId = payload.session?.thread_id || null;
     state.chats.active.loading = false;
     state.chats.active.error = null;
   },
   'chat.session.deleted': (state, payload) => {
-    deleteChatFromList(state.chats, payload.chat_session_id);
-    if (state.chats.active.chatSessionId === payload.chat_session_id) {
+    deleteChatFromList(state.chats, payload.thread_id);
+    if (state.chats.active.threadId === payload.thread_id) {
       state.chats.active = emptyActive();
     }
   },
@@ -285,7 +285,7 @@ export function buildExtraReducers(builder) {
       state.chats.error = action.error?.message || 'Failed to load chats';
     })
     .addCase(requestChatSessionDetail.pending, (state, action) => {
-      state.chats.active.chatSessionId = action.meta.arg.chatSessionId;
+      state.chats.active.threadId = action.meta.arg.threadId;
       state.chats.active.loading = true;
       state.chats.active.error = null;
       state.chats.active.requestId = action.meta.arg.requestId;
@@ -293,6 +293,12 @@ export function buildExtraReducers(builder) {
     .addCase(requestChatSessionDetail.fulfilled, (state, action) => {
       if (state.chats.active.requestId === action.payload.requestId) {
         state.chats.active.loading = false;
+        if (action.payload.session?.thread_id === action.payload.threadId) {
+          upsertChat(state.chats, action.payload.session);
+          state.chats.active.detail = action.payload.session;
+          state.chats.active.threadId = action.payload.threadId;
+          state.chats.active.error = null;
+        }
       }
     })
     .addCase(requestChatSessionDetail.rejected, (state, action) => {
@@ -302,29 +308,29 @@ export function buildExtraReducers(builder) {
       }
     })
     .addCase(ensureDraftChatSession.fulfilled, (state, action) => {
-      const chatSessionId = action.payload?.chat_session_id;
-      if (!chatSessionId) {
+      const threadId = action.payload?.thread_id;
+      if (!threadId) {
         return;
       }
       upsertChat(state.chats, action.payload);
-      moveChatToFront(state.chats, chatSessionId);
+      moveChatToFront(state.chats, threadId);
       mergeActiveDetail(state.chats.active, action.payload);
     })
     .addCase(updateChatSessionMetadata.fulfilled, (state, action) => {
-      const chatSessionId = action.payload?.chat_session_id;
-      if (!chatSessionId) {
+      const threadId = action.payload?.thread_id;
+      if (!threadId) {
         return;
       }
       upsertChat(state.chats, action.payload);
       if (action.meta.arg?.patch?.touch === true) {
-        moveChatToFront(state.chats, chatSessionId);
+        moveChatToFront(state.chats, threadId);
       }
       mergeActiveDetail(state.chats.active, action.payload);
     })
     .addCase(deleteChatSession.fulfilled, (state, action) => {
-      const chatSessionId = action.payload?.chatSessionId;
-      deleteChatFromList(state.chats, chatSessionId);
-      if (state.chats.active.chatSessionId === chatSessionId) {
+      const threadId = action.payload?.threadId;
+      deleteChatFromList(state.chats, threadId);
+      if (state.chats.active.threadId === threadId) {
         state.chats.active = emptyActive();
       }
     });
@@ -332,7 +338,7 @@ export function buildExtraReducers(builder) {
 
 export const selectChatSessions = createSelector(
   [(state) => state.uiData.chats.order, (state) => state.uiData.chats.byId],
-  (order, byId) => order.map((chatSessionId) => byId[chatSessionId]).filter(Boolean),
+  (order, byId) => order.map((threadId) => byId[threadId]).filter(Boolean),
 );
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;

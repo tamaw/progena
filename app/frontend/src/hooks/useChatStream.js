@@ -22,7 +22,7 @@ function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
   if (!selectedBackendChatId) {
     return null;
   }
-  if (activeBackendChat?.chat_session_id !== selectedBackendChatId) {
+  if (activeBackendChat?.thread_id !== selectedBackendChatId) {
     return null;
   }
   return activeBackendChat;
@@ -115,7 +115,7 @@ export function useChatStream({
 
     // The chat this stream belongs to, captured as a closure-local so
     // background completion can update the right sidebar card later.
-    const originChatId = selectedBackendChat?.chat_session_id ?? null;
+    const originChatId = selectedBackendChat?.thread_id ?? null;
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).
     backgroundOriginChatIdRef.current = originChatId;

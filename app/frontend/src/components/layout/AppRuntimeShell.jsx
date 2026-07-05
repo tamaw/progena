@@ -901,13 +901,13 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
         config.storage.quickChatHandoff,
         JSON.stringify({
           messages: promotedMessages,
-          sessionId: scratchSession?.session_id ?? null,
+          sessionId: scratchSession?.conversation_id ?? scratchSession?.session_id ?? null,
         }),
       );
       window.dispatchEvent(new CustomEvent('progenitor:load-chat-history', {
         detail: {
           messages: promotedMessages,
-          sessionId: scratchSession?.session_id ?? null,
+          sessionId: scratchSession?.conversation_id ?? scratchSession?.session_id ?? null,
         },
       }));
     }
@@ -915,7 +915,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     if (!isOnChatPage) {
       navigate('/');
     }
-  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchSession?.session_id]);
+  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchSession?.conversation_id, scratchSession?.session_id]);
 
   const resetQuickChat = useCallback(() => {
     cancelStream();

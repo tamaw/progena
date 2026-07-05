@@ -2,23 +2,23 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.progenitor.runtime.messages import (
+    attach_reasoning_trace,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
+    get_last_ai_message,
 )
 
 from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
 
 CHAT_METADATA_PREFIX = "backend.chat.sessions"
 CHAT_INDEX_KEY = "__index__"
-CONVERSATION_ID_PREFIX = "conv_"
 DEFAULT_CHAT_TITLE = "New chat"
 SCHEDULED_TASK_PREFIX = "[Scheduled Task]"
 BACKEND_ALERT_PREFIX = "A backend alert was just created for the user."
@@ -41,10 +41,8 @@ class ChatMessage(BaseModel):
 
 
 class ChatSessionSummary(BaseModel):
-    chat_session_id: str
+    thread_id: str
     title: str
-    thread_id: str | None = None
-    progenitor_session_id: str | None = None
     checkpoint_id: str | None = None
     pinned: bool = False
     shared: bool = False
@@ -68,7 +66,6 @@ class ChatSessionsResponse(BaseModel):
 class ChatCreateRequest(BaseModel):
     title: str | None = None
     thread_id: str | None = None
-    progenitor_session_id: str | None = None
     checkpoint_id: str | None = None
 
 
@@ -85,7 +82,6 @@ class ChatMutationResponse(BaseModel):
 
 
 class ChatDraftRequest(BaseModel):
-    progenitor_session_id: str | None = None
     thread_id: str | None = None
     checkpoint_id: str | None = None
 
@@ -112,51 +108,98 @@ def _save_metadata_index(store: BackendDocumentStore, ids: list[str]) -> None:
     store.save_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, ordered)
 
 
-def _get_metadata(store: BackendDocumentStore, chat_session_id: str) -> dict[str, Any] | None:
-    document = store.get_document(CHAT_METADATA_PREFIX, chat_session_id)
+def _get_metadata(store: BackendDocumentStore, thread_id: str) -> dict[str, Any] | None:
+    document = store.get_document(CHAT_METADATA_PREFIX, thread_id)
     if document is None or not isinstance(document.payload, dict):
         return None
     return dict(document.payload)
 
 
-def _save_metadata(
-    store: BackendDocumentStore, chat_session_id: str, metadata: dict[str, Any]
-) -> None:
-    store.save_document(CHAT_METADATA_PREFIX, chat_session_id, metadata)
+def _save_metadata(store: BackendDocumentStore, thread_id: str, metadata: dict[str, Any]) -> None:
+    store.save_document(CHAT_METADATA_PREFIX, thread_id, metadata)
     ids = _metadata_index(store)
-    if chat_session_id not in ids:
-        ids.append(chat_session_id)
+    if thread_id not in ids:
+        ids.append(thread_id)
         _save_metadata_index(store, ids)
 
 
-def _delete_metadata(store: BackendDocumentStore, chat_session_id: str) -> None:
-    metadata = _get_metadata(store, chat_session_id) or {}
+def _remove_metadata_index(store: BackendDocumentStore, key: str) -> None:
+    ids = [item for item in _metadata_index(store) if item != key]
+    _save_metadata_index(store, ids)
+
+
+def _delete_metadata(store: BackendDocumentStore, thread_id: str) -> None:
+    metadata = _get_metadata(store, thread_id) or {}
     metadata["deleted"] = True
     metadata["updated_at"] = _now_iso()
-    _save_metadata(store, chat_session_id, metadata)
+    _save_metadata(store, thread_id, metadata)
+
+
+def _resolve_thread_id(
+    *,
+    thread_id: str | None = None,
+    fallback: str | None = None,
+) -> str | None:
+    if isinstance(thread_id, str) and thread_id:
+        return thread_id
+    if isinstance(fallback, str) and fallback:
+        return fallback
+    return None
+
+
+def _resolve_metadata_key(store: BackendDocumentStore, chat_id: str) -> str | None:
+    if _get_metadata(store, chat_id) is not None:
+        return chat_id
+    query_thread_id = _thread_id_from_session_id(chat_id)
+    for key in _metadata_index(store):
+        metadata = _get_metadata(store, key)
+        if metadata is None:
+            continue
+        thread_id = _thread_id_for_metadata(metadata)
+        if thread_id == chat_id or (query_thread_id and thread_id == query_thread_id):
+            return key
+    return None
 
 
 def create_chat_metadata(
     store: BackendDocumentStore,
     request: ChatCreateRequest,
 ) -> dict[str, Any]:
+    thread_id = _resolve_thread_id(
+        thread_id=request.thread_id,
+    )
+    if not thread_id:
+        raise ValueError("thread_id is required to create chat metadata")
     now = _now_iso()
-    chat_session_id = f"{CONVERSATION_ID_PREFIX}{uuid.uuid4().hex[:12]}"
-    thread_id = request.thread_id or _thread_id_from_session_id(request.progenitor_session_id)
+    existing_key = _resolve_metadata_key(store, thread_id)
+    if existing_key is not None:
+        existing = _get_metadata(store, existing_key)
+        if existing is not None:
+            existing["thread_id"] = thread_id
+            existing["checkpoint_id"] = request.checkpoint_id
+            existing["title"] = (
+                request.title or existing.get("title") or DEFAULT_CHAT_TITLE
+            ).strip() or DEFAULT_CHAT_TITLE
+            existing["updated_at"] = now
+            existing["last_activity"] = now
+            existing["ui_owned"] = True
+            if existing_key != thread_id:
+                _remove_metadata_index(store, existing_key)
+            _save_metadata(store, thread_id, existing)
+            return existing
     metadata = {
-        "chat_session_id": chat_session_id,
         "title": (request.title or DEFAULT_CHAT_TITLE).strip() or DEFAULT_CHAT_TITLE,
         "thread_id": thread_id,
-        "progenitor_session_id": request.progenitor_session_id,
         "checkpoint_id": request.checkpoint_id,
         "pinned": False,
         "shared": False,
         "archived": False,
+        "ui_owned": True,
         "created_at": now,
         "updated_at": now,
         "last_activity": now,
     }
-    _save_metadata(store, chat_session_id, metadata)
+    _save_metadata(store, thread_id, metadata)
     return metadata
 
 
@@ -170,23 +213,25 @@ def acquire_reusable_draft(
     store: BackendDocumentStore,
     request: ChatDraftRequest,
 ) -> tuple[ChatSessionDetail, bool]:
+    thread_id = _resolve_thread_id(
+        thread_id=request.thread_id,
+    )
     for session in list_chat_sessions(store, include_archived=False):
         if not _is_reusable_draft(session):
             continue
-        metadata = _get_metadata(store, session.chat_session_id)
+        metadata_key = _resolve_metadata_key(store, session.thread_id)
+        if metadata_key is None:
+            continue
+        metadata = _get_metadata(store, metadata_key)
         if metadata is None:
             continue
         metadata["title"] = DEFAULT_CHAT_TITLE
-        metadata["progenitor_session_id"] = request.progenitor_session_id
-        metadata["thread_id"] = request.thread_id or _thread_id_from_session_id(
-            request.progenitor_session_id
-        )
-        metadata["checkpoint_id"] = request.checkpoint_id
         now = _now_iso()
         metadata["updated_at"] = now
         metadata["last_activity"] = now
-        _save_metadata(store, session.chat_session_id, metadata)
-        detail = get_chat_detail(store, session.chat_session_id)
+        metadata["ui_owned"] = True
+        _save_metadata(store, metadata_key, metadata)
+        detail = get_chat_detail(store, session.thread_id)
         if detail is not None:
             return detail, False
 
@@ -194,12 +239,11 @@ def acquire_reusable_draft(
         store,
         ChatCreateRequest(
             title=DEFAULT_CHAT_TITLE,
-            progenitor_session_id=request.progenitor_session_id,
-            thread_id=request.thread_id,
+            thread_id=thread_id,
             checkpoint_id=request.checkpoint_id,
         ),
     )
-    detail = get_chat_detail(store, metadata["chat_session_id"])
+    detail = get_chat_detail(store, thread_id or metadata["thread_id"])
     if detail is None:
         raise RuntimeError("Created draft chat metadata could not be loaded")
     return detail, True
@@ -210,29 +254,40 @@ def materialize_chat_metadata(
     session: ChatSessionSummary | ChatSessionDetail,
 ) -> dict[str, Any]:
     """Persist backend UI metadata for a checkpoint-derived chat summary."""
+    thread_id = _resolve_thread_id(
+        thread_id=session.thread_id,
+        fallback=session.thread_id,
+    )
+    if not thread_id:
+        raise ValueError("thread_id is required to materialize chat metadata")
     metadata = {
-        "chat_session_id": session.chat_session_id,
         "title": session.title,
-        "thread_id": session.thread_id,
-        "progenitor_session_id": session.progenitor_session_id,
+        "thread_id": thread_id,
         "checkpoint_id": session.checkpoint_id,
         "pinned": session.pinned,
         "shared": session.shared,
         "archived": session.archived,
+        "ui_owned": True,
         "created_at": session.created_at or _now_iso(),
         "updated_at": session.updated_at or _now_iso(),
         "last_activity": session.last_activity or session.updated_at or _now_iso(),
     }
-    _save_metadata(store, session.chat_session_id, metadata)
+    existing_key = _resolve_metadata_key(store, thread_id)
+    if existing_key is not None and existing_key != thread_id:
+        _remove_metadata_index(store, existing_key)
+    _save_metadata(store, thread_id, metadata)
     return metadata
 
 
 def patch_chat_metadata(
     store: BackendDocumentStore,
-    chat_session_id: str,
+    thread_id: str,
     request: ChatPatchRequest,
 ) -> dict[str, Any] | None:
-    metadata = _get_metadata(store, chat_session_id)
+    metadata_key = _resolve_metadata_key(store, thread_id)
+    if metadata_key is None:
+        return None
+    metadata = _get_metadata(store, metadata_key)
     if metadata is None or metadata.get("deleted") is True:
         return None
     if request.title is not None:
@@ -249,14 +304,19 @@ def patch_chat_metadata(
     metadata["updated_at"] = now
     if request.touch:
         metadata["last_activity"] = now
-    _save_metadata(store, chat_session_id, metadata)
+    canonical_thread_id = _thread_id_for_metadata(metadata) or thread_id
+    metadata["thread_id"] = canonical_thread_id
+    if metadata_key != canonical_thread_id:
+        _remove_metadata_index(store, metadata_key)
+    _save_metadata(store, canonical_thread_id, metadata)
     return metadata
 
 
-def delete_chat_metadata(store: BackendDocumentStore, chat_session_id: str) -> bool:
-    if _get_metadata(store, chat_session_id) is None:
+def delete_chat_metadata(store: BackendDocumentStore, thread_id: str) -> bool:
+    metadata_key = _resolve_metadata_key(store, thread_id)
+    if metadata_key is None:
         return False
-    _delete_metadata(store, chat_session_id)
+    _delete_metadata(store, metadata_key)
     return True
 
 
@@ -290,14 +350,9 @@ def _session_id_from_thread_id(thread_id: str | None) -> str | None:
     return thread_id.removeprefix("thread_")
 
 
-def _thread_id_candidates_for_chat_id(chat_session_id: str) -> list[str]:
-    candidates = [chat_session_id]
-    if chat_session_id.startswith(CONVERSATION_ID_PREFIX):
-        derived_session_id = chat_session_id.removeprefix(CONVERSATION_ID_PREFIX)
-        normalized = _thread_id_from_session_id(derived_session_id)
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    normalized_thread_id = _thread_id_from_session_id(chat_session_id)
+def _thread_id_candidates_for_thread_id(thread_id: str) -> list[str]:
+    candidates = [thread_id]
+    normalized_thread_id = _thread_id_from_session_id(thread_id)
     if normalized_thread_id and normalized_thread_id not in candidates:
         candidates.append(normalized_thread_id)
     return candidates
@@ -307,14 +362,6 @@ def _thread_id_for_metadata(metadata: dict[str, Any]) -> str | None:
     thread_id = metadata.get("thread_id")
     if isinstance(thread_id, str) and thread_id:
         return thread_id
-    progenitor_session_id = metadata.get("progenitor_session_id")
-    if isinstance(progenitor_session_id, str) and progenitor_session_id:
-        return _thread_id_from_session_id(progenitor_session_id)
-    chat_session_id = metadata.get("chat_session_id")
-    if isinstance(chat_session_id, str) and chat_session_id.startswith(
-        ("sess_", "thread_", CONVERSATION_ID_PREFIX)
-    ):
-        return _thread_id_from_session_id(chat_session_id)
     return None
 
 
@@ -338,8 +385,9 @@ def _is_activity_only_session(
         return False
     # Explicit UI chat cards should stay visible even if the first message looks
     # system-generated; this keeps user-created cards in the main chat surface.
-    chat_session_id = str(metadata.get("chat_session_id") or "")
-    return not chat_session_id.startswith(CONVERSATION_ID_PREFIX)
+    if "ui_owned" in metadata:
+        return not bool(metadata.get("ui_owned"))
+    return not bool(metadata.get("ui_owned"))
 
 
 def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
@@ -565,10 +613,8 @@ def _summary_from_metadata(
     raw_title = str(metadata.get("title") or "Untitled chat")
     title = _display_title(raw_title, messages)
     return ChatSessionSummary(
-        chat_session_id=str(metadata["chat_session_id"]),
+        thread_id=str(metadata["thread_id"]),
         title=title,
-        thread_id=metadata.get("thread_id"),
-        progenitor_session_id=metadata.get("progenitor_session_id"),
         checkpoint_id=metadata.get("checkpoint_id"),
         pinned=bool(metadata.get("pinned", False)),
         shared=bool(metadata.get("shared", False)),
@@ -583,6 +629,15 @@ def _summary_from_metadata(
 
 def _metadata_without_messages(metadata: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in metadata.items() if key != "messages"}
+
+
+def _metadata_sort_key(metadata: dict[str, Any]) -> str:
+    return str(
+        metadata.get("last_activity")
+        or metadata.get("updated_at")
+        or metadata.get("created_at")
+        or ""
+    )
 
 
 def _display_title(raw_title: str, messages: list[ChatMessage]) -> str:
@@ -618,13 +673,9 @@ def _metadata_with_checkpoint(
 ) -> dict[str, Any]:
     if snapshot is None:
         return metadata
-    progenitor_session_id = metadata.get("progenitor_session_id") or _session_id_from_thread_id(
-        snapshot.thread_id
-    )
     return {
         **metadata,
-        "thread_id": metadata.get("thread_id") or snapshot.thread_id,
-        "progenitor_session_id": progenitor_session_id,
+        "thread_id": snapshot.thread_id,
         "checkpoint_id": snapshot.checkpoint_id or metadata.get("checkpoint_id"),
         "updated_at": snapshot.checkpoint_ts or metadata.get("updated_at"),
         "last_activity": snapshot.checkpoint_ts
@@ -634,16 +685,9 @@ def _metadata_with_checkpoint(
 
 
 def _checkpoint_metadata(snapshot: CheckpointThreadSnapshot) -> dict[str, Any]:
-    session_id = _session_id_from_thread_id(snapshot.thread_id)
     return {
-        "chat_session_id": (
-            f"{CONVERSATION_ID_PREFIX}{session_id}"
-            if isinstance(session_id, str) and session_id.startswith("sess_")
-            else session_id or snapshot.thread_id
-        ),
         "title": DEFAULT_CHAT_TITLE,
         "thread_id": snapshot.thread_id,
-        "progenitor_session_id": session_id,
         "checkpoint_id": snapshot.checkpoint_id,
         "created_at": snapshot.checkpoint_ts,
         "updated_at": snapshot.checkpoint_ts,
@@ -651,6 +695,7 @@ def _checkpoint_metadata(snapshot: CheckpointThreadSnapshot) -> dict[str, Any]:
         "pinned": False,
         "shared": False,
         "archived": False,
+        "ui_owned": False,
     }
 
 
@@ -663,11 +708,19 @@ def list_chat_sessions(
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     covered_threads: set[str] = set()
     hidden_threads: set[str] = set()
-    for chat_session_id in _metadata_index(store):
-        metadata = _get_metadata(store, chat_session_id)
+    metadata_records: list[dict[str, Any]] = []
+    for thread_id in _metadata_index(store):
+        metadata_key = _resolve_metadata_key(store, thread_id)
+        metadata = _get_metadata(store, metadata_key) if metadata_key is not None else None
         if metadata is None:
             continue
+        metadata_records.append(metadata)
+
+    metadata_records.sort(key=_metadata_sort_key, reverse=True)
+    for metadata in metadata_records:
         metadata_thread_id = _thread_id_for_metadata(metadata)
+        if metadata_thread_id and metadata_thread_id in covered_threads:
+            continue
         if metadata.get("deleted") is True:
             if metadata_thread_id:
                 hidden_threads.add(metadata_thread_id)
@@ -679,6 +732,8 @@ def list_chat_sessions(
         if snapshot is not None:
             covered_threads.add(snapshot.thread_id)
             metadata = _metadata_with_checkpoint(metadata, snapshot)
+        elif metadata_thread_id:
+            covered_threads.add(metadata_thread_id)
         if _is_activity_only_session(metadata, fallback_messages):
             if metadata_thread_id:
                 hidden_threads.add(metadata_thread_id)
@@ -706,9 +761,9 @@ def list_chat_sessions(
 
 def get_chat_detail(
     store: BackendDocumentStore,
-    chat_session_id: str,
+    thread_id: str,
 ) -> ChatSessionDetail | None:
-    metadata = _get_metadata(store, chat_session_id)
+    metadata = _get_metadata(store, thread_id)
     messages: list[ChatMessage] = []
     snapshot: CheckpointThreadSnapshot | None = None
     if metadata is not None:
@@ -716,11 +771,12 @@ def get_chat_detail(
         messages = _messages_from_checkpoint(snapshot)
         metadata = _metadata_with_checkpoint(metadata, snapshot)
     else:
-        # Checkpoint-derived sidebar cards can use the raw thread id as their
-        # chat_session_id (for example legacy timestamp-like thread ids). Try an
-        # exact lookup first, then the normalized ``thread_<session>`` form.
-        for thread_id in _thread_id_candidates_for_chat_id(chat_session_id):
-            snapshot = store.get_checkpoint_thread_snapshot(thread_id) if thread_id else None
+        for candidate_thread_id in _thread_id_candidates_for_thread_id(thread_id):
+            snapshot = (
+                store.get_checkpoint_thread_snapshot(candidate_thread_id)
+                if candidate_thread_id
+                else None
+            )
             if snapshot is not None:
                 break
         if snapshot is not None:
@@ -740,20 +796,23 @@ def current_state_chat_detail(state: dict[str, Any]) -> ChatSessionDetail | None
     """
     if not isinstance(state, dict):
         return None
-    session_id = state.get("session_id")
-    if not isinstance(session_id, str) or not session_id:
+    thread_id = state.get("thread_id")
+    if not isinstance(thread_id, str) or not thread_id:
         return None
+    attach_reasoning_trace(
+        get_last_ai_message(state.get("messages")),
+        state.get("last_reasoning_trace"),
+    )
     messages = _messages_from_state(state)
     now = _now_iso()
     metadata = {
-        "chat_session_id": session_id,
         "title": str(state.get("title") or "Current chat"),
-        "thread_id": _thread_id_from_session_id(session_id),
-        "progenitor_session_id": session_id,
+        "thread_id": thread_id,
         "checkpoint_id": None,
         "pinned": False,
         "shared": False,
         "archived": False,
+        "ui_owned": True,
         "created_at": now,
         "updated_at": now,
         "last_activity": now,
