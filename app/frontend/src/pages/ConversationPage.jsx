@@ -795,7 +795,7 @@ function ConversationPage() {
         }
       }
       await openDraftChat({
-        forceFreshSession: Boolean(selectedBackendChatId || archivedMessages.length > 0 || !previousSessionId),
+        forceFreshSession: Boolean(selectedBackendChatId || archivedMessages.length > 0 || !previousThreadId),
       });
       focusComposer();
       if (archiveError) {
