@@ -181,7 +181,7 @@ export function getTimeBucket(timestamp, now = Date.now()) {
 function buildArchivedSessionItem(entry, pinnedKeys) {
   const messages = Array.isArray(entry?.messages) ? entry.messages : [];
   const id = typeof entry?.id === 'string' ? entry.id : `archived_${Date.now()}`;
-  const pinKey = typeof entry?.sessionId === 'string' && entry.sessionId ? entry.sessionId : id;
+  const pinKey = typeof entry?.threadId === 'string' && entry.threadId ? entry.threadId : id;
   const startedAt = toValidTimestamp(entry?.startedAt) ?? getFirstMessageTimestamp(messages);
   const archivedAt = toValidTimestamp(entry?.archivedAt);
   const activityAt =
@@ -213,7 +213,7 @@ function buildArchivedSessionItem(entry, pinnedKeys) {
 
 export function buildSessionItems({
   messages,
-  sessionId,
+  threadId,
   chatTitle,
   totalTokenCount,
   totalToolCount,
@@ -225,8 +225,8 @@ export function buildSessionItems({
   const pinnedKeys = new Set(Array.isArray(pinnedSessionIds) ? pinnedSessionIds : []);
   const sharedKeys = new Set(Array.isArray(sharedSessionIds) ? sharedSessionIds : []);
   const currentSession = {
-    id: sessionId || 'current-session',
-    pinKey: sessionId || 'current-session',
+    id: threadId || 'current-session',
+    pinKey: threadId || 'current-session',
     title: chatTitle,
     meta: buildSessionMeta({ activityAt: getLastMessageTimestamp(messages) ?? firstMessageTime, archivedAt: null }),
     detail: '',
@@ -239,8 +239,8 @@ export function buildSessionItems({
     bucket: getTimeBucket(getLastMessageTimestamp(messages) ?? firstMessageTime ?? Date.now()),
     preview: formatPreview(lastMessageContent(messages)),
     selected: true,
-    pinned: pinnedKeys.has(sessionId || 'current-session'),
-    shared: sharedKeys.has(sessionId || 'current-session'),
+    pinned: pinnedKeys.has(threadId || 'current-session'),
+    shared: sharedKeys.has(threadId || 'current-session'),
     messageCount: messages.length,
     toolCount: totalToolCount,
     errorCount: 0,
@@ -250,8 +250,8 @@ export function buildSessionItems({
     ? archivedSessions.map((entry) => ({
       ...buildArchivedSessionItem(entry, pinnedKeys),
       shared: sharedKeys.has(
-        (typeof entry?.sessionId === 'string' && entry.sessionId)
-          ? entry.sessionId
+        (typeof entry?.threadId === 'string' && entry.threadId)
+          ? entry.threadId
           : (typeof entry?.id === 'string' ? entry.id : ''),
       ),
     }))

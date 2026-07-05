@@ -38,7 +38,7 @@ export function useChatStream({
   setMessages,
   activeBackendChat,
   selectedBackendChatId,
-  sessionId,
+  threadId,
   sendMessageStream,
   cancelStream,
   dispatch,
@@ -122,7 +122,7 @@ export function useChatStream({
 
     // Identifies this stream's chat so a later send only aborts it when it
     // targets the same chat; sending in a different chat leaves this running.
-    const streamKey = originChatId ?? sessionId ?? null;
+    const streamKey = originChatId ?? threadId ?? null;
 
     try {
       const isStale = () => activeAssistantIdRef.current !== assistantId;
@@ -248,7 +248,7 @@ export function useChatStream({
     selectedBackendChatId,
     selectedBackendChatIdRef,
     sendMessageStream,
-    sessionId,
+    threadId,
     setMessages,
     show,
   ]);

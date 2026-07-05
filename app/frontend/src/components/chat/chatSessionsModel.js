@@ -145,7 +145,7 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
 
 export function buildChatSessionItems({
   messages,
-  sessionId,
+  threadId,
   chatTitle,
   totalTokenCount,
   totalToolCount,
@@ -166,7 +166,7 @@ export function buildChatSessionItems({
   const localItems = shouldShowLocalCurrentSession
     ? buildSessionItems({
       messages,
-      sessionId,
+      threadId,
       chatTitle,
       totalTokenCount,
       totalToolCount,

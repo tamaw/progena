@@ -59,7 +59,7 @@ describe('normalizeBackendChatMessage', () => {
 describe('buildChatSessionItems', () => {
   const base = {
     messages: [],
-    sessionId: null,
+    threadId: null,
     chatTitle: 'x',
     totalTokenCount: 0,
     totalToolCount: 0,
@@ -114,7 +114,7 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
-      sessionId: 'sess1',
+      threadId: 'sess1',
       firstMessageTime: 1,
       selectedBackendChatId: null,
       backendChatSessions: [
@@ -129,7 +129,7 @@ describe('buildChatSessionItems', () => {
   it('does not synthesize an empty local draft card anymore', () => {
     const items = buildChatSessionItems({
       ...base,
-      sessionId: 'draft-1',
+      threadId: 'draft-1',
       chatTitle: 'New chat',
       selectedBackendChatId: null,
       backendChatSessions: [
