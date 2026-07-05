@@ -85,6 +85,7 @@ export {
   fetchChatSessions,
   requestChatSessionDetail,
   createChatSession,
+  ensureDraftChatSession,
   updateChatSessionMetadata,
   deleteChatSession,
   selectChatSessions,

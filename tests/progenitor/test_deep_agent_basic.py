@@ -89,7 +89,7 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "low"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
     def test_reasoning_effort_respects_config_for_gpt_5_3_chat(self):
         """gpt-5.3-chat uses the configured reasoning effort."""
@@ -106,10 +106,10 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
-    def test_reasoning_summary_defaults_to_auto(self):
-        """Reasoning summary defaults to auto when not overridden."""
+    def test_reasoning_summary_defaults_to_detailed(self):
+        """Reasoning summary defaults to detailed when not overridden."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
@@ -121,7 +121,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "auto"}}
+        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
 
 
 class TestDeepAgentFactory:

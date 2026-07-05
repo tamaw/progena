@@ -6,10 +6,13 @@ import inspect
 import logging
 from collections.abc import AsyncIterator
 from typing import Any, cast
+from urllib.parse import urlsplit, urlunsplit
 
+import httpx
 from langchain_core.messages import AIMessageChunk, HumanMessage
 
 from ..runtime.messages import (
+    attach_reasoning_trace,
     coerce_messages_list,
     extract_message_text,
     extract_reasoning_token_count,
@@ -47,6 +50,7 @@ class DeepAgentIPCStream:
         self.last_response: str | None = None
         self.last_reasoning_trace: str | None = None
         self._streamed_response_content = ""
+        self._streamed_reasoning_content = ""
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
@@ -118,6 +122,7 @@ class DeepAgentIPCStream:
         stream_metadata = make_json_safe(metadata)
         for reasoning_delta in extract_stream_reasoning_deltas(message_chunk):
             self._reasoning_was_streamed = True
+            self._streamed_reasoning_content += reasoning_delta
             reasoning_event = build_reasoning_delta_event(
                 reasoning_delta,
                 metadata={
@@ -227,12 +232,27 @@ class DeepAgentIPCStream:
                 self.last_response = response_text
                 self.state["last_cycle_response"] = response_text
 
-        reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
-        self.last_reasoning_trace = reasoning_trace
-        self.state["last_reasoning_trace"] = reasoning_trace
         reasoning_tokens = (
             extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
+        reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
+        if not reasoning_trace and self._streamed_reasoning_content:
+            reasoning_trace = self._streamed_reasoning_content
+        if (
+            last_ai_msg is not None
+            and not reasoning_trace
+            and not self._reasoning_was_streamed
+            and reasoning_tokens
+        ):
+            reasoning_trace = await self._retrieve_reasoning_summary(last_ai_msg)
+        if last_ai_msg is not None and reasoning_trace:
+            attach_reasoning_trace(
+                last_ai_msg,
+                reasoning_trace,
+                reasoning_tokens=reasoning_tokens,
+            )
+        self.last_reasoning_trace = reasoning_trace
+        self.state["last_reasoning_trace"] = reasoning_trace
         if last_ai_msg is not None and bool(reasoning_trace) and not self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or "",
@@ -246,13 +266,13 @@ class DeepAgentIPCStream:
             }
         elif last_ai_msg is not None and self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
-                "",
+                reasoning_trace or self._streamed_reasoning_content,
                 metadata={"reasoning_tokens": reasoning_tokens},
             )
             yield {
                 "type": "stream_event",
                 "event_type": summary_event["event_type"],
-                "content": "",
+                "content": summary_event["content"],
                 "metadata": cast(dict[str, Any], summary_event["metadata"]),
             }
         elif last_ai_msg is not None and getattr(
@@ -264,6 +284,64 @@ class DeepAgentIPCStream:
             )
 
         yield {"type": "stream_chunk", "content": "", "is_final": True}
+
+    async def _retrieve_reasoning_summary(self, msg: Any) -> str | None:
+        response_metadata = getattr(msg, "response_metadata", None)
+        response_id = response_metadata.get("id") if isinstance(response_metadata, dict) else None
+        llm_config = getattr(self.config, "llm", None)
+        base_url = getattr(llm_config, "base_url", "") if llm_config is not None else ""
+        api_key = getattr(llm_config, "api_key", "") if llm_config is not None else ""
+        if (
+            not isinstance(response_id, str)
+            or not response_id
+            or not isinstance(base_url, str)
+            or not base_url
+        ):
+            return None
+        if not isinstance(api_key, str) or not api_key:
+            return None
+
+        parsed = urlsplit(base_url.strip())
+        path = (parsed.path or "").rstrip("/")
+        base_path = path[: -len("/responses")] if path.endswith("/responses") else path
+        endpoint = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                f"{base_path}/responses/{response_id}",
+                parsed.query,
+                parsed.fragment,
+            )
+        )
+
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(30.0),
+                headers={"api-key": api_key},
+            ) as client:
+                response = await client.get(endpoint)
+                response.raise_for_status()
+                data = response.json()
+        except Exception:
+            logger.debug(
+                "Failed to retrieve reasoning summary for response %s", response_id, exc_info=True
+            )
+            return None
+
+        summaries: list[str] = []
+        for item in data.get("output", []):
+            if not isinstance(item, dict) or item.get("type") != "reasoning":
+                continue
+            summary_items = item.get("summary")
+            if not isinstance(summary_items, list):
+                continue
+            for part in summary_items:
+                if not isinstance(part, dict):
+                    continue
+                text = part.get("text") or part.get("content")
+                if isinstance(text, str) and text.strip():
+                    summaries.append(text.strip())
+        return "\n\n".join(summaries) if summaries else None
 
     def _expand_task_subagent_events(self, envelope: dict[str, Any]) -> list[dict[str, Any]]:
         metadata = envelope.get("metadata")

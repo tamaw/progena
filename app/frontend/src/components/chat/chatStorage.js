@@ -68,19 +68,19 @@ export function persistSharedSessionIds(sharedSessionIds) {
 export function loadStoredCustomChatTitle() {
   const parsed = readJson(CUSTOM_CHAT_TITLE_KEY, null, 'Failed to load custom chat title:');
   if (!parsed || typeof parsed !== 'object') {
-    return { sessionId: null, title: '' };
+    return { threadId: null, title: '' };
   }
   return {
-    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+    threadId: typeof parsed.threadId === 'string' ? parsed.threadId : null,
     title: typeof parsed.title === 'string' ? parsed.title : '',
   };
 }
 
-export function persistCustomChatTitle(sessionId, title) {
+export function persistCustomChatTitle(threadId, title) {
   const normalizedTitle = typeof title === 'string' ? title.trim() : '';
   writeJsonOrRemove(
     CUSTOM_CHAT_TITLE_KEY,
-    { sessionId: typeof sessionId === 'string' ? sessionId : null, title: normalizedTitle },
+    { threadId: typeof threadId === 'string' ? threadId : null, title: normalizedTitle },
     !normalizedTitle,
   );
 }
@@ -92,6 +92,6 @@ export function loadQuickChatHandoff(storageKey) {
   }
   return {
     messages: Array.isArray(parsed.messages) ? parsed.messages : [],
-    sessionId: typeof parsed.sessionId === 'string' ? parsed.sessionId : null,
+    threadId: typeof parsed.threadId === 'string' ? parsed.threadId : null,
   };
 }
