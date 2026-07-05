@@ -102,7 +102,6 @@ class TestLLMConfig:
             # "medium" but CI leaves it unset (code default "low"). Pinning the
             # env value keeps the assertion stable in both.
             "PROGENITOR_REASONING_EFFORT": "medium",
-            "PROGENITOR_REASONING_SUMMARY": "auto",
         }
         with patch.dict(os.environ, env, clear=False):
             config = LLMConfig.from_env()
@@ -111,7 +110,7 @@ class TestLLMConfig:
             assert config.model_default == "gpt-4o"
             assert config.reasoning_enabled is True
             assert config.reasoning_effort == "medium"
-            assert config.reasoning_summary == "auto"
+            assert config.reasoning_summary == "detailed"
 
     def test_defaults(self):
         """Test default values."""
@@ -120,7 +119,7 @@ class TestLLMConfig:
         assert config.model_default == "gpt-5.1-codex-max"
         assert config.reasoning_enabled is True
         assert config.reasoning_effort == "low"
-        assert config.reasoning_summary == "auto"
+        assert config.reasoning_summary == "detailed"
 
     def test_reasoning_effort_from_env(self):
         """Test loading reasoning effort from environment."""

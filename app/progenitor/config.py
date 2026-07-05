@@ -112,7 +112,7 @@ class LLMConfig:
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
     reasoning_effort: str = "low"
-    reasoning_summary: str = "auto"
+    reasoning_summary: str = "detailed"
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
