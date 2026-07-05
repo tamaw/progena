@@ -67,6 +67,13 @@ function upsertChat(chats, session) {
   };
 }
 
+function moveChatToFront(chats, chatSessionId) {
+  if (!chatSessionId || !Array.isArray(chats.order) || !chats.order.includes(chatSessionId)) {
+    return;
+  }
+  chats.order = [chatSessionId, ...chats.order.filter((item) => item !== chatSessionId)];
+}
+
 function addChatIfMissing(chats, session) {
   const chatSessionId = sessionIdFor(session);
   if (!chatSessionId || chats.byId[chatSessionId]) {
@@ -127,6 +134,13 @@ export const fetchChatSessions = createAsyncThunk(
   ),
 );
 
+function unwrapChatMutationSession(response) {
+  if (response?.session && typeof response.session === 'object') {
+    return response.session;
+  }
+  return response;
+}
+
 export const requestChatSessionDetail = createAsyncThunk(
   'uiData/requestChatSessionDetail',
   async ({ chatsUrl, chatSessionId, requestId }) => {
@@ -140,19 +154,31 @@ export const requestChatSessionDetail = createAsyncThunk(
 
 export const createChatSession = createAsyncThunk(
   'uiData/createChatSession',
-  ({ chatsUrl, title, progenitorSessionId }) => requestJson(chatsUrl, {
+  async ({ chatsUrl, title, progenitorSessionId }) => unwrapChatMutationSession(await requestJson(chatsUrl, {
     method: 'POST',
     body: { title, progenitor_session_id: progenitorSessionId },
     errorLabel: 'Failed to create chat card',
-  }),
+  })),
+);
+
+export const ensureDraftChatSession = createAsyncThunk(
+  'uiData/ensureDraftChatSession',
+  async ({ chatsUrl, progenitorSessionId }) => unwrapChatMutationSession(await requestJson(
+    `${chatsUrl.replace(/\/$/, '')}/draft`,
+    {
+      method: 'POST',
+      body: { progenitor_session_id: progenitorSessionId },
+      errorLabel: 'Failed to open draft chat',
+    },
+  )),
 );
 
 export const updateChatSessionMetadata = createAsyncThunk(
   'uiData/updateChatSessionMetadata',
-  ({ chatsUrl, chatSessionId, patch }) => requestJson(
+  async ({ chatsUrl, chatSessionId, patch }) => unwrapChatMutationSession(await requestJson(
     `${chatsUrl}/${encodeURIComponent(chatSessionId)}`,
     { method: 'PATCH', body: patch, errorLabel: 'Failed to update chat' },
-  ),
+  )),
 );
 
 export const deleteChatSession = createAsyncThunk(
@@ -273,6 +299,33 @@ export function buildExtraReducers(builder) {
       if (state.chats.active.requestId === action.meta.arg.requestId) {
         state.chats.active.loading = false;
         state.chats.active.error = action.error?.message || 'Failed to load chat';
+      }
+    })
+    .addCase(ensureDraftChatSession.fulfilled, (state, action) => {
+      const chatSessionId = action.payload?.chat_session_id;
+      if (!chatSessionId) {
+        return;
+      }
+      upsertChat(state.chats, action.payload);
+      moveChatToFront(state.chats, chatSessionId);
+      mergeActiveDetail(state.chats.active, action.payload);
+    })
+    .addCase(updateChatSessionMetadata.fulfilled, (state, action) => {
+      const chatSessionId = action.payload?.chat_session_id;
+      if (!chatSessionId) {
+        return;
+      }
+      upsertChat(state.chats, action.payload);
+      if (action.meta.arg?.patch?.touch === true) {
+        moveChatToFront(state.chats, chatSessionId);
+      }
+      mergeActiveDetail(state.chats.active, action.payload);
+    })
+    .addCase(deleteChatSession.fulfilled, (state, action) => {
+      const chatSessionId = action.payload?.chatSessionId;
+      deleteChatFromList(state.chats, chatSessionId);
+      if (state.chats.active.chatSessionId === chatSessionId) {
+        state.chats.active = emptyActive();
       }
     });
 }

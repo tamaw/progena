@@ -154,7 +154,6 @@ export function buildChatSessionItems({
   pinnedSessionIds,
   sharedSessionIds,
   backendChatSessions,
-  backendChatsLoaded,
   selectedBackendChatId,
   unreadChatIds,
   backgroundGeneratingChatIds,
@@ -163,10 +162,7 @@ export function buildChatSessionItems({
 }) {
   const shouldShowLocalCurrentSession =
     !selectedBackendChatId
-    && (
-      messages.length > 0
-      || (backendChatsLoaded && backendChatSessions.length === 0)
-    );
+    && messages.length > 0;
   const localItems = shouldShowLocalCurrentSession
     ? buildSessionItems({
       messages,
@@ -232,5 +228,5 @@ export function sidebarEmptyMessage({ sidebarFilter, backendChatsLoaded, backend
   if (sidebarFilter === 'archived') {
     return 'No archived chats yet.';
   }
-  return 'No chats yet.';
+  return 'No conversations.';
 }

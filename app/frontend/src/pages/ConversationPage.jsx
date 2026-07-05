@@ -13,9 +13,11 @@ import {
   clearActiveChatSession,
   createChatSession,
   deleteChatSession,
+  ensureDraftChatSession,
   markChatGenerating,
   requestChatSessionDetail,
   selectActiveChatSession,
+  selectActiveChatSessionState,
   selectChatSessions,
   selectChatSessionsState,
   updateChatSessionMetadata,
@@ -41,6 +43,7 @@ import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
   CHAT_AGENT_NAME,
+  DEFAULT_CHAT_TITLE,
   countToolInvocations,
   deriveChatTitle,
   formatStartedTime,
@@ -219,6 +222,7 @@ function ConversationPage() {
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
+  const activeBackendChatState = useSelector(selectActiveChatSessionState);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
@@ -271,6 +275,7 @@ function ConversationPage() {
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [composerFocusTick, setComposerFocusTick] = useState(0);
   const messagesEndRef = useRef(null);
   const titleInputRef = useRef(null);
   const lastProcessedUiEventIdRef = useRef(null);
@@ -334,6 +339,45 @@ function ConversationPage() {
     selectedBackendChatIdRef,
     reloadOpenChat,
   });
+
+  const openBackendChat = useCallback(async (chatSessionId) => {
+    if (!chatSessionId) {
+      return;
+    }
+    activeAssistantIdRef.current = null;
+    setIsGenerating(false);
+    setIsEditingTitle(false);
+    setSelectedBackendChatId(chatSessionId);
+    dispatch(clearChatGenerating(chatSessionId));
+    dispatch(clearChatUnread(chatSessionId));
+    dispatch(clearChatErrored(chatSessionId));
+    lastAppliedBackendChatIdRef.current = null;
+    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await dispatch(requestChatSessionDetail({
+      chatsUrl: getApiUrl('chats'),
+      chatSessionId,
+      requestId,
+    })).unwrap();
+  }, [activeAssistantIdRef, dispatch, getApiUrl, setIsGenerating]);
+
+  const materializeCurrentChatCard = useCallback(async (title) => {
+    if (!sessionId) {
+      return null;
+    }
+    const existingBackendCard = backendChatSessions.find((chat) => (
+      chat.progenitor_session_id === sessionId
+      || chat.thread_id === sessionId
+      || chat.chat_session_id === sessionId
+    ));
+    if (existingBackendCard) {
+      return existingBackendCard;
+    }
+    return dispatch(createChatSession({
+      chatsUrl: getApiUrl('chats'),
+      title,
+      progenitorSessionId: sessionId,
+    })).unwrap();
+  }, [backendChatSessions, dispatch, getApiUrl, sessionId]);
 
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   const chatTitle = customChatTitle || derivedChatTitle;
@@ -538,6 +582,13 @@ function ConversationPage() {
     }
   }, [activeAssistantIdRef, activeBackendChat, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
 
+  useEffect(() => {
+    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
+      return;
+    }
+    dismissCurrentSession();
+  }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
@@ -640,7 +691,61 @@ function ConversationPage() {
     lastAppliedBackendChatIdRef.current = null;
   }, [dispatch]);
 
+  const focusComposer = useCallback(() => {
+    setComposerFocusTick((current) => current + 1);
+  }, []);
+
+  const dismissCurrentSession = useCallback(() => {
+    activeAssistantIdRef.current = null;
+    recentScheduledContent.current.clear();
+    setMessages([]);
+    setIsGenerating(false);
+    setIsClearingSession(false);
+    clearBackendSelection();
+    setCustomChatTitle('');
+    setCustomChatTitleSessionId(null);
+    setTitleDraft('');
+    setIsEditingTitle(false);
+    setSessionId(null);
+    setActiveDetailTab('Chat');
+    localStorage.removeItem(config.storage.chatHistory);
+    localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+  }, [activeAssistantIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
+
+  const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
+    let draftSessionId = sessionId;
+    if (forceFreshSession || !draftSessionId) {
+      const session = await createSession();
+      draftSessionId = session.session_id;
+    }
+
+    setActiveDetailTab('Chat');
+    setIsEditingTitle(false);
+    const draftChat = await dispatch(ensureDraftChatSession({
+      chatsUrl: getApiUrl('chats'),
+      progenitorSessionId: draftSessionId,
+    })).unwrap();
+    if (selectedBackendChatId !== draftChat.chat_session_id) {
+      await openBackendChat(draftChat.chat_session_id);
+    }
+    return draftChat;
+  }, [
+    createSession,
+    dispatch,
+    getApiUrl,
+    openBackendChat,
+    selectedBackendChatId,
+    sessionId,
+  ]);
+
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
+    if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {
+      setActiveDetailTab('Chat');
+      setIsEditingTitle(false);
+      focusComposer();
+      return;
+    }
+
     const previousAssistantId = activeAssistantIdRef.current;
     const previousSessionId = sessionId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
@@ -658,18 +763,8 @@ function ConversationPage() {
         ))
         : false;
       if (previousSessionId && !existingBackendCard && archivedMessages.length > 0) {
-        await dispatch(createChatSession({
-          chatsUrl: getApiUrl('chats'),
-          title: chatTitle || 'Untitled chat',
-          progenitorSessionId: previousSessionId,
-        })).unwrap();
+        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
       }
-      const session = await createSession();
-      await dispatch(createChatSession({
-        chatsUrl: getApiUrl('chats'),
-        title: 'New chat',
-        progenitorSessionId: session.session_id,
-      })).unwrap();
       let archiveError = null;
       if (archive && archivedMessages.length > 0) {
         try {
@@ -703,16 +798,10 @@ function ConversationPage() {
           archiveError = error;
         }
       }
-      setMessages([]);
-      setIsGenerating(false);
-      clearBackendSelection();
-      setCustomChatTitle('');
-      setCustomChatTitleSessionId(session.session_id);
-      setTitleDraft('');
-      setIsEditingTitle(false);
-      setSessionId(session.session_id);
-      localStorage.removeItem(config.storage.chatHistory);
-      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+      await openDraftChat({
+        forceFreshSession: Boolean(selectedBackendChatId || archivedMessages.length > 0 || !previousSessionId),
+      });
+      focusComposer();
       if (archiveError) {
         show('error', 'Archive failed', archiveError.message);
       }
@@ -737,12 +826,11 @@ function ConversationPage() {
     backendChatSessions,
     cancelStream,
     chatTitle,
-    clearBackendSelection,
-    config.storage.chatHistory,
-    dispatch,
-    getApiUrl,
-    createSession,
+    focusComposer,
+    materializeCurrentChatCard,
     messages,
+    openDraftChat,
+    selectedBackendChatId,
     sessionId,
     setArchivedSessions,
     setIsGenerating,
@@ -769,22 +857,11 @@ function ConversationPage() {
     // If we're leaving a local-only conversation, materialize it first so it
     // remains a distinct sidebar card instead of disappearing on selection.
     if (!selectedBackendChatId && sessionId && messages.length > 0) {
-      const existingBackendCard = backendChatSessions.some((chat) => (
-        chat.progenitor_session_id === sessionId
-        || chat.thread_id === sessionId
-        || chat.chat_session_id === sessionId
-      ));
-      if (!existingBackendCard) {
-        try {
-          await dispatch(createChatSession({
-            chatsUrl: getApiUrl('chats'),
-            title: chatTitle || 'Untitled chat',
-            progenitorSessionId: sessionId,
-          })).unwrap();
-        } catch (error) {
-          show('error', 'Chat save failed', error.message);
-          return;
-        }
+      try {
+        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
+      } catch (error) {
+        show('error', 'Chat save failed', error.message);
+        return;
       }
     }
 
@@ -794,21 +871,8 @@ function ConversationPage() {
     if (streamingOriginId && activeAssistantIdRef.current !== null) {
       dispatch(markChatGenerating(streamingOriginId));
     }
-    activeAssistantIdRef.current = null;
-    setIsGenerating(false);
-    setIsEditingTitle(false);
-    setSelectedBackendChatId(sessionItem.chatSessionId);
-    dispatch(clearChatGenerating(sessionItem.chatSessionId));
-    dispatch(clearChatUnread(sessionItem.chatSessionId));
-    dispatch(clearChatErrored(sessionItem.chatSessionId));
-    lastAppliedBackendChatIdRef.current = null;
-    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      await dispatch(requestChatSessionDetail({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        requestId,
-      })).unwrap();
+      await openBackendChat(sessionItem.chatSessionId);
     } catch (error) {
       show('error', 'Chat load failed', error.message);
     }
@@ -816,14 +880,13 @@ function ConversationPage() {
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
     clearBackendSelection,
-    dispatch,
-    getApiUrl,
-    backendChatSessions,
     chatTitle,
+    dispatch,
+    materializeCurrentChatCard,
     messages.length,
+    openBackendChat,
     selectedBackendChatId,
     sessionId,
-    setIsGenerating,
     show,
   ]);
 
@@ -921,6 +984,10 @@ function ConversationPage() {
     }
     return groups;
   }, [sessionItems, sidebarFilter, sidebarQuery, sidebarSort]);
+  const visibleSessionItems = useMemo(
+    () => visibleSessionGroups.flatMap((group) => group.items),
+    [visibleSessionGroups],
+  );
   const sidebarEmptyMessageText = useMemo(
     () => sidebarEmptyMessage({
       sidebarFilter,
@@ -961,40 +1028,94 @@ function ConversationPage() {
     }
   }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
 
-  const archiveSession = useCallback((sessionItem) => {
+  const archiveSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        patch: { archived: true },
-      })).unwrap()
-        .catch((error) => show('error', 'Archive failed', error.message));
+      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
+      const nextSessionItem = visibleIndex >= 0
+        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+        : null;
+      try {
+        await dispatch(updateChatSessionMetadata({
+          chatsUrl: getApiUrl('chats'),
+          chatSessionId: sessionItem.chatSessionId,
+          patch: { archived: true },
+        })).unwrap();
+      } catch (error) {
+        show('error', 'Archive failed', error.message);
+        return;
+      }
       if (sessionItem.selected) {
-        clearBackendSelection();
-        setMessages([]);
-        localStorage.removeItem(config.storage.chatHistory);
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+          await selectSessionItem(nextSessionItem);
+          return;
+        }
+        dismissCurrentSession();
+        if (nextSessionItem?.source === 'local') {
+          focusComposer();
+        }
       }
       return;
     }
     startNewChatSession({ archive: true });
-  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [
+    dismissCurrentSession,
+    dispatch,
+    focusComposer,
+    getApiUrl,
+    selectSessionItem,
+    show,
+    startNewChatSession,
+    visibleSessionItems,
+  ]);
 
-  const deleteSession = useCallback((sessionItem) => {
+  const deleteSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(deleteChatSession({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-      })).unwrap()
-        .catch((error) => show('error', 'Delete failed', error.message));
+      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
+      const nextSessionItem = visibleIndex >= 0
+        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+        : null;
+      try {
+        await dispatch(deleteChatSession({
+          chatsUrl: getApiUrl('chats'),
+          chatSessionId: sessionItem.chatSessionId,
+        })).unwrap();
+      } catch (error) {
+        show('error', 'Delete failed', error.message);
+        return;
+      }
       if (sessionItem.selected) {
-        clearBackendSelection();
-        setMessages([]);
-        localStorage.removeItem(config.storage.chatHistory);
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+          await selectSessionItem(nextSessionItem);
+          return;
+        }
+        dismissCurrentSession();
+        if (nextSessionItem?.source === 'local') {
+          focusComposer();
+        }
       }
       return;
     }
-    startNewChatSession();
-  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+    const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem?.id);
+    const nextSessionItem = visibleIndex >= 0
+      ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+      : null;
+    dismissCurrentSession();
+    if (nextSessionItem?.source === 'backend' && nextSessionItem.chatSessionId) {
+      await selectSessionItem(nextSessionItem);
+      return;
+    }
+    if (nextSessionItem?.source === 'local') {
+      focusComposer();
+    }
+  }, [
+    dismissCurrentSession,
+    dispatch,
+    focusComposer,
+    getApiUrl,
+    selectSessionItem,
+    show,
+    visibleSessionItems,
+  ]);
 
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).
@@ -1296,7 +1417,7 @@ function ConversationPage() {
           isGenerating={isGenerating}
           disabled={connectionState === 'error' || isClearingSession}
           autoFocus
-          focusToken={sessionId}
+          focusToken={`${sessionId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
         />
       </DetailPane>

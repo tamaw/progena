@@ -1,4 +1,5 @@
 export const CHAT_AGENT_NAME = 'Progenitor';
+export const DEFAULT_CHAT_TITLE = 'New chat';
 
 const SIDEBAR_GROUPS = [
   { key: 'pinned', label: 'Pinned' },
@@ -99,7 +100,7 @@ export function lastMessageContent(messages) {
 export function deriveChatTitle(messages) {
   const firstUserMessage = messages.find((message) => message.role === 'user' && message.content);
   if (!firstUserMessage) {
-    return 'New Progenitor conversation';
+    return DEFAULT_CHAT_TITLE;
   }
   const title = firstUserMessage.content.replace(/\s+/g, ' ').trim();
   return title.length > 72 ? `${title.slice(0, 69)}...` : title;

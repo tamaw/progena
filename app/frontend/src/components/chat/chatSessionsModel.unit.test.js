@@ -125,6 +125,24 @@ describe('buildChatSessionItems', () => {
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(true);
     expect(items.filter((i) => i.source === 'backend').map((i) => i.id)).toEqual(['other']);
   });
+
+  it('does not synthesize an empty local draft card anymore', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      sessionId: 'draft-1',
+      chatTitle: 'New chat',
+      selectedBackendChatId: null,
+      backendChatSessions: [
+        { chat_session_id: 'older', title: 'Earlier chat' },
+      ],
+    });
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: 'older',
+        source: 'backend',
+      }),
+    ]);
+  });
 });
 
 describe('visibleGroupsForFilter', () => {
@@ -160,6 +178,6 @@ describe('sidebarEmptyMessage', () => {
     expect(sidebarEmptyMessage({ sidebarFilter: 'unread', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No unread chats.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'shared', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No shared chats yet.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'archived', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No archived chats yet.');
-    expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No chats yet.');
+    expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No conversations.');
   });
 });
