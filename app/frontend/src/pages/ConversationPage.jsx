@@ -13,9 +13,11 @@ import {
   clearActiveChatSession,
   createChatSession,
   deleteChatSession,
+  ensureDraftChatSession,
   markChatGenerating,
   requestChatSessionDetail,
   selectActiveChatSession,
+  selectActiveChatSessionState,
   selectChatSessions,
   selectChatSessionsState,
   updateChatSessionMetadata,
@@ -41,6 +43,7 @@ import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
   CHAT_AGENT_NAME,
+  DEFAULT_CHAT_TITLE,
   countToolInvocations,
   deriveChatTitle,
   formatStartedTime,
@@ -61,6 +64,7 @@ import {
 } from '../components/chat/streamFilters';
 import {
   appendStreamEvent,
+  countReasoningTimelineEntries,
   finalizeSupersededAssistant,
   normalizeStreamEvent,
 } from '../components/chat/streamEventsModel';
@@ -219,6 +223,7 @@ function ConversationPage() {
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
+  const activeBackendChatState = useSelector(selectActiveChatSessionState);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
@@ -256,14 +261,14 @@ function ConversationPage() {
     }
   });
   const [isClearingSession, setIsClearingSession] = useState(false);
-  const [sessionId, setSessionId] = useState(() => (
-    typeof initialQuickChatHandoff?.sessionId === 'string' ? initialQuickChatHandoff.sessionId : null
+  const [threadId, setThreadId] = useState(() => (
+    typeof initialQuickChatHandoff?.threadId === 'string' ? initialQuickChatHandoff.threadId : null
   ));
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
   const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
-  const [customChatTitleSessionId, setCustomChatTitleSessionId] = useState(() => initialStoredCustomTitle.sessionId);
+  const [customChatTitleThreadId, setCustomChatTitleThreadId] = useState(() => initialStoredCustomTitle.threadId);
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
@@ -271,6 +276,7 @@ function ConversationPage() {
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
+  const [composerFocusTick, setComposerFocusTick] = useState(0);
   const messagesEndRef = useRef(null);
   const titleInputRef = useRef(null);
   const lastProcessedUiEventIdRef = useRef(null);
@@ -289,12 +295,12 @@ function ConversationPage() {
   // Reload the currently-open backend chat's detail (used when a background
   // stream for the chat the user is viewing finishes — so the reply shows
   // without marking the open chat unread).
-  const reloadOpenChat = useCallback((chatSessionId) => {
+  const reloadOpenChat = useCallback((threadId) => {
     lastAppliedBackendChatIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
-      chatSessionId,
+      threadId,
       requestId,
     })).unwrap().catch((error) => show('error', 'Chat reload failed', error.message));
   }, [dispatch, getApiUrl, show]);
@@ -325,7 +331,7 @@ function ConversationPage() {
     setMessages,
     activeBackendChat,
     selectedBackendChatId,
-    sessionId,
+    threadId,
     sendMessageStream,
     cancelStream,
     dispatch,
@@ -334,6 +340,43 @@ function ConversationPage() {
     selectedBackendChatIdRef,
     reloadOpenChat,
   });
+
+  const openBackendChat = useCallback(async (threadId) => {
+    if (!threadId) {
+      return;
+    }
+    activeAssistantIdRef.current = null;
+    setIsGenerating(false);
+    setIsEditingTitle(false);
+    setSelectedBackendChatId(threadId);
+    dispatch(clearChatGenerating(threadId));
+    dispatch(clearChatUnread(threadId));
+    dispatch(clearChatErrored(threadId));
+    lastAppliedBackendChatIdRef.current = null;
+    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    await dispatch(requestChatSessionDetail({
+      chatsUrl: getApiUrl('chats'),
+      threadId,
+      requestId,
+    })).unwrap();
+  }, [activeAssistantIdRef, dispatch, getApiUrl, setIsGenerating]);
+
+  const materializeCurrentChatCard = useCallback(async (title) => {
+    if (!threadId) {
+      return null;
+    }
+    const existingBackendCard = backendChatSessions.find((chat) => (
+      chat.thread_id === threadId
+    ));
+    if (existingBackendCard) {
+      return existingBackendCard;
+    }
+    return dispatch(createChatSession({
+      chatsUrl: getApiUrl('chats'),
+      title,
+      threadId,
+    })).unwrap();
+  }, [backendChatSessions, dispatch, getApiUrl, threadId]);
 
   const derivedChatTitle = useMemo(() => deriveChatTitle(messages), [messages]);
   const chatTitle = customChatTitle || derivedChatTitle;
@@ -366,28 +409,28 @@ function ConversationPage() {
   }, [isEditingTitle]);
 
   useEffect(() => {
-    if (!sessionId) {
+    if (!threadId) {
       return;
     }
     if (!customChatTitle) {
-      if (customChatTitleSessionId && customChatTitleSessionId !== sessionId) {
-        setCustomChatTitleSessionId(sessionId);
+      if (customChatTitleThreadId && customChatTitleThreadId !== threadId) {
+        setCustomChatTitleThreadId(threadId);
       }
       return;
     }
-    if (!customChatTitleSessionId) {
-      persistCustomChatTitle(sessionId, customChatTitle);
-      setCustomChatTitleSessionId(sessionId);
+    if (!customChatTitleThreadId) {
+      persistCustomChatTitle(threadId, customChatTitle);
+      setCustomChatTitleThreadId(threadId);
       return;
     }
-    if (customChatTitleSessionId !== sessionId) {
+    if (customChatTitleThreadId !== threadId) {
       setCustomChatTitle('');
-      setCustomChatTitleSessionId(sessionId);
+      setCustomChatTitleThreadId(threadId);
       setTitleDraft('');
       setIsEditingTitle(false);
       localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
     }
-  }, [customChatTitle, customChatTitleSessionId, sessionId]);
+  }, [customChatTitle, customChatTitleThreadId, threadId]);
 
   const cancelTitleEdit = useCallback(() => {
     setTitleDraft(chatTitle);
@@ -408,16 +451,16 @@ function ConversationPage() {
 
     const nextCustomTitle = normalizedTitle === derivedChatTitle ? '' : normalizedTitle;
     setCustomChatTitle(nextCustomTitle);
-    setCustomChatTitleSessionId(sessionId);
+    setCustomChatTitleThreadId(threadId);
     setTitleDraft(nextCustomTitle || derivedChatTitle);
     setIsEditingTitle(false);
 
     if (nextCustomTitle) {
-      persistCustomChatTitle(sessionId, nextCustomTitle);
+      persistCustomChatTitle(threadId, nextCustomTitle);
     } else {
       localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
     }
-  }, [cancelTitleEdit, derivedChatTitle, sessionId, titleDraft]);
+  }, [cancelTitleEdit, derivedChatTitle, threadId, titleDraft]);
 
   useEffect(() => {
     let cancelled = false;
@@ -427,8 +470,8 @@ function ConversationPage() {
       if (quickChatHandoff) {
         localStorage.removeItem(config.storage.quickChatHandoff);
         initialQuickChatHandoffRef.current = null;
-        if (quickChatHandoff.sessionId) {
-          setSessionId(quickChatHandoff.sessionId);
+        if (quickChatHandoff.threadId) {
+          setThreadId(quickChatHandoff.threadId);
           return;
         }
       }
@@ -436,13 +479,13 @@ function ConversationPage() {
       try {
         const session = await getSession();
         if (!cancelled) {
-          setSessionId(session.session_id);
+          setThreadId(session.conversation_id || null);
         }
       } catch {
         try {
           const session = await createSession();
           if (!cancelled) {
-            setSessionId(session.session_id);
+            setThreadId(session.conversation_id || null);
           }
         } catch (error) {
           console.warn('[ConversationPage] Failed to initialize session:', error);
@@ -477,8 +520,8 @@ function ConversationPage() {
       setIsGenerating(false);
       setIsEditingTitle(false);
       setTitleDraft('');
-      if (typeof event.detail?.sessionId === 'string') {
-        setSessionId(event.detail.sessionId);
+      if (typeof event.detail?.threadId === 'string') {
+        setThreadId(event.detail.threadId);
       }
       localStorage.removeItem(config.storage.quickChatHandoff);
     };
@@ -502,12 +545,12 @@ function ConversationPage() {
   }, [messages, selectedBackendChatId, config.storage.chatHistory]);
 
   useEffect(() => {
-    if (!activeBackendChat?.chat_session_id) {
+    if (!activeBackendChat?.thread_id) {
       return;
     }
     if (
-      selectedBackendChatId !== activeBackendChat.chat_session_id
-      || lastAppliedBackendChatIdRef.current === activeBackendChat.chat_session_id
+      selectedBackendChatId !== activeBackendChat.thread_id
+      || lastAppliedBackendChatIdRef.current === activeBackendChat.thread_id
     ) {
       return;
     }
@@ -518,9 +561,8 @@ function ConversationPage() {
         .filter(Boolean)
       : [];
     const nextSessionId =
-      activeBackendChat.progenitor_session_id
-      || activeBackendChat.thread_id
-      || activeBackendChat.chat_session_id;
+      activeBackendChat.thread_id
+      || null;
 
     activeAssistantIdRef.current = null;
     recentScheduledContent.current.clear();
@@ -528,11 +570,11 @@ function ConversationPage() {
     setIsGenerating(false);
     setIsClearingSession(false);
     setCustomChatTitle(activeBackendChat.title || '');
-    setCustomChatTitleSessionId(nextSessionId);
+    setCustomChatTitleThreadId(nextSessionId);
     setTitleDraft(activeBackendChat.title || '');
     setIsEditingTitle(false);
-    setSessionId(nextSessionId);
-    lastAppliedBackendChatIdRef.current = activeBackendChat.chat_session_id;
+    setThreadId(nextSessionId);
+    lastAppliedBackendChatIdRef.current = activeBackendChat.thread_id;
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
@@ -640,9 +682,70 @@ function ConversationPage() {
     lastAppliedBackendChatIdRef.current = null;
   }, [dispatch]);
 
+  const focusComposer = useCallback(() => {
+    setComposerFocusTick((current) => current + 1);
+  }, []);
+
+  const dismissCurrentSession = useCallback(() => {
+    activeAssistantIdRef.current = null;
+    recentScheduledContent.current.clear();
+    setMessages([]);
+    setIsGenerating(false);
+    setIsClearingSession(false);
+    clearBackendSelection();
+    setCustomChatTitle('');
+    setCustomChatTitleThreadId(null);
+    setTitleDraft('');
+    setIsEditingTitle(false);
+    setThreadId(null);
+    setActiveDetailTab('Chat');
+    localStorage.removeItem(config.storage.chatHistory);
+    localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+  }, [activeAssistantIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
+
+  useEffect(() => {
+    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
+      return;
+    }
+    dismissCurrentSession();
+  }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+
+  const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
+    let draftThreadId = threadId;
+    if (forceFreshSession || !draftThreadId) {
+      const session = await createSession();
+      draftThreadId = session.conversation_id || null;
+    }
+
+    setActiveDetailTab('Chat');
+    setIsEditingTitle(false);
+    const draftChat = await dispatch(ensureDraftChatSession({
+      chatsUrl: getApiUrl('chats'),
+      threadId: draftThreadId,
+    })).unwrap();
+    if (selectedBackendChatId !== draftChat.thread_id) {
+      await openBackendChat(draftChat.thread_id);
+    }
+    return draftChat;
+  }, [
+    createSession,
+    dispatch,
+    getApiUrl,
+    openBackendChat,
+    selectedBackendChatId,
+    threadId,
+  ]);
+
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
+    if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {
+      setActiveDetailTab('Chat');
+      setIsEditingTitle(false);
+      focusComposer();
+      return;
+    }
+
     const previousAssistantId = activeAssistantIdRef.current;
-    const previousSessionId = sessionId;
+    const previousThreadId = threadId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
     activeAssistantIdRef.current = null;
@@ -650,26 +753,14 @@ function ConversationPage() {
     cancelStream();
 
     try {
-      const existingBackendCard = previousSessionId
+      const existingBackendCard = previousThreadId
         ? backendChatSessions.some((chat) => (
-          chat.progenitor_session_id === previousSessionId
-          || chat.thread_id === previousSessionId
-          || chat.chat_session_id === previousSessionId
+          chat.thread_id === previousThreadId
         ))
         : false;
-      if (previousSessionId && !existingBackendCard && archivedMessages.length > 0) {
-        await dispatch(createChatSession({
-          chatsUrl: getApiUrl('chats'),
-          title: chatTitle || 'Untitled chat',
-          progenitorSessionId: previousSessionId,
-        })).unwrap();
+      if (previousThreadId && !existingBackendCard && archivedMessages.length > 0) {
+        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
       }
-      const session = await createSession();
-      await dispatch(createChatSession({
-        chatsUrl: getApiUrl('chats'),
-        title: 'New chat',
-        progenitorSessionId: session.session_id,
-      })).unwrap();
       let archiveError = null;
       if (archive && archivedMessages.length > 0) {
         try {
@@ -680,7 +771,7 @@ function ConversationPage() {
             .find((message) => Number.isFinite(message.timestamp))?.timestamp ?? startedAt;
           const archiveEntry = {
             id: `archived_${Date.now()}`,
-            sessionId,
+            threadId,
             title: chatTitle,
             archivedAt: new Date().toISOString(),
             startedAt,
@@ -703,16 +794,10 @@ function ConversationPage() {
           archiveError = error;
         }
       }
-      setMessages([]);
-      setIsGenerating(false);
-      clearBackendSelection();
-      setCustomChatTitle('');
-      setCustomChatTitleSessionId(session.session_id);
-      setTitleDraft('');
-      setIsEditingTitle(false);
-      setSessionId(session.session_id);
-      localStorage.removeItem(config.storage.chatHistory);
-      localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
+      await openDraftChat({
+        forceFreshSession: Boolean(selectedBackendChatId || archivedMessages.length > 0 || !previousThreadId),
+      });
+      focusComposer();
       if (archiveError) {
         show('error', 'Archive failed', archiveError.message);
       }
@@ -737,13 +822,12 @@ function ConversationPage() {
     backendChatSessions,
     cancelStream,
     chatTitle,
-    clearBackendSelection,
-    config.storage.chatHistory,
-    dispatch,
-    getApiUrl,
-    createSession,
+    focusComposer,
+    materializeCurrentChatCard,
     messages,
-    sessionId,
+    openDraftChat,
+    selectedBackendChatId,
+    threadId,
     setArchivedSessions,
     setIsGenerating,
     show,
@@ -756,35 +840,24 @@ function ConversationPage() {
     const shouldReloadSelectedBackendChat =
       sessionItem.selected
       && sessionItem.source === 'backend'
-      && sessionItem.chatSessionId
+      && sessionItem.threadId
       && messages.length === 0;
     if (sessionItem.selected && !shouldReloadSelectedBackendChat) {
       return;
     }
-    if (sessionItem.source !== 'backend' || !sessionItem.chatSessionId) {
+    if (sessionItem.source !== 'backend' || !sessionItem.threadId) {
       clearBackendSelection();
       return;
     }
 
     // If we're leaving a local-only conversation, materialize it first so it
     // remains a distinct sidebar card instead of disappearing on selection.
-    if (!selectedBackendChatId && sessionId && messages.length > 0) {
-      const existingBackendCard = backendChatSessions.some((chat) => (
-        chat.progenitor_session_id === sessionId
-        || chat.thread_id === sessionId
-        || chat.chat_session_id === sessionId
-      ));
-      if (!existingBackendCard) {
-        try {
-          await dispatch(createChatSession({
-            chatsUrl: getApiUrl('chats'),
-            title: chatTitle || 'Untitled chat',
-            progenitorSessionId: sessionId,
-          })).unwrap();
-        } catch (error) {
-          show('error', 'Chat save failed', error.message);
-          return;
-        }
+    if (!selectedBackendChatId && threadId && messages.length > 0) {
+      try {
+        await materializeCurrentChatCard(chatTitle || 'Untitled chat');
+      } catch (error) {
+        show('error', 'Chat save failed', error.message);
+        return;
       }
     }
 
@@ -794,21 +867,8 @@ function ConversationPage() {
     if (streamingOriginId && activeAssistantIdRef.current !== null) {
       dispatch(markChatGenerating(streamingOriginId));
     }
-    activeAssistantIdRef.current = null;
-    setIsGenerating(false);
-    setIsEditingTitle(false);
-    setSelectedBackendChatId(sessionItem.chatSessionId);
-    dispatch(clearChatGenerating(sessionItem.chatSessionId));
-    dispatch(clearChatUnread(sessionItem.chatSessionId));
-    dispatch(clearChatErrored(sessionItem.chatSessionId));
-    lastAppliedBackendChatIdRef.current = null;
-    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     try {
-      await dispatch(requestChatSessionDetail({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        requestId,
-      })).unwrap();
+      await openBackendChat(sessionItem.threadId);
     } catch (error) {
       show('error', 'Chat load failed', error.message);
     }
@@ -816,14 +876,13 @@ function ConversationPage() {
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
     clearBackendSelection,
-    dispatch,
-    getApiUrl,
-    backendChatSessions,
     chatTitle,
+    dispatch,
+    materializeCurrentChatCard,
     messages.length,
+    openBackendChat,
     selectedBackendChatId,
-    sessionId,
-    setIsGenerating,
+    threadId,
     show,
   ]);
 
@@ -847,10 +906,14 @@ function ConversationPage() {
       if (message.role === 'user') { counts.user++; continue; }
       if (message.role === 'assistant') {
         counts.agent++;
-        if (message.reasoningText) counts.reasoning++;
+        counts.reasoning += countReasoningTimelineEntries(
+          message.streamEvents,
+          message.reasoningText,
+        );
       }
       for (const event of (Array.isArray(message.streamEvents) ? message.streamEvents : [])) {
         const cat = categoryForEventType(event.eventType);
+        if (cat === 'reasoning') continue;
         if (cat && cat in counts) counts[cat]++;
         if (Array.isArray(event.images) && event.images.length > 0) counts.images++;
       }
@@ -863,10 +926,15 @@ function ConversationPage() {
   );
   const isContentLoading =
     !backendChatSessionsState.loaded && messages.length === 0 && !selectedBackendChatId;
+  const isEmptyConversationPane =
+    backendChatSessionsState.loaded
+    && backendChatSessions.length === 0
+    && !selectedBackendChatId
+    && messages.length === 0;
   const sessionItems = useMemo(
     () => buildChatSessionItems({
       messages,
-      sessionId,
+      threadId,
       chatTitle,
       totalTokenCount,
       totalToolCount,
@@ -894,7 +962,7 @@ function ConversationPage() {
       messages,
       pinnedSessionIds,
       selectedBackendChatId,
-      sessionId,
+      threadId,
       sharedSessionIds,
       totalTokenCount,
       totalToolCount,
@@ -921,6 +989,10 @@ function ConversationPage() {
     }
     return groups;
   }, [sessionItems, sidebarFilter, sidebarQuery, sidebarSort]);
+  const visibleSessionItems = useMemo(
+    () => visibleSessionGroups.flatMap((group) => group.items),
+    [visibleSessionGroups],
+  );
   const sidebarEmptyMessageText = useMemo(
     () => sidebarEmptyMessage({
       sidebarFilter,
@@ -961,40 +1033,94 @@ function ConversationPage() {
     }
   }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
 
-  const archiveSession = useCallback((sessionItem) => {
-    if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(updateChatSessionMetadata({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-        patch: { archived: true },
-      })).unwrap()
-        .catch((error) => show('error', 'Archive failed', error.message));
+  const archiveSession = useCallback(async (sessionItem) => {
+    if (sessionItem?.source === 'backend' && sessionItem.threadId) {
+      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
+      const nextSessionItem = visibleIndex >= 0
+        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+        : null;
+      try {
+        await dispatch(updateChatSessionMetadata({
+          chatsUrl: getApiUrl('chats'),
+          threadId: sessionItem.threadId,
+          patch: { archived: true },
+        })).unwrap();
+      } catch (error) {
+        show('error', 'Archive failed', error.message);
+        return;
+      }
       if (sessionItem.selected) {
-        clearBackendSelection();
-        setMessages([]);
-        localStorage.removeItem(config.storage.chatHistory);
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
+          await selectSessionItem(nextSessionItem);
+          return;
+        }
+        dismissCurrentSession();
+        if (nextSessionItem?.source === 'local') {
+          focusComposer();
+        }
       }
       return;
     }
     startNewChatSession({ archive: true });
-  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+  }, [
+    dismissCurrentSession,
+    dispatch,
+    focusComposer,
+    getApiUrl,
+    selectSessionItem,
+    show,
+    startNewChatSession,
+    visibleSessionItems,
+  ]);
 
-  const deleteSession = useCallback((sessionItem) => {
-    if (sessionItem?.source === 'backend' && sessionItem.chatSessionId) {
-      dispatch(deleteChatSession({
-        chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
-      })).unwrap()
-        .catch((error) => show('error', 'Delete failed', error.message));
+  const deleteSession = useCallback(async (sessionItem) => {
+    if (sessionItem?.source === 'backend' && sessionItem.threadId) {
+      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
+      const nextSessionItem = visibleIndex >= 0
+        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+        : null;
+      try {
+        await dispatch(deleteChatSession({
+          chatsUrl: getApiUrl('chats'),
+          threadId: sessionItem.threadId,
+        })).unwrap();
+      } catch (error) {
+        show('error', 'Delete failed', error.message);
+        return;
+      }
       if (sessionItem.selected) {
-        clearBackendSelection();
-        setMessages([]);
-        localStorage.removeItem(config.storage.chatHistory);
+        if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
+          await selectSessionItem(nextSessionItem);
+          return;
+        }
+        dismissCurrentSession();
+        if (nextSessionItem?.source === 'local') {
+          focusComposer();
+        }
       }
       return;
     }
-    startNewChatSession();
-  }, [clearBackendSelection, config.storage.chatHistory, dispatch, getApiUrl, show, startNewChatSession]);
+    const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem?.id);
+    const nextSessionItem = visibleIndex >= 0
+      ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
+      : null;
+    dismissCurrentSession();
+    if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
+      await selectSessionItem(nextSessionItem);
+      return;
+    }
+    if (nextSessionItem?.source === 'local') {
+      focusComposer();
+    }
+  }, [
+    dismissCurrentSession,
+    dispatch,
+    focusComposer,
+    getApiUrl,
+    selectSessionItem,
+    show,
+    visibleSessionItems,
+  ]);
 
   // Conversation actions, shared between the inline header icon row (desktop)
   // and the collapsed "⋮" dropdown (narrow / mobile widths).
@@ -1183,7 +1309,9 @@ function ConversationPage() {
                   }}
                 />
               ) : (
-                <span className="chat-detail-header__title-text">{isContentLoading ? '' : chatTitle}</span>
+                <span className="chat-detail-header__title-text">
+                  {isContentLoading ? '' : (isEmptyConversationPane ? 'No conversation selected' : chatTitle)}
+                </span>
               )}
               <button
                 type="button"
@@ -1223,7 +1351,7 @@ function ConversationPage() {
               ))}
             </DetailHeaderActions>
           )}
-          meta={isContentLoading ? [] : [
+          meta={isContentLoading || isEmptyConversationPane ? [] : [
             <span key="model" className="chat-page-header__model">
               <span className="agent-dot agent-dot--purple" />
               {CHAT_AGENT_NAME}
@@ -1232,14 +1360,14 @@ function ConversationPage() {
             <span key="msgs" className="muted">{messages.length} messages</span>,
             <span key="tools" className="muted">{totalToolCount} tools</span>,
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
-            sessionId ? <span key="id" className="chat-session-id">{sessionId}</span> : null,
+            threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
-          tabs={isContentLoading ? [] : ['Chat', 'Text']}
+          tabs={isContentLoading || isEmptyConversationPane ? [] : ['Chat', 'Text']}
           activeTab={activeDetailTab}
           onTabChange={setActiveDetailTab}
           tabLabel="Conversation detail tabs"
         />
-        {!isContentLoading && activeDetailTab === 'Chat' && (
+        {!isContentLoading && !isEmptyConversationPane && activeDetailTab === 'Chat' && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
@@ -1252,6 +1380,11 @@ function ConversationPage() {
           <div className="chat-messages__inner">
             {isContentLoading ? (
               <div className="chat-loading">Loading...</div>
+            ) : isEmptyConversationPane ? (
+              <div className="welcome-message">
+                <h2>No conversations yet</h2>
+                <p className="muted">Click <strong>+ New</strong> to start a conversation.</p>
+              </div>
             ) : messages.length === 0 ? (
               <div className="welcome-message">
                 <h2>{welcomeMessage}</h2>
@@ -1296,7 +1429,7 @@ function ConversationPage() {
           isGenerating={isGenerating}
           disabled={connectionState === 'error' || isClearingSession}
           autoFocus
-          focusToken={sessionId}
+          focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
         />
       </DetailPane>

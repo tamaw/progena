@@ -41,10 +41,10 @@ export function useChatSessionPrefs({ dispatch, getApiUrl, show }) {
       return;
     }
 
-    if (sessionItem.source === 'backend' && sessionItem.chatSessionId) {
+    if (sessionItem.source === 'backend' && sessionItem.threadId) {
       dispatch(updateChatSessionMetadata({
         chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
+        threadId: sessionItem.threadId,
         patch: { pinned: !sessionItem.pinned },
       })).unwrap()
         .catch((error) => show('error', 'Pinning failed', error.message));
@@ -71,10 +71,10 @@ export function useChatSessionPrefs({ dispatch, getApiUrl, show }) {
       return;
     }
 
-    if (sessionItem.source === 'backend' && sessionItem.chatSessionId) {
+    if (sessionItem.source === 'backend' && sessionItem.threadId) {
       dispatch(updateChatSessionMetadata({
         chatsUrl: getApiUrl('chats'),
-        chatSessionId: sessionItem.chatSessionId,
+        threadId: sessionItem.threadId,
         patch: { shared: !sessionItem.shared },
       })).unwrap()
         .catch((error) => show('error', 'Sharing failed', error.message));

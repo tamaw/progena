@@ -38,6 +38,46 @@ def serialize_messages(messages: Any) -> list:
     return serialized
 
 
+def attach_reasoning_trace(
+    msg: Any,
+    reasoning_trace: str | None,
+    *,
+    reasoning_tokens: int | None = None,
+) -> None:
+    """Attach reasoning metadata to a message when the provider omitted it."""
+    trace = (reasoning_trace or "").strip()
+    if msg is None or not trace or extract_reasoning_trace(msg):
+        return
+
+    if isinstance(msg, dict):
+        additional = msg.get("additional_kwargs")
+        if not isinstance(additional, dict):
+            additional = {}
+            msg["additional_kwargs"] = additional
+        additional["reasoning"] = {"summary": trace}
+
+        metadata = msg.get("response_metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+            msg["response_metadata"] = metadata
+        if reasoning_tokens is not None and metadata.get("reasoning_tokens") is None:
+            metadata["reasoning_tokens"] = reasoning_tokens
+        return
+
+    additional = getattr(msg, "additional_kwargs", None)
+    if not isinstance(additional, dict):
+        additional = {}
+        msg.additional_kwargs = additional
+    additional["reasoning"] = {"summary": trace}
+
+    metadata = getattr(msg, "response_metadata", None)
+    if not isinstance(metadata, dict):
+        metadata = {}
+        msg.response_metadata = metadata
+    if reasoning_tokens is not None and metadata.get("reasoning_tokens") is None:
+        metadata["reasoning_tokens"] = reasoning_tokens
+
+
 def get_last_ai_message(messages: Any) -> Any | None:
     """Get the last assistant/AI message from a messages collection."""
     for msg in reversed(coerce_messages_list(messages)):
@@ -105,7 +145,7 @@ def extract_reasoning_trace(msg: Any) -> str | None:
             candidate = (
                 part_dict.get("text") or part_dict.get("summary") or part_dict.get("content")
             )
-            if text := _coerce_text(candidate):
+            if text := _coerce_reasoning_summary_text(candidate):
                 parts.append(text)
         if parts:
             return "\n".join(parts)
@@ -113,6 +153,10 @@ def extract_reasoning_trace(msg: Any) -> str | None:
     containers: list[dict[str, Any]] = []
     if isinstance(msg, dict):
         containers.append(msg)
+        for key in ("additional_kwargs", "response_metadata"):
+            value = msg.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
     else:
         for attr in ("additional_kwargs", "response_metadata"):
             value = getattr(msg, attr, None)
@@ -121,15 +165,12 @@ def extract_reasoning_trace(msg: Any) -> str | None:
 
     for container in containers:
         for key in ("reasoning", "thinking"):
-            if key in container and (text := _coerce_text(container.get(key))):
+            if key in container and (text := _coerce_reasoning_summary_text(container.get(key))):
                 return text
-        if "summary" in container or "effort" in container:
-            summary_obj = {
-                "effort": container.get("effort"),
-                "summary": container.get("summary"),
-            }
-            if text := _coerce_text(summary_obj):
-                return text
+        if ("summary" in container or "effort" in container) and (
+            text := _coerce_reasoning_summary_text(container.get("summary"))
+        ):
+            return text
 
     return None
 
@@ -315,6 +356,7 @@ def _extract_reasoning_token_count_from_container(container: dict[str, Any]) -> 
 
 
 __all__ = [
+    "attach_reasoning_trace",
     "coerce_messages_list",
     "extract_message_text",
     "extract_reasoning_trace",

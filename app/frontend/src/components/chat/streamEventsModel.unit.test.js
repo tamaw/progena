@@ -4,6 +4,7 @@ import {
   CANCELLED_SUFFIX,
   isReasoningEvent,
   hasReasoningContent,
+  countReasoningTimelineEntries,
   normalizeStreamEvent,
   extractReasoningTokenCount,
   appendReasoningText,
@@ -32,6 +33,21 @@ describe('isReasoningEvent / hasReasoningContent', () => {
     expect(hasReasoningContent({ content: 'hi' })).toBe(true);
     expect(hasReasoningContent({ content: '   ' })).toBe(false);
     expect(hasReasoningContent({ content: 123 })).toBe(false);
+  });
+});
+
+describe('countReasoningTimelineEntries', () => {
+  it('counts rendered reasoning events from stream events', () => {
+    const events = [
+      { eventType: 'reasoning_delta', content: 'abc' },
+      { eventType: 'tool_start', content: 'search' },
+    ];
+    expect(countReasoningTimelineEntries(events, 'fallback')).toBe(1);
+  });
+
+  it('falls back to reasoningText when no stream reasoning event exists', () => {
+    expect(countReasoningTimelineEntries([], 'saved reasoning')).toBe(1);
+    expect(countReasoningTimelineEntries([], '   ')).toBe(0);
   });
 });
 

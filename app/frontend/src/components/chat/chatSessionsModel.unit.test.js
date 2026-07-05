@@ -59,7 +59,7 @@ describe('normalizeBackendChatMessage', () => {
 describe('buildChatSessionItems', () => {
   const base = {
     messages: [],
-    sessionId: null,
+    threadId: null,
     chatTitle: 'x',
     totalTokenCount: 0,
     totalToolCount: 0,
@@ -77,8 +77,8 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       backendChatSessions: [
-        { chat_session_id: 'c1', title: 'One' },
-        { chat_session_id: 'c2', title: 'Two' },
+        { thread_id: 'c1', title: 'One' },
+        { thread_id: 'c2', title: 'Two' },
       ],
       selectedBackendChatId: 'c1',
       unreadChatIds: new Set(['c2']),
@@ -97,8 +97,8 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       backendChatSessions: [
-        { chat_session_id: 'c1', title: 'One' },
-        { chat_session_id: 'c2', title: 'Two' },
+        { thread_id: 'c1', title: 'One' },
+        { thread_id: 'c2', title: 'Two' },
       ],
       selectedBackendChatId: 'c1',
       isGenerating: true,
@@ -114,16 +114,34 @@ describe('buildChatSessionItems', () => {
     const items = buildChatSessionItems({
       ...base,
       messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
-      sessionId: 'sess1',
+      threadId: 'sess1',
       firstMessageTime: 1,
       selectedBackendChatId: null,
       backendChatSessions: [
-        { chat_session_id: 'sess1', title: 'dup' },
-        { chat_session_id: 'other', title: 'other' },
+        { thread_id: 'sess1', title: 'dup' },
+        { thread_id: 'other', title: 'other' },
       ],
     });
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(true);
     expect(items.filter((i) => i.source === 'backend').map((i) => i.id)).toEqual(['other']);
+  });
+
+  it('does not synthesize an empty local draft card anymore', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      threadId: 'draft-1',
+      chatTitle: 'New chat',
+      selectedBackendChatId: null,
+      backendChatSessions: [
+        { thread_id: 'older', title: 'Earlier chat' },
+      ],
+    });
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: 'older',
+        source: 'backend',
+      }),
+    ]);
   });
 });
 
@@ -160,6 +178,6 @@ describe('sidebarEmptyMessage', () => {
     expect(sidebarEmptyMessage({ sidebarFilter: 'unread', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No unread chats.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'shared', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No shared chats yet.');
     expect(sidebarEmptyMessage({ sidebarFilter: 'archived', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No archived chats yet.');
-    expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No chats yet.');
+    expect(sidebarEmptyMessage({ sidebarFilter: 'all', backendChatsLoaded: true, backendChatsLoading: false })).toBe('No conversations.');
   });
 });

@@ -233,15 +233,15 @@ class TestUIRoutes:
         )
 
         assert create_response.status_code == 200
-        chat_id = create_response.json()["session"]["chat_session_id"]
-        assert chat_id.startswith("conv_")
-        stored = document_store.get_document("backend.chat.sessions", chat_id)
+        thread_id = create_response.json()["session"]["thread_id"]
+        assert thread_id == "thread-1"
+        stored = document_store.get_document("backend.chat.sessions", thread_id)
         assert stored is not None
         assert stored.payload["title"] == "Backend chat"
         assert "messages" not in stored.payload
 
         patch_response = client.patch(
-            f"/api/ui/chats/{chat_id}",
+            f"/api/ui/chats/{thread_id}",
             json={"pinned": True, "shared": True, "archived": True},
         )
         assert patch_response.status_code == 200
@@ -250,7 +250,7 @@ class TestUIRoutes:
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 200
         assert list_response.json()["total"] == 1
-        assert list_response.json()["sessions"][0]["chat_session_id"] == chat_id
+        assert list_response.json()["sessions"][0]["thread_id"] == thread_id
 
     def test_chat_detail_request_emits_request_scoped_selection_event(self, client, document_store):
         from app.backend import ui_routes
@@ -260,20 +260,20 @@ class TestUIRoutes:
             json={"title": "Selectable chat", "thread_id": "thread-select"},
         )
         assert create_response.status_code == 200
-        chat_id = create_response.json()["session"]["chat_session_id"]
-        assert chat_id.startswith("conv_")
+        thread_id = create_response.json()["session"]["thread_id"]
+        assert thread_id == "thread-select"
 
-        detail_response = client.get(f"/api/ui/chats/{chat_id}?request_id=request-123")
+        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-123")
 
         assert detail_response.status_code == 200
         upserted = ui_routes._ui_event_replay[-2]
         selected = ui_routes._ui_event_replay[-1]
         assert upserted.type == "chat.session.upserted"
-        assert upserted.payload["session"]["chat_session_id"] == chat_id
+        assert upserted.payload["session"]["thread_id"] == thread_id
         assert selected.type == "chat.session.selected"
-        assert selected.session_id == chat_id
+        assert selected.session_id == thread_id
         assert selected.payload["request_id"] == "request-123"
-        assert selected.payload["session"]["chat_session_id"] == chat_id
+        assert selected.payload["session"]["thread_id"] == thread_id
 
     def test_chat_card_rehydrates_history_from_checkpoint_thread(self, client, document_store):
         document_store.upsert_checkpoint_thread_snapshot(
@@ -305,20 +305,20 @@ class TestUIRoutes:
         )
         create_response = client.post(
             "/api/ui/chats",
-            json={"title": "New chat", "progenitor_session_id": "sess-history"},
+            json={"title": "New chat", "thread_id": "thread_sess-history"},
         )
         assert create_response.status_code == 200
-        chat_id = create_response.json()["session"]["chat_session_id"]
-        assert chat_id.startswith("conv_")
+        thread_id = create_response.json()["session"]["thread_id"]
+        assert thread_id == "thread_sess-history"
 
         list_response = client.get("/api/ui/chats?include_archived=true")
-        detail_response = client.get(f"/api/ui/chats/{chat_id}?request_id=request-history")
+        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-history")
 
         assert list_response.status_code == 200
         listed = next(
             session
             for session in list_response.json()["sessions"]
-            if session["chat_session_id"] == chat_id
+            if session["thread_id"] == thread_id
         )
         assert listed["title"] == "count backwards"
         assert listed["message_count"] == 2
@@ -335,6 +335,63 @@ class TestUIRoutes:
         assert detail["messages"][1]["reasoning_text"] == "Need to count down."
         assert detail["messages"][1]["reasoning_token_count"] == 3
         assert detail["messages"][1]["token_count"] == 12
+
+    def test_chat_detail_prefers_current_state_reasoning_when_checkpoint_lacks_it(
+        self,
+        client,
+        document_store,
+        monkeypatch,
+    ):
+        thread_id = "thread_sess-live-reasoning"
+        document_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id=thread_id,
+                checkpoint_id="checkpoint-live-reasoning",
+                checkpoint_ts="2026-07-05T06:00:00+00:00",
+                messages=[
+                    {"id": "m1", "type": "human", "content": "count backwards"},
+                    {
+                        "id": "m2",
+                        "type": "ai",
+                        "content": "99, 98, 97",
+                        "usage_metadata": {
+                            "input_tokens": 4,
+                            "output_tokens": 12,
+                            "total_tokens": 16,
+                        },
+                    },
+                ],
+            )
+        )
+
+        class _StubStateReader:
+            def get_progenitor_state(self):
+                return {
+                    "thread_id": thread_id,
+                    "messages": [
+                        {"id": "m1", "type": "human", "content": "count backwards"},
+                        {
+                            "id": "m2",
+                            "type": "ai",
+                            "content": "99, 98, 97",
+                            "usage_metadata": {
+                                "input_tokens": 4,
+                                "output_tokens": 12,
+                                "total_tokens": 16,
+                            },
+                        },
+                    ],
+                    "last_reasoning_trace": "Need to count down.",
+                }
+
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: _StubStateReader())
+
+        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-live-reasoning")
+
+        assert detail_response.status_code == 200
+        detail = detail_response.json()
+        assert detail["thread_id"] == thread_id
+        assert detail["messages"][1]["reasoning_text"] == "Need to count down."
 
     def test_chat_detail_loads_checkpoint_only_thread_ids_without_sess_prefix(
         self,
@@ -359,14 +416,13 @@ class TestUIRoutes:
         listed = next(
             session
             for session in list_response.json()["sessions"]
-            if session["chat_session_id"] == thread_id
+            if session["thread_id"] == thread_id
         )
         assert listed["thread_id"] == thread_id
 
         detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-legacy-thread")
         assert detail_response.status_code == 200
         detail = detail_response.json()
-        assert detail["chat_session_id"] == thread_id
         assert detail["thread_id"] == thread_id
         assert [message["content"] for message in detail["messages"]] == [
             "legacy hello",
@@ -403,19 +459,59 @@ class TestUIRoutes:
             json={"title": "Disposable chat", "thread_id": "thread-delete"},
         )
         assert create_response.status_code == 200
-        chat_id = create_response.json()["session"]["chat_session_id"]
+        thread_id = create_response.json()["session"]["thread_id"]
 
-        delete_response = client.delete(f"/api/ui/chats/{chat_id}")
+        delete_response = client.delete(f"/api/ui/chats/{thread_id}")
 
         assert delete_response.status_code == 204
-        stored = document_store.get_document("backend.chat.sessions", chat_id)
+        stored = document_store.get_document("backend.chat.sessions", thread_id)
         assert stored is not None
         assert stored.payload["deleted"] is True
         list_response = client.get("/api/ui/chats?include_archived=true")
         assert list_response.status_code == 200
         assert all(
-            session["chat_session_id"] != chat_id for session in list_response.json()["sessions"]
+            session["thread_id"] != thread_id for session in list_response.json()["sessions"]
         )
+
+    def test_chat_draft_endpoint_reuses_existing_empty_new_chat(self, client):
+        create_response = client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "thread_id": "thread_sess-draft-1"},
+        )
+        assert create_response.status_code == 200
+        draft_id = create_response.json()["session"]["thread_id"]
+
+        draft_response = client.post(
+            "/api/ui/chats/draft",
+            json={"thread_id": "thread_sess-draft-2"},
+        )
+
+        assert draft_response.status_code == 200
+        assert draft_response.json()["session"]["thread_id"] == draft_id
+        assert draft_response.json()["session"]["thread_id"] == "thread_sess-draft-1"
+
+        list_response = client.get("/api/ui/chats?include_archived=true")
+        assert list_response.status_code == 200
+        assert len(list_response.json()["sessions"]) == 1
+        assert list_response.json()["sessions"][0]["thread_id"] == draft_id
+
+    def test_chat_draft_endpoint_creates_new_after_deleted_draft(self, client):
+        create_response = client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "thread_id": "thread_sess-draft-delete"},
+        )
+        assert create_response.status_code == 200
+        deleted_id = create_response.json()["session"]["thread_id"]
+        delete_response = client.delete(f"/api/ui/chats/{deleted_id}")
+        assert delete_response.status_code == 204
+
+        draft_response = client.post(
+            "/api/ui/chats/draft",
+            json={"thread_id": "thread_sess-draft-new"},
+        )
+
+        assert draft_response.status_code == 200
+        assert draft_response.json()["session"]["thread_id"] != deleted_id
 
     def test_chat_patch_and_delete_materialize_current_state_card(
         self,
@@ -428,6 +524,7 @@ class TestUIRoutes:
             json.dumps(
                 {
                     "session_id": "current-session-1",
+                    "thread_id": "thread_current-session-1",
                     "title": "Current synthetic chat",
                     "messages": [{"id": "m1", "role": "user", "content": "hello"}],
                 }
@@ -437,22 +534,22 @@ class TestUIRoutes:
         kanban_state_reader.invalidate(state_path)
 
         patch_response = client.patch(
-            "/api/ui/chats/current-session-1",
+            "/api/ui/chats/thread_current-session-1",
             json={"pinned": True, "archived": True},
         )
 
         assert patch_response.status_code == 200
         assert patch_response.json()["session"]["pinned"] is True
-        stored = document_store.get_document("backend.chat.sessions", "current-session-1")
+        stored = document_store.get_document("backend.chat.sessions", "thread_current-session-1")
         assert stored is not None
         assert stored.payload["pinned"] is True
         assert stored.payload["archived"] is True
 
-        delete_response = client.delete("/api/ui/chats/current-session-1")
+        delete_response = client.delete("/api/ui/chats/thread_current-session-1")
 
         assert delete_response.status_code == 204
         stored_after_delete = document_store.get_document(
-            "backend.chat.sessions", "current-session-1"
+            "backend.chat.sessions", "thread_current-session-1"
         )
         assert stored_after_delete is not None
         assert stored_after_delete.payload["deleted"] is True
