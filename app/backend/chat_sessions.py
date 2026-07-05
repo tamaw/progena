@@ -176,7 +176,8 @@ def create_chat_metadata(
         existing = _get_metadata(store, existing_key)
         if existing is not None:
             existing["thread_id"] = thread_id
-            existing["checkpoint_id"] = request.checkpoint_id
+            if request.checkpoint_id is not None:
+                existing["checkpoint_id"] = request.checkpoint_id
             existing["title"] = (
                 request.title or existing.get("title") or DEFAULT_CHAT_TITLE
             ).strip() or DEFAULT_CHAT_TITLE
@@ -385,8 +386,6 @@ def _is_activity_only_session(
         return False
     # Explicit UI chat cards should stay visible even if the first message looks
     # system-generated; this keeps user-created cards in the main chat surface.
-    if "ui_owned" in metadata:
-        return not bool(metadata.get("ui_owned"))
     return not bool(metadata.get("ui_owned"))
 
 
@@ -710,7 +709,10 @@ def list_chat_sessions(
     hidden_threads: set[str] = set()
     metadata_records: list[dict[str, Any]] = []
     for thread_id in _metadata_index(store):
-        metadata_key = _resolve_metadata_key(store, thread_id)
+        metadata = _get_metadata(store, thread_id)
+        metadata_key = (
+            thread_id if metadata is not None else _resolve_metadata_key(store, thread_id)
+        )
         metadata = _get_metadata(store, metadata_key) if metadata_key is not None else None
         if metadata is None:
             continue

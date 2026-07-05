@@ -191,7 +191,6 @@ export function buildChatSessionItems({
     .filter((chat) => (
       chat.thread_id
       && !localIds.has(chat.thread_id)
-      && !localIds.has(chat.thread_id)
     ))
     .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating));
 
