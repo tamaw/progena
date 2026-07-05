@@ -54,19 +54,19 @@ describe('pinned session ids', () => {
 describe('custom chat title', () => {
   it('persists a normalized title and reads it back', () => {
     persistCustomChatTitle('sess1', '  My Title  ');
-    expect(loadStoredCustomChatTitle()).toEqual({ sessionId: 'sess1', title: 'My Title' });
+    expect(loadStoredCustomChatTitle()).toEqual({ threadId: 'sess1', title: 'My Title' });
   });
   it('removes the key when the title is empty', () => {
     persistCustomChatTitle('sess1', 'X');
     persistCustomChatTitle('sess1', '   ');
-    expect(loadStoredCustomChatTitle()).toEqual({ sessionId: null, title: '' });
+    expect(loadStoredCustomChatTitle()).toEqual({ threadId: null, title: '' });
   });
 });
 
 describe('loadQuickChatHandoff', () => {
   it('returns a normalized handoff', () => {
-    localStorage.setItem('handoff', JSON.stringify({ messages: [{ id: 'm' }], sessionId: 's' }));
-    expect(loadQuickChatHandoff('handoff')).toEqual({ messages: [{ id: 'm' }], sessionId: 's' });
+    localStorage.setItem('handoff', JSON.stringify({ messages: [{ id: 'm' }], threadId: 's' }));
+    expect(loadQuickChatHandoff('handoff')).toEqual({ messages: [{ id: 'm' }], threadId: 's' });
   });
   it('returns null for a missing or non-object payload', () => {
     expect(loadQuickChatHandoff('handoff')).toBeNull();
