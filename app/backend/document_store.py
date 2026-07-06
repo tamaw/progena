@@ -12,6 +12,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import psycopg
+from langgraph.checkpoint.base import CheckpointTuple
+from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -46,6 +48,33 @@ class CheckpointThreadSnapshot:
     checkpoint_id: str | None
     checkpoint_ts: str | None
     messages: list[Any]
+
+
+_MESSAGES_CHANNEL = "messages"
+
+
+def _reconstruct_checkpoint_messages(
+    saver: PostgresSaver,
+    *,
+    thread_id: str,
+    checkpoint_ns: str = "",
+    checkpoint_id: str | None,
+) -> list[Any]:
+    configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}
+    if checkpoint_id:
+        configurable["checkpoint_id"] = checkpoint_id
+    checkpoint = saver.get_tuple({"configurable": configurable})
+    if checkpoint is None:
+        return []
+    return _messages_from_checkpoint_tuple(checkpoint)
+
+
+def _messages_from_checkpoint_tuple(checkpoint: CheckpointTuple) -> list[Any]:
+    channel_values = checkpoint.checkpoint.get("channel_values", {})
+    if not isinstance(channel_values, dict):
+        return []
+    messages = channel_values.get(_MESSAGES_CHANNEL, [])
+    return list(messages) if isinstance(messages, list) else []
 
 
 class BackendDocumentStore(Protocol):
@@ -229,6 +258,34 @@ class PostgresDocumentStore:
     def _recreate_pool(self) -> None:
         self._pool = self._create_pool()
         self._pool.open()
+
+    def _checkpoint_saver(self) -> PostgresSaver:
+        return PostgresSaver(self._pool)
+
+    def _checkpoint_messages(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_ns: str = "",
+        checkpoint_id: str | None,
+    ) -> list[Any]:
+        try:
+            return _reconstruct_checkpoint_messages(
+                self._checkpoint_saver(),
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
+        except PoolClosed:
+            logger.warning("Backend checkpoint saver pool was closed; recreating it")
+            self._recreate_pool()
+            self._ensure_store_table()
+            return _reconstruct_checkpoint_messages(
+                self._checkpoint_saver(),
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
 
     @contextmanager
     def _cursor(self):
@@ -445,7 +502,7 @@ class PostgresDocumentStore:
     def list_checkpoint_thread_snapshots(
         self, *, limit: int = 50
     ) -> list[CheckpointThreadSnapshot]:
-        """Return latest decoded message snapshots for LangGraph threads."""
+        """Return latest reconstructed message snapshots for LangGraph threads."""
         with self._cursor() as cur:
             cur.execute(
                 """
@@ -455,7 +512,6 @@ class PostgresDocumentStore:
                         c.checkpoint_ns,
                         c.checkpoint_id,
                         c.checkpoint->>'ts' AS checkpoint_ts,
-                        c.checkpoint #>> '{channel_versions,messages}' AS messages_version,
                         row_number() OVER (
                             PARTITION BY c.thread_id
                             ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
@@ -464,26 +520,37 @@ class PostgresDocumentStore:
                     WHERE c.checkpoint ? 'channel_versions'
                       AND c.checkpoint->'channel_versions' ? 'messages'
                 )
-                SELECT
-                    r.thread_id,
-                    r.checkpoint_id,
-                    r.checkpoint_ts,
-                    b.type,
-                    b.blob
-                FROM ranked r
-                LEFT JOIN checkpoint_blobs b
-                  ON b.thread_id = r.thread_id
-                 AND b.checkpoint_ns = r.checkpoint_ns
-                 AND b.channel = 'messages'
-                 AND b.version = r.messages_version
-                WHERE r.rn = 1
-                ORDER BY r.checkpoint_ts DESC
+                SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_ts
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY checkpoint_ts DESC
                 LIMIT %s
                 """,
                 (limit,),
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
-        return [snapshot for row in rows if (snapshot := self._checkpoint_snapshot_from_row(row))]
+        snapshots: list[CheckpointThreadSnapshot] = []
+        for row in rows:
+            thread_id = row.get("thread_id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            checkpoint_ns = row.get("checkpoint_ns")
+            resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
+            checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
+            messages = self._checkpoint_messages(
+                thread_id=thread_id,
+                checkpoint_ns=resolved_checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
+            snapshots.append(
+                CheckpointThreadSnapshot(
+                    thread_id=thread_id,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
+                    messages=messages,
+                )
+            )
+        return snapshots
 
     def get_checkpoint_thread_snapshot(
         self,
@@ -505,18 +572,9 @@ class PostgresDocumentStore:
             cur.execute(
                 sql.SQL(
                     """
-                SELECT
-                    c.thread_id,
-                    c.checkpoint_id,
-                    c.checkpoint->>'ts' AS checkpoint_ts,
-                    b.type,
-                    b.blob
+                SELECT c.thread_id, c.checkpoint_id, c.checkpoint->>'ts' AS checkpoint_ts
+                     , c.checkpoint_ns
                 FROM checkpoints c
-                LEFT JOIN checkpoint_blobs b
-                  ON b.thread_id = c.thread_id
-                 AND b.checkpoint_ns = c.checkpoint_ns
-                 AND b.channel = 'messages'
-                 AND b.version = c.checkpoint #>> '{{channel_versions,messages}}'
                 WHERE {}
                 ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
                 LIMIT 1
@@ -525,20 +583,23 @@ class PostgresDocumentStore:
                 params,
             )
             row = cast(dict[str, Any] | None, cur.fetchone())
-        return self._checkpoint_snapshot_from_row(row) if row is not None else None
-
-    def _checkpoint_snapshot_from_row(
-        self,
-        row: dict[str, Any],
-    ) -> CheckpointThreadSnapshot | None:
-        thread_id = row.get("thread_id")
-        if not isinstance(thread_id, str) or not thread_id:
+        if row is None:
             return None
-        messages = _deserialize_checkpoint_messages(row.get("type"), row.get("blob"))
+        resolved_thread_id = row.get("thread_id")
+        if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
+            return None
+        checkpoint_ns = row.get("checkpoint_ns")
+        resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
+        resolved_checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
+        messages = self._checkpoint_messages(
+            thread_id=resolved_thread_id,
+            checkpoint_ns=resolved_checkpoint_ns,
+            checkpoint_id=resolved_checkpoint_id,
+        )
         return CheckpointThreadSnapshot(
-            thread_id=thread_id,
-            checkpoint_id=str(row.get("checkpoint_id")) if row.get("checkpoint_id") else None,
-            checkpoint_ts=str(row.get("checkpoint_ts")) if row.get("checkpoint_ts") else None,
+            thread_id=resolved_thread_id,
+            checkpoint_id=resolved_checkpoint_id,
+            checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
             messages=messages,
         )
 
@@ -642,20 +703,6 @@ def _timestamp_text(value: Any) -> str:
     if isinstance(value, str) and value:
         return value
     return datetime.now(UTC).isoformat()
-
-
-def _deserialize_checkpoint_messages(blob_type: Any, blob: Any) -> list[Any]:
-    if not blob_type or blob is None:
-        return []
-    try:
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-
-        serializer = JsonPlusSerializer(pickle_fallback=True)
-        value = serializer.loads_typed((str(blob_type), bytes(blob)))
-    except Exception as exc:
-        logger.warning("Failed to decode checkpoint messages: %s", exc)
-        return []
-    return value if isinstance(value, list) else []
 
 
 _default_store: BackendDocumentStore = InMemoryDocumentStore()

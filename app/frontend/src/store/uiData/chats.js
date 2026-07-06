@@ -223,6 +223,19 @@ export const reducers = {
   clearActiveChatSession(state) {
     state.chats.active = emptyActive();
   },
+  // Optimistic bump so the sidebar re-sorts a chat to the top of "Recent" the
+  // instant a message is sent, instead of waiting for the stream to finish and
+  // a fresh chat list snapshot to arrive.
+  touchChatSession(state, action) {
+    const threadId = action.payload;
+    if (typeof threadId !== 'string' || !threadId || !state.chats.byId[threadId]) {
+      return;
+    }
+    state.chats.byId[threadId] = {
+      ...state.chats.byId[threadId],
+      last_activity: new Date().toISOString(),
+    };
+  },
 };
 
 export const eventHandlers = {

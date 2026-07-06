@@ -127,6 +127,7 @@ export const {
   taskActivityReceived,
   taskContentReceived,
   setUnreadChatIds,
+  touchChatSession,
 } = uiDataSlice.actions;
 
 export const selectUnseenNavRoutes = (state) => state.uiData.navActivity.unseenRoutes;
