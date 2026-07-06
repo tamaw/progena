@@ -22,6 +22,11 @@ const realtimeSlice = createSlice({
       state.connected = true;
       state.status = 'connected';
       state.error = null;
+      // A fresh connection (initial or an automatic reconnect) may be to a
+      // different backend process, whose event-id sequence restarts from 1 -
+      // stale ids from a prior process's lifetime must not dedupe-suppress
+      // genuinely new events that happen to reuse the same low ids.
+      state.receivedIds = [];
     },
     realtimeDisconnected(state) {
       state.connected = false;
