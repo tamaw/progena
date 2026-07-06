@@ -31,6 +31,8 @@ from .persistence import StatePersistence
 
 logger = logging.getLogger(__name__)
 
+INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
+
 
 def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
     """Extract a concise searchable message from one structured log payload."""
@@ -480,6 +482,52 @@ class StateManager:
         assembled = {k: v for k, v in structure.items() if k not in ("cards", "card_order")}
         assembled["cards"] = cards
         return assembled
+
+    @staticmethod
+    def _inbox_message_key(message_id: str) -> str:
+        return f"{INBOX_MESSAGE_KEY_PREFIX}{message_id}"
+
+    async def get_inbox_message(self, message_id: str) -> dict[str, Any] | None:
+        """Return one inbox message document, or ``None`` if it does not exist.
+
+        Reads straight from the shared store (never the cache, and never
+        creating a default row): the backend mutates these same rows
+        (mark-read/delete), and the message list is a key-prefix scan a junk
+        row would pollute.
+        """
+        key = self._inbox_message_key(message_id)
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.peek_document(key)
+        else:
+            payload = self._state_cache.get(key)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_inbox_message(self, message_id: str, message: dict[str, Any]) -> None:
+        """Persist one inbox message document (no index to maintain)."""
+        key = self._inbox_message_key(message_id)
+        if self._runtime_store is not None:
+            await self._save_runtime_document(key, message)
+            return
+        self._state_cache[key] = message
+
+    async def delete_inbox_message(self, message_id: str) -> None:
+        """Remove one inbox message document."""
+        key = self._inbox_message_key(message_id)
+        if self._runtime_store is not None:
+            await self._runtime_store.delete_document(key)
+            return
+        self._state_cache.pop(key, None)
+
+    async def list_inbox_messages(self) -> list[dict[str, Any]]:
+        """Return all inbox message documents (unsorted; callers order them)."""
+        if self._runtime_store is not None:
+            rows = await self._runtime_store.list_documents(INBOX_MESSAGE_KEY_PREFIX)
+            return [payload for _, payload in rows if isinstance(payload, dict)]
+        return [
+            payload
+            for key, payload in self._state_cache.items()
+            if key.startswith(INBOX_MESSAGE_KEY_PREFIX) and isinstance(payload, dict)
+        ]
 
     async def get_mcp_tools(self) -> dict[str, Any]:
         """Return the runtime-owned discovered MCP tools document.

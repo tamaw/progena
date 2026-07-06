@@ -57,17 +57,43 @@ const knowledgeQuickChatConfig = {
   prompts: knowledgeQuickPrompts,
 };
 
+const inboxQuickPrompts = [
+  "Summarize this week's repo activity and send it to my inbox.",
+  'Write me an inbox message with your current priorities and blockers.',
+  'Research LangGraph checkpointing best practices and send me a digest.',
+];
+const inboxQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'inbox-compose',
+  title: 'Compose inbox message',
+  placeholder: 'What should the message cover?',
+  prompts: inboxQuickPrompts,
+};
+const inboxEditQuickPrompts = [
+  'Tighten this message into a few bullet points.',
+  'Expand it with more detail and supporting links.',
+  'Rewrite the title so it says what changed at a glance.',
+];
+const inboxEditQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'inbox-edit',
+  title: 'Edit inbox message',
+  placeholder: 'How should this message change?',
+  prompts: inboxEditQuickPrompts,
+};
+
+const QUICK_CHAT_CONFIGS_BY_MODE = {
+  'schedule-create': scheduleQuickChatConfig,
+  'mcp-create': mcpQuickChatConfig,
+  'task-create': taskQuickChatConfig,
+  'knowledge-create': knowledgeQuickChatConfig,
+  'inbox-compose': inboxQuickChatConfig,
+  'inbox-edit': inboxEditQuickChatConfig,
+};
+
 export function normalizeQuickChatConfig(config) {
   const candidate = config && typeof config === 'object' ? config : {};
-  const baseConfig = candidate.mode === 'schedule-create'
-    ? scheduleQuickChatConfig
-    : candidate.mode === 'mcp-create'
-      ? mcpQuickChatConfig
-      : candidate.mode === 'task-create'
-        ? taskQuickChatConfig
-        : candidate.mode === 'knowledge-create'
-          ? knowledgeQuickChatConfig
-          : defaultQuickChatConfig;
+  const baseConfig = QUICK_CHAT_CONFIGS_BY_MODE[candidate.mode] || defaultQuickChatConfig;
   const prompts = Array.isArray(candidate.prompts)
     ? candidate.prompts.filter((prompt) => typeof prompt === 'string' && prompt.trim())
     : [];
@@ -124,6 +150,38 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
       'sources still need indexing from the Knowledge page UI.',
       'Only ask a follow-up question if the base name is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created knowledge base name.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
+  if (mode === 'inbox-compose') {
+    return [
+      'Compose a new inbox message for the user from the following request.',
+      'Follow the managing-inbox skill: generate an id (prefix=msg), then write',
+      '/inbox/<id>.md with a specific title in the YAML frontmatter and the full',
+      'content as a markdown body (headings, lists, and links all render).',
+      'Leave read/read_at/created_at alone — they are stamped automatically.',
+      'Writing the file delivers it; the Inbox page updates live.',
+      'Only ask a follow-up question if the requested content is unclear; otherwise send it.',
+      'Reply with one short sentence confirming the message title you sent.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
+  if (mode === 'inbox-edit') {
+    const messagePath = config.messageId ? `/inbox/${config.messageId}.md` : '/inbox/<id>.md';
+    const titleLine = config.messageTitle
+      ? `The message is currently titled "${config.messageTitle}".`
+      : null;
+    return [
+      `Edit the existing inbox message ${messagePath} per the following request.`,
+      ...(titleLine ? [titleLine] : []),
+      'Follow the managing-inbox skill: read the file first, then use edit_file to',
+      'change only the title/body text the request calls for, preserving the',
+      'read, read_at, and created_at frontmatter fields exactly as they are.',
+      'Saving the file updates it; the Inbox page reflects the change live.',
+      'Only ask a follow-up question if the requested change is unclear; otherwise make it.',
+      'Reply with one short sentence confirming what changed.',
       '',
       `User request: ${text}`,
     ].join('\n');

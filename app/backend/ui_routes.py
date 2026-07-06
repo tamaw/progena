@@ -58,6 +58,11 @@ from .alerts import (
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
 from .chat_sessions import UiEventEnvelope
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
+from .inbox_routes import (
+    INBOX_MESSAGE_KEY_PREFIX,
+    broadcast_inbox_snapshot,
+    create_inbox_router,
+)
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .prompt_service import PromptService
 from .skill_service import SkillService
@@ -4401,6 +4406,8 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
                 or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
             ):
                 broadcast_kanban_snapshot()
+            if changed_key is None or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX):
+                _broadcast_inbox_snapshot()
             if changed_key in (None, "mcp", "mcp_tools"):
                 broadcast_mcp_snapshot()
             if changed_key in (None, "schedule"):
@@ -5054,6 +5061,21 @@ router.include_router(
         broadcast_ui_event=broadcast_ui_event,
     )
 )
+
+
+router.include_router(
+    create_inbox_router(
+        get_document_store=get_default_document_store,
+        broadcast_ui_event=broadcast_ui_event,
+    )
+)
+
+
+def _broadcast_inbox_snapshot():
+    return broadcast_inbox_snapshot(
+        get_document_store=get_default_document_store,
+        broadcast_ui_event=broadcast_ui_event,
+    )
 
 
 def broadcast_chat_event(event_type: str, data: dict):

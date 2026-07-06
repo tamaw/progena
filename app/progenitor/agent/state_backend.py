@@ -41,7 +41,7 @@ from ..schedule.engine import parse_schedule_datetime
 from ..schemas import load_schema
 from ..state.models import ScheduleEntry
 from ..structured import validate_against_schema
-from ..utils import utcnow
+from ..utils import utcnow, utcnow_isoformat
 
 logger = logging.getLogger(__name__)
 
@@ -211,6 +211,41 @@ def markdown_to_card(content: str, card_id: str, project_id: str | None = None) 
     return card
 
 
+def inbox_message_to_markdown(message: dict[str, Any]) -> str:
+    """Render one inbox message as YAML frontmatter (fields) + markdown body."""
+    fields = {k: v for k, v in message.items() if k != "body"}
+    body = str(message.get("body") or "").strip("\n")
+    frontmatter = yaml.safe_dump(
+        fields, sort_keys=True, default_flow_style=False, allow_unicode=True
+    ).strip()
+    if body:
+        return f"---\n{frontmatter}\n---\n\n{body}\n"
+    return f"---\n{frontmatter}\n---\n"
+
+
+def markdown_to_inbox_message(content: str, message_id: str) -> dict[str, Any]:
+    """Parse an ``inbox/<id>.md`` file into a message dict.
+
+    The filename is authoritative for ``id`` (same convention as kanban cards).
+    The markdown body becomes ``body``. A non-empty ``title`` is the only hard
+    requirement; ``read`` is coerced to a bool and ``created_at`` is stamped
+    when absent so agent-written files need only a title and a body. Unknown
+    frontmatter keys round-trip untouched.
+    """
+    fields, body = _split_frontmatter(content)
+    message: dict[str, Any] = dict(fields)
+    message["id"] = message_id
+    body = body.strip("\n")
+    message["body"] = body
+    if not str(message.get("title") or "").strip():
+        raise ValueError("message is missing a 'title'")
+    message["read"] = bool(message.get("read", False))
+    if not str(message.get("created_at") or "").strip():
+        message["created_at"] = utcnow_isoformat()
+    message.setdefault("read_at", None)
+    return message
+
+
 def _doc_to_text(doc: JsonDoc) -> str:
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
@@ -234,7 +269,37 @@ def _check_entry_schema(label: str, entry: dict[str, Any], schema_name: str) -> 
         raise ValueError(f"{label} does not conform to schema: {error}")
 
 
-class StateDocumentBackend:
+class _AsyncOnlyFileBackendMixin:
+    """Shared sync-method stubs for filesystem backends that are async-only.
+
+    The Progenitor DeepAgent runs async, so only each backend's async surface
+    (aread/awrite/aedit/als/aglob/agrep) is ever wired up. Subclasses set their
+    own ``_ASYNC_ONLY`` message and mix this in instead of repeating these six
+    stubs verbatim.
+    """
+
+    _ASYNC_ONLY: str = "This backend is async-only; use the async file tools."
+
+    def read(self, *args: Any, **kwargs: Any) -> ReadResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+    def write(self, *args: Any, **kwargs: Any) -> WriteResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+    def edit(self, *args: Any, **kwargs: Any) -> EditResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+    def ls(self, *args: Any, **kwargs: Any) -> LsResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+    def glob(self, *args: Any, **kwargs: Any) -> GlobResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+    def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
+        raise NotImplementedError(self._ASYNC_ONLY)
+
+
+class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
     """Async DeepAgent backend exposing state documents as virtual files."""
 
     _ASYNC_ONLY = "StateDocumentBackend is async-only; use the async file tools."
@@ -311,25 +376,6 @@ class StateDocumentBackend:
             await state_file.on_change()
         except Exception as exc:  # noqa: BLE001 - surface as a log, never fail the write
             logger.warning("on_change for state file %s failed: %s", state_file.name, exc)
-
-    # The Progenitor DeepAgent runs async, so only the async surface is wired.
-    def read(self, *args: Any, **kwargs: Any) -> ReadResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
-
-    def write(self, *args: Any, **kwargs: Any) -> WriteResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
-
-    def edit(self, *args: Any, **kwargs: Any) -> EditResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
-
-    def ls(self, *args: Any, **kwargs: Any) -> LsResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
-
-    def glob(self, *args: Any, **kwargs: Any) -> GlobResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
-
-    def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
 
 
 def _simple_state_file(
@@ -453,7 +499,7 @@ _BOARD_FILE = "board.json"
 _RESERVED_PROJECT_IDS = {".", ".."}
 
 
-class KanbanTaskDirectoryBackend:
+class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async DeepAgent backend exposing the kanban board as a task directory.
 
     Mounted at ``/state/tasks/``: ``board.json`` is the structure document
@@ -617,23 +663,119 @@ class KanbanTaskDirectoryBackend:
     ) -> GrepResult:
         return GrepResult(matches=[])
 
-    def read(self, *args: Any, **kwargs: Any) -> ReadResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
 
-    def write(self, *args: Any, **kwargs: Any) -> WriteResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
+class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
+    """Async DeepAgent backend exposing the user's inbox as a message directory.
 
-    def edit(self, *args: Any, **kwargs: Any) -> EditResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
+    Mounted at ``/inbox/``: every message is one ``<id>.md`` file (YAML
+    frontmatter for the fields, markdown body for the content). Each message is
+    its own ``inbox_message:<id>`` document in the shared Postgres store, so
+    the agent composes one message per file and a write touches a single row.
+    Persistence flows through the StateManager, so the existing LISTEN/NOTIFY
+    pipeline pushes ``inbox.snapshot`` to the Inbox UI with no bespoke tool.
 
-    def ls(self, *args: Any, **kwargs: Any) -> LsResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
+    The directory is flat — no index document; the message list is a key-prefix
+    scan. ``read``/``read_at`` are user-owned (set by the backend when the user
+    opens a message) and should be left alone by the agent.
+    """
 
-    def glob(self, *args: Any, **kwargs: Any) -> GlobResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
+    _ASYNC_ONLY = "InboxDirectoryBackend is async-only; use the async file tools."
 
-    def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
-        raise NotImplementedError(self._ASYNC_ONLY)
+    def __init__(self, state_manager: Any) -> None:
+        self._sm = state_manager
+
+    @staticmethod
+    def _name(file_path: str) -> str:
+        # CompositeBackend strips the /inbox/ route prefix before delegating.
+        return file_path.lstrip("/").removeprefix("inbox/")
+
+    @staticmethod
+    def _parse_message_name(name: str) -> str | None:
+        """Return the message id a filename names, or ``None`` if not a message path."""
+        if "/" in name or not name.endswith(".md"):
+            return None
+        message_id = name[: -len(".md")].strip()
+        return message_id or None
+
+    async def _resolve_message(self, name: str) -> tuple[str, dict[str, Any]] | None:
+        message_id = self._parse_message_name(name)
+        if message_id is None:
+            return None
+        message = await self._sm.get_inbox_message(message_id)
+        if message is None:
+            return None
+        return message_id, message
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        resolved = await self._resolve_message(self._name(file_path))
+        if resolved is None:
+            return ReadResult(error=f"File '{file_path}' not found")
+        _, message = resolved
+        file_data = create_file_data(inbox_message_to_markdown(message))
+        sliced = slice_read_response(file_data, offset, limit)
+        if isinstance(sliced, ReadResult):
+            return sliced
+        return ReadResult(
+            file_data=FileData(content=sliced, encoding=file_data.get("encoding", "utf-8"))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        name = self._name(file_path)
+        message_id = self._parse_message_name(name)
+        if message_id is None:
+            return WriteResult(error=f"Unknown inbox file '{file_path}' (expected <id>.md)")
+        try:
+            message = markdown_to_inbox_message(content, message_id)
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid inbox message {name}: {exc}")
+        await self._sm.save_inbox_message(message_id, message)
+        return WriteResult(path=file_path)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        read = await self.aread(file_path, 0, 10_000_000)
+        if read.error is not None:
+            return EditResult(error=f"Error: {read.error}")
+        current = read.file_data["content"] if read.file_data else ""
+        result = perform_string_replacement(current, old_string, new_string, replace_all)
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        written = await self.awrite(file_path, new_content)
+        if written.error is not None:
+            return EditResult(error=f"Error: {written.error}")
+        return EditResult(path=file_path, occurrences=int(occurrences))
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        resolved = await self._resolve_message(self._name(file_path))
+        if resolved is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        message_id, _ = resolved
+        await self._sm.delete_inbox_message(message_id)
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        messages = await self._sm.list_inbox_messages()
+        ordered = sorted(
+            (m for m in messages if isinstance(m, dict) and m.get("id")),
+            key=lambda m: str(m.get("created_at") or ""),
+            reverse=True,
+        )
+        entries = [FileInfo(path=f"/{message['id']}.md", is_dir=False) for message in ordered]
+        return LsResult(entries=entries)
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        return GlobResult(matches=[])
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        return GrepResult(matches=[])
 
 
 def validate_schedule_document(content: str) -> JsonDoc:

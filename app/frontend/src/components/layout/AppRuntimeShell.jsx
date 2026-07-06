@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { selectChatIndicators } from '../../store/uiDataSlice';
+import {
+  selectChatIndicators,
+  selectInboxUnreadCount,
+  selectUnseenNavRoutes,
+  setActiveNavRoute,
+} from '../../store/uiDataSlice';
 import { useAlertCenter } from '../../context/AlertCenterContext';
 import { useChromeRuntime } from '../../context/ChromeRuntimeContext';
 import { useConfig } from '../../context/ConfigContext';
@@ -21,6 +26,7 @@ import {
   AlertsIcon,
   ChannelsNavIcon,
   ChatNavIcon,
+  InboxNavIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -70,6 +76,7 @@ const navGroups = [
     id: 'orchestrate',
     label: 'Orchestrate',
     items: [
+      { to: '/inbox', icon: <InboxNavIcon />, label: 'Inbox', unreadDot: true },
       { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
     ],
   },
@@ -77,7 +84,7 @@ const navGroups = [
     id: 'spectate',
     label: 'Spectate',
     items: [
-      { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', countKey: 'widgets' },
+      { to: '/dashboard', icon: <DashboardNavIcon />, label: 'Dashboard', trackActivity: true },
     ],
   },
   {
@@ -85,7 +92,7 @@ const navGroups = [
     label: 'Operate',
     items: [
       // { to: '/projects', icon: <ProjectsNavIcon />, label: 'Projects' }, // hidden for now
-      { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', countKey: 'tasks' },
+      { to: '/tasks', icon: <TasksNavIcon />, label: 'Tasks', trackActivity: true },
     ],
   },
   {
@@ -100,17 +107,17 @@ const navGroups = [
     id: 'delegate',
     label: 'Delegate',
     items: [
-      { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', countKey: 'agents' },
+      { to: '/agents', icon: <AgentsNavIcon />, label: 'Agents', trackActivity: true },
     ],
   },
   {
     id: 'facilitate',
     label: 'Facilitate',
     items: [
-      { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', countKey: 'skills' },
-      { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', countKey: 'tools' },
-      { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', countKey: 'knowledge' },
-      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', countKey: 'schedules' },
+      { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', trackActivity: true },
+      { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
+      { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
+      { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },
     ],
   },
   {
@@ -119,7 +126,7 @@ const navGroups = [
     items: [
       { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
       { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
-      { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories', countKey: 'repositories' },
+      { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories' },
     ],
   },
 ];
@@ -127,6 +134,9 @@ const navGroups = [
 // Flattened list of rail items, plus the routes that no longer appear in the
 // rail but still need a breadcrumb label.
 const navItems = navGroups.flatMap((group) => group.items);
+// Pages whose nav dot reflects "an event arrived while you weren't there"
+// (see uiDataSlice's NAV_ACTIVITY_EVENT_ROUTES for the event->route mapping).
+const NAV_ACTIVITY_ROUTES = navItems.filter((item) => item.trackActivity).map((item) => item.to);
 const breadcrumbRoutes = [
   ...navItems,
   { to: '/sessions', label: 'Sessions' },
@@ -462,26 +472,25 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuic
   );
 }
 
-function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSettings, onOpenAccount, runtime }) {
+function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSettings, onOpenAccount }) {
   const navigate = useNavigate();
+  const dispatch = useDispatch();
+  const location = useLocation();
   const [solutions, setSolutions] = useState(() => loadStoredSolutions());
   const [createModal, setCreateModal] = useState(null);
   const chatIndicators = useSelector(selectChatIndicators);
-  const counts = useMemo(() => {
-    const agentCount = runtime.widgets.filter((widget) => widget.type === 'agent').length;
-    const scheduleCount = runtime.widgets.filter((widget) => widget.type === 'schedule').length;
-    return {
-      agents: Math.max(7, agentCount),
-      knowledge: Math.max(6, runtime.widgets.length),
-      repositories: 6,
-      schedules: Math.max(6, scheduleCount),
-      sessions: Math.max(3, agentCount),
-      skills: 14,
-      tasks: runtime.widgets.filter((widget) => ['running', 'busy', 'executing'].includes(widget.status || widget.data?.agentStatus)).length,
-      tools: Math.max(9, runtime.widgets.filter((widget) => widget.type === 'mcp').length),
-      widgets: runtime.widgets.length,
-    };
-  }, [runtime.widgets]);
+  const inboxUnread = useSelector(selectInboxUnreadCount);
+  const unseenNavRoutes = useSelector(selectUnseenNavRoutes);
+
+  // Tell the store which tracked page is currently open, so the "unseen
+  // activity" dot (see uiDataSlice's NAV_ACTIVITY_EVENT_ROUTES) clears for it
+  // and future events for this route are known-seen rather than "new".
+  useEffect(() => {
+    const matchedRoute = NAV_ACTIVITY_ROUTES.find(
+      (route) => location.pathname === route || location.pathname.startsWith(`${route}/`),
+    );
+    dispatch(setActiveNavRoute(matchedRoute || null));
+  }, [dispatch, location.pathname]);
 
   const handleCreateProject = useCallback((projectName) => {
     const solutionId = createModal?.solutionId;
@@ -534,25 +543,33 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
           <div className="app-shell__nav-group" key={group.id} data-group={group.id}>
             <div className="app-shell__nav-group-label">{group.label}</div>
             <div className="app-shell__nav-group-items">
-              {group.items.map((item) => (
-                <NavLink
-                  key={item.to}
-                  to={item.to}
-                  end={item.end}
-                  className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
-                  onClick={onClose}
-                >
-                  <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
-                  <span className="app-shell__nav-label">{item.label}</span>
-                  {item.dot && (chatIndicators.isGenerating || chatIndicators.hasUnread) ? (
-                    <span
-                      className={`app-shell__nav-dot${chatIndicators.isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  {item.countKey ? <span className="app-shell__nav-count">{counts[item.countKey]}</span> : null}
-                </NavLink>
-              ))}
+              {group.items.map((item) => {
+                // One "unseen activity" dot, regardless of which signal backs
+                // it: Chat's own generating/unread state, Inbox's real unread
+                // count, or the generic per-route activity tracker.
+                const isGenerating = item.dot && chatIndicators.isGenerating;
+                const showDot = (item.dot && (isGenerating || chatIndicators.hasUnread))
+                  || (item.unreadDot && inboxUnread > 0)
+                  || (item.trackActivity && unseenNavRoutes[item.to]);
+                return (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    className={({ isActive }) => `app-shell__nav-item ${isActive ? 'is-active' : ''}`}
+                    onClick={onClose}
+                  >
+                    <span className="app-shell__nav-icon" aria-hidden="true">{item.icon}</span>
+                    <span className="app-shell__nav-label">{item.label}</span>
+                    {showDot ? (
+                      <span
+                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                  </NavLink>
+                );
+              })}
             </div>
           </div>
         ))}
@@ -719,10 +736,17 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const sessionPromiseRef = useRef(null);
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
+  const scrollEndRef = useRef(null);
   const normalizedConfig = useMemo(
     () => normalizeQuickChatConfig(panelConfig),
     [panelConfig],
   );
+
+  // Keep the transcript pinned to the latest message, including as it streams
+  // in token by token (mirrors the main Chat page's scroll-to-bottom effect).
+  useEffect(() => {
+    scrollEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+  }, [history, isSending]);
 
   const startFreshQuickSession = useCallback(() => {
     if (isQuickChatMountedRef.current) {
@@ -987,6 +1011,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
           </article>
         ))}
         {error ? <div className="qchat-assistant is-error">{error}</div> : null}
+        <div ref={scrollEndRef} />
       </div>
       {history.length === 0 && !isSending && !error ? (
         <div className="qchat-pane__hints" aria-label="Quick chat suggestions">
@@ -1448,13 +1473,13 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
   // slide-in used by the other chrome tools — they are never pinned.
   const isModalPanel = displayed === 'settings' || displayed === 'account';
   // Scrim: visible for the full lifetime of the pane (including enter/exit
-  // transitions) so clicks never pass through while the panel is animating.
-  // Modal panels get a full-width backdrop; the side panels leave the docked
-  // column clickable when pinned.
+  // transitions), full-width, so clicks never pass through and the page
+  // behind is already grayed out before the panel finishes sliding into
+  // place. Skipped when pinned (non-modal): the docked column stays clickable.
   const scrim = (isModalPanel || !isPinned) ? (
     <button
       type="button"
-      className={`topnav-scrim is-open${isModalPanel ? ' topnav-scrim--modal' : ''}`}
+      className="topnav-scrim is-open"
       aria-label="Close panel"
       onClick={closePanel}
     />
@@ -1569,7 +1594,6 @@ function AppRuntimeShell() {
         onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
         onOpenSettings={() => setActivePanel('settings')}
         onOpenAccount={() => setActivePanel('account')}
-        runtime={runtime}
       />
       <Header
         activePanel={activePanel}
