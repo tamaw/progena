@@ -35,6 +35,7 @@ const defaultConfig = {
       chat: '/v1/responses',
       stream: '/api/ui/stream',
       chats: '/api/ui/chats',
+      inbox: '/api/ui/inbox',
       agentProfiles: '/api/ui/agent-profiles',
       events: '/api/ui/events',
       status: '/api/ui/status',

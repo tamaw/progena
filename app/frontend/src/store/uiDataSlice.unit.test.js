@@ -24,9 +24,13 @@ import reducer, {
   selectTaskActivityEntry,
   selectTaskContentEntry,
   selectUnreadChatIds,
+  selectInboxMessages,
+  selectInboxUnreadCount,
   selectMcpServers,
   selectMcpState,
   selectSchedules,
+  selectUnseenNavRoutes,
+  setActiveNavRoute,
   scheduleSnapshotReceived,
   setErroredChatIds,
   setGeneratingChatIds,
@@ -379,5 +383,76 @@ describe('kanbanSnapshotReceived', () => {
     const board = { id: 'board-1', cards: [] };
     const s = reducer(undefined, kanbanSnapshotReceived(board));
     expect(selectKanbanBoard({ uiData: s })).toEqual(board);
+  });
+});
+
+describe('inbox events', () => {
+  const inboxSnapshot = (messages) => applyUiEvent({
+    type: 'inbox.snapshot',
+    payload: { messages, total: messages.length, unread: messages.filter((m) => !m.read).length },
+  });
+
+  it('snapshot replaces the message list in server order and marks loaded', () => {
+    const s = reducer(undefined, inboxSnapshot([
+      { id: 'msg_new', title: 'New', read: false },
+      { id: 'msg_old', title: 'Old', read: true },
+    ]));
+    expect(s.inbox.order).toEqual(['msg_new', 'msg_old']);
+    expect(s.inbox.loaded).toBe(true);
+    expect(selectInboxUnreadCount({ uiData: s })).toBe(1);
+  });
+
+  it('upserted merges an existing message and prepends a new one', () => {
+    let s = reducer(undefined, inboxSnapshot([{ id: 'a', title: 'A', read: false }]));
+    s = reducer(s, applyUiEvent({ type: 'inbox.message.upserted', payload: { message: { id: 'a', read: true } } }));
+    expect(s.inbox.byId.a.title).toBe('A');
+    expect(s.inbox.byId.a.read).toBe(true);
+    expect(selectInboxUnreadCount({ uiData: s })).toBe(0);
+    s = reducer(s, applyUiEvent({ type: 'inbox.message.upserted', payload: { message: { id: 'b', title: 'B', read: false } } }));
+    expect(s.inbox.order).toEqual(['b', 'a']);
+  });
+
+  it('deleted removes the message', () => {
+    let s = reducer(undefined, inboxSnapshot([
+      { id: 'a', title: 'A', read: false },
+      { id: 'b', title: 'B', read: false },
+    ]));
+    s = reducer(s, applyUiEvent({ type: 'inbox.message.deleted', payload: { message_id: 'a' } }));
+    expect(s.inbox.order).toEqual(['b']);
+    expect(s.inbox.byId.a).toBeUndefined();
+    expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['b']);
+  });
+});
+
+describe('nav activity tracking (unseen-page dots)', () => {
+  it('a route\'s first-ever event is its baseline, not "new" activity', () => {
+    const s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+
+  it('a later event for a route not currently open marks it unseen', () => {
+    let s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
+  });
+
+  it('an event for the currently active route never marks it unseen', () => {
+    let s = reducer(undefined, setActiveNavRoute('/tasks'));
+    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+
+  it('navigating to a route clears its unseen flag', () => {
+    let s = reducer(undefined, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    s = reducer(s, applyUiEvent({ type: 'kanban.snapshot', payload: {} }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
+    s = reducer(s, setActiveNavRoute('/tasks'));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+
+  it('unmapped event types are ignored', () => {
+    const s = reducer(undefined, applyUiEvent({ type: 'not.a.tracked.event', payload: {} }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
   });
 });
