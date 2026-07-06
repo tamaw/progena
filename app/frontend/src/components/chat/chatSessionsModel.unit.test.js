@@ -3,6 +3,8 @@ import {
   compareSessionItems,
   normalizeBackendChatMessage,
   buildChatSessionItems,
+  findAdjacentSessionItem,
+  shouldMaterializeBeforeSwitching,
   visibleGroupsForFilter,
   sidebarEmptyMessage,
 } from './chatSessionsModel';
@@ -20,6 +22,23 @@ describe('compareSessionItems', () => {
       { pinned: false, activityAt: 1, id: 'a' },
       { pinned: false, activityAt: 2, id: 'b' },
     )).toBeGreaterThan(0);
+  });
+
+  // Regression: this comparator existed and was unit-tested (above) but was
+  // never actually called from ConversationPage's "Recent" sort, so toggling
+  // it was a no-op - items kept whatever order chats.order last happened to
+  // be in. This mirrors the fix: sort with compareSessionItems before
+  // grouping, so within-bucket order reflects recency instead of arrival order.
+  it('sorting with compareSessionItems before grouping puts each bucket in recency order', () => {
+    const items = [
+      { id: 'old', title: 'Old', bucket: 'today', pinned: false, activityAt: 1 },
+      { id: 'new', title: 'New', bucket: 'today', pinned: false, activityAt: 100 },
+      { id: 'mid', title: 'Mid', bucket: 'today', pinned: false, activityAt: 50 },
+    ];
+    const sorted = [...items].sort(compareSessionItems);
+    const groups = groupSessionItems(sorted);
+    const today = groups.find((group) => group.key === 'today');
+    expect(today.items.map((item) => item.id)).toEqual(['new', 'mid', 'old']);
   });
 });
 
@@ -143,6 +162,29 @@ describe('buildChatSessionItems', () => {
       }),
     ]);
   });
+
+  // Regression: locally-archived sessions used to be gated behind the same
+  // "is there a live draft to show" flag as the current-session card, so
+  // selecting ANY backend chat (setting selectedBackendChatId) made every
+  // archived chat vanish from the list - which also fed into
+  // usePrunedSelection and permanently unpinned/unshared them.
+  it('keeps locally-archived sessions visible once a backend chat is selected', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+      threadId: 'sess1',
+      selectedBackendChatId: 'c1',
+      archivedSessions: [
+        { id: 'archived-1', threadId: 'archived-1', title: 'Old chat', lastActivityAt: 1 },
+      ],
+      backendChatSessions: [
+        { thread_id: 'c1', title: 'One' },
+      ],
+    });
+    expect(items.some((i) => i.source === 'local' && i.id === 'archived-1')).toBe(true);
+    // The transient current-draft card is still correctly hidden.
+    expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
+  });
 });
 
 describe('visibleGroupsForFilter', () => {
@@ -169,6 +211,60 @@ describe('visibleGroupsForFilter', () => {
     const groups = visibleGroupsForFilter({ sessionItems: items, sidebarFilter: 'all', groupSessionItems });
     const today = groups.find((g) => g.key === 'today');
     expect(today.items.map((i) => i.id).sort()).toEqual(['s', 'u']);
+  });
+});
+
+describe('findAdjacentSessionItem', () => {
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+  it('picks the next item after the removed one', () => {
+    expect(findAdjacentSessionItem(items, 'a')).toEqual({ id: 'b' });
+  });
+
+  it('falls back to the previous item when removing the last one', () => {
+    expect(findAdjacentSessionItem(items, 'c')).toEqual({ id: 'b' });
+  });
+
+  it('returns null when the removed id is not in the list', () => {
+    expect(findAdjacentSessionItem(items, 'missing')).toBeNull();
+  });
+
+  it('returns null for a single-item list', () => {
+    expect(findAdjacentSessionItem([{ id: 'only' }], 'only')).toBeNull();
+  });
+});
+
+describe('shouldMaterializeBeforeSwitching', () => {
+  it('materializes a local session with messages that has no backend selection yet', () => {
+    expect(shouldMaterializeBeforeSwitching({
+      selectedBackendChatId: null,
+      threadId: 'sess1',
+      messageCount: 2,
+    })).toBe(true);
+  });
+
+  it('does not materialize once a backend chat is already selected', () => {
+    expect(shouldMaterializeBeforeSwitching({
+      selectedBackendChatId: 'c1',
+      threadId: 'sess1',
+      messageCount: 2,
+    })).toBe(false);
+  });
+
+  it('does not materialize an empty session', () => {
+    expect(shouldMaterializeBeforeSwitching({
+      selectedBackendChatId: null,
+      threadId: 'sess1',
+      messageCount: 0,
+    })).toBe(false);
+  });
+
+  it('does not materialize without a thread id', () => {
+    expect(shouldMaterializeBeforeSwitching({
+      selectedBackendChatId: null,
+      threadId: null,
+      messageCount: 2,
+    })).toBe(false);
   });
 });
 

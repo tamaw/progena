@@ -14,7 +14,6 @@ import {
   createChatSession,
   deleteChatSession,
   ensureDraftChatSession,
-  markChatGenerating,
   requestChatSessionDetail,
   selectActiveChatSession,
   selectActiveChatSessionState,
@@ -51,7 +50,10 @@ import {
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
+  compareSessionItems,
+  findAdjacentSessionItem,
   normalizeBackendChatMessage,
+  shouldMaterializeBeforeSwitching,
   sidebarEmptyMessage,
   visibleGroupsForFilter,
 } from '../components/chat/chatSessionsModel';
@@ -280,7 +282,14 @@ function ConversationPage() {
   const messagesEndRef = useRef(null);
   const titleInputRef = useRef(null);
   const lastProcessedUiEventIdRef = useRef(null);
-  const lastAppliedBackendChatIdRef = useRef(null);
+  // Tracks the requestId of the fetch last applied to local `messages` state.
+  // Each dispatch of requestChatSessionDetail carries a fresh requestId
+  // (chats.js's active.requestId), so this differs across any two distinct
+  // fetches for the same thread_id — unlike comparing by thread_id, which (and
+  // did) silently swallow a background stream's reload of its origin chat
+  // whenever this component had remounted since the id was last seen — e.g.
+  // navigating to another nav item and back mid-stream.
+  const lastAppliedBackendChatRequestIdRef = useRef(null);
   const hasAutoSelectedOnMountRef = useRef(false);
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
@@ -296,7 +305,7 @@ function ConversationPage() {
   // stream for the chat the user is viewing finishes — so the reply shows
   // without marking the open chat unread).
   const reloadOpenChat = useCallback((threadId) => {
-    lastAppliedBackendChatIdRef.current = null;
+    lastAppliedBackendChatRequestIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
@@ -323,7 +332,7 @@ function ConversationPage() {
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
     activeAssistantIdRef,
-    backgroundOriginChatIdRef,
+    preserveStreamInBackground,
     handleSend,
     handleStop,
   } = useChatStream({
@@ -352,7 +361,7 @@ function ConversationPage() {
     dispatch(clearChatGenerating(threadId));
     dispatch(clearChatUnread(threadId));
     dispatch(clearChatErrored(threadId));
-    lastAppliedBackendChatIdRef.current = null;
+    lastAppliedBackendChatRequestIdRef.current = null;
     const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     await dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
@@ -478,13 +487,17 @@ function ConversationPage() {
 
       try {
         const session = await getSession();
-        if (!cancelled) {
+        // A backend chat may have been selected (e.g. auto-select-on-mount)
+        // while this request was in flight - its detail-load effect already
+        // owns `threadId` at that point, so don't clobber it with the
+        // session's default draft id.
+        if (!cancelled && !selectedBackendChatIdRef.current) {
           setThreadId(session.conversation_id || null);
         }
       } catch {
         try {
           const session = await createSession();
-          if (!cancelled) {
+          if (!cancelled && !selectedBackendChatIdRef.current) {
             setThreadId(session.conversation_id || null);
           }
         } catch (error) {
@@ -550,7 +563,7 @@ function ConversationPage() {
     }
     if (
       selectedBackendChatId !== activeBackendChat.thread_id
-      || lastAppliedBackendChatIdRef.current === activeBackendChat.thread_id
+      || lastAppliedBackendChatRequestIdRef.current === activeBackendChatState?.requestId
     ) {
       return;
     }
@@ -574,11 +587,11 @@ function ConversationPage() {
     setTitleDraft(activeBackendChat.title || '');
     setIsEditingTitle(false);
     setThreadId(nextSessionId);
-    lastAppliedBackendChatIdRef.current = activeBackendChat.thread_id;
+    lastAppliedBackendChatRequestIdRef.current = activeBackendChatState?.requestId ?? null;
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeAssistantIdRef, activeBackendChat, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
+  }, [activeAssistantIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -679,7 +692,7 @@ function ConversationPage() {
   const clearBackendSelection = useCallback(() => {
     setSelectedBackendChatId(null);
     dispatch(clearActiveChatSession());
-    lastAppliedBackendChatIdRef.current = null;
+    lastAppliedBackendChatRequestIdRef.current = null;
   }, [dispatch]);
 
   const focusComposer = useCallback(() => {
@@ -748,17 +761,18 @@ function ConversationPage() {
     const previousThreadId = threadId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
+    // If a stream is in progress for the chat we're leaving, keep it running in
+    // the background (same as switching to a different existing chat) instead
+    // of cancelling it — starting a new chat shouldn't discard another chat's
+    // in-flight response.
+    preserveStreamInBackground();
     activeAssistantIdRef.current = null;
     recentScheduledContent.current.clear();
-    cancelStream();
 
     try {
-      const existingBackendCard = previousThreadId
-        ? backendChatSessions.some((chat) => (
-          chat.thread_id === previousThreadId
-        ))
-        : false;
-      if (previousThreadId && !existingBackendCard && archivedMessages.length > 0) {
+      // materializeCurrentChatCard already no-ops if a backend card for
+      // previousThreadId exists, so no need to check for one here first.
+      if (previousThreadId && archivedMessages.length > 0) {
         await materializeCurrentChatCard(chatTitle || 'Untitled chat');
       }
       let archiveError = null;
@@ -819,13 +833,12 @@ function ConversationPage() {
     }
   }, [
     activeAssistantIdRef,
-    backendChatSessions,
-    cancelStream,
     chatTitle,
     focusComposer,
     materializeCurrentChatCard,
     messages,
     openDraftChat,
+    preserveStreamInBackground,
     selectedBackendChatId,
     threadId,
     setArchivedSessions,
@@ -852,7 +865,7 @@ function ConversationPage() {
 
     // If we're leaving a local-only conversation, materialize it first so it
     // remains a distinct sidebar card instead of disappearing on selection.
-    if (!selectedBackendChatId && threadId && messages.length > 0) {
+    if (shouldMaterializeBeforeSwitching({ selectedBackendChatId, threadId, messageCount: messages.length })) {
       try {
         await materializeCurrentChatCard(chatTitle || 'Untitled chat');
       } catch (error) {
@@ -863,24 +876,19 @@ function ConversationPage() {
 
     // If a stream is in progress for the chat we're leaving, keep it running
     // in the background and show an orange dot on that card.
-    const streamingOriginId = backgroundOriginChatIdRef.current;
-    if (streamingOriginId && activeAssistantIdRef.current !== null) {
-      dispatch(markChatGenerating(streamingOriginId));
-    }
+    preserveStreamInBackground();
     try {
       await openBackendChat(sessionItem.threadId);
     } catch (error) {
       show('error', 'Chat load failed', error.message);
     }
   }, [
-    activeAssistantIdRef,
-    backgroundOriginChatIdRef,
     clearBackendSelection,
     chatTitle,
-    dispatch,
     materializeCurrentChatCard,
     messages.length,
     openBackendChat,
+    preserveStreamInBackground,
     selectedBackendChatId,
     threadId,
     show,
@@ -978,7 +986,12 @@ function ConversationPage() {
     const filtered = normalizedQuery
       ? sessionItems.filter((item) => `${item.title} ${item.summary ?? ''}`.toLowerCase().includes(normalizedQuery))
       : sessionItems;
-    const groups = visibleGroupsForFilter({ sessionItems: filtered, sidebarFilter, groupSessionItems });
+    // "Recent" (the default) sorts pinned-first then most-recent-activity
+    // first; grouping still buckets by recency afterward, so this is what
+    // actually determines order *within* each bucket instead of leaving it
+    // however the items happened to arrive in chats.order.
+    const sortedForGrouping = sidebarSort === 'Name' ? filtered : [...filtered].sort(compareSessionItems);
+    const groups = visibleGroupsForFilter({ sessionItems: sortedForGrouping, sidebarFilter, groupSessionItems });
     // "Name" collapses the recency buckets into a single flat A→Z list (no header),
     // keeping whatever the active filter already selected.
     if (sidebarSort === 'Name') {
@@ -1035,10 +1048,7 @@ function ConversationPage() {
 
   const archiveSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.threadId) {
-      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
-      const nextSessionItem = visibleIndex >= 0
-        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
-        : null;
+      const nextSessionItem = findAdjacentSessionItem(visibleSessionItems, sessionItem.id);
       try {
         await dispatch(updateChatSessionMetadata({
           chatsUrl: getApiUrl('chats'),
@@ -1075,10 +1085,7 @@ function ConversationPage() {
 
   const deleteSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.threadId) {
-      const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem.id);
-      const nextSessionItem = visibleIndex >= 0
-        ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
-        : null;
+      const nextSessionItem = findAdjacentSessionItem(visibleSessionItems, sessionItem.id);
       try {
         await dispatch(deleteChatSession({
           chatsUrl: getApiUrl('chats'),
@@ -1100,10 +1107,7 @@ function ConversationPage() {
       }
       return;
     }
-    const visibleIndex = visibleSessionItems.findIndex((item) => item.id === sessionItem?.id);
-    const nextSessionItem = visibleIndex >= 0
-      ? (visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null)
-      : null;
+    const nextSessionItem = findAdjacentSessionItem(visibleSessionItems, sessionItem?.id);
     dismissCurrentSession();
     if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
       await selectSessionItem(nextSessionItem);
