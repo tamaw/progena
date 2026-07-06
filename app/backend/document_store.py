@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import psycopg
-from deepagents._messages_reducer import _messages_delta_reducer
-from langgraph.channels.delta import DeltaChannel
+from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import sql
 from psycopg.rows import dict_row
@@ -51,44 +50,31 @@ class CheckpointThreadSnapshot:
     messages: list[Any]
 
 
-# DeepAgents puts the ``messages`` state key on a `DeltaChannel` (see
-# `deepagents.graph.AgentState`) instead of the usual `add_messages` reducer,
-# specifically so checkpoint growth stays O(N) instead of O(N^2). A
-# `DeltaChannel` never writes a full "latest value" blob to `checkpoint_blobs`
-# (its `.checkpoint()` always returns MISSING) except once every
-# `snapshot_frequency` updates — so reading `checkpoint_blobs` directly for
-# `messages`, as this module used to, reads back an empty list almost always.
-# The channel's true value must instead be *replayed* from `checkpoint_writes`
-# through the same reducer, exactly as LangGraph's own state loader does
-# (`langgraph.pregel._checkpoint.channels_from_checkpoint`). `snapshot_frequency`
-# must mirror the value the real graph was compiled with for `from_checkpoint`
-# to interpret an existing snapshot blob correctly.
 _MESSAGES_CHANNEL = "messages"
-_MESSAGES_SNAPSHOT_FREQUENCY = 50
 
 
 def _reconstruct_checkpoint_messages(
     saver: PostgresSaver,
     *,
     thread_id: str,
+    checkpoint_ns: str = "",
     checkpoint_id: str | None,
 ) -> list[Any]:
-    configurable: dict[str, Any] = {"thread_id": thread_id}
+    configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
-    histories = saver.get_delta_channel_history(
-        config={"configurable": configurable},
-        channels=[_MESSAGES_CHANNEL],
-    )
-    history = histories.get(_MESSAGES_CHANNEL, {"writes": []})
-    channel = DeltaChannel(
-        cast("Callable[[Any, Sequence[Any]], Any]", _messages_delta_reducer),
-        list,
-        snapshot_frequency=_MESSAGES_SNAPSHOT_FREQUENCY,
-    )
-    channel = channel.from_checkpoint(history.get("seed", []))
-    channel.replay_writes(history["writes"])
-    return cast(list[Any], channel.get())
+    checkpoint = saver.get_tuple({"configurable": configurable})
+    if checkpoint is None:
+        return []
+    return _messages_from_checkpoint_tuple(checkpoint)
+
+
+def _messages_from_checkpoint_tuple(checkpoint: CheckpointTuple) -> list[Any]:
+    channel_values = checkpoint.checkpoint.get("channel_values", {})
+    if not isinstance(channel_values, dict):
+        return []
+    messages = channel_values.get(_MESSAGES_CHANNEL, [])
+    return list(messages) if isinstance(messages, list) else []
 
 
 class BackendDocumentStore(Protocol):
@@ -260,6 +246,34 @@ class PostgresDocumentStore:
     def _recreate_pool(self) -> None:
         self._pool = self._create_pool()
         self._pool.open()
+
+    def _checkpoint_saver(self) -> PostgresSaver:
+        return PostgresSaver(self._pool)
+
+    def _checkpoint_messages(
+        self,
+        *,
+        thread_id: str,
+        checkpoint_ns: str = "",
+        checkpoint_id: str | None,
+    ) -> list[Any]:
+        try:
+            return _reconstruct_checkpoint_messages(
+                self._checkpoint_saver(),
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
+        except PoolClosed:
+            logger.warning("Backend checkpoint saver pool was closed; recreating it")
+            self._recreate_pool()
+            self._ensure_store_table()
+            return _reconstruct_checkpoint_messages(
+                self._checkpoint_saver(),
+                thread_id=thread_id,
+                checkpoint_ns=checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
 
     @contextmanager
     def _cursor(self):
@@ -468,6 +482,7 @@ class PostgresDocumentStore:
                 WITH ranked AS (
                     SELECT
                         c.thread_id,
+                        c.checkpoint_ns,
                         c.checkpoint_id,
                         c.checkpoint->>'ts' AS checkpoint_ts,
                         row_number() OVER (
@@ -478,7 +493,7 @@ class PostgresDocumentStore:
                     WHERE c.checkpoint ? 'channel_versions'
                       AND c.checkpoint->'channel_versions' ? 'messages'
                 )
-                SELECT thread_id, checkpoint_id, checkpoint_ts
+                SELECT thread_id, checkpoint_ns, checkpoint_id, checkpoint_ts
                 FROM ranked
                 WHERE rn = 1
                 ORDER BY checkpoint_ts DESC
@@ -488,25 +503,26 @@ class PostgresDocumentStore:
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         snapshots: list[CheckpointThreadSnapshot] = []
-        with PostgresSaver.from_conn_string(self._database_url) as saver:
-            for row in rows:
-                thread_id = row.get("thread_id")
-                if not isinstance(thread_id, str) or not thread_id:
-                    continue
-                checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
-                messages = _reconstruct_checkpoint_messages(
-                    saver, thread_id=thread_id, checkpoint_id=checkpoint_id
+        for row in rows:
+            thread_id = row.get("thread_id")
+            if not isinstance(thread_id, str) or not thread_id:
+                continue
+            checkpoint_ns = row.get("checkpoint_ns")
+            resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
+            checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
+            messages = self._checkpoint_messages(
+                thread_id=thread_id,
+                checkpoint_ns=resolved_checkpoint_ns,
+                checkpoint_id=checkpoint_id,
+            )
+            snapshots.append(
+                CheckpointThreadSnapshot(
+                    thread_id=thread_id,
+                    checkpoint_id=checkpoint_id,
+                    checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
+                    messages=messages,
                 )
-                snapshots.append(
-                    CheckpointThreadSnapshot(
-                        thread_id=thread_id,
-                        checkpoint_id=checkpoint_id,
-                        checkpoint_ts=str(row["checkpoint_ts"])
-                        if row.get("checkpoint_ts")
-                        else None,
-                        messages=messages,
-                    )
-                )
+            )
         return snapshots
 
     def get_checkpoint_thread_snapshot(
@@ -530,6 +546,7 @@ class PostgresDocumentStore:
                 sql.SQL(
                     """
                 SELECT c.thread_id, c.checkpoint_id, c.checkpoint->>'ts' AS checkpoint_ts
+                     , c.checkpoint_ns
                 FROM checkpoints c
                 WHERE {}
                 ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
@@ -544,11 +561,14 @@ class PostgresDocumentStore:
         resolved_thread_id = row.get("thread_id")
         if not isinstance(resolved_thread_id, str) or not resolved_thread_id:
             return None
+        checkpoint_ns = row.get("checkpoint_ns")
+        resolved_checkpoint_ns = checkpoint_ns if isinstance(checkpoint_ns, str) else ""
         resolved_checkpoint_id = str(row["checkpoint_id"]) if row.get("checkpoint_id") else None
-        with PostgresSaver.from_conn_string(self._database_url) as saver:
-            messages = _reconstruct_checkpoint_messages(
-                saver, thread_id=resolved_thread_id, checkpoint_id=resolved_checkpoint_id
-            )
+        messages = self._checkpoint_messages(
+            thread_id=resolved_thread_id,
+            checkpoint_ns=resolved_checkpoint_ns,
+            checkpoint_id=resolved_checkpoint_id,
+        )
         return CheckpointThreadSnapshot(
             thread_id=resolved_thread_id,
             checkpoint_id=resolved_checkpoint_id,
