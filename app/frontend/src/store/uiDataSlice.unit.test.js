@@ -24,7 +24,9 @@ import reducer, {
   selectTaskActivityEntry,
   selectTaskContentEntry,
   selectUnreadChatIds,
+  fetchInbox,
   selectInboxMessages,
+  selectInboxState,
   selectInboxUnreadCount,
   selectMcpServers,
   selectMcpState,
@@ -421,6 +423,26 @@ describe('inbox events', () => {
     expect(s.inbox.order).toEqual(['b']);
     expect(s.inbox.byId.a).toBeUndefined();
     expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['b']);
+  });
+
+  // Regression: fetchInbox.fulfilled used to only clear `loading`, leaving
+  // `loaded` false until the backend's echoed inbox.snapshot event happened
+  // to arrive over SSE - if that never came, a page effect keyed on `loaded`
+  // would keep re-dispatching the GET forever.
+  it('fetchInbox.fulfilled applies the response body directly, without needing an echoed SSE event', () => {
+    const payload = { messages: [{ id: 'a', title: 'A', read: false }], total: 1, unread: 1 };
+    const s = reducer(undefined, fetchInbox.fulfilled(payload, 'reqId', { inboxUrl: '/api/ui/inbox' }));
+    expect(selectInboxState({ uiData: s }).loaded).toBe(true);
+    expect(selectInboxState({ uiData: s }).loading).toBe(false);
+    expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['a']);
+  });
+
+  it('fetchInbox.rejected clears loading and records the error without marking loaded', () => {
+    const action = fetchInbox.rejected(new Error('network down'), 'reqId', { inboxUrl: '/api/ui/inbox' });
+    const s = reducer(undefined, action);
+    expect(selectInboxState({ uiData: s }).loading).toBe(false);
+    expect(selectInboxState({ uiData: s }).loaded).toBe(false);
+    expect(selectInboxState({ uiData: s }).error).toBe('network down');
   });
 });
 
