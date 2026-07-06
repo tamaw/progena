@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "Deploy mode: changed (diff HEAD^..HEAD) or all mcps"
+        description: "Deploy mode: changed vs origin/main, or all MCP servers"
         required: false
         default: "changed"
         type: choice
@@ -76,6 +76,7 @@ jobs:
           json: true
           files: |
             app/mcp/**
+            .github/workflows/mcp.yml
 
       - name: Detect changed MCP files (dispatch)
         id: changed-dispatch
@@ -85,6 +86,7 @@ jobs:
           json: true
           files: |
             app/mcp/**
+            .github/workflows/mcp.yml
           base_sha: ${{ steps.base-sha.outputs.sha }}
           sha: ${{ github.sha }}
 
@@ -99,8 +101,19 @@ jobs:
           script: |
             const fs = require('fs');
             const path = require('path');
+            const skip = new Set(['__pycache__', '.git', 'base', '.venv', 'node_modules']);
             const root = path.join(process.env.GITHUB_WORKSPACE, 'app', 'mcp');
             const changedFiles = JSON.parse(process.env.CHANGED_FILES || '[]');
+            const listAllMcps = () =>
+              fs.readdirSync(root, { withFileTypes: true })
+                .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !skip.has(entry.name))
+                .map((entry) => entry.name)
+                .sort();
+
+            if (changedFiles.includes('.github/workflows/mcp.yml')) {
+              return JSON.stringify(listAllMcps());
+            }
+
             const mcps = [...new Set(
               changedFiles
                 .filter((file) => file.startsWith('app/mcp/'))

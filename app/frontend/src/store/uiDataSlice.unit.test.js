@@ -25,6 +25,11 @@ import reducer, {
   selectTaskContentEntry,
   selectUnreadChatIds,
   fetchInbox,
+  selectWorkflowDetailByPath,
+  selectWorkflowLatestRunById,
+  selectWorkflowRuns,
+  selectWorkflows,
+  selectWorkflowsState,
   selectInboxMessages,
   selectInboxState,
   selectInboxUnreadCount,
@@ -226,6 +231,78 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(selectTaskContentEntry({ uiData: s }, 'card_1')?.content).toBe('# Ship Tasks');
     expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
+  });
+
+  it('workflow snapshot/detail/run events populate the workflows domain', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'workflows.snapshot',
+      payload: {
+        items: [
+          {
+            id: 'wf_1',
+            title: 'Card created',
+            description: '',
+            enabled: true,
+            paused: false,
+            version: 1,
+            event_type: 'kanban.card.created',
+            node_count: 2,
+            updated_at: '2026-07-06T00:00:00Z',
+            created_at: '2026-07-06T00:00:00Z',
+          },
+        ],
+      },
+    }));
+    expect(selectWorkflows({ uiData: s })).toHaveLength(1);
+    expect(selectWorkflowsState({ uiData: s }).loaded).toBe(true);
+
+    s = reducer(s, applyUiEvent({
+      type: 'workflow.updated',
+      payload: {
+        path: '/state/workflows/wf_1.json',
+        workflow: {
+          id: 'wf_1',
+          title: 'Card created',
+          description: '',
+          enabled: true,
+          paused: false,
+          version: 1,
+          trigger: { type: 'event', event_type: 'kanban.card.created' },
+          graph: {
+            nodes: {
+              event_a: { kind: 'event', title: 'Event' },
+              prompt_a: { kind: 'prompt', title: 'Prompt', prompt: 'Handle it', agent_name: 'progenitor', role: null },
+            },
+            edges: [{ from: { node: 'event_a', port: 'default' }, to: { node: 'prompt_a', port: 'default' } }],
+          },
+          ui: {},
+          updated_at: '2026-07-06T00:00:00Z',
+          created_at: '2026-07-06T00:00:00Z',
+        },
+      },
+    }));
+    expect(selectWorkflowDetailByPath({ uiData: s }, '/state/workflows/wf_1.json')?.workflow?.id).toBe('wf_1');
+
+    s = reducer(s, applyUiEvent({
+      type: 'workflow.run.completed',
+      payload: {
+        run_id: 'run_1',
+        workflow_id: 'wf_1',
+        status: 'completed',
+        current_node_id: null,
+        completed_node_ids: ['event_a', 'prompt_a'],
+        thread_id: 'thread_1',
+        trigger_event: { event_type: 'kanban.card.created' },
+        last_output: 'done',
+        last_error: null,
+        queued_at: '2026-07-06T00:00:00Z',
+        started_at: '2026-07-06T00:00:01Z',
+        updated_at: '2026-07-06T00:00:02Z',
+        completed_at: '2026-07-06T00:00:02Z',
+      },
+    }));
+    expect(selectWorkflowRuns({ uiData: s })).toHaveLength(1);
+    expect(selectWorkflowLatestRunById({ uiData: s }, 'wf_1')?.run_id).toBe('run_1');
   });
 });
 
@@ -471,6 +548,32 @@ describe('nav activity tracking (unseen-page dots)', () => {
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/tasks': true });
     s = reducer(s, setActiveNavRoute('/tasks'));
     expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+  });
+
+  it('workflow events light the workflows nav dot after the baseline snapshot', () => {
+    let s = reducer(undefined, setActiveNavRoute('/tasks'));
+    s = reducer(s, applyUiEvent({ type: 'workflows.snapshot', payload: { items: [] } }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({});
+    s = reducer(s, applyUiEvent({
+      type: 'workflow.updated',
+      payload: {
+        path: '/state/workflows/wf_1.json',
+        workflow: {
+          id: 'wf_1',
+          title: 'Workflow',
+          description: '',
+          enabled: true,
+          paused: false,
+          version: 1,
+          trigger: { type: 'event', event_type: 'kanban.card.created' },
+          graph: { nodes: { event_a: { kind: 'event', title: 'Event' } }, edges: [] },
+          ui: {},
+          updated_at: '2026-07-06T00:00:00Z',
+          created_at: '2026-07-06T00:00:00Z',
+        },
+      },
+    }));
+    expect(selectUnseenNavRoutes({ uiData: s })).toEqual({ '/workflows': true });
   });
 
   it('unmapped event types are ignored', () => {

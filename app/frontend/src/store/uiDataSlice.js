@@ -24,8 +24,9 @@ import * as prompts from './uiData/prompts';
 import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
 import * as inbox from './uiData/inbox';
+import * as workflows from './uiData/workflows';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, agents, chats, inbox];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -61,6 +62,14 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'mcp.snapshot': '/tools',
   'knowledge.snapshot': '/knowledge',
   'schedule.snapshot': '/schedules',
+  'workflows.snapshot': '/workflows',
+  'workflow.updated': '/workflows',
+  'workflow.deleted': '/workflows',
+  'workflow.runs.snapshot': '/workflows',
+  'workflow.run.started': '/workflows',
+  'workflow.run.updated': '/workflows',
+  'workflow.run.completed': '/workflows',
+  'workflow.run.failed': '/workflows',
 };
 
 const navActivityInitialState = {
@@ -219,5 +228,22 @@ export {
   selectInboxState,
   selectInboxUnreadCount,
 } from './uiData/inbox';
+
+export {
+  fetchWorkflows,
+  fetchWorkflowContent,
+  saveWorkflow,
+  createWorkflow,
+  deleteWorkflow,
+  pauseWorkflow,
+  resumeWorkflow,
+  triggerWorkflow,
+  fetchWorkflowRuns,
+  selectWorkflows,
+  selectWorkflowsState,
+  selectWorkflowRuns,
+  selectWorkflowDetailByPath,
+  selectWorkflowLatestRunById,
+} from './uiData/workflows';
 
 export default uiDataSlice.reducer;

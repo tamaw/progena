@@ -1,0 +1,168 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow Definition",
+  "description": "One backend-native workflow definition stored as the 'workflow:<id>' document and exposed as a virtual file at /state/workflows/<id>.json. Edit one workflow file at a time; execution state lives in separate workflow_run:* documents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "title",
+    "description",
+    "enabled",
+    "paused",
+    "version",
+    "trigger",
+    "graph",
+    "ui",
+    "updated_at",
+    "created_at"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string"
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "paused": {
+      "type": "boolean"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "event_type"],
+      "properties": {
+        "type": {
+          "const": "event"
+        },
+        "event_type": {
+          "type": "string",
+          "enum": [
+            "kanban.card.created",
+            "kanban.card.updated",
+            "kanban.card.moved",
+            "kanban.card.deleted",
+            "kanban.card.status_changed"
+          ]
+        }
+      }
+    },
+    "graph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title"],
+                "properties": {
+                  "kind": {
+                    "const": "event"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title", "prompt", "agent_name"],
+                "properties": {
+                  "kind": {
+                    "const": "prompt"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "agent_name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "role": {
+                    "type": ["string", "null"]
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {
+              "from": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node", "port"],
+                "properties": {
+                  "node": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "port": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "to": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["node", "port"],
+                "properties": {
+                  "node": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "port": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "ui": {
+      "type": "object"
+    },
+    "updated_at": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

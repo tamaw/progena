@@ -163,6 +163,7 @@ jobs:
             agents:
               - 'app/agents/*/**'
               - 'docker/agents/**'
+              - '.github/workflows/agents.yml'
 
       - name: Detect changed agent files (dispatch)
         id: changed-dispatch
@@ -176,6 +177,7 @@ jobs:
             agents:
               - 'app/agents/*/**'
               - 'docker/agents/**'
+              - '.github/workflows/agents.yml'
 
       - name: Build changed agent matrix
         id: changed-agents
@@ -198,7 +200,13 @@ jobs:
                 .map((entry) => entry.name)
                 .sort();
 
-            if (changedFiles.some((file) => file.startsWith('docker/agents/'))) {
+            if (
+              changedFiles.some(
+                (file) =>
+                  file.startsWith('docker/agents/') ||
+                  file === '.github/workflows/agents.yml',
+              )
+            ) {
               return JSON.stringify(listAllAgents());
             }
 
