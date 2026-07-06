@@ -199,12 +199,16 @@ export function useChatStream({
         },
         // onComplete
         (status) => {
+          const stale = isStale();
           const outcome = resolveBackgroundStreamOutcome({
-            isStale: isStale(),
+            isStale: stale,
             originChatId,
             isViewingOrigin: selectedBackendChatIdRef?.current === originChatId,
             resultType: status === 'cancelled' ? 'cancelled' : 'completed',
           });
+          if (stale && outcome.action === 'foreground') {
+            return;
+          }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
             return;
@@ -224,12 +228,16 @@ export function useChatStream({
         },
         // onError
         (error) => {
+          const stale = isStale();
           const outcome = resolveBackgroundStreamOutcome({
-            isStale: isStale(),
+            isStale: stale,
             originChatId,
             isViewingOrigin: selectedBackendChatIdRef?.current === originChatId,
             resultType: 'error',
           });
+          if (stale && outcome.action === 'foreground') {
+            return;
+          }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
             return;
