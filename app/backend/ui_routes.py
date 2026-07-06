@@ -39,6 +39,17 @@ from pydantic import BaseModel, Field
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
+from app.progenitor.workflows import (
+    WORKFLOW_ALLOWED_EVENT_TYPES,
+    WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_QUEUE_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
+    WorkflowDefinition,
+    WorkflowListItem,
+    WorkflowRun,
+    default_workflow_definition,
+    workflow_id_from_path,
+)
 
 from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agent_profile_router
 from .agent_store import get_agent_store
@@ -73,6 +84,18 @@ from .threads import (
     fail_thread,
     list_threads,
     upsert_thread,
+)
+from .workflow_service import (
+    PromptExecutionResult,
+    WorkflowExecutor,
+    build_manual_trigger_event,
+    delete_workflow_definition,
+    find_active_workflow_run,
+    get_workflow_definition,
+    get_workflow_run,
+    list_workflow_list_items,
+    list_workflow_runs,
+    save_workflow_definition,
 )
 
 logger = logging.getLogger(__name__)
@@ -603,6 +626,55 @@ class ActionResponse(BaseModel):
     response: str
 
 
+class WorkflowCreateRequest(BaseModel):
+    """Create one workflow definition."""
+
+    title: str = "Untitled workflow"
+    description: str = ""
+    event_type: str = WORKFLOW_ALLOWED_EVENT_TYPES[0]
+
+
+class WorkflowContentPutRequest(BaseModel):
+    """Persist one workflow definition."""
+
+    path: str | None = None
+    workflow: dict[str, Any]
+
+
+class WorkflowManualTriggerRequest(BaseModel):
+    """Manual trigger payload for operator testing."""
+
+    event_type: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowTriggerResponse(BaseModel):
+    """Response for manual workflow triggers."""
+
+    ok: bool = True
+    queued: bool = False
+    run: WorkflowRun | None = None
+
+
+class WorkflowsResponse(BaseModel):
+    """Workflow list payload."""
+
+    items: list[WorkflowListItem] = Field(default_factory=list)
+
+
+class WorkflowContentResponse(BaseModel):
+    """Single workflow definition payload."""
+
+    path: str
+    workflow: WorkflowDefinition
+
+
+class WorkflowRunsResponse(BaseModel):
+    """Workflow runs list payload."""
+
+    items: list[WorkflowRun] = Field(default_factory=list)
+
+
 def _resolve_action_thread_id(thread_id: str | None) -> str:
     """Return a workspace execution thread identifier."""
 
@@ -634,6 +706,45 @@ def _build_action_metadata(
     if root_widget_id:
         metadata["root_widget_id"] = root_widget_id
     return metadata
+
+
+_workflow_executor: WorkflowExecutor | None = None
+
+
+async def _workflow_prompt_runner(
+    *,
+    workflow: WorkflowDefinition,
+    node_id: str,
+    node,
+    input_text: str,
+    thread_id: str | None,
+) -> PromptExecutionResult:
+    response = await action_run(
+        ActionRunRequest(
+            widget_id=f"workflow:{workflow.id}:{node_id}",
+            prompt=node.prompt,
+            input=input_text,
+            broadcast_response=False,
+            thread_id=thread_id,
+            invocation_type="automation",
+            invocation_source=f"workflow:{workflow.id}:{node_id}",
+            root_widget_id=f"workflow:{workflow.id}",
+        )
+    )
+    return PromptExecutionResult(response=response.response, thread_id=response.thread_id)
+
+
+def get_workflow_executor() -> WorkflowExecutor:
+    """Return the singleton backend workflow executor."""
+
+    global _workflow_executor
+    if _workflow_executor is None:
+        _workflow_executor = WorkflowExecutor(
+            store_getter=get_default_document_store,
+            prompt_runner=_workflow_prompt_runner,
+            emit_event=lambda event_type, payload: broadcast_ui_event(event_type, payload),
+        )
+    return _workflow_executor
 
 
 class TaskInfo(BaseModel):
@@ -2393,6 +2504,12 @@ def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]
         _broadcast_widget_refresh(state_reader)
 
 
+async def _dispatch_workflow_triggers(triggers: list[dict]) -> None:
+    if not triggers:
+        return
+    await get_workflow_executor().dispatch_triggers(triggers)
+
+
 def _parse_once_datetime(expression: str) -> datetime:
     try:
         return datetime.fromisoformat(expression.replace("Z", "+00:00"))
@@ -2518,6 +2635,212 @@ async def get_workspace():
         sessions=payload["sessions"],
         widgets=[_widget_to_response(widget) for widget in payload["widgets"]],
     )
+
+
+def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowContentResponse:
+    return WorkflowContentResponse(
+        path=f"/state/workflows/{definition.id}.json",
+        workflow=definition,
+    )
+
+
+def _workflow_event_payload(definition: WorkflowDefinition) -> dict[str, Any]:
+    return _workflow_content_response(definition).model_dump(mode="json")
+
+
+@router.get("/workflows", response_model=WorkflowsResponse)
+async def get_workflows():
+    """Return the workflow definition list for the workflows page/sidebar."""
+
+    items = list_workflow_list_items(get_default_document_store())
+    broadcast_ui_event(
+        "workflows.snapshot",
+        {"items": [item.model_dump(mode="json") for item in items]},
+    )
+    return WorkflowsResponse(items=items)
+
+
+@router.get("/workflows/content", response_model=WorkflowContentResponse)
+async def get_workflow_content(path: str = Query(...)):
+    """Return one stored workflow definition by id or mounted virtual path."""
+
+    try:
+        definition = get_workflow_definition(get_default_document_store(), path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    payload = _workflow_content_response(definition)
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    return payload
+
+
+@router.put("/workflows/content", response_model=WorkflowContentResponse)
+async def put_workflow_content(body: WorkflowContentPutRequest):
+    """Persist one workflow definition."""
+
+    workflow_payload = dict(body.workflow)
+    target_path = body.path
+    if target_path:
+        try:
+            workflow_id = workflow_id_from_path(target_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if workflow_payload.get("id") and workflow_payload.get("id") != workflow_id:
+            raise HTTPException(status_code=400, detail="Workflow id must match requested path")
+        workflow_payload["id"] = workflow_id
+    try:
+        definition = save_workflow_definition(get_default_document_store(), workflow_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = _workflow_content_response(definition)
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event(
+        "workflows.snapshot",
+        {
+            "items": [
+                item.model_dump(mode="json")
+                for item in list_workflow_list_items(get_default_document_store())
+            ]
+        },
+    )
+    return payload
+
+
+@router.post("/workflows", response_model=WorkflowContentResponse)
+async def create_workflow(body: WorkflowCreateRequest):
+    """Create a new workflow definition with the minimal valid scaffold."""
+
+    if body.event_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported workflow event type")
+    try:
+        definition = save_workflow_definition(
+            get_default_document_store(),
+            default_workflow_definition(
+                title=body.title.strip() or "Untitled workflow",
+                description=body.description,
+                event_type=body.event_type,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = _workflow_content_response(definition)
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event(
+        "workflows.snapshot",
+        {
+            "items": [
+                item.model_dump(mode="json")
+                for item in list_workflow_list_items(get_default_document_store())
+            ]
+        },
+    )
+    return payload
+
+
+@router.delete("/workflows/{workflow_id}", status_code=204)
+async def delete_workflow(workflow_id: str):
+    """Delete one stored workflow definition."""
+
+    store = get_default_document_store()
+    try:
+        definition = get_workflow_definition(store, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    delete_workflow_definition(store, workflow_id)
+    broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id})
+    broadcast_ui_event(
+        "workflows.snapshot",
+        {"items": [item.model_dump(mode="json") for item in list_workflow_list_items(store)]},
+    )
+    return None
+
+
+@router.post("/workflows/{workflow_id}/pause", response_model=WorkflowContentResponse)
+async def pause_workflow(workflow_id: str):
+    """Pause one workflow definition and any active run."""
+
+    store = get_default_document_store()
+    try:
+        definition = get_workflow_definition(store, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    updated = save_workflow_definition(
+        store,
+        definition.model_copy(
+            update={"paused": True, "updated_at": utcnow().isoformat()}
+        ).model_dump(mode="json", by_alias=True),
+    )
+    await get_workflow_executor().pause_workflow(updated.id)
+    payload = _workflow_content_response(updated)
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_workflows_snapshot()
+    return payload
+
+
+@router.post("/workflows/{workflow_id}/resume", response_model=WorkflowContentResponse)
+async def resume_workflow(workflow_id: str):
+    """Resume one paused workflow definition and its active run, if any."""
+
+    store = get_default_document_store()
+    try:
+        definition = get_workflow_definition(store, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    updated = save_workflow_definition(
+        store,
+        definition.model_copy(
+            update={"paused": False, "updated_at": utcnow().isoformat()}
+        ).model_dump(mode="json", by_alias=True),
+    )
+    await get_workflow_executor().resume_workflow(updated.id)
+    payload = _workflow_content_response(updated)
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_workflows_snapshot()
+    return payload
+
+
+@router.get("/workflow-runs", response_model=WorkflowRunsResponse)
+async def get_workflow_runs():
+    """Return active and recent workflow runs."""
+
+    items = list_workflow_runs(get_default_document_store())
+    broadcast_workflow_runs_snapshot(items)
+    return WorkflowRunsResponse(items=items)
+
+
+@router.post("/workflows/{workflow_id}/trigger", response_model=WorkflowTriggerResponse)
+async def trigger_workflow(workflow_id: str, body: WorkflowManualTriggerRequest):
+    """Manually trigger one workflow definition for operator testing."""
+
+    store = get_default_document_store()
+    try:
+        definition = get_workflow_definition(store, workflow_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if definition is None:
+        raise HTTPException(status_code=404, detail="Workflow not found")
+    try:
+        trigger = build_manual_trigger_event(
+            definition,
+            event_type=body.event_type,
+            payload=body.payload,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    active_before = find_active_workflow_run(store, definition.id)
+    run = await get_workflow_executor().trigger_workflow(definition.id, trigger)
+    queued = active_before is not None
+    if queued and active_before is not None:
+        return WorkflowTriggerResponse(ok=True, queued=True, run=active_before)
+    refreshed = get_workflow_run(store, run.run_id) if run is not None else None
+    return WorkflowTriggerResponse(ok=True, queued=False, run=refreshed or run)
 
 
 @router.get("/database/schema")
@@ -3152,6 +3475,20 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             }
         ],
     )
+    await _dispatch_workflow_triggers(
+        [
+            {
+                "event_type": "kanban.card.created",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.created",
+                    "card": created,
+                    "timestamp": now,
+                    "source": "kanban",
+                },
+            }
+        ]
+    )
     response = _kanban_card_response(state_reader, created)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
     return response
@@ -3313,6 +3650,21 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
                 }
             )
     _apply_event_widget_triggers(state_reader, triggers)
+    workflow_triggers = []
+    for trigger in triggers:
+        raw_payload = trigger.get("payload")
+        payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
+        workflow_triggers.append(
+            {
+                **trigger,
+                "payload": {
+                    **payload,
+                    "timestamp": trigger.get("timestamp") or now,
+                    "source": "kanban",
+                },
+            }
+        )
+    await _dispatch_workflow_triggers(workflow_triggers)
     if previous_card is not None:
         if previous_card.get("status") != refreshed.get("status"):
             _append_task_activity_entry(
@@ -3393,6 +3745,20 @@ async def delete_kanban_card(card_id: str):
                     },
                 }
             ],
+        )
+        await _dispatch_workflow_triggers(
+            [
+                {
+                    "event_type": "kanban.card.deleted",
+                    "timestamp": timestamp,
+                    "payload": {
+                        "event_type": "kanban.card.deleted",
+                        "card": deleted_card,
+                        "timestamp": timestamp,
+                        "source": "kanban",
+                    },
+                }
+            ]
         )
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
     return None
@@ -4435,6 +4801,18 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
                 broadcast_task_content(changed_key.split(":", 1)[1])
             elif changed_key.startswith("kanban_task_activity:"):
                 broadcast_task_activity(changed_key.split(":", 1)[1])
+            if changed_key is None or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
+                broadcast_workflows_snapshot()
+                if changed_key is not None:
+                    workflow_id = changed_key.removeprefix(WORKFLOW_DEFINITION_KEY_PREFIX)
+                    if workflow_id:
+                        broadcast_workflow_detail(workflow_id)
+            if (
+                changed_key is None
+                or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
+                or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
+            ):
+                broadcast_workflow_runs_snapshot()
             if changed_key is None or changed_key in _WIDGET_KEYS:
                 broadcast_widgets_snapshot()
         except Exception:
@@ -5023,6 +5401,38 @@ def broadcast_prompts_snapshot(
         ]
     payload = [item.model_dump(mode="json") for item in prompts]
     return broadcast_ui_event("prompts.snapshot", {"prompts": payload})
+
+
+def broadcast_workflows_snapshot(
+    items: list[WorkflowListItem] | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current workflow definition list."""
+
+    if items is None:
+        items = list_workflow_list_items(get_default_document_store())
+    payload = [item.model_dump(mode="json") for item in items]
+    return broadcast_ui_event("workflows.snapshot", {"items": payload})
+
+
+def broadcast_workflow_detail(workflow_id: str) -> UiEventEnvelope:
+    """Broadcast one workflow definition update or delete event."""
+
+    definition = get_workflow_definition(get_default_document_store(), workflow_id)
+    if definition is None:
+        return broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id})
+    payload = _workflow_content_response(definition).model_dump(mode="json")
+    return broadcast_ui_event("workflow.updated", payload)
+
+
+def broadcast_workflow_runs_snapshot(
+    runs: list[WorkflowRun] | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current workflow runs list."""
+
+    if runs is None:
+        runs = list_workflow_runs(get_default_document_store())
+    payload = [item.model_dump(mode="json") for item in runs]
+    return broadcast_ui_event("workflow.runs.snapshot", {"items": payload})
 
 
 def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:

@@ -1,379 +1,1193 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
+import { useSearchParams } from 'react-router-dom';
 import {
-  ReactFlow,
+  addEdge,
+  applyEdgeChanges,
+  applyNodeChanges,
   Background,
   Controls,
+  Handle,
   MiniMap,
-  useReactFlow,
-  useOnViewportChange,
+  Position,
+  ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
 } from '@xyflow/react';
-
+import { useConfig } from '../context/ConfigContext';
+import { useNotifications } from '../context/NotificationContext';
+import {
+  createWorkflow,
+  deleteWorkflow,
+  fetchWorkflowContent,
+  fetchWorkflows,
+  fetchWorkflowRuns,
+  pauseWorkflow,
+  resumeWorkflow,
+  saveWorkflow,
+  selectWorkflowDetailByPath,
+  selectWorkflowLatestRunById,
+  selectWorkflowRuns,
+  selectWorkflows,
+  selectWorkflowsState,
+  triggerWorkflow,
+} from '../store/uiDataSlice';
+import DetailHeader, {
+  DeleteActionIcon,
+  DetailHeaderAction,
+  DetailHeaderActions,
+  DetailStatus,
+  PauseActionIcon,
+  PlayActionIcon,
+  SaveActionIcon,
+} from '../components/layout/DetailHeader';
+import {
+  PaneCollapseSeam,
+  PaneExpandRail,
+  PaneListFilters,
+  PaneListFooter,
+  PaneListGroup,
+  PaneListScroll,
+  PaneListSearch,
+  PaneListSortButton,
+  PaneListToolbar,
+  PaneSection,
+} from '../components/layout/PaneList';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
+import { JsonCodeEditor } from '../components/workspace/WorkflowJsonPanel';
 import '../styles/workspace.css';
 import '../styles/nodes.css';
-import WorkspaceSidebar from '../components/workspace/WorkspaceSidebar';
-import WorkspaceDock from '../components/workspace/WorkspaceDock';
-import NodeContextMenu from '../components/workspace/NodeContextMenu';
-import {
-  WorkspaceProvider,
-  useWorkspaceActions,
-  useWorkspaceGraph,
-} from '../context/WorkspaceContext';
-import { createPersistedGraph } from '../context/workspaceGraph';
-import { WorkflowJsonDock, WorkflowJsonEditor } from '../components/workspace/WorkflowJsonPanel';
 
-import PromptNode from '../components/workspace/nodes/PromptNode';
-import CodeNode from '../components/workspace/nodes/CodeNode';
-import WebFrameNode from '../components/workspace/nodes/WebFrameNode';
-import LabelNode from '../components/workspace/nodes/LabelNode';
-import ScheduleNode from '../components/workspace/nodes/ScheduleNode';
-import EventNode from '../components/workspace/nodes/EventNode';
-import GroupNode from '../components/workspace/nodes/GroupNode';
-import AgentNode from '../components/workspace/nodes/AgentNode';
-import UserNode from '../components/workspace/nodes/UserNode';
-import { useSelector } from 'react-redux';
-import { selectUiWidgets } from '../store/uiDataSlice';
-
-const nodeTypes = {
-  prompt: PromptNode,
-  code: CodeNode,
-  user: UserNode,
-  webframe: WebFrameNode,
-  label: LabelNode,
-  schedule: ScheduleNode,
-  event: EventNode,
-  group: GroupNode,
-  agent: AgentNode,
-  mcp: AgentNode,
+const WORKFLOW_EVENT_TYPES = [
+  'kanban.card.created',
+  'kanban.card.updated',
+  'kanban.card.moved',
+  'kanban.card.deleted',
+  'kanban.card.status_changed',
+];
+const FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'enabled', label: 'Enabled' },
+  { value: 'paused', label: 'Paused' },
+];
+const SORTS = ['Recent', 'Name'];
+const DEFAULT_EDGE_OPTIONS = { type: 'smoothstep', animated: true };
+const MINIMAP_STYLE = { height: 100, width: 150 };
+const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
+const DEFAULT_NODE_SIZES = {
+  event: { width: 320, height: 190 },
+  prompt: { width: 340, height: 240 },
 };
 
-const minimapStyle = {
-  height: 100,
-  width: 150,
-};
-const defaultEdgeOptions = {
-  type: 'smoothstep',
-  animated: true,
-};
-const snapGrid = [16, 16];
-const defaultViewport = { x: 0, y: 0, zoom: 1 };
-
-function getViewportSignature(viewport = {}) {
-  return `${viewport.x ?? 0}:${viewport.y ?? 0}:${viewport.zoom ?? 1}`;
+function workflowPath(workflowId) {
+  return workflowId ? `/state/workflows/${workflowId}.json` : '';
 }
 
-const minimapNodeColor = (node) => {
-  switch (node.type) {
-    case 'prompt': return '#58a6ff';
-    case 'code': return '#3fb950';
-    case 'user': return '#39c5cf';
-    case 'webframe': return '#d29922';
-    case 'label': return '#8b949e';
-    case 'schedule': return '#bc8cff';
-    case 'event': return '#ffa657';
-    case 'group': return '#6e7681';
-    case 'agent': return '#f85149';
-    default: return '#8b949e';
-  }
-};
+function cloneValue(value) {
+  return value ? JSON.parse(JSON.stringify(value)) : value;
+}
 
-function WorkspaceInner() {
-  const {
+function nodeColor(node) {
+  return node.type === 'event' ? '#ffa657' : '#58a6ff';
+}
+
+function formatRelativeTime(timestamp) {
+  if (!timestamp) {
+    return 'No activity yet';
+  }
+  const time = Date.parse(timestamp);
+  if (!Number.isFinite(time)) {
+    return timestamp;
+  }
+  const deltaMs = Date.now() - time;
+  const absSeconds = Math.max(0, Math.round(deltaMs / 1000));
+  if (absSeconds < 60) return 'Just now';
+  if (absSeconds < 3600) return `${Math.round(absSeconds / 60)}m ago`;
+  if (absSeconds < 86400) return `${Math.round(absSeconds / 3600)}h ago`;
+  return `${Math.round(absSeconds / 86400)}d ago`;
+}
+
+function workflowTone(workflow, latestRun) {
+  if (workflow?.paused) return 'muted';
+  if (latestRun?.status === 'failed') return 'error';
+  if (latestRun?.status === 'running') return 'info';
+  if (workflow?.enabled === false) return 'muted';
+  return 'ok';
+}
+
+function workflowStatusLabel(workflow, latestRun) {
+  if (workflow?.paused) return 'Paused';
+  if (latestRun?.status === 'running') return 'Running';
+  if (latestRun?.status === 'failed') return 'Failed';
+  if (workflow?.enabled === false) return 'Disabled';
+  return 'Ready';
+}
+
+function nextPromptPosition(nodes) {
+  const ordered = [...nodes].sort((left, right) => left.position.x - right.position.x);
+  const anchor = ordered[ordered.length - 1];
+  if (!anchor) {
+    return { x: 440, y: 160 };
+  }
+  return { x: anchor.position.x + 360, y: anchor.position.y };
+}
+
+function buildNodeData(kind, node, callbacks, latestRun) {
+  if (kind === 'event') {
+    return {
+      kind,
+      title: node.title || 'Event',
+      eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
+      currentNodeId: latestRun?.current_node_id || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: false,
+    };
+  }
+  return {
+    kind,
+    title: node.title || 'Prompt',
+    prompt: node.prompt || '',
+    agentName: node.agent_name || 'progenitor',
+    role: node.role || '',
+    currentNodeId: latestRun?.current_node_id || null,
+    completedNodeIds: latestRun?.completed_node_ids || [],
+    onChange: callbacks.onNodeChange,
+    onDelete: callbacks.onDeleteNode,
+    canDelete: true,
+  };
+}
+
+function workflowToFlow(definition, callbacks, latestRun) {
+  const uiNodes = definition?.ui?.nodes || {};
+  const nodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
+    const kind = node.kind === 'event' ? 'event' : 'prompt';
+    const uiNode = uiNodes[nodeId] || {};
+    const size = uiNode.size || DEFAULT_NODE_SIZES[kind];
+    const position = uiNode.position || (kind === 'event' ? { x: 96, y: 160 } : { x: 456, y: 160 });
+    const enriched = kind === 'event'
+      ? { ...node, eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0] }
+      : node;
+    return {
+      id: nodeId,
+      type: kind,
+      position,
+      style: { width: size.width || DEFAULT_NODE_SIZES[kind].width, height: size.height || DEFAULT_NODE_SIZES[kind].height },
+      data: buildNodeData(kind, enriched, callbacks, latestRun),
+    };
+  });
+  const edges = (definition?.graph?.edges || []).map((edge) => ({
+    id: `edge_${edge.from.node}_${edge.to.node}`,
+    source: edge.from.node,
+    target: edge.to.node,
+    type: 'smoothstep',
+    animated: true,
+  }));
+  return {
     nodes,
     edges,
-    viewport,
-    viewportVersion,
-    loading,
-    error,
-  } = useWorkspaceGraph();
-  const {
-    onNodesChange,
-    onEdgesChange,
-    onConnect,
-    addNode,
-    captureViewport,
-    removeNodes,
-    removeEdges,
-    duplicateNode,
-    bringToFront,
-    sendToBack,
-    toggleExpanded,
-    refreshWorkspace,
-    syncWidgets,
-    replaceGraph,
-  } = useWorkspaceActions();
-  const workspaceReady = !loading && !error;
+    viewport: definition?.ui?.viewport || DEFAULT_VIEWPORT,
+  };
+}
 
-  const [jsonOpen, setJsonOpen] = useState(false);
-  const graphJson = useMemo(
-    () => JSON.stringify(createPersistedGraph(nodes, edges), null, 2),
-    [nodes, edges],
-  );
-  const handleJsonApply = useCallback((parsed) => {
-    replaceGraph(parsed.nodes, parsed.edges);
-  }, [replaceGraph]);
+function applyRunStateToNodes(nodes, latestRun) {
+  const currentNodeId = latestRun?.current_node_id || null;
+  const completedNodeIds = latestRun?.completed_node_ids || [];
+  return nodes.map((node) => {
+    const nextData = node.type === 'event'
+      ? { ...node.data, currentNodeId }
+      : { ...node.data, currentNodeId, completedNodeIds };
+    if (nextData === node.data) {
+      return node;
+    }
+    return { ...node, data: nextData };
+  });
+}
 
-  const reactFlowInstance = useReactFlow();
-  const reactFlowWrapper = useRef(null);
-  const viewportSignatureRef = useRef(getViewportSignature(defaultViewport));
-  const lastAppliedViewportVersionRef = useRef(-1);
-  const [contextMenu, setContextMenu] = useState(null);
-  const [dragOver, setDragOver] = useState(false);
-
-  useOnViewportChange({
-    onChange: workspaceReady
-      ? (nextViewport) => {
-        viewportSignatureRef.current = getViewportSignature(nextViewport);
-        captureViewport(nextViewport);
-      }
-      : undefined,
+function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
+  const graphNodes = {};
+  const uiNodes = {};
+  nodes.forEach((node) => {
+    if (node.type === 'event') {
+      graphNodes[node.id] = {
+        kind: 'event',
+        title: String(node.data?.title || 'Event'),
+      };
+    } else {
+      graphNodes[node.id] = {
+        kind: 'prompt',
+        title: String(node.data?.title || 'Prompt'),
+        prompt: String(node.data?.prompt || ''),
+        agent_name: String(node.data?.agentName || 'progenitor'),
+        role: node.data?.role ? String(node.data.role) : null,
+      };
+    }
+    uiNodes[node.id] = {
+      position: {
+        x: Math.round(node.position?.x || 0),
+        y: Math.round(node.position?.y || 0),
+      },
+      size: {
+        width: Math.round(Number(node.style?.width) || DEFAULT_NODE_SIZES[node.type]?.width || 320),
+        height: Math.round(Number(node.style?.height) || DEFAULT_NODE_SIZES[node.type]?.height || 200),
+      },
+    };
   });
 
-  useEffect(() => {
-    if (!workspaceReady || lastAppliedViewportVersionRef.current === viewportVersion) {
-      return;
-    }
-
-    lastAppliedViewportVersionRef.current = viewportVersion;
-    const nextSignature = getViewportSignature(viewport);
-    if (viewportSignatureRef.current === nextSignature) {
-      return;
-    }
-
-    viewportSignatureRef.current = nextSignature;
-    reactFlowInstance.setViewport(viewport);
-  }, [reactFlowInstance, viewport, viewportVersion, workspaceReady]);
-
-  // Widgets come from the Redux realtime store (single source of truth) rather
-  // than this page opening its own status stream.
-  const widgets = useSelector(selectUiWidgets);
-  useEffect(() => {
-    syncWidgets(widgets);
-  }, [widgets, syncWidgets]);
-
-  // Handle drop from sidebar
-  const onDrop = useCallback(
-    (event) => {
-      if (!workspaceReady) {
-        event.preventDefault();
-        return;
-      }
-      event.preventDefault();
-      setDragOver(false);
-
-      const type = event.dataTransfer.getData('application/reactflow');
-      if (!type) return;
-
-      const position = reactFlowInstance.screenToFlowPosition({
-        x: event.clientX,
-        y: event.clientY,
-      });
-
-      addNode(type, position);
+  const eventNode = nodes.find((node) => node.type === 'event');
+  return {
+    ...baseWorkflow,
+    trigger: {
+      ...baseWorkflow.trigger,
+      type: 'event',
+      event_type: eventNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
     },
-    [workspaceReady, reactFlowInstance, addNode]
-  );
-
-  const onDragOver = useCallback((event) => {
-    if (!workspaceReady) {
-      return;
-    }
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setDragOver(true);
-  }, [workspaceReady]);
-
-  const onDragLeave = useCallback(() => {
-    setDragOver(false);
-  }, []);
-
-  // Context menu
-  const onNodeContextMenu = useCallback((event, node) => {
-    if (!workspaceReady) {
-      return;
-    }
-    event.preventDefault();
-    setContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      nodeId: node.id,
-    });
-  }, [workspaceReady]);
-
-  const onPaneContextMenu = useCallback((event) => {
-    if (!workspaceReady) {
-      return;
-    }
-    event.preventDefault();
-    setContextMenu({
-      x: event.clientX,
-      y: event.clientY,
-      nodeId: null,
-    });
-  }, [workspaceReady]);
-
-  const onContextMenuAction = useCallback(
-    (action, nodeId) => {
-      switch (action) {
-        case 'delete':
-          if (nodeId) removeNodes([nodeId]);
-          break;
-        case 'duplicate':
-          if (nodeId) duplicateNode(nodeId);
-          break;
-        case 'bringToFront':
-          if (nodeId) bringToFront(nodeId);
-          break;
-        case 'sendToBack':
-          if (nodeId) sendToBack(nodeId);
-          break;
-        case 'expand':
-          if (nodeId) toggleExpanded(nodeId);
-          break;
-        case 'fitView':
-          reactFlowInstance.fitView({ padding: 0.2 });
-          break;
-        case 'resetView':
-          reactFlowInstance.setViewport({ x: 0, y: 0, zoom: 1 });
-          break;
-      }
+    graph: {
+      nodes: graphNodes,
+      edges: edges.map((edge) => ({
+        from: { node: edge.source, port: 'default' },
+        to: { node: edge.target, port: 'default' },
+      })),
     },
-    [removeNodes, duplicateNode, bringToFront, sendToBack, toggleExpanded, reactFlowInstance]
-  );
-
-  const closeContextMenu = useCallback(() => {
-    setContextMenu(null);
-  }, []);
-
-  // Close context menu on click
-  const onPaneClick = useCallback(() => {
-    setContextMenu(null);
-  }, []);
-
-  const handleKeyboardShortcut = useCallback(
-    (event) => {
-      if (!workspaceReady) {
-        return;
-      }
-      // Only handle if not in an input/textarea
-      const tag = event.target.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-
-      if (event.key === 'Delete' || event.key === 'Backspace') {
-        const selectedNodes = nodes.filter((node) => node.selected);
-        const selectedEdges = edges.filter((edge) => edge.selected);
-        if (selectedEdges.length > 0) {
-          removeEdges(selectedEdges.map((edge) => edge.id));
-        }
-        if (selectedNodes.length > 0) {
-          removeNodes(selectedNodes.map((node) => node.id));
-        }
-      }
-
-      if (event.ctrlKey && event.key === 'd') {
-        event.preventDefault();
-        const selectedNode = nodes.find((n) => n.selected);
-        if (selectedNode) {
-          duplicateNode(selectedNode.id);
-        }
-      }
+    ui: {
+      ...(baseWorkflow.ui || {}),
+      nodes: uiNodes,
+      viewport: viewport || baseWorkflow.ui?.viewport || DEFAULT_VIEWPORT,
     },
-    [workspaceReady, nodes, edges, removeNodes, removeEdges, duplicateNode]
-  );
+  };
+}
 
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyboardShortcut);
-    return () => window.removeEventListener('keydown', handleKeyboardShortcut);
-  }, [handleKeyboardShortcut]);
-
+function EventNode({ id, data, selected }) {
+  const isRunning = data.currentNodeId === id;
   return (
-    <div className="workspace-container" tabIndex={-1}>
-      <WorkspaceSidebar />
-      <div
-        className={`workspace-canvas ${dragOver ? 'drag-over' : ''} ${!workspaceReady ? 'locked' : ''}`}
-        ref={reactFlowWrapper}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-      >
-        {loading && <div className="workspace-loading">Loading workflows...</div>}
-        {error && (
-          <div className="workspace-loading workspace-error">
-            Failed to load workflows.
-            <button className="node-action-btn primary" onClick={refreshWorkspace}>Retry</button>
-          </div>
-        )}
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={workspaceReady ? onNodesChange : undefined}
-          onEdgesChange={workspaceReady ? onEdgesChange : undefined}
-          onConnect={workspaceReady ? onConnect : undefined}
-          onNodeContextMenu={workspaceReady ? onNodeContextMenu : undefined}
-          onPaneContextMenu={workspaceReady ? onPaneContextMenu : undefined}
-          onPaneClick={workspaceReady ? onPaneClick : undefined}
-          nodeTypes={nodeTypes}
-          fitView={false}
-          deleteKeyCode={null}
-          multiSelectionKeyCode="Shift"
-          selectionOnDrag={workspaceReady}
-          panOnDrag={workspaceReady ? [1, 2] : false}
-          nodesDraggable={workspaceReady}
-          nodesConnectable={workspaceReady}
-          elementsSelectable={workspaceReady}
-          zoomOnScroll={workspaceReady}
-          zoomOnPinch={workspaceReady}
-          zoomOnDoubleClick={workspaceReady}
-          panOnScroll={false}
-          selectionMode="partial"
-          defaultEdgeOptions={defaultEdgeOptions}
-          snapToGrid
-          snapGrid={snapGrid}
-          minZoom={0.1}
-          maxZoom={4}
-          defaultViewport={defaultViewport}
-        >
-          <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
-          <Controls showInteractive={false} />
-          <MiniMap
-            style={minimapStyle}
-            nodeColor={minimapNodeColor}
-            maskColor="rgba(0, 0, 0, 0.6)"
-            pannable
-            zoomable
-          />
-        </ReactFlow>
-
-        {contextMenu && (
-          <NodeContextMenu
-            x={contextMenu.x}
-            y={contextMenu.y}
-            nodeId={contextMenu.nodeId}
-            onClose={closeContextMenu}
-            onAction={onContextMenuAction}
-          />
-        )}
-        <WorkspaceDock disabled={!workspaceReady} />
-        {jsonOpen ? (
-          <WorkflowJsonEditor
-            value={graphJson}
-            onApply={handleJsonApply}
-            onClose={() => setJsonOpen(false)}
-          />
-        ) : (
-          <WorkflowJsonDock onOpen={() => setJsonOpen(true)} />
-        )}
+    <div className={`workspace-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className="node-title-bar drag-handle">
+        <span className="node-type-icon event">E</span>
+        <input
+          className="node-title-input"
+          value={data.title}
+          onChange={(event) => data.onChange(id, { title: event.target.value })}
+          placeholder="Event title"
+        />
+        <span className={`node-status-badge ${isRunning ? 'running' : 'idle'}`}>{isRunning ? 'Live' : 'Start'}</span>
+      </div>
+      <div className="node-body">
+        <div className="node-body-compact workflow-graph-node__body">
+          <label className="workflow-graph-node__field">
+            <span>Trigger</span>
+            <select
+              value={data.eventType}
+              onChange={(event) => data.onChange(id, { eventType: event.target.value })}
+            >
+              {WORKFLOW_EVENT_TYPES.map((eventType) => (
+                <option key={eventType} value={eventType}>{eventType}</option>
+              ))}
+            </select>
+          </label>
+          <p className="workflow-graph-node__hint">
+            One event node starts the v1 workflow path.
+          </p>
+        </div>
       </div>
     </div>
+  );
+}
+
+function PromptNode({ id, data, selected }) {
+  const isRunning = data.currentNodeId === id;
+  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
+  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
+  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Prompt');
+  return (
+    <div className={`workspace-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
+      <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className="node-title-bar drag-handle">
+        <span className="node-type-icon prompt">P</span>
+        <input
+          className="node-title-input"
+          value={data.title}
+          onChange={(event) => data.onChange(id, { title: event.target.value })}
+          placeholder="Prompt title"
+        />
+        <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
+        {data.canDelete ? (
+          <button
+            type="button"
+            className="node-remove-btn"
+            aria-label="Delete prompt node"
+            onClick={() => data.onDelete(id)}
+          >
+            ×
+          </button>
+        ) : null}
+      </div>
+      <div className="node-body">
+        <div className="node-body-compact workflow-graph-node__body">
+          <label className="workflow-graph-node__field">
+            <span>Agent</span>
+            <input
+              value={data.agentName}
+              onChange={(event) => data.onChange(id, { agentName: event.target.value })}
+              placeholder="progenitor"
+            />
+          </label>
+          <label className="workflow-graph-node__field">
+            <span>Role</span>
+            <input
+              value={data.role}
+              onChange={(event) => data.onChange(id, { role: event.target.value })}
+              placeholder="Optional role"
+            />
+          </label>
+          <label className="workflow-graph-node__field">
+            <span>Prompt</span>
+            <textarea
+              value={data.prompt}
+              onChange={(event) => data.onChange(id, { prompt: event.target.value })}
+              placeholder="Handle this workflow event."
+            />
+          </label>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const NODE_TYPES = {
+  event: EventNode,
+  prompt: PromptNode,
+};
+
+function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
+  const path = workflowPath(item.id);
+  return (
+    <button
+      type="button"
+      className={`workflow-list-row ${selectedPath === path ? 'active' : ''}`}
+      onClick={() => onSelect(path)}
+      title={item.description || item.title}
+    >
+      <div className="workflow-list-row__head">
+        <span className="workflow-list-row__title">{item.title}</span>
+        <span className={`workflow-list-row__status workflow-list-row__status--${workflowTone(item, latestRun)}`}>
+          {workflowStatusLabel(item, latestRun)}
+        </span>
+      </div>
+      <div className="workflow-list-row__meta">
+        <span>{item.event_type}</span>
+        <span>{item.node_count} nodes</span>
+      </div>
+      <div className="workflow-list-row__foot">
+        <span>{item.description || 'No description yet.'}</span>
+        <span>{formatRelativeTime(latestRun?.updated_at || item.updated_at)}</span>
+      </div>
+    </button>
+  );
+}
+
+function WorkflowRunsList({ runs, loading }) {
+  if (loading) {
+    return <div className="prompts-empty-state">Loading workflow runs...</div>;
+  }
+  if (!runs.length) {
+    return <div className="prompts-empty-state">No runs yet. Trigger the workflow to inspect its execution path.</div>;
+  }
+  return (
+    <div className="workflow-runs">
+      {runs.map((run) => (
+        <article key={run.run_id} className="workflow-run-card">
+          <div className="workflow-run-card__head">
+            <strong>{run.status}</strong>
+            <span>{formatRelativeTime(run.updated_at || run.queued_at)}</span>
+          </div>
+          <div className="workflow-run-card__meta">
+            <span>Run {run.run_id}</span>
+            {run.current_node_id ? <span>Current: {run.current_node_id}</span> : null}
+            {run.thread_id ? <span>Thread: {run.thread_id}</span> : null}
+          </div>
+          {run.last_error ? <p className="workflow-run-card__error">{run.last_error}</p> : null}
+          {run.last_output ? <pre className="workflow-run-card__output">{run.last_output}</pre> : null}
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function WorkflowsInner() {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const { show } = useNotifications();
+  const workflowsUrl = getApiUrl('workflows');
+  const workflowRunsUrl = getApiUrl('workflowRuns');
+  const workflows = useSelector(selectWorkflows);
+  const workflowsState = useSelector(selectWorkflowsState);
+  const workflowRuns = useSelector(selectWorkflowRuns);
+  const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('workflows-sidebar sess-list');
+  const reactFlow = useReactFlow();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [selectedPath, setSelectedPath] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [query, setQuery] = useState('');
+  const [sortMode, setSortMode] = useState('Recent');
+  const [detailTab, setDetailTab] = useState('Canvas');
+  const [draftWorkflow, setDraftWorkflow] = useState(null);
+  const [graphNodes, setGraphNodes] = useState([]);
+  const [graphEdges, setGraphEdges] = useState([]);
+  const [jsonDraft, setJsonDraft] = useState('');
+  const [jsonError, setJsonError] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [busyAction, setBusyAction] = useState('');
+  const requestedPath = searchParams.get('path') || '';
+  const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
+  const selectedLatestRun = useSelector((state) => {
+    const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
+    return selectWorkflowLatestRunById(state, workflowId);
+  });
+  const nodesRef = useRef([]);
+  const edgesRef = useRef([]);
+  const viewportRef = useRef(DEFAULT_VIEWPORT);
+  const syncedPathRef = useRef('');
+  const syncedHashRef = useRef('');
+
+  const loadWorkflows = useCallback(() => (
+    dispatch(fetchWorkflows({ workflowsUrl })).unwrap().catch((error) => {
+      show('error', 'Workflow load failed', error.message);
+    })
+  ), [dispatch, show, workflowsUrl]);
+
+  const loadRuns = useCallback(() => (
+    dispatch(fetchWorkflowRuns({ workflowRunsUrl })).unwrap().catch((error) => {
+      show('error', 'Workflow runs load failed', error.message);
+    })
+  ), [dispatch, show, workflowRunsUrl]);
+
+  useEffect(() => {
+    loadWorkflows();
+    loadRuns();
+  }, [loadRuns, loadWorkflows]);
+
+  useEffect(() => {
+    if (!workflows.length) {
+      setSelectedPath('');
+      return;
+    }
+    setSelectedPath((current) => {
+      const next = workflows.find((item) => workflowPath(item.id) === requestedPath)?.id
+        ? requestedPath
+        : workflows.find((item) => workflowPath(item.id) === current)?.id
+          ? current
+          : workflowPath(workflows[0].id);
+      return next;
+    });
+  }, [requestedPath, workflows]);
+
+  useEffect(() => {
+    const currentPath = searchParams.get('path') || '';
+    if (!selectedPath || currentPath === selectedPath) {
+      return;
+    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('path', selectedPath);
+    setSearchParams(nextParams, { replace: true });
+  }, [searchParams, selectedPath, setSearchParams]);
+
+  useEffect(() => {
+    if (!selectedPath || selectedDetail) {
+      return;
+    }
+    dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }))
+      .unwrap()
+      .catch((error) => show('error', 'Workflow detail load failed', error.message));
+  }, [dispatch, selectedDetail, selectedPath, show, workflowsUrl]);
+
+  const visibleItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const filtered = workflows.filter((item) => {
+      if (filter === 'enabled' && item.enabled === false) return false;
+      if (filter === 'paused' && !item.paused) return false;
+      const searchable = `${item.title} ${item.description} ${item.event_type}`.toLowerCase();
+      return !normalizedQuery || searchable.includes(normalizedQuery);
+    });
+    return [...filtered].sort((left, right) => {
+      if (sortMode === 'Name') {
+        return left.title.localeCompare(right.title);
+      }
+      const leftTime = Date.parse(left.updated_at || '') || 0;
+      const rightTime = Date.parse(right.updated_at || '') || 0;
+      return rightTime - leftTime;
+    });
+  }, [filter, query, sortMode, workflows]);
+
+  const visibleRuns = useMemo(() => {
+    const workflowId = selectedDetail?.workflow?.id;
+    return workflowRuns.filter((run) => !workflowId || run.workflow_id === workflowId);
+  }, [selectedDetail, workflowRuns]);
+
+  const draftHash = useMemo(
+    () => (draftWorkflow ? JSON.stringify(draftWorkflow) : ''),
+    [draftWorkflow],
+  );
+  const selectedHash = useMemo(
+    () => (selectedDetail?.workflow ? JSON.stringify(selectedDetail.workflow) : ''),
+    [selectedDetail],
+  );
+  const hasUnsavedChanges = Boolean(selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
+
+  const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
+    if (!workflow) {
+      setDraftWorkflow(null);
+      setGraphNodes([]);
+      setGraphEdges([]);
+      setJsonDraft('');
+      setJsonError('');
+      return;
+    }
+    const nextHash = JSON.stringify(workflow);
+    if (preserveDirty && hasUnsavedChanges && syncedPathRef.current === path) {
+      return;
+    }
+    syncedPathRef.current = path;
+    syncedHashRef.current = nextHash;
+    const cloned = cloneValue(workflow);
+    const flow = workflowToFlow(cloned, {
+      onNodeChange: (nodeId, patch) => {
+        setGraphNodes((currentNodes) => {
+          const nextNodes = currentNodes.map((node) => (
+            node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+          ));
+          nodesRef.current = nextNodes;
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
+          return nextNodes;
+        });
+      },
+      onDeleteNode: (nodeId) => {
+        setGraphNodes((currentNodes) => {
+          const nextNodes = currentNodes.filter((node) => node.id !== nodeId);
+          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+          nodesRef.current = nextNodes;
+          edgesRef.current = nextEdges;
+          setGraphEdges(nextEdges);
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
+          return nextNodes;
+        });
+      },
+    }, latestRun);
+    nodesRef.current = flow.nodes;
+    edgesRef.current = flow.edges;
+    viewportRef.current = flow.viewport;
+    setDraftWorkflow(cloned);
+    setGraphNodes(flow.nodes);
+    setGraphEdges(flow.edges);
+    setJsonDraft(`${JSON.stringify(cloned, null, 2)}\n`);
+    setJsonError('');
+    setStatusMessage('');
+    requestAnimationFrame(() => {
+      if (flow.nodes.length) {
+        reactFlow.setViewport(flow.viewport || DEFAULT_VIEWPORT);
+        reactFlow.fitView({ padding: 0.18, duration: 200 });
+      }
+    });
+  }, [hasUnsavedChanges, reactFlow]);
+
+  useEffect(() => {
+    if (!selectedDetail?.workflow || !selectedPath) {
+      return;
+    }
+    const selectedWorkflowHash = JSON.stringify(selectedDetail.workflow);
+    if (syncedPathRef.current === selectedPath && syncedHashRef.current === selectedWorkflowHash && hasUnsavedChanges) {
+      return;
+    }
+    syncDraftFromWorkflow(selectedDetail.workflow, selectedLatestRun, selectedPath, true);
+  }, [hasUnsavedChanges, selectedDetail, selectedLatestRun, selectedPath, syncDraftFromWorkflow]);
+
+  useEffect(() => {
+    if (!draftWorkflow) {
+      setJsonDraft('');
+      return;
+    }
+    setJsonDraft(`${JSON.stringify(draftWorkflow, null, 2)}\n`);
+  }, [draftWorkflow]);
+
+  useEffect(() => {
+    if (!nodesRef.current.length) {
+      return;
+    }
+    setGraphNodes((currentNodes) => {
+      const nextNodes = applyRunStateToNodes(currentNodes, selectedLatestRun);
+      nodesRef.current = nextNodes;
+      return nextNodes;
+    });
+  }, [selectedLatestRun]);
+
+  const updateDraft = useCallback((updater) => {
+    setDraftWorkflow((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      return next;
+    });
+  }, []);
+
+  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current) => {
+    nodesRef.current = nextNodes;
+    edgesRef.current = nextEdges;
+    viewportRef.current = nextViewport;
+    setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
+  }, []);
+
+  const onNodesChange = useCallback((changes) => {
+    setGraphNodes((currentNodes) => {
+      const nextNodes = applyNodeChanges(changes, currentNodes);
+      syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+      return nextNodes;
+    });
+  }, [syncWorkflowFromGraph]);
+
+  const onEdgesChange = useCallback((changes) => {
+    setGraphEdges((currentEdges) => {
+      const nextEdges = applyEdgeChanges(changes, currentEdges);
+      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      return nextEdges;
+    });
+  }, [syncWorkflowFromGraph]);
+
+  const validateConnection = useCallback((connection) => {
+    const source = nodesRef.current.find((node) => node.id === connection.source);
+    const target = nodesRef.current.find((node) => node.id === connection.target);
+    if (!source || !target) {
+      return 'Both workflow nodes must exist before connecting them.';
+    }
+    if (source.id === target.id) {
+      return 'A workflow node cannot connect to itself.';
+    }
+    if (target.type === 'event') {
+      return 'Event nodes cannot accept inbound edges in v1 workflows.';
+    }
+    const existingOutgoing = edgesRef.current.filter((edge) => edge.source === source.id && edge.target !== target.id);
+    if (existingOutgoing.length > 0) {
+      return 'Each workflow node may have only one outgoing edge in v1 workflows.';
+    }
+    const existingInbound = edgesRef.current.filter((edge) => edge.target === target.id && edge.source !== source.id);
+    if (existingInbound.length > 0) {
+      return 'Prompt nodes may have only one inbound edge in v1 workflows.';
+    }
+    return '';
+  }, []);
+
+  const onConnect = useCallback((connection) => {
+    const validationError = validateConnection(connection);
+    if (validationError) {
+      setStatusMessage(validationError);
+      show('error', 'Invalid workflow connection', validationError);
+      return;
+    }
+    setGraphEdges((currentEdges) => {
+      const nextEdges = addEdge({ ...connection, ...DEFAULT_EDGE_OPTIONS }, currentEdges);
+      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      return nextEdges;
+    });
+  }, [show, syncWorkflowFromGraph, validateConnection]);
+
+  const handleViewportChange = useCallback((_event, viewport) => {
+    viewportRef.current = viewport;
+    if (nodesRef.current.length && edgesRef.current.length >= 0) {
+      setDraftWorkflow((current) => (current ? flowToWorkflow(current, nodesRef.current, edgesRef.current, viewport) : current));
+    }
+  }, []);
+
+  const handleSelectWorkflow = (path) => {
+    setStatusMessage('');
+    setJsonError('');
+    setSelectedPath(path);
+  };
+
+  const handleCreateWorkflow = async () => {
+    setBusyAction('create');
+    setStatusMessage('');
+    try {
+      const created = await dispatch(createWorkflow({
+        workflowsUrl,
+        title: 'Untitled workflow',
+        description: '',
+        eventType: WORKFLOW_EVENT_TYPES[0],
+      })).unwrap();
+      setSelectedPath(created.path);
+      setDetailTab('Canvas');
+      setStatusMessage(`Created ${created.workflow.title}.`);
+    } catch (error) {
+      show('error', 'Workflow create failed', error.message);
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleRefresh = async () => {
+    await Promise.all([loadWorkflows(), loadRuns()]);
+  };
+
+  const handleAddPromptNode = () => {
+    if (!draftWorkflow) {
+      return;
+    }
+    const nodeId = `prompt_${Math.random().toString(36).slice(2, 10)}`;
+    const position = nextPromptPosition(nodesRef.current);
+    const nextNodes = [
+      ...nodesRef.current,
+      {
+        id: nodeId,
+        type: 'prompt',
+        position,
+        style: { ...DEFAULT_NODE_SIZES.prompt },
+        data: {
+          kind: 'prompt',
+          title: 'Prompt',
+          prompt: 'Handle this workflow event.',
+          agentName: 'progenitor',
+          role: '',
+          currentNodeId: null,
+          completedNodeIds: [],
+          onChange: (targetId, patch) => {
+            setGraphNodes((currentNodes) => {
+              const updated = currentNodes.map((node) => (
+                node.id === targetId ? { ...node, data: { ...node.data, ...patch } } : node
+              ));
+              syncWorkflowFromGraph(updated, edgesRef.current, viewportRef.current);
+              return updated;
+            });
+          },
+          onDelete: (targetId) => {
+            const updatedNodes = nodesRef.current.filter((node) => node.id !== targetId);
+            const updatedEdges = edgesRef.current.filter((edge) => edge.source !== targetId && edge.target !== targetId);
+            setGraphNodes(updatedNodes);
+            setGraphEdges(updatedEdges);
+            syncWorkflowFromGraph(updatedNodes, updatedEdges, viewportRef.current);
+          },
+          canDelete: true,
+        },
+      },
+    ];
+    const anchor = [...nodesRef.current]
+      .sort((left, right) => left.position.x - right.position.x)
+      .at(-1);
+    const nextEdges = anchor ? [...edgesRef.current, {
+      id: `edge_${anchor.id}_${nodeId}`,
+      source: anchor.id,
+      target: nodeId,
+      ...DEFAULT_EDGE_OPTIONS,
+    }] : edgesRef.current;
+    setGraphNodes(nextNodes);
+    setGraphEdges(nextEdges);
+    syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
+    setStatusMessage('Added a prompt step to the workflow path.');
+  };
+
+  const handleFieldChange = (field, value) => {
+    updateDraft((current) => ({ ...current, [field]: value }));
+  };
+
+  const handleApplyJson = () => {
+    try {
+      const parsed = JSON.parse(jsonDraft);
+      const flow = workflowToFlow(parsed, {
+        onNodeChange: (nodeId, patch) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => (
+              node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+            ));
+            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+            return nextNodes;
+          });
+        },
+        onDeleteNode: (nodeId) => {
+          const nextNodes = nodesRef.current.filter((node) => node.id !== nodeId);
+          const nextEdges = edgesRef.current.filter((edge) => edge.source !== nodeId && edge.target !== nodeId);
+          setGraphNodes(nextNodes);
+          setGraphEdges(nextEdges);
+          syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
+        },
+      }, selectedLatestRun);
+      setDraftWorkflow(parsed);
+      setGraphNodes(flow.nodes);
+      setGraphEdges(flow.edges);
+      nodesRef.current = flow.nodes;
+      edgesRef.current = flow.edges;
+      viewportRef.current = flow.viewport;
+      setJsonError('');
+      setStatusMessage('Applied JSON changes to the workflow draft.');
+      setDetailTab('Canvas');
+    } catch (error) {
+      setJsonError(error.message || 'Invalid workflow JSON');
+    }
+  };
+
+  const handleResetJson = () => {
+    if (!draftWorkflow) {
+      return;
+    }
+    setJsonDraft(`${JSON.stringify(draftWorkflow, null, 2)}\n`);
+    setJsonError('');
+  };
+
+  const handleSaveWorkflow = async () => {
+    if (!selectedPath || !draftWorkflow) {
+      return;
+    }
+    setSaving(true);
+    setStatusMessage('');
+    try {
+      const saved = await dispatch(saveWorkflow({
+        workflowsUrl,
+        path: selectedPath,
+        workflow: draftWorkflow,
+      })).unwrap();
+      syncDraftFromWorkflow(saved.workflow, selectedLatestRun, saved.path);
+      setStatusMessage(`Saved ${saved.workflow.title}.`);
+    } catch (error) {
+      show('error', 'Workflow save failed', error.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handlePauseResume = async () => {
+    const workflowId = selectedDetail?.workflow?.id;
+    if (!workflowId) {
+      return;
+    }
+    setBusyAction(selectedDetail.workflow.paused ? 'resume' : 'pause');
+    setStatusMessage('');
+    try {
+      const action = selectedDetail.workflow.paused ? resumeWorkflow : pauseWorkflow;
+      const updated = await dispatch(action({ workflowsUrl, workflowId })).unwrap();
+      syncDraftFromWorkflow(updated.workflow, selectedLatestRun, updated.path);
+      setStatusMessage(`${updated.workflow.paused ? 'Paused' : 'Resumed'} ${updated.workflow.title}.`);
+    } catch (error) {
+      show('error', 'Workflow update failed', error.message);
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleTrigger = async () => {
+    const workflowId = selectedDetail?.workflow?.id;
+    if (!workflowId) {
+      return;
+    }
+    setBusyAction('trigger');
+    setStatusMessage('');
+    try {
+      const response = await dispatch(triggerWorkflow({
+        workflowsUrl,
+        workflowId,
+        eventType: draftWorkflow?.trigger?.event_type,
+      })).unwrap();
+      setStatusMessage(response.queued ? 'Workflow queued behind an active run.' : 'Workflow triggered.');
+    } catch (error) {
+      show('error', 'Workflow trigger failed', error.message);
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleDeleteWorkflow = async () => {
+    const workflowId = selectedDetail?.workflow?.id;
+    if (!workflowId) {
+      return;
+    }
+    if (!window.confirm(`Delete workflow "${selectedDetail.workflow.title}"?`)) {
+      return;
+    }
+    setBusyAction('delete');
+    try {
+      await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
+      setStatusMessage('Workflow deleted.');
+      setSelectedPath('');
+    } catch (error) {
+      show('error', 'Workflow delete failed', error.message);
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  return (
+    <PageShell className="workflows-page" label="Workflows">
+      <PaneSection as="aside" className={paneClassName} aria-label="Workflows" onItemSelect={() => setCollapsed(true)}>
+        {collapsed ? (
+          <PaneExpandRail label="Workflows" onExpand={() => setCollapsed(false)} />
+        ) : (
+          <>
+            <PaneCollapseSeam label="Workflows" onCollapse={() => setCollapsed(true)} />
+            <button type="button" className="pane-mobile-scrim" aria-label="Close workflows list" onClick={() => setCollapsed(true)} />
+            <PaneListFilters
+              filters={FILTERS}
+              activeFilter={filter}
+              onFilterChange={setFilter}
+              actionLabel="+ New"
+              onAction={handleCreateWorkflow}
+              actionDisabled={busyAction === 'create'}
+            />
+            <PaneListToolbar>
+              <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
+              <PaneListSortButton title="Sort workflows" options={SORTS} value={sortMode} onSelect={setSortMode} />
+              <button type="button" className="sess-sort" onClick={handleRefresh}>
+                Refresh
+              </button>
+            </PaneListToolbar>
+            <PaneListScroll className="workspace-sidebar__scroll">
+              {workflowsState.loading && !workflowsState.loaded ? <div className="prompts-empty-state">Loading workflows...</div> : null}
+              {workflowsState.error && !workflows.length ? <div className="prompts-empty-state">Failed to load workflows.</div> : null}
+              {!workflowsState.loading && !visibleItems.length ? <div className="prompts-empty-state">No workflows match the current filters.</div> : null}
+              {!workflowsState.loading && visibleItems.length ? (
+                <PaneListGroup title="Workflow selector" count={visibleItems.length}>
+                  <div className="workflows-list">
+                    {visibleItems.map((item) => (
+                      <WorkflowRow
+                        key={item.id}
+                        item={item}
+                        latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
+                        selectedPath={selectedPath}
+                        onSelect={handleSelectWorkflow}
+                      />
+                    ))}
+                  </div>
+                </PaneListGroup>
+              ) : null}
+            </PaneListScroll>
+            <PaneListFooter>
+              <span><span className="num">{workflows.length}</span> workflows</span>
+            </PaneListFooter>
+          </>
+        )}
+      </PaneSection>
+
+      <DetailPane flush className="workflow-detail" label="Workflow detail">
+        {!selectedPath && !workflowsState.loading ? (
+          <div className="prompts-empty-state">Select a workflow to edit or create a new one.</div>
+        ) : null}
+
+        {selectedPath && !selectedDetail ? (
+          <div className="prompts-empty-state">Loading workflow detail...</div>
+        ) : null}
+
+        {selectedDetail?.workflow && draftWorkflow ? (
+          <>
+            <DetailHeader
+              title={draftWorkflow.title || 'Untitled workflow'}
+              meta={[
+                <DetailStatus key="status" tone={workflowTone(draftWorkflow, selectedLatestRun)}>
+                  {workflowStatusLabel(draftWorkflow, selectedLatestRun)}
+                </DetailStatus>,
+                <span key="event" className="taskid">{draftWorkflow.trigger?.event_type}</span>,
+                <span key="nodes" className="taskid">{Object.keys(draftWorkflow.graph?.nodes || {}).length} nodes</span>,
+                <span key="id" className="taskid">{draftWorkflow.id}</span>,
+              ]}
+              tabs={['Canvas', 'JSON', 'Runs']}
+              activeTab={detailTab}
+              onTabChange={setDetailTab}
+              tabLabel="Workflow detail tabs"
+              actions={(
+                <DetailHeaderActions menuLabel="Workflow actions">
+                  <DetailHeaderAction
+                    icon={<PlayActionIcon />}
+                    label="Trigger"
+                    tooltip="Run workflow now"
+                    ariaLabel="Run workflow now"
+                    variant="primary"
+                    onClick={handleTrigger}
+                    disabled={busyAction === 'trigger'}
+                  />
+                  <DetailHeaderAction
+                    icon={<PauseActionIcon />}
+                    label={draftWorkflow.paused ? 'Resume' : 'Pause'}
+                    tooltip={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
+                    ariaLabel={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
+                    onClick={handlePauseResume}
+                    disabled={busyAction === 'pause' || busyAction === 'resume'}
+                  />
+                  <DetailHeaderAction
+                    icon={<SaveActionIcon />}
+                    label="Save"
+                    tooltip="Save workflow"
+                    ariaLabel="Save workflow"
+                    onClick={handleSaveWorkflow}
+                    disabled={!hasUnsavedChanges || saving}
+                  />
+                  <DetailHeaderAction
+                    icon={<DeleteActionIcon />}
+                    label="Delete"
+                    tooltip="Delete workflow"
+                    ariaLabel="Delete workflow"
+                    variant="danger"
+                    onClick={handleDeleteWorkflow}
+                    disabled={busyAction === 'delete'}
+                  />
+                </DetailHeaderActions>
+              )}
+            />
+
+            <div className="workflow-detail__body">
+              {detailTab === 'Canvas' ? (
+                <>
+                  <section className="workflow-form">
+                    <label>
+                      <span>Title</span>
+                      <input
+                        value={draftWorkflow.title}
+                        onChange={(event) => handleFieldChange('title', event.target.value)}
+                        placeholder="Workflow title"
+                      />
+                    </label>
+                    <label>
+                      <span>Event type</span>
+                      <select
+                        value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
+                        onChange={(event) => {
+                          const nextEventType = event.target.value;
+                          handleFieldChange('trigger', {
+                            ...draftWorkflow.trigger,
+                            type: 'event',
+                            event_type: nextEventType,
+                          });
+                          setGraphNodes((currentNodes) => {
+                            const nextNodes = currentNodes.map((node) => (
+                              node.type === 'event'
+                                ? { ...node, data: { ...node.data, eventType: nextEventType } }
+                                : node
+                            ));
+                            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+                            return nextNodes;
+                          });
+                        }}
+                      >
+                        {WORKFLOW_EVENT_TYPES.map((eventType) => (
+                          <option key={eventType} value={eventType}>{eventType}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="workflow-form__toggle">
+                      <span>Enabled</span>
+                      <input
+                        type="checkbox"
+                        checked={draftWorkflow.enabled !== false}
+                        onChange={(event) => handleFieldChange('enabled', event.target.checked)}
+                      />
+                    </label>
+                    <label className="workflow-form__full">
+                      <span>Description</span>
+                      <textarea
+                        value={draftWorkflow.description || ''}
+                        onChange={(event) => handleFieldChange('description', event.target.value)}
+                        placeholder="Describe what this workflow does."
+                      />
+                    </label>
+                  </section>
+
+                  <section className="workflow-canvas-shell">
+                    <div className="workflow-canvas-toolbar">
+                      <div>
+                        <strong>Workflow path</strong>
+                        <span>Drag nodes to reposition or connect them into a single execution path.</span>
+                      </div>
+                      <div className="workflow-canvas-toolbar__actions">
+                        <button type="button" className="node-action-btn" onClick={handleAddPromptNode}>
+                          Add prompt
+                        </button>
+                        <button
+                          type="button"
+                          className="node-action-btn"
+                          onClick={() => reactFlow.fitView({ padding: 0.18, duration: 200 })}
+                        >
+                          Fit view
+                        </button>
+                        <button
+                          type="button"
+                          className="node-action-btn"
+                          onClick={() => setDetailTab('JSON')}
+                        >
+                          Edit JSON
+                        </button>
+                      </div>
+                    </div>
+                    <div className="workspace-canvas workflow-canvas">
+                      <ReactFlow
+                        nodes={graphNodes}
+                        edges={graphEdges}
+                        nodeTypes={NODE_TYPES}
+                        onNodesChange={onNodesChange}
+                        onEdgesChange={onEdgesChange}
+                        onConnect={onConnect}
+                        onMoveEnd={handleViewportChange}
+                        defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                        defaultViewport={DEFAULT_VIEWPORT}
+                        fitView={false}
+                        minZoom={0.2}
+                        maxZoom={2.5}
+                      >
+                        <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
+                        <Controls showInteractive={false} />
+                        <MiniMap
+                          style={MINIMAP_STYLE}
+                          nodeColor={nodeColor}
+                          maskColor="rgba(0, 0, 0, 0.55)"
+                          pannable
+                          zoomable
+                        />
+                      </ReactFlow>
+                    </div>
+                  </section>
+                </>
+              ) : null}
+
+              {detailTab === 'JSON' ? (
+                <section className="workflow-json-tab">
+                  <header className="workflow-json-tab__head">
+                    <div>
+                      <strong>Workflow definition JSON</strong>
+                      <span>Edit the backend workflow document directly and apply it back to the draft.</span>
+                    </div>
+                    <div className="workflow-json-tab__actions">
+                      <button type="button" className="node-action-btn" onClick={handleResetJson}>
+                        Reset
+                      </button>
+                      <button type="button" className="node-action-btn primary" onClick={handleApplyJson}>
+                        Apply
+                      </button>
+                    </div>
+                  </header>
+                  <JsonCodeEditor value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} />
+                  {jsonError ? <p className="workflow-json-tab__error">{jsonError}</p> : null}
+                </section>
+              ) : null}
+
+              {detailTab === 'Runs' ? (
+                <WorkflowRunsList
+                  runs={visibleRuns}
+                  loading={workflowsState.runsLoading && !workflowsState.runsLoaded}
+                />
+              ) : null}
+            </div>
+
+            <div className="workflow-detail__footer">
+              <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
+              <span>{statusMessage}</span>
+            </div>
+          </>
+        ) : null}
+      </DetailPane>
+    </PageShell>
   );
 }
 
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>
-      <WorkspaceProvider>
-        <WorkspaceInner />
-      </WorkspaceProvider>
+      <WorkflowsInner />
     </ReactFlowProvider>
   );
 }

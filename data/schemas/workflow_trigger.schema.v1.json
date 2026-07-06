@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow Trigger",
+  "description": "Workflow trigger settings for one backend-native workflow definition.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "event_type"],
+  "properties": {
+    "type": {
+      "const": "event"
+    },
+    "event_type": {
+      "type": "string",
+      "enum": [
+        "kanban.card.created",
+        "kanban.card.updated",
+        "kanban.card.moved",
+        "kanban.card.deleted",
+        "kanban.card.status_changed"
+      ]
+    }
+  }
+}

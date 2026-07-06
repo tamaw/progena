@@ -41,6 +41,8 @@ const defaultConfig = {
       status: '/api/ui/status',
       models: '/v1/models',
       workspace: '/api/ui/workspace',
+      workflows: '/api/ui/workflows',
+      workflowRuns: '/api/ui/workflow-runs',
       widgets: '/api/ui/widgets',
       mcp: '/api/ui/mcp',
       widgetSchemas: '/api/ui/widget-schemas',
