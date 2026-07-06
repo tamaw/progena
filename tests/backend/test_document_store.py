@@ -10,6 +10,7 @@ from app.backend.document_store import (
     InMemoryDocumentStore,
     PostgresDocumentStore,
     StoreChangeListener,
+    _escape_like,
     store_database_url,
 )
 
@@ -80,6 +81,25 @@ def test_postgres_document_store_reopens_closed_pool():
     assert healthy_pool._cursor.executed
     assert doc is not None
     assert doc.payload == {"ok": True}
+
+
+def test_in_memory_list_documents_filters_by_prefix_and_key_prefix():
+    store = InMemoryDocumentStore()
+    store.save_document("progenitor.state", "inbox_message:b", {"id": "b"})
+    store.save_document("progenitor.state", "inbox_message:a", {"id": "a"})
+    store.save_document("progenitor.state", "kanban_card:c", {"id": "c"})
+    store.save_document("backend.state", "inbox_message:d", {"id": "d"})
+
+    rows = store.list_documents("progenitor.state", "inbox_message:")
+
+    assert [key for key, _doc in rows] == ["inbox_message:a", "inbox_message:b"]
+    assert [doc.payload["id"] for _key, doc in rows] == ["a", "b"]
+
+
+def test_escape_like_escapes_wildcards():
+    assert _escape_like("inbox_message:") == "inbox\\_message:"
+    assert _escape_like("100%") == "100\\%"
+    assert _escape_like("a\\b") == "a\\\\b"
 
 
 def test_store_database_url_resolution():

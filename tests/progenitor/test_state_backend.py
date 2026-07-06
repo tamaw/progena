@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.progenitor.agent.state_backend import (
+    InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
     card_to_markdown,
@@ -16,7 +17,9 @@ from app.progenitor.agent.state_backend import (
     create_mcp_state_file,
     create_registry_state_file,
     create_schedule_state_file,
+    inbox_message_to_markdown,
     markdown_to_card,
+    markdown_to_inbox_message,
     validate_kanban_structure,
     validate_mcp_document,
     validate_registry_document,
@@ -351,6 +354,141 @@ async def test_kanban_adelete_project_scoped_requires_matching_path():
     result = await backend.adelete("/acme/card_1.md")
     assert result.error is None
     assert "card_1" not in sm.cards
+
+
+# ---- inbox (per-message directory) -------------------------------------------
+
+
+class _FakeInboxStateManager:
+    """Mimic the StateManager per-message inbox surface over an in-memory dict."""
+
+    def __init__(self, messages: list[dict[str, Any]] | None = None) -> None:
+        self.messages: dict[str, dict[str, Any]] = {
+            message["id"]: copy.deepcopy(message) for message in messages or []
+        }
+
+    async def get_inbox_message(self, message_id: str) -> dict[str, Any] | None:
+        message = self.messages.get(message_id)
+        return copy.deepcopy(message) if message is not None else None
+
+    async def save_inbox_message(self, message_id: str, message: dict[str, Any]) -> None:
+        self.messages[message_id] = copy.deepcopy(message)
+
+    async def delete_inbox_message(self, message_id: str) -> None:
+        self.messages.pop(message_id, None)
+
+    async def list_inbox_messages(self) -> list[dict[str, Any]]:
+        return [copy.deepcopy(message) for message in self.messages.values()]
+
+
+def _inbox_backend(messages=None) -> tuple[InboxDirectoryBackend, _FakeInboxStateManager]:
+    sm = _FakeInboxStateManager(messages)
+    return InboxDirectoryBackend(sm), sm
+
+
+def test_inbox_message_markdown_round_trips():
+    message = {
+        "id": "msg_1",
+        "title": "Digest",
+        "created_at": "2026-07-05T00:00:00+00:00",
+        "read": False,
+        "read_at": None,
+        "body": "Line one\n\n**bold**",
+    }
+    text = inbox_message_to_markdown(message)
+    assert text.startswith("---\n")
+    parsed = markdown_to_inbox_message(text, "msg_1")
+    assert parsed == message
+
+
+def test_markdown_to_inbox_message_stamps_created_at_and_coerces_read():
+    parsed = markdown_to_inbox_message("---\ntitle: Hello\n---\n\nBody\n", "msg_1")
+    assert parsed["id"] == "msg_1"
+    assert parsed["read"] is False
+    assert parsed["read_at"] is None
+    assert parsed["created_at"]  # stamped when absent
+
+
+def test_markdown_to_inbox_message_filename_id_wins():
+    parsed = markdown_to_inbox_message("---\ntitle: Hello\nid: other\n---\n", "msg_1")
+    assert parsed["id"] == "msg_1"
+
+
+def test_markdown_to_inbox_message_requires_title():
+    try:
+        markdown_to_inbox_message("---\nread: false\n---\n\nNo title\n", "msg_1")
+    except ValueError as exc:
+        assert "title" in str(exc)
+    else:
+        raise AssertionError("expected ValueError")
+
+
+async def test_inbox_awrite_persists_and_aread_round_trips():
+    backend, sm = _inbox_backend([])
+    result = await backend.awrite("/msg_1.md", "---\ntitle: Digest\n---\n\nBody text\n")
+    assert result.error is None
+    assert sm.messages["msg_1"]["title"] == "Digest"
+    assert sm.messages["msg_1"]["body"] == "Body text"
+    read = await backend.aread("/msg_1.md")
+    assert read.error is None
+    assert "Body text" in read.file_data["content"]
+
+
+async def test_inbox_awrite_invalid_does_not_persist():
+    backend, sm = _inbox_backend([])
+    result = await backend.awrite("/msg_1.md", "---\nread: true\n---\n\nNo title\n")
+    assert result.error and "Invalid" in result.error
+    assert sm.messages == {}
+
+
+async def test_inbox_awrite_rejects_nested_and_non_md_paths():
+    backend, sm = _inbox_backend([])
+    for path in ("/sub/msg_1.md", "/msg_1.txt"):
+        result = await backend.awrite(path, "---\ntitle: Hello\n---\n")
+        assert result.error is not None
+    assert sm.messages == {}
+
+
+async def test_inbox_aread_unknown_errors():
+    backend, _sm = _inbox_backend([])
+    result = await backend.aread("/nope.md")
+    assert result.error and "not found" in result.error
+
+
+async def test_inbox_als_lists_newest_first():
+    backend, _sm = _inbox_backend(
+        [
+            {"id": "msg_old", "title": "Old", "created_at": "2026-07-01T00:00:00+00:00"},
+            {"id": "msg_new", "title": "New", "created_at": "2026-07-05T00:00:00+00:00"},
+        ]
+    )
+    listed = await backend.als("/")
+    assert [entry["path"] for entry in listed.entries] == ["/msg_new.md", "/msg_old.md"]
+
+
+async def test_inbox_aedit_updates_body():
+    backend, sm = _inbox_backend(
+        [
+            {
+                "id": "msg_1",
+                "title": "Digest",
+                "created_at": "2026-07-05T00:00:00+00:00",
+                "body": "old",
+            }
+        ]
+    )
+    result = await backend.aedit("/msg_1.md", "old", "new")
+    assert result.error is None
+    assert sm.messages["msg_1"]["body"] == "new"
+
+
+async def test_inbox_adelete_removes_message():
+    backend, sm = _inbox_backend([{"id": "msg_1", "title": "Digest"}])
+    result = await backend.adelete("/msg_1.md")
+    assert result.error is None
+    assert sm.messages == {}
+    missing = await backend.adelete("/msg_1.md")
+    assert missing.error is not None
 
 
 # ---- schedule (single file, object keyed by id) ------------------------------

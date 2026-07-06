@@ -62,6 +62,18 @@ class LangGraphRuntimeStore:
         value = _item_value(item)
         return value.get("payload", default)
 
+    async def peek_document(self, name: str) -> Any | None:
+        """Return one runtime document's payload, or ``None``, without creating it.
+
+        Unlike ``get_document`` this never writes a default row - needed where
+        the caller enumerates documents by key prefix (e.g. inbox messages), so
+        a speculative read of a missing key must not materialize a junk row.
+        """
+        item = await self._store.aget(STATE_NAMESPACE, name)
+        if item is None:
+            return None
+        return _item_value(item).get("payload")
+
     async def save_document(self, name: str, payload: Any) -> None:
         """Persist one runtime document."""
         await self._store.aput(STATE_NAMESPACE, name, {"payload": payload})
@@ -69,6 +81,26 @@ class LangGraphRuntimeStore:
     async def delete_document(self, name: str) -> None:
         """Remove one runtime document (no-op if it was never written)."""
         await self._store.adelete(STATE_NAMESPACE, name)
+
+    async def list_documents(self, key_prefix: str) -> list[tuple[str, Any]]:
+        """Return ``(key, payload)`` for every state document whose key starts with prefix.
+
+        LangGraph's ``asearch`` defaults to a page of 10, so this pages through
+        the state namespace until a short page; the namespace holds only dozens
+        of rows (logs live under a different namespace prefix).
+        """
+        page_size = 500
+        offset = 0
+        results: list[tuple[str, Any]] = []
+        while True:
+            items = await self._store.asearch(STATE_NAMESPACE, limit=page_size, offset=offset)
+            for item in items:
+                key = str(getattr(item, "key", ""))
+                if key.startswith(key_prefix):
+                    results.append((key, _item_value(item).get("payload")))
+            if len(items) < page_size:
+                return results
+            offset += page_size
 
     async def update_document(self, name: str, updates: dict[str, Any], default: Any) -> None:
         """Merge updates into one dict document."""

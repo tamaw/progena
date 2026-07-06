@@ -64,6 +64,25 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/schemas/"], ReadOnlyFilesystemBackend)
             assert (root / "data" / "memories").is_dir()
 
+    def test_state_manager_mounts_state_and_inbox_routes(self, monkeypatch):
+        """A state_manager adds the /state/, /state/tasks/, and /inbox/ virtual mounts."""
+        from unittest.mock import MagicMock
+
+        from app.progenitor.agent.state_backend import (
+            InboxDirectoryBackend,
+            KanbanTaskDirectoryBackend,
+            StateDocumentBackend,
+        )
+
+        self._patch_runtime_free_state_backend(monkeypatch)
+
+        # The state-file factories bind StateManager getters/setters at
+        # construction time, so the stub needs arbitrary attribute access.
+        backend = create_progenitor_backend(project_root=".", state_manager=MagicMock())
+        assert isinstance(backend.routes["/state/"], StateDocumentBackend)
+        assert isinstance(backend.routes["/state/tasks/"], KanbanTaskDirectoryBackend)
+        assert isinstance(backend.routes["/inbox/"], InboxDirectoryBackend)
+
     def test_factory_defaults_to_cwd(self, monkeypatch):
         """Factory defaults to cwd when no project_root specified."""
         self._patch_runtime_free_state_backend(monkeypatch)

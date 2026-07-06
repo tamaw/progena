@@ -761,21 +761,6 @@ body,
   50% { opacity: 0.35; }
 }
 
-.app-shell__nav-count {
-  margin-left: auto;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.app-shell__nav-dot + .app-shell__nav-count {
-  margin-left: 0;
-}
-
-.app-shell__nav-item.is-active .app-shell__nav-count {
-  color: var(--color-accent);
-}
-
 .app-shell__sidebar.is-collapsed {
   min-width: 52px;
   padding-right: 6px;
@@ -793,7 +778,6 @@ body,
   justify-content: center;
 }
 
-.app-shell__sidebar.is-collapsed .app-shell__nav-count,
 .app-shell__sidebar.is-collapsed .app-shell__nav-dot,
 .app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
   display: none;
@@ -1883,7 +1867,10 @@ body,
   position: fixed;
   top: var(--chrome-header-height);
   left: 0;
-  right: min(var(--right-panel-width), 100vw);
+  /* Full width, not stopped at the panel's edge: the panel slides in from
+     translateX(100%) over ~200ms, so a scrim that only covers up to its
+     resting position leaves that strip ungrayed until the slide finishes. */
+  right: 0;
   bottom: 0;
   z-index: 80;
   background: rgba(15, 18, 25, 0.22);
@@ -1981,11 +1968,6 @@ body,
   box-shadow:
     0 24px 64px rgba(0, 0, 0, 0.5),
     0 4px 16px rgba(0, 0, 0, 0.3);
-}
-
-/* Full-width backdrop for the modal popups (the side scrim leaves a gap). */
-.topnav-scrim--modal {
-  right: 0;
 }
 
 .account-pane {
@@ -5775,6 +5757,15 @@ body,
   min-height: 0;
   max-width: none;
   padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Lets the Inbox detail pane's empty state (.welcome-message, margin: auto)
+   center vertically, matching the Chat page's empty-conversation look. */
+.inbox-detail__body {
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }

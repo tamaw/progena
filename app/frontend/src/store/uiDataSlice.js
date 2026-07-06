@@ -14,7 +14,7 @@
  * To add a domain: create `./uiData/<name>.js` and register it in the arrays
  * below.
  */
-import { createSlice } from '@reduxjs/toolkit';
+import { createSelector, createSlice } from '@reduxjs/toolkit';
 import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
@@ -23,8 +23,9 @@ import * as skills from './uiData/skills';
 import * as prompts from './uiData/prompts';
 import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
+import * as inbox from './uiData/inbox';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, agents, chats];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, agents, chats, inbox];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -42,9 +43,40 @@ const domainReducers = domains.reduce(
   {},
 );
 
+// Nav "unseen activity" tracking: cross-cutting (spans every domain's events),
+// so it lives here rather than in one domain module - a domain-owned entry
+// here would collide with that event type's real handler in the merged
+// `eventHandlers` map above. Maps a realtime event type to the nav route that
+// owns it; only pages with a real live-update signal are tracked (Chat/Inbox
+// already have their own precise unread tracking; Repositories has no events
+// to drive it yet).
+const NAV_ACTIVITY_EVENT_ROUTES = {
+  'widgets.updated': '/dashboard',
+  'kanban.snapshot': '/tasks',
+  'task.content.updated': '/tasks',
+  'task.activity.updated': '/tasks',
+  'agents.snapshot': '/agents',
+  'agent.upserted': '/agents',
+  'skills.snapshot': '/skills',
+  'mcp.snapshot': '/tools',
+  'knowledge.snapshot': '/knowledge',
+  'schedule.snapshot': '/schedules',
+};
+
+const navActivityInitialState = {
+  navActivity: {
+    activeRoute: null,
+    // A route's first-ever event this session is its baseline (e.g. the
+    // initial snapshot burst on connect, or a page's own first fetch) rather
+    // than "new" activity; only later events light the dot.
+    seenBaselineRoutes: {},
+    unseenRoutes: {},
+  },
+};
+
 const uiDataSlice = createSlice({
   name: 'uiData',
-  initialState,
+  initialState: { ...initialState, ...navActivityInitialState },
   reducers: {
     ...domainReducers,
     applyUiEvent(state, action) {
@@ -52,6 +84,22 @@ const uiDataSlice = createSlice({
       const handler = eventHandlers[event?.type];
       if (handler) {
         handler(state, event?.payload || {}, event);
+      }
+      const route = NAV_ACTIVITY_EVENT_ROUTES[event?.type];
+      if (route) {
+        if (!state.navActivity.seenBaselineRoutes[route]) {
+          state.navActivity.seenBaselineRoutes[route] = true;
+        } else if (state.navActivity.activeRoute !== route) {
+          state.navActivity.unseenRoutes[route] = true;
+        }
+      }
+    },
+    setActiveNavRoute(state, action) {
+      const route = action.payload;
+      state.navActivity.activeRoute = route;
+      if (route) {
+        state.navActivity.seenBaselineRoutes[route] = true;
+        delete state.navActivity.unseenRoutes[route];
       }
     },
   },
@@ -73,12 +121,19 @@ export const {
   markChatGenerating,
   markChatUnread,
   scheduleSnapshotReceived,
+  setActiveNavRoute,
   setErroredChatIds,
   setGeneratingChatIds,
   taskActivityReceived,
   taskContentReceived,
   setUnreadChatIds,
 } = uiDataSlice.actions;
+
+export const selectUnseenNavRoutes = (state) => state.uiData.navActivity.unseenRoutes;
+export const selectHasUnseenNavRoute = createSelector(
+  [selectUnseenNavRoutes, (_state, route) => route],
+  (unseenRoutes, route) => Boolean(route && unseenRoutes[route]),
+);
 
 // Re-export thunks + selectors from their domain modules.
 export {
@@ -154,5 +209,14 @@ export {
   selectUiWidgets,
   selectSchedules,
 } from './uiData/runtime';
+
+export {
+  fetchInbox,
+  markInboxMessageRead,
+  deleteInboxMessage,
+  selectInboxMessages,
+  selectInboxState,
+  selectInboxUnreadCount,
+} from './uiData/inbox';
 
 export default uiDataSlice.reducer;

@@ -26,6 +26,7 @@ from deepagents.backends import (
 )
 
 from .state_backend import (
+    InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
     StateFile,
@@ -146,6 +147,9 @@ def create_progenitor_backend(
             [factory(state_manager) for factory in state_file_factories]
         )
         routes["/state/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
+        # User inbox: a directory of per-message files (/inbox/<id>.md) the
+        # agent writes to send the user rich markdown messages.
+        routes["/inbox/"] = InboxDirectoryBackend(state_manager)
 
     state_backend_cls: Any = StateBackend
     logger.info("Created progenitor backend with scoped filesystem mounts")
