@@ -2645,7 +2645,7 @@ def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowConten
 
 
 def _workflow_event_payload(definition: WorkflowDefinition) -> dict[str, Any]:
-    return _workflow_content_response(definition).model_dump(mode="json")
+    return _workflow_content_response(definition).model_dump(mode="json", by_alias=True)
 
 
 @router.get("/workflows", response_model=WorkflowsResponse)
@@ -2671,7 +2671,7 @@ async def get_workflow_content(path: str = Query(...)):
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
     return payload
 
 
@@ -2694,7 +2694,7 @@ async def put_workflow_content(body: WorkflowContentPutRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
     broadcast_ui_event(
         "workflows.snapshot",
         {
@@ -2725,7 +2725,7 @@ async def create_workflow(body: WorkflowCreateRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
     broadcast_ui_event(
         "workflows.snapshot",
         {
@@ -2777,7 +2777,7 @@ async def pause_workflow(workflow_id: str):
     )
     await get_workflow_executor().pause_workflow(updated.id)
     payload = _workflow_content_response(updated)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
     broadcast_workflows_snapshot()
     return payload
 
@@ -2801,7 +2801,7 @@ async def resume_workflow(workflow_id: str):
     )
     await get_workflow_executor().resume_workflow(updated.id)
     payload = _workflow_content_response(updated)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json"))
+    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
     broadcast_workflows_snapshot()
     return payload
 
@@ -5420,7 +5420,7 @@ def broadcast_workflow_detail(workflow_id: str) -> UiEventEnvelope:
     definition = get_workflow_definition(get_default_document_store(), workflow_id)
     if definition is None:
         return broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id})
-    payload = _workflow_content_response(definition).model_dump(mode="json")
+    payload = _workflow_content_response(definition).model_dump(mode="json", by_alias=True)
     return broadcast_ui_event("workflow.updated", payload)
 
 

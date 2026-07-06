@@ -258,3 +258,30 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
             } <= seen
     finally:
         ui_routes._ui_stream_subscribers.remove(queue)
+
+
+def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, backend_client):
+    # Regression: WorkflowEdge.from_ is a Pydantic field aliased to the JSON
+    # key "from" (a reserved word). model_dump(mode="json") without
+    # by_alias=True silently emits "from_" instead, so the frontend's
+    # edge.from.node access reads undefined and crashes. broadcast_ui_event
+    # calls must always pass by_alias=True when dumping a WorkflowDefinition.
+    import app.backend.ui_routes as ui_routes
+
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.append(queue)
+    try:
+        with TestClient(app) as client:
+            client.post("/api/ui/workflows", json={"title": "Alias check"})
+
+            envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+            updated = next(e for e in envelopes if e.type == "workflow.updated")
+            edges = updated.payload["workflow"]["graph"]["edges"]
+            assert edges, "expected the default workflow scaffold to include an edge"
+            for edge in edges:
+                assert "from" in edge, f"edge serialized without aliasing: {edge!r}"
+                assert "from_" not in edge
+                assert "node" in edge["from"]
+                assert "node" in edge["to"]
+    finally:
+        ui_routes._ui_stream_subscribers.remove(queue)

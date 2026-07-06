@@ -85,6 +85,19 @@ function workflowPath(workflowId) {
   return workflowId ? `/state/workflows/${workflowId}.json` : '';
 }
 
+// The `.json` suffix on workflowPath() is the backing virtual-file extension
+// used internally (Redux cache keys, backend query params) — it has no
+// business showing up in the address bar, where `path` reads as a route
+// segment rather than a file reference. These two helpers convert only at
+// the URL-sync boundary; everything else keeps using the `.json` form.
+function stripJsonExtension(path) {
+  return path.endsWith('.json') ? path.slice(0, -'.json'.length) : path;
+}
+
+function withJsonExtension(path) {
+  return path && !path.endsWith('.json') ? `${path}.json` : path;
+}
+
 function cloneValue(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
@@ -442,7 +455,7 @@ function WorkflowsInner() {
   const [statusMessage, setStatusMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState('');
-  const requestedPath = searchParams.get('path') || '';
+  const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const selectedLatestRun = useSelector((state) => {
     const workflowId = selectedDetail?.workflow?.id || selectedPath.replace(/^.*\/|\.json$/g, '');
@@ -488,11 +501,12 @@ function WorkflowsInner() {
 
   useEffect(() => {
     const currentPath = searchParams.get('path') || '';
-    if (!selectedPath || currentPath === selectedPath) {
+    const nextUrlPath = stripJsonExtension(selectedPath);
+    if (!selectedPath || currentPath === nextUrlPath) {
       return;
     }
     const nextParams = new URLSearchParams(searchParams);
-    nextParams.set('path', selectedPath);
+    nextParams.set('path', nextUrlPath);
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, selectedPath, setSearchParams]);
 
