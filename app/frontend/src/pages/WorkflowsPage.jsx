@@ -375,6 +375,54 @@ const NODE_TYPES = {
   prompt: PromptNode,
 };
 
+// Bottom-center floating dock for adding nodes to the canvas — mirrors the
+// Workspace/Agents-graph dock so all ReactFlow canvases in the app share the
+// same add-node affordance instead of a plain toolbar button.
+function WorkflowDock({ onAdd }) {
+  return (
+    <div className="workspace-dock">
+      <div className="workspace-dock-shell">
+        <button
+          type="button"
+          className="workspace-dock-item"
+          onClick={onAdd}
+          title="Add a prompt step"
+        >
+          <span className="workspace-dock-icon prompt">P</span>
+          <span className="workspace-dock-tooltip">Prompt</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Collapsed right-edge dock holding the workflow's title/event-type/enabled/
+// description fields — mirrors the Agents/Sequences canvas's GraphSideDock so
+// the canvas itself can occupy the full page instead of sharing space with a
+// permanent form.
+const WORKFLOW_SIDE_ITEMS = [
+  { id: 'details', label: 'Details', title: 'Workflow details' },
+];
+
+function WorkflowSideDock({ onSelect }) {
+  return (
+    <aside className="workflow-side-dock" aria-label="Workflow tools">
+      {WORKFLOW_SIDE_ITEMS.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          className="workflow-side-dock__item"
+          title={item.title}
+          aria-label={item.title}
+          onClick={() => onSelect(item.id)}
+        >
+          <span className="workflow-side-dock__label">{item.label}</span>
+        </button>
+      ))}
+    </aside>
+  );
+}
+
 function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
   const path = workflowPath(item.id);
   return (
@@ -447,6 +495,7 @@ function WorkflowsInner() {
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
   const [detailTab, setDetailTab] = useState('Canvas');
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const [draftWorkflow, setDraftWorkflow] = useState(null);
   const [graphNodes, setGraphNodes] = useState([]);
   const [graphEdges, setGraphEdges] = useState([]);
@@ -1047,87 +1096,8 @@ function WorkflowsInner() {
 
             <div className="workflow-detail__body">
               {detailTab === 'Canvas' ? (
-                <>
-                  <section className="workflow-form">
-                    <label>
-                      <span>Title</span>
-                      <input
-                        value={draftWorkflow.title}
-                        onChange={(event) => handleFieldChange('title', event.target.value)}
-                        placeholder="Workflow title"
-                      />
-                    </label>
-                    <label>
-                      <span>Event type</span>
-                      <select
-                        value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
-                        onChange={(event) => {
-                          const nextEventType = event.target.value;
-                          handleFieldChange('trigger', {
-                            ...draftWorkflow.trigger,
-                            type: 'event',
-                            event_type: nextEventType,
-                          });
-                          setGraphNodes((currentNodes) => {
-                            const nextNodes = currentNodes.map((node) => (
-                              node.type === 'event'
-                                ? { ...node, data: { ...node.data, eventType: nextEventType } }
-                                : node
-                            ));
-                            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-                            return nextNodes;
-                          });
-                        }}
-                      >
-                        {WORKFLOW_EVENT_TYPES.map((eventType) => (
-                          <option key={eventType} value={eventType}>{eventType}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="workflow-form__toggle">
-                      <span>Enabled</span>
-                      <input
-                        type="checkbox"
-                        checked={draftWorkflow.enabled !== false}
-                        onChange={(event) => handleFieldChange('enabled', event.target.checked)}
-                      />
-                    </label>
-                    <label className="workflow-form__full">
-                      <span>Description</span>
-                      <textarea
-                        value={draftWorkflow.description || ''}
-                        onChange={(event) => handleFieldChange('description', event.target.value)}
-                        placeholder="Describe what this workflow does."
-                      />
-                    </label>
-                  </section>
-
-                  <section className="workflow-canvas-shell">
-                    <div className="workflow-canvas-toolbar">
-                      <div>
-                        <strong>Workflow path</strong>
-                        <span>Drag nodes to reposition or connect them into a single execution path.</span>
-                      </div>
-                      <div className="workflow-canvas-toolbar__actions">
-                        <button type="button" className="node-action-btn" onClick={handleAddPromptNode}>
-                          Add prompt
-                        </button>
-                        <button
-                          type="button"
-                          className="node-action-btn"
-                          onClick={() => reactFlow.fitView({ padding: 0.18, duration: 200 })}
-                        >
-                          Fit view
-                        </button>
-                        <button
-                          type="button"
-                          className="node-action-btn"
-                          onClick={() => setDetailTab('JSON')}
-                        >
-                          Edit JSON
-                        </button>
-                      </div>
-                    </div>
+                <section className="workflow-canvas-shell">
+                  <div className="workflow-canvas-panel">
                     <div className="workspace-canvas workflow-canvas">
                       <ReactFlow
                         nodes={graphNodes}
@@ -1153,9 +1123,80 @@ function WorkflowsInner() {
                           zoomable
                         />
                       </ReactFlow>
+                      <WorkflowDock onAdd={handleAddPromptNode} />
                     </div>
-                  </section>
-                </>
+                  </div>
+                  {detailsOpen ? (
+                    <div className="workflow-details-panel">
+                      <div className="workflow-details-panel__head">
+                        <strong>Workflow details</strong>
+                        <button
+                          type="button"
+                          className="node-action-btn"
+                          onClick={() => setDetailsOpen(false)}
+                          aria-label="Close workflow details"
+                        >
+                          Close
+                        </button>
+                      </div>
+                      <section className="workflow-form">
+                        <label>
+                          <span>Title</span>
+                          <input
+                            value={draftWorkflow.title}
+                            onChange={(event) => handleFieldChange('title', event.target.value)}
+                            placeholder="Workflow title"
+                          />
+                        </label>
+                        <label>
+                          <span>Event type</span>
+                          <select
+                            value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
+                            onChange={(event) => {
+                              const nextEventType = event.target.value;
+                              handleFieldChange('trigger', {
+                                ...draftWorkflow.trigger,
+                                type: 'event',
+                                event_type: nextEventType,
+                              });
+                              setGraphNodes((currentNodes) => {
+                                const nextNodes = currentNodes.map((node) => (
+                                  node.type === 'event'
+                                    ? { ...node, data: { ...node.data, eventType: nextEventType } }
+                                    : node
+                                ));
+                                syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+                                return nextNodes;
+                              });
+                            }}
+                          >
+                            {WORKFLOW_EVENT_TYPES.map((eventType) => (
+                              <option key={eventType} value={eventType}>{eventType}</option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="workflow-form__toggle">
+                          <span>Enabled</span>
+                          <input
+                            type="checkbox"
+                            checked={draftWorkflow.enabled !== false}
+                            onChange={(event) => handleFieldChange('enabled', event.target.checked)}
+                          />
+                        </label>
+                        <label className="workflow-form__full">
+                          <span>Description</span>
+                          <textarea
+                            value={draftWorkflow.description || ''}
+                            onChange={(event) => handleFieldChange('description', event.target.value)}
+                            placeholder="Describe what this workflow does."
+                          />
+                        </label>
+                      </section>
+                    </div>
+                  ) : (
+                    <WorkflowSideDock onSelect={(id) => { if (id === 'details') setDetailsOpen(true); }} />
+                  )}
+                </section>
               ) : null}
 
               {detailTab === 'JSON' ? (
