@@ -32,15 +32,6 @@ import {
   selectWorkflowsState,
   triggerWorkflow,
 } from '../store/uiDataSlice';
-import DetailHeader, {
-  DeleteActionIcon,
-  DetailHeaderAction,
-  DetailHeaderActions,
-  DetailStatus,
-  PauseActionIcon,
-  PlayActionIcon,
-  SaveActionIcon,
-} from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
   PaneExpandRail,
@@ -375,17 +366,43 @@ const NODE_TYPES = {
   prompt: PromptNode,
 };
 
-// Bottom-center floating dock for adding nodes to the canvas — mirrors the
-// Workspace/Agents-graph dock so all ReactFlow canvases in the app share the
-// same add-node affordance instead of a plain toolbar button.
+// Chevrons for the right tools dock / collapse seam (point toward the action:
+// left = expand the panel leftward, right = collapse it away). Ported from the
+// Agents/Sequences canvas.
+function ChevronLeftSmall() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d="m9.8 4.2-3.6 3.8 3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function ChevronRightSmall() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// Bottom-center floating dock for adding nodes to the canvas — ported directly
+// from the Agents/Sequences canvas's GraphDock: drag onto the canvas or click
+// to add at the next slot. Workflows only offer one draggable kind (prompt;
+// the event node is the fixed start and isn't dock-addable).
 function WorkflowDock({ onAdd }) {
+  const onDragStart = (event) => {
+    event.dataTransfer.setData('application/workflow-node', 'prompt');
+    event.dataTransfer.effectAllowed = 'move';
+  };
   return (
     <div className="workspace-dock">
       <div className="workspace-dock-shell">
         <button
           type="button"
           className="workspace-dock-item"
-          onClick={onAdd}
+          draggable
+          onDragStart={onDragStart}
+          onClick={() => onAdd()}
           title="Add a prompt step"
         >
           <span className="workspace-dock-icon prompt">P</span>
@@ -396,12 +413,14 @@ function WorkflowDock({ onAdd }) {
   );
 }
 
-// Collapsed right-edge dock holding the workflow's title/event-type/enabled/
-// description fields — mirrors the Agents/Sequences canvas's GraphSideDock so
-// the canvas itself can occupy the full page instead of sharing space with a
-// permanent form.
+// Collapsed right-edge dock holding the workflow's auxiliary views (details
+// form, JSON editor, run history) — ported from the Agents/Sequences canvas's
+// GraphSideDock so the canvas itself can occupy the full page instead of
+// sharing space with a permanent header/form.
 const WORKFLOW_SIDE_ITEMS = [
   { id: 'details', label: 'Details', title: 'Workflow details' },
+  { id: 'json', label: 'JSON', title: 'Edit as JSON' },
+  { id: 'runs', label: 'Runs', title: 'Run history' },
 ];
 
 function WorkflowSideDock({ onSelect }) {
@@ -416,6 +435,7 @@ function WorkflowSideDock({ onSelect }) {
           aria-label={item.title}
           onClick={() => onSelect(item.id)}
         >
+          <ChevronLeftSmall />
           <span className="workflow-side-dock__label">{item.label}</span>
         </button>
       ))}
@@ -494,8 +514,7 @@ function WorkflowsInner() {
   const [filter, setFilter] = useState('all');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Recent');
-  const [detailTab, setDetailTab] = useState('Canvas');
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [activeSidePanel, setActiveSidePanel] = useState(null);
   const [draftWorkflow, setDraftWorkflow] = useState(null);
   const [graphNodes, setGraphNodes] = useState([]);
   const [graphEdges, setGraphEdges] = useState([]);
@@ -781,7 +800,7 @@ function WorkflowsInner() {
         eventType: WORKFLOW_EVENT_TYPES[0],
       })).unwrap();
       setSelectedPath(created.path);
-      setDetailTab('Canvas');
+      setActiveSidePanel(null);
       setStatusMessage(`Created ${created.workflow.title}.`);
     } catch (error) {
       show('error', 'Workflow create failed', error.message);
@@ -794,12 +813,12 @@ function WorkflowsInner() {
     await Promise.all([loadWorkflows(), loadRuns()]);
   };
 
-  const handleAddPromptNode = () => {
+  const handleAddPromptNode = useCallback((dropPosition) => {
     if (!draftWorkflow) {
       return;
     }
     const nodeId = `prompt_${Math.random().toString(36).slice(2, 10)}`;
-    const position = nextPromptPosition(nodesRef.current);
+    const position = dropPosition || nextPromptPosition(nodesRef.current);
     const nextNodes = [
       ...nodesRef.current,
       {
@@ -848,7 +867,22 @@ function WorkflowsInner() {
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
     setStatusMessage('Added a prompt step to the workflow path.');
-  };
+  }, [draftWorkflow, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
+
+  const onCanvasDragOver = useCallback((event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+  }, []);
+
+  const onCanvasDrop = useCallback((event) => {
+    event.preventDefault();
+    const kind = event.dataTransfer.getData('application/workflow-node');
+    if (kind !== 'prompt') {
+      return;
+    }
+    const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
+    handleAddPromptNode(position);
+  }, [handleAddPromptNode, reactFlow]);
 
   const handleFieldChange = (field, value) => {
     updateDraft((current) => ({ ...current, [field]: value }));
@@ -883,7 +917,7 @@ function WorkflowsInner() {
       viewportRef.current = flow.viewport;
       setJsonError('');
       setStatusMessage('Applied JSON changes to the workflow draft.');
-      setDetailTab('Canvas');
+      setActiveSidePanel(null);
     } catch (error) {
       setJsonError(error.message || 'Invalid workflow JSON');
     }
@@ -1029,7 +1063,7 @@ function WorkflowsInner() {
         )}
       </PaneSection>
 
-      <DetailPane flush className="workflow-detail" label="Workflow detail">
+      <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
         {!selectedPath && !workflowsState.loading ? (
           <div className="prompts-empty-state">Select a workflow to edit or create a new one.</div>
         ) : null}
@@ -1039,106 +1073,102 @@ function WorkflowsInner() {
         ) : null}
 
         {selectedDetail?.workflow && draftWorkflow ? (
-          <>
-            <DetailHeader
-              title={draftWorkflow.title || 'Untitled workflow'}
-              meta={[
-                <DetailStatus key="status" tone={workflowTone(draftWorkflow, selectedLatestRun)}>
-                  {workflowStatusLabel(draftWorkflow, selectedLatestRun)}
-                </DetailStatus>,
-                <span key="event" className="taskid">{draftWorkflow.trigger?.event_type}</span>,
-                <span key="nodes" className="taskid">{Object.keys(draftWorkflow.graph?.nodes || {}).length} nodes</span>,
-                <span key="id" className="taskid">{draftWorkflow.id}</span>,
-              ]}
-              tabs={['Canvas', 'JSON', 'Runs']}
-              activeTab={detailTab}
-              onTabChange={setDetailTab}
-              tabLabel="Workflow detail tabs"
-              actions={(
-                <DetailHeaderActions menuLabel="Workflow actions">
-                  <DetailHeaderAction
-                    icon={<PlayActionIcon />}
-                    label="Trigger"
-                    tooltip="Run workflow now"
-                    ariaLabel="Run workflow now"
-                    variant="primary"
-                    onClick={handleTrigger}
-                    disabled={busyAction === 'trigger'}
-                  />
-                  <DetailHeaderAction
-                    icon={<PauseActionIcon />}
-                    label={draftWorkflow.paused ? 'Resume' : 'Pause'}
-                    tooltip={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
-                    ariaLabel={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
-                    onClick={handlePauseResume}
-                    disabled={busyAction === 'pause' || busyAction === 'resume'}
-                  />
-                  <DetailHeaderAction
-                    icon={<SaveActionIcon />}
-                    label="Save"
-                    tooltip="Save workflow"
-                    ariaLabel="Save workflow"
-                    onClick={handleSaveWorkflow}
-                    disabled={!hasUnsavedChanges || saving}
-                  />
-                  <DetailHeaderAction
-                    icon={<DeleteActionIcon />}
-                    label="Delete"
-                    tooltip="Delete workflow"
-                    ariaLabel="Delete workflow"
-                    variant="danger"
-                    onClick={handleDeleteWorkflow}
-                    disabled={busyAction === 'delete'}
-                  />
-                </DetailHeaderActions>
-              )}
-            />
-
-            <div className="workflow-detail__body">
-              {detailTab === 'Canvas' ? (
-                <section className="workflow-canvas-shell">
-                  <div className="workflow-canvas-panel">
-                    <div className="workspace-canvas workflow-canvas">
-                      <ReactFlow
-                        nodes={graphNodes}
-                        edges={graphEdges}
-                        nodeTypes={NODE_TYPES}
-                        onNodesChange={onNodesChange}
-                        onEdgesChange={onEdgesChange}
-                        onConnect={onConnect}
-                        onMoveEnd={handleViewportChange}
-                        defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
-                        defaultViewport={DEFAULT_VIEWPORT}
-                        fitView={false}
-                        minZoom={0.2}
-                        maxZoom={2.5}
+          <div className="detail-pane__body detail-pane__body--graph">
+            <div className="agents-graph-layout">
+              <section className="agents-graph-panel">
+                <div className="agents-graph-shell">
+                  <div
+                    className="workspace-canvas workflow-canvas"
+                    onDrop={onCanvasDrop}
+                    onDragOver={onCanvasDragOver}
+                  >
+                    <div className="agents-graph-floating">
+                      <span>{draftWorkflow.title || 'Untitled workflow'}</span>
+                      <span>{Object.keys(draftWorkflow.graph?.nodes || {}).length} nodes</span>
+                      <span>{workflowStatusLabel(draftWorkflow, selectedLatestRun)}</span>
+                      {statusMessage ? <span>{statusMessage}</span> : null}
+                      <button
+                        type="button"
+                        onClick={handleTrigger}
+                        disabled={busyAction === 'trigger'}
+                        title="Run workflow now"
                       >
-                        <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
-                        <Controls showInteractive={false} />
-                        <MiniMap
-                          style={MINIMAP_STYLE}
-                          nodeColor={nodeColor}
-                          maskColor="rgba(0, 0, 0, 0.55)"
-                          pannable
-                          zoomable
-                        />
-                      </ReactFlow>
-                      <WorkflowDock onAdd={handleAddPromptNode} />
+                        Run
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePauseResume}
+                        disabled={busyAction === 'pause' || busyAction === 'resume'}
+                        title={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
+                      >
+                        {draftWorkflow.paused ? 'Resume' : 'Pause'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveWorkflow}
+                        disabled={!hasUnsavedChanges || saving}
+                        title="Save workflow"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteWorkflow}
+                        disabled={busyAction === 'delete'}
+                        title="Delete workflow"
+                      >
+                        Delete
+                      </button>
                     </div>
+                    <ReactFlow
+                      nodes={graphNodes}
+                      edges={graphEdges}
+                      nodeTypes={NODE_TYPES}
+                      onNodesChange={onNodesChange}
+                      onEdgesChange={onEdgesChange}
+                      onConnect={onConnect}
+                      onMoveEnd={handleViewportChange}
+                      defaultEdgeOptions={DEFAULT_EDGE_OPTIONS}
+                      defaultViewport={DEFAULT_VIEWPORT}
+                      fitView={false}
+                      minZoom={0.2}
+                      maxZoom={2.5}
+                    >
+                      <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
+                      <Controls showInteractive={false} />
+                      <MiniMap
+                        style={MINIMAP_STYLE}
+                        nodeColor={nodeColor}
+                        maskColor="rgba(0, 0, 0, 0.55)"
+                        pannable
+                        zoomable
+                      />
+                    </ReactFlow>
+                    <WorkflowDock onAdd={handleAddPromptNode} />
                   </div>
-                  {detailsOpen ? (
-                    <div className="workflow-details-panel">
-                      <div className="workflow-details-panel__head">
-                        <strong>Workflow details</strong>
-                        <button
-                          type="button"
-                          className="node-action-btn"
-                          onClick={() => setDetailsOpen(false)}
-                          aria-label="Close workflow details"
-                        >
-                          Close
-                        </button>
-                      </div>
+                </div>
+              </section>
+
+              {activeSidePanel ? (
+                <aside className="workflow-details-panel">
+                  <button
+                    type="button"
+                    className="workflow-details-panel__collapse"
+                    onClick={() => setActiveSidePanel(null)}
+                    title="Collapse"
+                    aria-label="Collapse panel"
+                  >
+                    <ChevronRightSmall />
+                  </button>
+                  <header className="workflow-details-panel__head">
+                    <h2>
+                      {activeSidePanel === 'details' ? 'Workflow details' : null}
+                      {activeSidePanel === 'json' ? 'Edit workflow as JSON' : null}
+                      {activeSidePanel === 'runs' ? 'Run history' : null}
+                    </h2>
+                  </header>
+                  <div className="workflow-details-panel__content">
+                    {activeSidePanel === 'details' ? (
                       <section className="workflow-form">
                         <label>
                           <span>Title</span>
@@ -1192,47 +1222,36 @@ function WorkflowsInner() {
                           />
                         </label>
                       </section>
-                    </div>
-                  ) : (
-                    <WorkflowSideDock onSelect={(id) => { if (id === 'details') setDetailsOpen(true); }} />
-                  )}
-                </section>
-              ) : null}
+                    ) : null}
 
-              {detailTab === 'JSON' ? (
-                <section className="workflow-json-tab">
-                  <header className="workflow-json-tab__head">
-                    <div>
-                      <strong>Workflow definition JSON</strong>
-                      <span>Edit the backend workflow document directly and apply it back to the draft.</span>
-                    </div>
-                    <div className="workflow-json-tab__actions">
-                      <button type="button" className="node-action-btn" onClick={handleResetJson}>
-                        Reset
-                      </button>
-                      <button type="button" className="node-action-btn primary" onClick={handleApplyJson}>
-                        Apply
-                      </button>
-                    </div>
-                  </header>
-                  <JsonCodeEditor value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} />
-                  {jsonError ? <p className="workflow-json-tab__error">{jsonError}</p> : null}
-                </section>
-              ) : null}
+                    {activeSidePanel === 'json' ? (
+                      <>
+                        <JsonCodeEditor value={jsonDraft} onChange={(event) => setJsonDraft(event.target.value)} />
+                        {jsonError ? <p className="workflow-json-tab__error">{jsonError}</p> : null}
+                        <div className="workflow-json-tab__actions">
+                          <button type="button" className="node-action-btn" onClick={handleResetJson}>
+                            Reset
+                          </button>
+                          <button type="button" className="node-action-btn primary" onClick={handleApplyJson}>
+                            Apply
+                          </button>
+                        </div>
+                      </>
+                    ) : null}
 
-              {detailTab === 'Runs' ? (
-                <WorkflowRunsList
-                  runs={visibleRuns}
-                  loading={workflowsState.runsLoading && !workflowsState.runsLoaded}
-                />
-              ) : null}
+                    {activeSidePanel === 'runs' ? (
+                      <WorkflowRunsList
+                        runs={visibleRuns}
+                        loading={workflowsState.runsLoading && !workflowsState.runsLoaded}
+                      />
+                    ) : null}
+                  </div>
+                </aside>
+              ) : (
+                <WorkflowSideDock onSelect={setActiveSidePanel} />
+              )}
             </div>
-
-            <div className="workflow-detail__footer">
-              <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
-              <span>{statusMessage}</span>
-            </div>
-          </>
+          </div>
         ) : null}
       </DetailPane>
     </PageShell>
