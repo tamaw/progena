@@ -78,6 +78,7 @@ export const {
   taskActivityReceived,
   taskContentReceived,
   setUnreadChatIds,
+  touchChatSession,
 } = uiDataSlice.actions;
 
 // Re-export thunks + selectors from their domain modules.

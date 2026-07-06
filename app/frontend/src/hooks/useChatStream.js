@@ -1,14 +1,16 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 import {
   clearChatErrored,
   clearChatGenerating,
   fetchChatSessions,
   markChatErrored,
+  markChatGenerating,
   markChatUnread,
   selectErroredChatIds,
   selectGeneratingChatIds,
   selectUnreadChatIds,
+  touchChatSession,
 } from '../store/uiDataSlice';
 import {
   appendReasoningText,
@@ -17,6 +19,7 @@ import {
   extractReasoningTokenCount,
   finalizeSupersededAssistant,
 } from '../components/chat/streamEventsModel';
+import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
 
 function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
   if (!selectedBackendChatId) {
@@ -56,6 +59,55 @@ export function useChatStream({
   const backgroundErrorChatIds = useMemo(() => new Set(erroredChatIdList), [erroredChatIdList]);
   const activeAssistantIdRef = useRef(null);
   const backgroundOriginChatIdRef = useRef(null);
+
+  // Marks the chat currently streaming (if any) as generating-in-background.
+  // Called whenever the caller is about to stop treating that stream as the
+  // foreground one — switching chats, starting a new chat, or unmounting.
+  const preserveStreamInBackground = useCallback(() => {
+    if (shouldPreserveStreamInBackground({
+      streamingOriginId: backgroundOriginChatIdRef.current,
+      activeAssistantId: activeAssistantIdRef.current,
+    })) {
+      dispatch(markChatGenerating(backgroundOriginChatIdRef.current));
+    }
+  }, [dispatch]);
+
+  // If the page unmounts (navigating to a different nav item) while a stream
+  // is in flight, treat it exactly like switching chats: preserve it as a
+  // background stream instead of leaving it orphaned. Without this, nothing
+  // ever marks activeAssistantIdRef stale, so the stream's completion takes
+  // the foreground branch on a dead closure — no unread marker, no reload,
+  // and the reply silently goes nowhere once it finishes.
+  useEffect(() => {
+    return () => {
+      preserveStreamInBackground();
+      activeAssistantIdRef.current = null;
+    };
+  }, [preserveStreamInBackground]);
+
+  // Dispatches the redux side effects for a resolveBackgroundStreamOutcome()
+  // result whose action isn't 'foreground' (that case is handled inline by
+  // the caller, since it also needs to touch the local `messages` state).
+  const applyBackgroundStreamOutcome = useCallback((outcome) => {
+    if (outcome.action === 'clearGenerating') {
+      dispatch(clearChatGenerating(outcome.threadId));
+      return;
+    }
+    if (outcome.action === 'reload') {
+      dispatch(clearChatGenerating(outcome.threadId));
+      // The user navigated away and back to this chat while it was
+      // streaming. Reload its detail so the finished reply shows, and do NOT
+      // mark the chat the user is actively viewing as unread.
+      reloadOpenChat?.(outcome.threadId);
+      return;
+    }
+    if (outcome.action === 'markUnread') {
+      dispatch(clearChatGenerating(outcome.threadId));
+      dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
+      dispatch(markChatUnread(outcome.threadId));
+      dispatch(outcome.errored ? markChatErrored(outcome.threadId) : clearChatErrored(outcome.threadId));
+    }
+  }, [dispatch, getApiUrl, reloadOpenChat]);
 
   const handleSend = useCallback(async (content) => {
     const userMessage = {
@@ -119,6 +171,12 @@ export function useChatStream({
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).
     backgroundOriginChatIdRef.current = originChatId;
+    // Bump this chat's activity now so "Recent" sorts it to the top right
+    // away, instead of waiting for the stream to finish and a fresh chat list
+    // snapshot to arrive.
+    if (originChatId) {
+      dispatch(touchChatSession(originChatId));
+    }
 
     // Identifies this stream's chat so a later send only aborts it when it
     // targets the same chat; sending in a different chat leaves this running.
@@ -141,26 +199,14 @@ export function useChatStream({
         },
         // onComplete
         (status) => {
-          if (isStale()) {
-            // A background stream finished. Clear just this chat's orange dot,
-            // leaving any other still-generating background chats indicated.
-            if (originChatId) {
-              dispatch(clearChatGenerating(originChatId));
-            }
-            if (status !== 'cancelled' && originChatId) {
-              if (selectedBackendChatIdRef?.current === originChatId) {
-                // The user navigated away and back to this chat while it was
-                // streaming. Reload its detail so the finished reply shows, and
-                // do NOT mark the chat the user is actively viewing as unread.
-                reloadOpenChat?.(originChatId);
-              } else {
-                // Finished OK in the background while the user is on another
-                // chat: green unread dot, clearing any prior error flag.
-                dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-                dispatch(markChatUnread(originChatId));
-                dispatch(clearChatErrored(originChatId));
-              }
-            }
+          const outcome = resolveBackgroundStreamOutcome({
+            isStale: isStale(),
+            originChatId,
+            isViewingOrigin: selectedBackendChatIdRef?.current === originChatId,
+            resultType: status === 'cancelled' ? 'cancelled' : 'completed',
+          });
+          if (outcome.action !== 'foreground') {
+            applyBackgroundStreamOutcome(outcome);
             return;
           }
           // Foreground stream finished — clear the in-flight origin marker.
@@ -178,22 +224,14 @@ export function useChatStream({
         },
         // onError
         (error) => {
-          if (isStale()) {
-            // A background stream errored. Clear its orange dot; if the user is
-            // viewing it, reload; otherwise flag it unread + errored so its card
-            // shows a red dot in place of the green "done" dot.
-            if (originChatId) {
-              dispatch(clearChatGenerating(originChatId));
-            }
-            if (originChatId) {
-              if (selectedBackendChatIdRef?.current === originChatId) {
-                reloadOpenChat?.(originChatId);
-              } else {
-                dispatch(fetchChatSessions({ chatsUrl: getApiUrl('chats'), includeArchived: true }));
-                dispatch(markChatUnread(originChatId));
-                dispatch(markChatErrored(originChatId));
-              }
-            }
+          const outcome = resolveBackgroundStreamOutcome({
+            isStale: isStale(),
+            originChatId,
+            isViewingOrigin: selectedBackendChatIdRef?.current === originChatId,
+            resultType: 'error',
+          });
+          if (outcome.action !== 'foreground') {
+            applyBackgroundStreamOutcome(outcome);
             return;
           }
           show('error', 'Chat Error', error.message);
@@ -241,10 +279,10 @@ export function useChatStream({
     }
   }, [
     activeBackendChat,
+    applyBackgroundStreamOutcome,
     dispatch,
     getApiUrl,
     messages,
-    reloadOpenChat,
     selectedBackendChatId,
     selectedBackendChatIdRef,
     sendMessageStream,
@@ -265,6 +303,7 @@ export function useChatStream({
     backgroundErrorChatIds,
     activeAssistantIdRef,
     backgroundOriginChatIdRef,
+    preserveStreamInBackground,
     handleSend,
     handleStop,
   };

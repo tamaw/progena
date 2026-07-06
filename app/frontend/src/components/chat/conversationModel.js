@@ -211,6 +211,33 @@ function buildArchivedSessionItem(entry, pinnedKeys) {
   };
 }
 
+export function buildArchivedSessionItems({
+  archivedSessions = [],
+  pinnedSessionIds = [],
+  sharedSessionIds = [],
+}) {
+  const pinnedKeys = new Set(Array.isArray(pinnedSessionIds) ? pinnedSessionIds : []);
+  const sharedKeys = new Set(Array.isArray(sharedSessionIds) ? sharedSessionIds : []);
+  return Array.isArray(archivedSessions)
+    ? archivedSessions.map((entry) => ({
+      ...buildArchivedSessionItem(entry, pinnedKeys),
+      shared: sharedKeys.has(
+        (typeof entry?.threadId === 'string' && entry.threadId)
+          ? entry.threadId
+          : (typeof entry?.id === 'string' ? entry.id : ''),
+      ),
+    }))
+    : [];
+}
+
+// The current (unsaved) draft session card and the user's locally-archived
+// chat history are two independent concerns bundled here only for shared
+// pinned/shared-id bookkeeping. `includeCurrentSession` should be false once
+// a backend chat is selected (the draft is no longer "current"), but archived
+// items must NOT be gated on that same flag - they're persisted history, not
+// the transient draft, and hiding them meant they briefly vanished from the
+// sidebar (and got pruned out of pinned/shared ids) the instant any backend
+// chat was selected.
 export function buildSessionItems({
   messages,
   threadId,
@@ -221,10 +248,11 @@ export function buildSessionItems({
   archivedSessions = [],
   pinnedSessionIds = [],
   sharedSessionIds = [],
+  includeCurrentSession = true,
 }) {
   const pinnedKeys = new Set(Array.isArray(pinnedSessionIds) ? pinnedSessionIds : []);
   const sharedKeys = new Set(Array.isArray(sharedSessionIds) ? sharedSessionIds : []);
-  const currentSession = {
+  const currentSession = includeCurrentSession ? {
     id: threadId || 'current-session',
     pinKey: threadId || 'current-session',
     title: chatTitle,
@@ -244,20 +272,12 @@ export function buildSessionItems({
     messageCount: messages.length,
     toolCount: totalToolCount,
     errorCount: 0,
-  };
+  } : null;
 
-  const archivedItems = Array.isArray(archivedSessions)
-    ? archivedSessions.map((entry) => ({
-      ...buildArchivedSessionItem(entry, pinnedKeys),
-      shared: sharedKeys.has(
-        (typeof entry?.threadId === 'string' && entry.threadId)
-          ? entry.threadId
-          : (typeof entry?.id === 'string' ? entry.id : ''),
-      ),
-    }))
-    : [];
+  const archivedItems = buildArchivedSessionItems({ archivedSessions, pinnedSessionIds, sharedSessionIds });
 
-  return [currentSession, ...archivedItems].sort((left, right) => right.activityAt - left.activityAt);
+  return [...(currentSession ? [currentSession] : []), ...archivedItems]
+    .sort((left, right) => right.activityAt - left.activityAt);
 }
 
 export function groupSessionItems(items) {

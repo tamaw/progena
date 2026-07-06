@@ -163,28 +163,31 @@ export function buildChatSessionItems({
   const shouldShowLocalCurrentSession =
     !selectedBackendChatId
     && messages.length > 0;
-  const localItems = shouldShowLocalCurrentSession
-    ? buildSessionItems({
-      messages,
-      threadId,
-      chatTitle,
-      totalTokenCount,
-      totalToolCount,
-      firstMessageTime,
-      archivedSessions,
-      pinnedSessionIds,
-      sharedSessionIds,
-    })
-      .map((item) => ({
-        ...item,
-        source: 'local',
-        archived: item.detail === 'Archived',
-        selected: item.selected,
-        // The live local session is the active chat, so it generates in the
-        // foreground exactly when the composer is streaming.
-        generating: Boolean(isGenerating) && item.selected,
-      }))
-    : [];
+  // Locally-archived sessions are independent persisted history, not the
+  // transient current draft - they must always be included regardless of
+  // whether a backend chat is currently selected. Only the draft card itself
+  // is gated on `shouldShowLocalCurrentSession`.
+  const localItems = buildSessionItems({
+    messages,
+    threadId,
+    chatTitle,
+    totalTokenCount,
+    totalToolCount,
+    firstMessageTime,
+    archivedSessions,
+    pinnedSessionIds,
+    sharedSessionIds,
+    includeCurrentSession: shouldShowLocalCurrentSession,
+  })
+    .map((item) => ({
+      ...item,
+      source: 'local',
+      archived: item.detail === 'Archived',
+      selected: item.selected,
+      // The live local session is the active chat, so it generates in the
+      // foreground exactly when the composer is streaming.
+      generating: Boolean(isGenerating) && item.selected,
+    }));
 
   const localIds = new Set(localItems.map((item) => item.pinKey));
   const backendItems = backendChatSessions
@@ -211,6 +214,24 @@ export function visibleGroupsForFilter({ sessionItems, sidebarFilter, groupSessi
       .filter((group) => group.items.length > 0);
   }
   return groupSessionItems(sessionItems.filter((item) => !item.archived));
+}
+
+// Picks which sidebar item to fall back to once `removedItemId` is gone
+// (archived, deleted) -- prefers the item just after it in the visible list,
+// falling back to the one just before it (e.g. removing the last item).
+export function findAdjacentSessionItem(visibleSessionItems, removedItemId) {
+  const visibleIndex = visibleSessionItems.findIndex((item) => item.id === removedItemId);
+  if (visibleIndex < 0) {
+    return null;
+  }
+  return visibleSessionItems[visibleIndex + 1] ?? visibleSessionItems[visibleIndex - 1] ?? null;
+}
+
+// Whether the local-only "current session" (not yet a backend chat card)
+// needs to be persisted as its own sidebar card before switching away from
+// it -- otherwise it would simply disappear once selection moves elsewhere.
+export function shouldMaterializeBeforeSwitching({ selectedBackendChatId, threadId, messageCount }) {
+  return !selectedBackendChatId && Boolean(threadId) && messageCount > 0;
 }
 
 export function sidebarEmptyMessage({ sidebarFilter, backendChatsLoaded, backendChatsLoading }) {
