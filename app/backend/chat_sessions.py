@@ -255,10 +255,7 @@ def materialize_chat_metadata(
     session: ChatSessionSummary | ChatSessionDetail,
 ) -> dict[str, Any]:
     """Persist backend UI metadata for a checkpoint-derived chat summary."""
-    thread_id = _resolve_thread_id(
-        thread_id=session.thread_id,
-        fallback=session.thread_id,
-    )
+    thread_id = _resolve_thread_id(thread_id=session.thread_id)
     if not thread_id:
         raise ValueError("thread_id is required to materialize chat metadata")
     metadata = {
@@ -626,10 +623,6 @@ def _summary_from_metadata(
     )
 
 
-def _metadata_without_messages(metadata: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in metadata.items() if key != "messages"}
-
-
 def _metadata_sort_key(metadata: dict[str, Any]) -> str:
     return str(
         metadata.get("last_activity")
@@ -655,14 +648,26 @@ def _display_title(raw_title: str, messages: list[ChatMessage]) -> str:
 def _checkpoint_snapshot_for_metadata(
     store: BackendDocumentStore,
     metadata: dict[str, Any],
+    *,
+    cached_snapshots: dict[str, CheckpointThreadSnapshot] | None = None,
 ) -> CheckpointThreadSnapshot | None:
     thread_id = _thread_id_for_metadata(metadata)
     if thread_id is None:
         return None
     checkpoint_id = metadata.get("checkpoint_id")
+    checkpoint_id_str = str(checkpoint_id) if checkpoint_id else None
+    if cached_snapshots is not None:
+        cached = cached_snapshots.get(thread_id)
+        # A cache hit is only usable when the metadata doesn't pin a specific
+        # checkpoint, or that checkpoint happens to be the latest one anyway —
+        # otherwise this must fall through to a real fetch for that checkpoint.
+        if cached is not None and (
+            checkpoint_id_str is None or cached.checkpoint_id == checkpoint_id_str
+        ):
+            return cached
     return store.get_checkpoint_thread_snapshot(
         thread_id,
-        checkpoint_id=str(checkpoint_id) if checkpoint_id else None,
+        checkpoint_id=checkpoint_id_str,
     )
 
 
@@ -705,6 +710,7 @@ def list_chat_sessions(
 ) -> list[ChatSessionSummary]:
     sessions: list[ChatSessionSummary] = []
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
+    snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
     covered_threads: set[str] = set()
     hidden_threads: set[str] = set()
     metadata_records: list[dict[str, Any]] = []
@@ -729,7 +735,9 @@ def list_chat_sessions(
             continue
         if metadata.get("archived") is True and not include_archived:
             continue
-        snapshot = _checkpoint_snapshot_for_metadata(store, metadata)
+        snapshot = _checkpoint_snapshot_for_metadata(
+            store, metadata, cached_snapshots=snapshots_by_thread_id
+        )
         fallback_messages = _messages_from_checkpoint(snapshot)
         if snapshot is not None:
             covered_threads.add(snapshot.thread_id)
