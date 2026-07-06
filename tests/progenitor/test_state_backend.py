@@ -26,8 +26,8 @@ from app.progenitor.agent.state_backend import (
     validate_registry_document,
     validate_schedule_document,
 )
-from app.progenitor.workflows import default_workflow_definition
 from app.progenitor.state.models import ScheduleEntry
+from app.progenitor.workflows import default_workflow_definition
 
 
 class _FakeStateManager:
