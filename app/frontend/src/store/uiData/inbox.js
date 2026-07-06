@@ -30,6 +30,17 @@ function replaceMessageList(inbox, items) {
   }
 }
 
+// Shared by the SSE event handler and the GET thunk's own fulfilled case, so
+// a page renders directly from the HTTP response instead of only becoming
+// "loaded" once the backend's echoed inbox.snapshot event happens to arrive
+// (which would otherwise never resolve if the realtime stream is down).
+function applyInboxSnapshot(inbox, payload) {
+  replaceMessageList(inbox, payload?.messages);
+  inbox.loaded = true;
+  inbox.loading = false;
+  inbox.error = null;
+}
+
 export const fetchInbox = createAsyncThunk(
   'uiData/fetchInbox',
   ({ inboxUrl }) => requestJson(inboxUrl, { errorLabel: 'Failed to load inbox' }),
@@ -60,10 +71,7 @@ export const deleteInboxMessage = createAsyncThunk(
 
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {
-    replaceMessageList(state.inbox, payload.messages);
-    state.inbox.loaded = true;
-    state.inbox.loading = false;
-    state.inbox.error = null;
+    applyInboxSnapshot(state.inbox, payload);
   },
   'inbox.message.upserted': (state, payload) => {
     const message = payload.message;
@@ -92,8 +100,8 @@ export function buildExtraReducers(builder) {
       state.inbox.loading = true;
       state.inbox.error = null;
     })
-    .addCase(fetchInbox.fulfilled, (state) => {
-      state.inbox.loading = false;
+    .addCase(fetchInbox.fulfilled, (state, action) => {
+      applyInboxSnapshot(state.inbox, action.payload);
     })
     .addCase(fetchInbox.rejected, (state, action) => {
       state.inbox.loading = false;

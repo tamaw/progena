@@ -21,7 +21,6 @@ import { useConfig } from '../context/ConfigContext';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   deleteInboxMessage,
-  fetchInbox,
   markInboxMessageRead,
   selectInboxMessages,
   selectInboxState,
@@ -75,11 +74,9 @@ export default function InboxPage() {
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('Recent');
 
-  useEffect(() => {
-    if (!inboxState.loaded && !inboxState.loading) {
-      dispatch(fetchInbox({ inboxUrl }));
-    }
-  }, [dispatch, inboxState.loaded, inboxState.loading, inboxUrl]);
+  // No fetch-on-mount here: RealtimeBridge seeds the inbox globally on
+  // connect (same convention ConversationPage follows for chat sessions),
+  // so the page only ever reads state instead of re-triggering its own GET.
 
   const visibleMessages = useMemo(() => {
     const needle = query.trim().toLowerCase();
