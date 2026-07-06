@@ -8,6 +8,7 @@ import { NotificationProvider } from './context/NotificationContext';
 import AppRuntimeShell from './components/layout/AppRuntimeShell';
 import RealtimeBridge from './store/RealtimeBridge';
 import ConversationPage from './pages/ConversationPage';
+import InboxPage from './pages/InboxPage';
 import DashboardPage from './pages/DashboardPage';
 import TasksPage from './pages/TasksPage';
 import KanbanPage from './pages/KanbanPage';
@@ -51,6 +52,7 @@ function App() {
                 <Routes>
                   <Route element={<AppRuntimeShell />}>
                     <Route path="/" element={<ConversationPage />} />
+                    <Route path="/inbox" element={<InboxPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/models" element={<ModelsPage />} />
                     <Route path="/channels" element={<ChannelsPage />} />

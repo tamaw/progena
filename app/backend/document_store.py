@@ -55,6 +55,8 @@ class BackendDocumentStore(Protocol):
         self, prefix: str, key: str, default: Any | None = None
     ) -> StoredDocument | None: ...
 
+    def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]: ...
+
     def save_document(self, prefix: str, key: str, payload: Any) -> None: ...
 
     def delete_document(self, prefix: str, key: str) -> None: ...
@@ -101,6 +103,16 @@ class InMemoryDocumentStore:
         if default is None:
             return None
         return StoredDocument(default, None)
+
+    def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]:
+        return sorted(
+            (
+                (key, document)
+                for (doc_prefix, key), document in self._documents.items()
+                if doc_prefix == prefix and key.startswith(key_prefix)
+            ),
+            key=lambda entry: entry[0],
+        )
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         self._documents[(prefix, key)] = StoredDocument(payload, datetime.now(UTC))
@@ -307,6 +319,21 @@ class PostgresDocumentStore:
         value = row.get("value")
         payload = value.get("payload", default) if isinstance(value, dict) else default
         return StoredDocument(payload, row.get("updated_at"))
+
+    def list_documents(self, prefix: str, key_prefix: str) -> list[tuple[str, StoredDocument]]:
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT key, value, updated_at FROM store "
+                "WHERE prefix = %s AND key LIKE %s ORDER BY key",
+                (prefix, _escape_like(key_prefix) + "%"),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        results: list[tuple[str, StoredDocument]] = []
+        for row in rows:
+            value = row.get("value")
+            payload = value.get("payload") if isinstance(value, dict) else None
+            results.append((str(row["key"]), StoredDocument(payload, row.get("updated_at"))))
+        return results
 
     def save_document(self, prefix: str, key: str, payload: Any) -> None:
         value = {"payload": payload}
@@ -587,6 +614,11 @@ class StoreChangeListener:
                 self._on_change(notify.payload)
         finally:
             await aconn.close()
+
+
+def _escape_like(text: str) -> str:
+    """Escape LIKE wildcards so a key prefix matches literally (ids may contain ``_``)."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _log_row_to_entry(row: dict[str, Any]) -> dict[str, Any]:

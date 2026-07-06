@@ -139,6 +139,20 @@ def _parse_date_boundary(value: str | None, *, end_of_day: bool = False) -> date
     return parsed
 
 
+def _hash_material(material: Any) -> str:
+    """Stable short hash of arbitrary JSON-ish content, for change-detection fingerprints.
+
+    Shared tail for every ``_*_fingerprint`` method on ``StateReader``: each
+    gathers its own document(s) into ``material``, then calls this to turn it
+    into the sha1 prefix ``_state_changed`` compares between polls.
+    """
+    try:
+        serialized = json.dumps(material, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        serialized = str(material)
+    return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+
+
 def _entry_identity(entry: dict[str, Any]) -> str:
     payload = "|".join(
         [
@@ -465,6 +479,10 @@ class StateSnapshot:
     # cycle_count, thread_id, idle_cycles, queue_stats, pid - NOT liveness,
     # which is a live IPC check pushed separately via _process_metrics()).
     health_fingerprint: str = ""
+    # Content fingerprint of all inbox message documents. Like kanban, no other
+    # snapshot field changes when the agent writes /inbox/<id>.md, so this is
+    # the sole signal _state_changed() has for an inbox-only write.
+    inbox_fingerprint: str = ""
 
 
 class StateReader:
@@ -973,11 +991,7 @@ class StateReader:
             "tools": tools_doc.get("tools") if isinstance(tools_doc, dict) else None,
             "status": tools_doc.get("servers") if isinstance(tools_doc, dict) else None,
         }
-        try:
-            serialized = json.dumps(material, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            serialized = str(material)
-        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return _hash_material(material)
 
     def _knowledge_fingerprint(self) -> str:
         """Stable hash of the ``knowledge`` state document (base settings)."""
@@ -990,11 +1004,7 @@ class StateReader:
         except Exception:
             return ""
         payload = document.payload if document is not None else {"bases": []}
-        try:
-            serialized = json.dumps(payload, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            serialized = str(payload)
-        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return _hash_material(payload)
 
     def _schedule_fingerprint(self) -> str:
         """Stable hash of the ``schedule`` state document (all entries, keyed by id).
@@ -1011,11 +1021,7 @@ class StateReader:
         except Exception:
             return ""
         payload = document.payload if document is not None else {}
-        try:
-            serialized = json.dumps(payload, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            serialized = str(payload)
-        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return _hash_material(payload)
 
     def _kanban_fingerprint(self) -> str:
         """Stable hash of the kanban board (structure + every per-card document).
@@ -1049,11 +1055,25 @@ class StateReader:
             material = {"structure": structure, "cards": cards}
         except Exception:
             return ""
+        return _hash_material(material)
+
+    def _inbox_fingerprint(self) -> str:
+        """Stable hash of all inbox message documents.
+
+        Mirrors ``_kanban_fingerprint`` (no other snapshot field ever changes
+        on an inbox-only write), but the messages have no index document, so
+        this is a single key-prefix query instead of per-key gets.
+        """
+        if self.document_store is None:
+            return ""
         try:
-            serialized = json.dumps(material, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            serialized = str(material)
-        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+            rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, "inbox_message:")
+            material = [
+                document.payload for _key, document in rows if isinstance(document.payload, dict)
+            ]
+        except Exception:
+            return ""
+        return _hash_material(material)
 
     def _health_fingerprint(self) -> str:
         """Stable hash of the ``health`` Postgres document's status fields.
@@ -1071,11 +1091,7 @@ class StateReader:
             payload = health_doc.payload if health_doc is not None else {}
         except Exception:
             return ""
-        try:
-            serialized = json.dumps(payload, sort_keys=True, default=str)
-        except (TypeError, ValueError):
-            serialized = str(payload)
-        return hashlib.sha1(serialized.encode("utf-8"), usedforsecurity=False).hexdigest()[:16]
+        return _hash_material(payload)
 
     def get_snapshot(self) -> StateSnapshot:
         health = self.get_health()
@@ -1103,6 +1119,7 @@ class StateReader:
             schedule_fingerprint=self._schedule_fingerprint(),
             kanban_fingerprint=self._kanban_fingerprint(),
             health_fingerprint=self._health_fingerprint(),
+            inbox_fingerprint=self._inbox_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1935,6 +1952,8 @@ class StateReader:
         if new.kanban_fingerprint != old.kanban_fingerprint:
             return True
         if new.health_fingerprint != old.health_fingerprint:
+            return True
+        if new.inbox_fingerprint != old.inbox_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0
