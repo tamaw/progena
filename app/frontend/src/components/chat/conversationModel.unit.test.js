@@ -4,6 +4,7 @@ import {
   DEFAULT_CHAT_TITLE,
   toValidTimestamp,
   deriveChatTitle,
+  collectMessageImages,
   countToolInvocations,
   getTimeBucket,
   groupSessionItems,
@@ -48,6 +49,42 @@ describe('countToolInvocations', () => {
       {},
     ];
     expect(countToolInvocations(messages)).toBe(2);
+  });
+});
+
+describe('collectMessageImages', () => {
+  it('collects tool-result images only from assistant messages', () => {
+    const userMessage = {
+      role: 'user',
+      content: 'hi',
+      streamEvents: [{ eventType: 'tool_result', images: [{ base64: 'x', media_type: 'image/png' }] }],
+    };
+    expect(collectMessageImages(userMessage)).toEqual([]);
+  });
+
+  it('builds a data: URI per tool-result image, in event order', () => {
+    const message = {
+      role: 'assistant',
+      content: 'here you go',
+      streamEvents: [
+        { eventType: 'tool_result', images: [{ id: 'a', base64: 'AAA', media_type: 'image/png' }] },
+        { eventType: 'tool_result', images: [] },
+        { eventType: 'tool_result', images: [{ id: 'b', base64: 'BBB' }] },
+      ],
+    };
+    expect(collectMessageImages(message)).toEqual([
+      { id: 'a', src: 'data:image/png;base64,AAA', alt: 'Image 1' },
+      { id: 'b', src: 'data:image/jpeg;base64,BBB', alt: 'Image 2' },
+    ]);
+  });
+
+  it('returns an empty list for a message with no images anywhere', () => {
+    const message = { role: 'assistant', content: 'just text, no images', streamEvents: [] };
+    expect(collectMessageImages(message)).toEqual([]);
+  });
+
+  it('tolerates a missing streamEvents array', () => {
+    expect(collectMessageImages({ role: 'assistant', content: 'hi' })).toEqual([]);
   });
 });
 

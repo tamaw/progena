@@ -43,6 +43,7 @@ import DetailPane from '../components/layout/DetailPane';
 import {
   CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
+  collectMessageImages,
   countToolInvocations,
   deriveChatTitle,
   formatStartedTime,
@@ -919,11 +920,11 @@ function ConversationPage() {
           message.reasoningText,
         );
       }
+      counts.images += collectMessageImages(message).length;
       for (const event of (Array.isArray(message.streamEvents) ? message.streamEvents : [])) {
         const cat = categoryForEventType(event.eventType);
         if (cat === 'reasoning') continue;
         if (cat && cat in counts) counts[cat]++;
-        if (Array.isArray(event.images) && event.images.length > 0) counts.images++;
       }
     }
     return counts;

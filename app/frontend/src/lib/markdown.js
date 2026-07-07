@@ -57,10 +57,20 @@ export function renderMarkdownToHtml(content) {
 
   formatted = formatted.replace(/~~([^~]+)~~/g, '<del>$1</del>');
 
+  // Images before plain links: `![alt](url)` would otherwise be matched by
+  // the `[label](url)` pass below (it doesn't care about the leading `!`),
+  // leaving a stray `!` in front of a link instead of rendering an image.
+  formatted = formatted.replace(
+    /!\[([^\]]*)\]\(([^)]+)\)/g,
+    (match, alt, src) => renderMarkdownImage(alt, src),
+  );
+
   formatted = formatted.replace(
     /\[([^\]]+)\]\(([^)]+)\)/g,
     (match, label, href) => renderMarkdownLink(label, href),
   );
+
+  formatted = autolinkPlainUrls(formatted);
 
   formatted = formatted.replace(/^---$/gm, '<hr class="md-hr">');
   formatted = formatted.replace(/^\*\*\*$/gm, '<hr class="md-hr">');
@@ -73,6 +83,14 @@ export function renderMarkdownToHtml(content) {
 
   formatted = formatted.replace(/\[ \]\s+(.+)/g, '<span class="task-item">☐ $1</span>');
   formatted = formatted.replace(/\[x\]\s+(.+)/gi, '<span class="task-item completed">☑ $1</span>');
+
+  // GFM tables. Runs after inline formatting (bold/links/code spans) so cell
+  // content already carries its HTML, and after the list-item pass since
+  // both operate on whole lines and table rows never collide with `- `/`1. `
+  // list markers. Only the piped style (`| a | b |`) is guaranteed to be
+  // detected -- a bare `a | b` / `- | -` table can be misread as a list
+  // item by the pass above, same as any other line-based markdown here.
+  formatted = convertMarkdownTables(formatted);
 
   formatted = formatted.replace(/\n\n/g, '</p><p>');
   formatted = formatted.replace(/\n/g, '<br>');
@@ -184,10 +202,90 @@ function normalizeListMarkup(html) {
   return container.innerHTML;
 }
 
+const TABLE_SEPARATOR_ROW_RE = /^[ \t]*\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$/;
+
+function isTableRowCandidate(line) {
+  return typeof line === 'string' && line.includes('|') && line.trim() !== '';
+}
+
+function splitTableRow(line) {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
+}
+
+function tableColumnAlignment(separatorCell) {
+  const left = separatorCell.startsWith(':');
+  const right = separatorCell.endsWith(':');
+  if (left && right) return 'center';
+  if (right) return 'right';
+  if (left) return 'left';
+  return null;
+}
+
+function tableCellAttr(align) {
+  return align ? ` style="text-align:${align}"` : '';
+}
+
+function renderTable(headerCells, alignments, bodyRows) {
+  const headHtml = headerCells
+    .map((cell, index) => `<th${tableCellAttr(alignments[index])}>${cell}</th>`)
+    .join('');
+  const bodyHtml = bodyRows
+    .map((row) => {
+      const rowHtml = headerCells
+        .map((_, index) => `<td${tableCellAttr(alignments[index])}>${row[index] ?? ''}</td>`)
+        .join('');
+      return `<tr>${rowHtml}</tr>`;
+    })
+    .join('');
+  return `<table><thead><tr>${headHtml}</tr></thead><tbody>${bodyHtml}</tbody></table>`;
+}
+
+// Detects GFM-style tables: a header row immediately followed by a
+// `| --- | --- |`-shaped separator row, then zero or more body rows. Consumes
+// consecutive piped lines rather than a single regex since a table body can
+// be any number of rows.
+function convertMarkdownTables(text) {
+  const lines = text.split('\n');
+  const output = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const headerLine = lines[i];
+    const separatorLine = lines[i + 1];
+
+    if (
+      separatorLine !== undefined
+      && isTableRowCandidate(headerLine)
+      && TABLE_SEPARATOR_ROW_RE.test(separatorLine)
+    ) {
+      const headerCells = splitTableRow(headerLine);
+      const alignments = splitTableRow(separatorLine).map(tableColumnAlignment);
+      const bodyRows = [];
+      let j = i + 2;
+      while (j < lines.length && isTableRowCandidate(lines[j])) {
+        bodyRows.push(splitTableRow(lines[j]));
+        j += 1;
+      }
+      output.push(renderTable(headerCells, alignments, bodyRows));
+      i = j;
+      continue;
+    }
+
+    output.push(headerLine);
+    i += 1;
+  }
+
+  return output.join('\n');
+}
+
 function escapeHtml(text) {
   const div = document.createElement('div');
   div.textContent = text;
-  return div.innerHTML;
+  // textContent->innerHTML only escapes &, <, > -- quotes must be escaped
+  // too since this output also lands inside attribute values (href, src,
+  // alt), where a literal `"` breaks out of the attribute.
+  return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function decodeHtmlEntities(text) {
@@ -211,6 +309,7 @@ function sanitizeMarkdownHref(href) {
   ) {
     return {
       href: escapeHtml(decodedHref),
+      decoded: decodedHref,
       external: false,
     };
   }
@@ -221,6 +320,7 @@ function sanitizeMarkdownHref(href) {
       if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
         return {
           href: escapeHtml(decodedHref),
+          decoded: decodedHref,
           external: true,
         };
       }
@@ -233,6 +333,7 @@ function sanitizeMarkdownHref(href) {
 
   return {
     href: escapeHtml(decodedHref),
+    decoded: decodedHref,
     external: false,
   };
 }
@@ -245,6 +346,75 @@ function renderMarkdownLink(label, href) {
 
   const externalAttrs = sanitizedHref.external ? ' target="_blank" rel="noopener noreferrer"' : '';
   return `<a href="${sanitizedHref.href}"${externalAttrs}>${label}</a>`;
+}
+
+// Chat renders markdown images as thumbnails in a bottom strip alongside
+// tool-result images (see conversationModel.collectMessageImages(), which
+// calls extractMarkdownImages() below), not inline -- so inline text just
+// keeps a plain link to the image, the same as any other markdown link.
+function renderMarkdownImage(alt, src) {
+  return renderMarkdownLink(alt || src, src);
+}
+
+// Pulls `![alt](url)` images out of raw (pre-render) markdown so a caller
+// can display them separately from the text, e.g. chat's bottom image strip.
+// Skips fenced code blocks so a literal `![]()` shown as an example isn't
+// mistaken for an image.
+export function extractMarkdownImages(content) {
+  if (!content) return [];
+  const withoutCodeBlocks = content.replace(/```(?:\w*)\n[\s\S]*?```/g, '');
+  const images = [];
+  const imageRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let match = imageRe.exec(withoutCodeBlocks);
+  while (match !== null) {
+    const [, alt, rawSrc] = match;
+    const sanitized = sanitizeMarkdownHref(rawSrc.trim());
+    if (sanitized) {
+      images.push({ alt: alt.trim(), src: sanitized.decoded });
+    }
+    match = imageRe.exec(withoutCodeBlocks);
+  }
+  return images;
+}
+
+// Runs on already-escaped HTML text, after `[label](url)` conversion. Only
+// bare `http(s)://` URLs are linked -- schemeless domains like "example.com"
+// are left alone since they're too easy to confuse with ordinary text.
+const BARE_URL_RE = /\bhttps?:\/\/[^\s<>"')\]]+/g;
+
+function autolinkPlainUrls(text) {
+  // `<a>` tags (from the `[label](url)` / `![alt](url)` passes) and inline-
+  // code spans must not be touched -- otherwise a link's own label/href, or
+  // a URL a user deliberately wrote as code, gets a second, broken link
+  // wrapped around it. Pull them out into placeholders first, same
+  // technique as code/writing blocks above, then restore once the bare-URL
+  // pass has run.
+  //
+  // The placeholder token includes a per-call random component so that if a
+  // message's own text happens to contain something that looks like
+  // "@@AUTOLINKSKIP_0@@", it's left alone -- only placeholders this exact
+  // call stashed (matching this call's random suffix) are restored.
+  const skipped = [];
+  const token = `@@AUTOLINKSKIP_${Math.random().toString(36).slice(2)}_`;
+  const stash = (match) => {
+    skipped.push(match);
+    return `${token}${skipped.length - 1}@@`;
+  };
+
+  let working = text.replace(/<a\b[^>]*>[\s\S]*?<\/a>/g, stash);
+  working = working.replace(/<code class="inline-code">[\s\S]*?<\/code>/g, stash);
+
+  working = working.replace(BARE_URL_RE, (match) => {
+    // Peel off trailing punctuation that reads as sentence punctuation
+    // rather than part of the URL, e.g. "see https://example.com."
+    const trailingMatch = match.match(/[).,!?;:]+$/);
+    const trailing = trailingMatch ? trailingMatch[0] : '';
+    const url = trailing ? match.slice(0, -trailing.length) : match;
+    return url ? `${renderMarkdownLink(url, url)}${trailing}` : match;
+  });
+
+  const restoreRe = new RegExp(`${token}(\\d+)@@`, 'g');
+  return working.replace(restoreRe, (match, index) => skipped[Number(index)] || '');
 }
 
 function renderCodeBlock(language, code) {

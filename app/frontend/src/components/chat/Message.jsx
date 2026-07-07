@@ -1,5 +1,6 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { renderMarkdownToHtml } from '../../lib/markdown';
+import { collectMessageImages } from './conversationModel';
 import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 
 function isTimelineStreamEvent(event) {
@@ -96,14 +97,14 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
-  // Collect images from all tool_result events on this message (unfiltered — images
-  // belong in the agent response, not the tool row, so they survive the tool filter).
-  const messageImages = useMemo(() => {
-    if (role !== 'assistant') return [];
-    return streamEvents
-      .filter((e) => e.eventType === 'tool_result' && Array.isArray(e.images) && e.images.length > 0)
-      .flatMap((e) => e.images);
-  }, [role, streamEvents]);
+  // Tool-result (base64) images and markdown images from the message text are both
+  // image responses in the same sense, so they're collected together via the shared
+  // collectMessageImages() -- see its doc comment for why this must stay one function
+  // rather than duplicated logic here and in the Images filter count.
+  const messageImages = useMemo(
+    () => collectMessageImages({ role, content, streamEvents }),
+    [role, content, streamEvents],
+  );
 
   const messageEntry = (
     <article className={`message-wrapper ${role} msg msg--${role} entry entry--${role === 'assistant' ? 'assistant' : 'user'} ${entryStateClass}`}>
@@ -147,10 +148,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
           </span>
         </div>
         <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
-          <div
-            className="message-content"
-            dangerouslySetInnerHTML={{ __html: formattedContent }}
-          />
+          <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
           {showImages && messageImages.length > 0 && (
             <MessageImageStrip images={messageImages} />
           )}
@@ -175,7 +173,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   );
 }
 
-function ImageModal({ image, onClose }) {
+function ImageModal({ src, alt, onClose }) {
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose(); };
     document.addEventListener('keydown', onKey);
@@ -190,16 +188,16 @@ function ImageModal({ image, onClose }) {
             <path d="M1 1l12 12M13 1L1 13" />
           </svg>
         </button>
-        <img
-          className="img-modal-img"
-          src={`data:${image.media_type || 'image/jpeg'};base64,${image.base64}`}
-          alt="Full size"
-        />
+        <img className="img-modal-img" src={src} alt={alt || 'Full size'} />
       </div>
     </div>
   );
 }
 
+// Renders both tool-result images and markdown images from the message
+// text (see collectMessageImages() in MessageView, above) as one strip of
+// fixed-size, click-to-expand thumbnails -- callers pass already-normalized
+// { id, src, alt } entries.
 function MessageImageStrip({ images }) {
   const [lightboxImage, setLightboxImage] = useState(null);
   const openLightbox = useCallback((image) => setLightboxImage(image), []);
@@ -207,7 +205,9 @@ function MessageImageStrip({ images }) {
 
   return (
     <>
-      {lightboxImage && <ImageModal image={lightboxImage} onClose={closeLightbox} />}
+      {lightboxImage && (
+        <ImageModal src={lightboxImage.src} alt={lightboxImage.alt} onClose={closeLightbox} />
+      )}
       <div className="img-strip msg-img-strip">
         {images.map((image, index) => (
           <div
@@ -221,10 +221,7 @@ function MessageImageStrip({ images }) {
             aria-label={`View image ${index + 1} full size`}
           >
             <div className="img-thumb__inner img-thumb__inner--photo">
-              <img
-                src={`data:${image.media_type || 'image/jpeg'};base64,${image.base64}`}
-                alt={`Image ${index + 1}`}
-              />
+              <img src={image.src} alt={image.alt} />
             </div>
           </div>
         ))}
