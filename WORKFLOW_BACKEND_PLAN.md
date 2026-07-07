@@ -74,10 +74,10 @@ Define workflow definition shape for v1:
 
 Add runtime-side validation:
 - New schema files in `data/schemas/`:
-  - `workflow_definition.schema.v1.json`
-  - `workflow_trigger.schema.v1.json`
-  - `workflow_node_event.schema.v1.json`
-  - `workflow_node_prompt.schema.v1.json`
+  - `definition.workflow.schema.v1.json`
+  - `trigger.workflow.schema.v1.json`
+  - `node_event.workflow.schema.v1.json`
+  - `node_prompt.workflow.schema.v1.json`
 - Add runtime validators in the state backend so writes through `/state/workflows/*.json` are rejected unless valid.
 - Validation rules:
   - top-level object required
@@ -107,7 +107,7 @@ Skill responsibilities:
 Skill workflow:
 1. `ls /state/workflows/`
 2. `read_file /state/workflows/<id>.json` when editing
-3. `read_file /schemas/workflow_definition.schema.v1.json` and relevant node schemas
+3. `read_file /schemas/definition.workflow.schema.v1.json` and relevant node schemas
 4. call `structured_output` for one workflow definition or one node payload
 5. persist with `edit_file` or `write_file`
 
@@ -274,7 +274,7 @@ Add new backend/domain types:
 
 Add new schema/tool/skill-visible contracts:
 - `/state/workflows/*.json` virtual files
-- `/schemas/workflow_definition.schema.v1.json`
+- `/schemas/definition.workflow.schema.v1.json`
 - `managing-workflows` skill
 
 Reuse existing structured-output interface:

@@ -16,9 +16,12 @@ from app.progenitor.workflows import (
     WORKFLOW_ALLOWED_EVENT_TYPES,
     WorkflowDefinition,
     WorkflowListItem,
+    WorkflowNodeCode,
     WorkflowNodeEvent,
     WorkflowNodePrompt,
+    WorkflowNodeUser,
     WorkflowRun,
+    WorkflowTrigger,
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
@@ -44,14 +47,14 @@ class PromptExecutionResult:
 
 
 class WorkflowPromptRunner(Protocol):
-    """Prompt runner adapter for workflow prompt nodes."""
+    """Prompt runner adapter for workflow prompt/user/code nodes."""
 
     async def __call__(
         self,
         *,
         workflow: WorkflowDefinition,
         node_id: str,
-        node: WorkflowNodePrompt,
+        node: WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode,
         input_text: str,
         thread_id: str | None,
     ) -> PromptExecutionResult: ...
@@ -262,6 +265,52 @@ def compose_workflow_prompt_input(trigger_event: Mapping[str, Any], previous_out
     return "\n".join(sections)
 
 
+def build_user_node_instruction(node: WorkflowNodeUser, input_text: str) -> str:
+    """Build the scripted tool-call instruction sent to the agent for a user node.
+
+    Mirrors the old Workspace canvas's ``buildUserMessageInstruction``: the
+    agent has no dedicated "send to user" execution path of its own, so we
+    ask it to call the matching tool with an exact payload and reply with a
+    fixed sentinel, keeping the run's output deterministic.
+    """
+
+    message = node.message.strip()
+    if input_text.strip():
+        message = (
+            f"{message}\n\nConnected input:\n{input_text.strip()}"
+            if message
+            else input_text.strip()
+        )
+
+    if node.message_type == "notify_user":
+        payload = {
+            "request": message,
+            "tool_args": {
+                "title": str(node.notification_title or "").strip(),
+                "body": message,
+                "level": node.level,
+            },
+        }
+        tool = "notify_user"
+    elif node.message_type == "ask_user":
+        payload = {"request": message}
+        tool = "ask_user"
+    else:
+        payload = {"request": message}
+        tool = "say_to_user"
+
+    return "\n".join(
+        [
+            f"Use the `{tool}` tool exactly once with this exact payload.",
+            "Do not call any other tools.",
+            "After the tool call, reply with exactly: sent",
+            "```json",
+            json.dumps(payload, indent=2),
+            "```",
+        ]
+    )
+
+
 def render_workflow_event_output(trigger_event: Mapping[str, Any]) -> str:
     """Render the event node's output text for downstream prompt nodes."""
 
@@ -278,6 +327,31 @@ def render_workflow_event_output(trigger_event: Mapping[str, Any]) -> str:
         indent=2,
         sort_keys=True,
         default=str,
+    )
+
+
+def _trigger_column_filter_matches(trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
+    """Check a trigger's optional from_column/to_column filter against a kanban.card.moved payload.
+
+    Other event types carry no column transition, so a trigger with a column
+    filter set simply never matches them.
+    """
+
+    if not trigger.from_column and not trigger.to_column:
+        return True
+    payload = event.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    from_column = (
+        (payload.get("from") or {}).get("column_id")
+        if isinstance(payload.get("from"), dict)
+        else None
+    )
+    to_column = (
+        (payload.get("to") or {}).get("column_id") if isinstance(payload.get("to"), dict) else None
+    )
+    return (not trigger.from_column or trigger.from_column == from_column) and (
+        not trigger.to_column or trigger.to_column == to_column
     )
 
 
@@ -316,6 +390,7 @@ class WorkflowExecutor:
             definition
             for definition in list_workflow_definitions(store)
             if definition.trigger.event_type == event_type
+            and _trigger_column_filter_matches(definition.trigger, trigger)
         ]
         started: list[WorkflowRun] = []
         for definition in definitions:

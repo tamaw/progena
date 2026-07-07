@@ -9,6 +9,7 @@ import {
   Controls,
   Handle,
   MiniMap,
+  NodeResizer,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -17,7 +18,6 @@ import {
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import {
-  createWorkflow,
   deleteWorkflow,
   fetchWorkflowContent,
   fetchWorkflows,
@@ -37,7 +37,6 @@ import {
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
   PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
@@ -47,6 +46,14 @@ import {
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import {
+  DeleteActionIcon,
+  DetailHeaderAction,
+  DetailHeaderActions,
+  PauseActionIcon,
+  PlayActionIcon,
+  SaveActionIcon,
+} from '../components/layout/DetailHeader';
 import { JsonCodeEditor } from '../components/workspace/WorkflowJsonPanel';
 import '../styles/workspace.css';
 import '../styles/nodes.css';
@@ -58,6 +65,16 @@ const WORKFLOW_EVENT_TYPES = [
   'kanban.card.deleted',
   'kanban.card.status_changed',
 ];
+// Mirrors the fixed kanban pipeline from _kanban_default_columns() in
+// app/backend/ui_routes.py. Only meaningful for the kanban.card.moved trigger.
+const WORKFLOW_KANBAN_COLUMNS = [
+  { value: '', label: 'Any column' },
+  { value: 'backlog', label: 'Backlog' },
+  { value: 'plan', label: 'Plan' },
+  { value: 'build', label: 'Build' },
+  { value: 'validate', label: 'Validate' },
+  { value: 'done', label: 'Done' },
+];
 const FILTERS = [
   { value: 'all', label: 'All' },
   { value: 'enabled', label: 'Enabled' },
@@ -67,10 +84,67 @@ const SORTS = ['Recent', 'Name'];
 const DEFAULT_EDGE_OPTIONS = { type: 'smoothstep', animated: true };
 const MINIMAP_STYLE = { height: 100, width: 150 };
 const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
+// Each node kind remembers two independent sizes: the compact "data" view
+// (just a read-only preview) and the "settings" view (the full editable
+// form). Switching views resizes the node to whichever one the user last
+// left it at, instead of forcing one fixed rectangle for both.
 const DEFAULT_NODE_SIZES = {
-  event: { width: 320, height: 190 },
-  prompt: { width: 340, height: 240 },
+  event: {
+    data: { width: 320, height: 120 },
+    settings: { width: 320, height: 190 },
+  },
+  prompt: {
+    data: { width: 340, height: 160 },
+    settings: { width: 340, height: 280 },
+  },
+  user: {
+    data: { width: 320, height: 130 },
+    settings: { width: 340, height: 280 },
+  },
+  code: {
+    data: { width: 360, height: 160 },
+    settings: { width: 460, height: 340 },
+  },
 };
+// Node kinds addable from the dock/JSON editor beyond the fixed event start
+// node. Order here drives the dock's button order.
+const DOCK_NODE_KINDS = ['prompt', 'user', 'code'];
+const USER_MESSAGE_TYPES = [
+  { value: 'say_to_user', label: 'say_to_user' },
+  { value: 'notify_user', label: 'notify_user' },
+  { value: 'ask_user', label: 'ask_user' },
+];
+const USER_NOTIFICATION_LEVELS = ['info', 'warning', 'error', 'success'];
+const CODE_LANGUAGES = [
+  'javascript', 'python', 'html', 'css', 'bash',
+  'json', 'yaml', 'markdown', 'typescript', 'sql',
+];
+// Default editable-field values for a freshly dock-added node, keyed by kind.
+const DOCK_NODE_DEFAULTS = {
+  prompt: () => ({
+    title: 'Prompt', prompt: 'Handle this workflow event.', agentName: 'progenitor', role: '',
+  }),
+  user: () => ({
+    title: 'User', messageType: 'say_to_user', message: 'Summarize the workflow result for the user.', notificationTitle: '', level: 'info',
+  }),
+  code: () => ({
+    title: 'Code', language: 'javascript', content: '// Write code for the agent to run',
+  }),
+};
+
+function resolveNodeSizes(kind, storedSize) {
+  const defaults = DEFAULT_NODE_SIZES[kind];
+  return {
+    data: {
+      width: storedSize?.data?.width || defaults.data.width,
+      height: storedSize?.data?.height || defaults.data.height,
+    },
+    settings: {
+      width: storedSize?.settings?.width || defaults.settings.width,
+      height: storedSize?.settings?.height || defaults.settings.height,
+    },
+  };
+}
 
 function workflowPath(workflowId) {
   return workflowId ? `/state/workflows/${workflowId}.json` : '';
@@ -93,8 +167,15 @@ function cloneValue(value) {
   return value ? JSON.parse(JSON.stringify(value)) : value;
 }
 
+const NODE_MINIMAP_COLORS = {
+  event: '#ffa657',
+  prompt: '#58a6ff',
+  user: '#39c5cf',
+  code: '#3fb950',
+};
+
 function nodeColor(node) {
-  return node.type === 'event' ? '#ffa657' : '#58a6ff';
+  return NODE_MINIMAP_COLORS[node.type] || NODE_MINIMAP_COLORS.prompt;
 }
 
 function formatRelativeTime(timestamp) {
@@ -113,23 +194,17 @@ function formatRelativeTime(timestamp) {
   return `${Math.round(absSeconds / 86400)}d ago`;
 }
 
-function workflowTone(workflow, latestRun) {
-  if (workflow?.paused) return 'muted';
+// Status dot only carries colour when there's something worth surfacing —
+// paused, running, or failed. A ready (or disabled) workflow leaves the rail
+// empty, matching the Chat sidebar's session cards.
+function workflowDotTone(workflow, latestRun) {
+  if (workflow?.paused) return 'paused';
   if (latestRun?.status === 'failed') return 'error';
   if (latestRun?.status === 'running') return 'info';
-  if (workflow?.enabled === false) return 'muted';
-  return 'ok';
+  return '';
 }
 
-function workflowStatusLabel(workflow, latestRun) {
-  if (workflow?.paused) return 'Paused';
-  if (latestRun?.status === 'running') return 'Running';
-  if (latestRun?.status === 'failed') return 'Failed';
-  if (workflow?.enabled === false) return 'Disabled';
-  return 'Ready';
-}
-
-function nextPromptPosition(nodes) {
+function nextDockNodePosition(nodes) {
   const ordered = [...nodes].sort((left, right) => left.position.x - right.position.x);
   const anchor = ordered[ordered.length - 1];
   if (!anchor) {
@@ -138,26 +213,68 @@ function nextPromptPosition(nodes) {
   return { x: anchor.position.x + 360, y: anchor.position.y };
 }
 
-function buildNodeData(kind, node, callbacks, latestRun) {
+function buildNodeData(kind, node, callbacks, latestRun, sizes) {
+  const shared = {
+    expanded: false,
+    dataSize: sizes.data,
+    settingsSize: sizes.settings,
+    onToggleExpanded: callbacks.onToggleExpanded,
+    onResize: callbacks.onResize,
+  };
   if (kind === 'event') {
     return {
+      ...shared,
       kind,
       title: node.title || 'Event',
       eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
+      fromColumn: node.fromColumn || '',
+      toColumn: node.toColumn || '',
       currentNodeId: latestRun?.current_node_id || null,
       onChange: callbacks.onNodeChange,
       onDelete: callbacks.onDeleteNode,
       canDelete: false,
     };
   }
+  const runState = {
+    currentNodeId: latestRun?.current_node_id || null,
+    completedNodeIds: latestRun?.completed_node_ids || [],
+  };
+  if (kind === 'user') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'User',
+      messageType: node.message_type || 'say_to_user',
+      message: node.message || '',
+      notificationTitle: node.notification_title || '',
+      level: node.level || 'info',
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
+  if (kind === 'code') {
+    return {
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'Code',
+      language: node.language || 'javascript',
+      content: node.content || '',
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
+    };
+  }
   return {
+    ...shared,
+    ...runState,
     kind,
     title: node.title || 'Prompt',
     prompt: node.prompt || '',
     agentName: node.agent_name || 'progenitor',
     role: node.role || '',
-    currentNodeId: latestRun?.current_node_id || null,
-    completedNodeIds: latestRun?.completed_node_ids || [],
     onChange: callbacks.onNodeChange,
     onDelete: callbacks.onDeleteNode,
     canDelete: true,
@@ -167,19 +284,31 @@ function buildNodeData(kind, node, callbacks, latestRun) {
 function workflowToFlow(definition, callbacks, latestRun) {
   const uiNodes = definition?.ui?.nodes || {};
   const nodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
-    const kind = node.kind === 'event' ? 'event' : 'prompt';
+    const kind = DEFAULT_NODE_SIZES[node.kind] ? node.kind : 'prompt';
     const uiNode = uiNodes[nodeId] || {};
-    const size = uiNode.size || DEFAULT_NODE_SIZES[kind];
+    const sizes = resolveNodeSizes(kind, uiNode.size);
     const position = uiNode.position || (kind === 'event' ? { x: 96, y: 160 } : { x: 456, y: 160 });
     const enriched = kind === 'event'
-      ? { ...node, eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0] }
+      ? {
+        ...node,
+        eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
+        fromColumn: definition.trigger?.from_column || '',
+        toColumn: definition.trigger?.to_column || '',
+      }
       : node;
     return {
       id: nodeId,
       type: kind,
       position,
-      style: { width: size.width || DEFAULT_NODE_SIZES[kind].width, height: size.height || DEFAULT_NODE_SIZES[kind].height },
-      data: buildNodeData(kind, enriched, callbacks, latestRun),
+      // Nodes always load in the compact "data" view, so the rendered size
+      // starts at sizes.data; toggling to settings swaps to sizes.settings.
+      // Both the top-level width/height and style must be set: React Flow's
+      // NodeResizer reads/writes the top-level fields once a node has been
+      // manually resized, and those then take precedence over style.
+      width: sizes.data.width,
+      height: sizes.data.height,
+      style: { width: sizes.data.width, height: sizes.data.height },
+      data: buildNodeData(kind, enriched, callbacks, latestRun, sizes),
     };
   });
   const edges = (definition?.graph?.edges || []).map((edge) => ({
@@ -219,6 +348,22 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         kind: 'event',
         title: String(node.data?.title || 'Event'),
       };
+    } else if (node.type === 'user') {
+      graphNodes[node.id] = {
+        kind: 'user',
+        title: String(node.data?.title || 'User'),
+        message_type: node.data?.messageType || 'say_to_user',
+        message: String(node.data?.message || ''),
+        notification_title: node.data?.notificationTitle ? String(node.data.notificationTitle) : null,
+        level: node.data?.level || 'info',
+      };
+    } else if (node.type === 'code') {
+      graphNodes[node.id] = {
+        kind: 'code',
+        title: String(node.data?.title || 'Code'),
+        language: String(node.data?.language || 'javascript'),
+        content: String(node.data?.content || ''),
+      };
     } else {
       graphNodes[node.id] = {
         kind: 'prompt',
@@ -228,14 +373,18 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         role: node.data?.role ? String(node.data.role) : null,
       };
     }
+    const sizes = resolveNodeSizes(node.type, {
+      data: node.data?.dataSize,
+      settings: node.data?.settingsSize,
+    });
     uiNodes[node.id] = {
       position: {
         x: Math.round(node.position?.x || 0),
         y: Math.round(node.position?.y || 0),
       },
       size: {
-        width: Math.round(Number(node.style?.width) || DEFAULT_NODE_SIZES[node.type]?.width || 320),
-        height: Math.round(Number(node.style?.height) || DEFAULT_NODE_SIZES[node.type]?.height || 200),
+        data: { width: Math.round(sizes.data.width), height: Math.round(sizes.data.height) },
+        settings: { width: Math.round(sizes.settings.width), height: Math.round(sizes.settings.height) },
       },
     };
   });
@@ -247,6 +396,8 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
       ...baseWorkflow.trigger,
       type: 'event',
       event_type: eventNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
+      from_column: eventNode?.data?.fromColumn || null,
+      to_column: eventNode?.data?.toColumn || null,
     },
     graph: {
       nodes: graphNodes,
@@ -265,38 +416,93 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
 
 function EventNode({ id, data, selected }) {
   const isRunning = data.currentNodeId === id;
+  const expanded = data.expanded;
   return (
-    <div className={`workspace-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
-      <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className="node-title-bar drag-handle">
-        <span className="node-type-icon event">E</span>
-        <input
-          className="node-title-input"
-          value={data.title}
-          onChange={(event) => data.onChange(id, { title: event.target.value })}
-          placeholder="Event title"
-        />
-        <span className={`node-status-badge ${isRunning ? 'running' : 'idle'}`}>{isRunning ? 'Live' : 'Start'}</span>
-      </div>
-      <div className="node-body">
-        <div className="node-body-compact workflow-graph-node__body">
-          <label className="workflow-graph-node__field">
-            <span>Trigger</span>
-            <select
-              value={data.eventType}
-              onChange={(event) => data.onChange(id, { eventType: event.target.value })}
-            >
-              {WORKFLOW_EVENT_TYPES.map((eventType) => (
-                <option key={eventType} value={eventType}>{eventType}</option>
-              ))}
-            </select>
-          </label>
-          <p className="workflow-graph-node__hint">
-            One event node starts the v1 workflow path.
-          </p>
+    <>
+      <NodeResizer
+        minWidth={220}
+        minHeight={expanded ? 140 : 80}
+        isVisible={selected}
+        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
+      />
+      <div className={`workspace-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
+        <Handle type="source" position={Position.Right} className="workspace-handle" />
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon event">E</span>
+          <input
+            className="node-title-input"
+            value={data.title}
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+            placeholder="Event title"
+          />
+          <span className={`node-status-badge ${isRunning ? 'running' : 'idle'}`}>{isRunning ? 'Live' : 'Start'}</span>
+          <button
+            type="button"
+            className="node-expand-btn nodrag"
+            onClick={() => data.onToggleExpanded(id)}
+            title={expanded ? 'Show data' : 'Show settings'}
+            aria-label={expanded ? 'Show data' : 'Show settings'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+        </div>
+        <div className="node-body">
+          {expanded ? (
+            <div className="node-body-expanded workflow-graph-node__body">
+              <label className="workflow-graph-node__field">
+                <span>Trigger</span>
+                <select
+                  value={data.eventType}
+                  onChange={(event) => data.onChange(id, { eventType: event.target.value })}
+                >
+                  {WORKFLOW_EVENT_TYPES.map((eventType) => (
+                    <option key={eventType} value={eventType}>{eventType}</option>
+                  ))}
+                </select>
+              </label>
+              {data.eventType === 'kanban.card.moved' ? (
+                <>
+                  <label className="workflow-graph-node__field">
+                    <span>From column</span>
+                    <select
+                      value={data.fromColumn}
+                      onChange={(event) => data.onChange(id, { fromColumn: event.target.value })}
+                    >
+                      {WORKFLOW_KANBAN_COLUMNS.map((column) => (
+                        <option key={column.value} value={column.value}>{column.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="workflow-graph-node__field">
+                    <span>To column</span>
+                    <select
+                      value={data.toColumn}
+                      onChange={(event) => data.onChange(id, { toColumn: event.target.value })}
+                    >
+                      {WORKFLOW_KANBAN_COLUMNS.map((column) => (
+                        <option key={column.value} value={column.value}>{column.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
+              <p className="workflow-graph-node__hint">
+                One event node starts the v1 workflow path.
+              </p>
+            </div>
+          ) : (
+            <div className="node-body-compact">
+              <div className="prompt-preview">
+                {data.eventType}
+                {data.eventType === 'kanban.card.moved' && (data.fromColumn || data.toColumn)
+                  ? ` (${data.fromColumn || 'any'} → ${data.toColumn || 'any'})`
+                  : ''}
+              </div>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -305,65 +511,279 @@ function PromptNode({ id, data, selected }) {
   const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
   const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
   const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Prompt');
+  const expanded = data.expanded;
   return (
-    <div className={`workspace-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
-      <Handle type="target" position={Position.Left} className="workspace-handle" />
-      <Handle type="source" position={Position.Right} className="workspace-handle" />
-      <div className="node-title-bar drag-handle">
-        <span className="node-type-icon prompt">P</span>
-        <input
-          className="node-title-input"
-          value={data.title}
-          onChange={(event) => data.onChange(id, { title: event.target.value })}
-          placeholder="Prompt title"
-        />
-        <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
-        {data.canDelete ? (
+    <>
+      <NodeResizer
+        minWidth={240}
+        minHeight={expanded ? 200 : 100}
+        isVisible={selected}
+        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
+      />
+      <div className={`workspace-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="workspace-handle" />
+        <Handle type="source" position={Position.Right} className="workspace-handle" />
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon prompt">P</span>
+          <input
+            className="node-title-input"
+            value={data.title}
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+            placeholder="Prompt title"
+          />
+          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
           <button
             type="button"
-            className="node-remove-btn"
-            aria-label="Delete prompt node"
-            onClick={() => data.onDelete(id)}
+            className="node-expand-btn nodrag"
+            onClick={() => data.onToggleExpanded(id)}
+            title={expanded ? 'Show data' : 'Show settings'}
+            aria-label={expanded ? 'Show data' : 'Show settings'}
           >
-            ×
+            {expanded ? '▲' : '▼'}
           </button>
-        ) : null}
-      </div>
-      <div className="node-body">
-        <div className="node-body-compact workflow-graph-node__body">
-          <label className="workflow-graph-node__field">
-            <span>Agent</span>
-            <input
-              value={data.agentName}
-              onChange={(event) => data.onChange(id, { agentName: event.target.value })}
-              placeholder="progenitor"
-            />
-          </label>
-          <label className="workflow-graph-node__field">
-            <span>Role</span>
-            <input
-              value={data.role}
-              onChange={(event) => data.onChange(id, { role: event.target.value })}
-              placeholder="Optional role"
-            />
-          </label>
-          <label className="workflow-graph-node__field">
-            <span>Prompt</span>
-            <textarea
-              value={data.prompt}
-              onChange={(event) => data.onChange(id, { prompt: event.target.value })}
-              placeholder="Handle this workflow event."
-            />
-          </label>
+          {data.canDelete ? (
+            <button
+              type="button"
+              className="node-remove-btn"
+              aria-label="Delete prompt node"
+              onClick={() => data.onDelete(id)}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+        <div className="node-body">
+          {expanded ? (
+            <div className="node-body-expanded workflow-graph-node__body">
+              <label className="workflow-graph-node__field">
+                <span>Agent</span>
+                <input
+                  value={data.agentName}
+                  onChange={(event) => data.onChange(id, { agentName: event.target.value })}
+                  placeholder="progenitor"
+                />
+              </label>
+              <label className="workflow-graph-node__field">
+                <span>Role</span>
+                <input
+                  value={data.role}
+                  onChange={(event) => data.onChange(id, { role: event.target.value })}
+                  placeholder="Optional role"
+                />
+              </label>
+              <label className="workflow-graph-node__field">
+                <span>Prompt</span>
+                <textarea
+                  value={data.prompt}
+                  onChange={(event) => data.onChange(id, { prompt: event.target.value })}
+                  placeholder="Handle this workflow event."
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="node-body-compact">
+              {data.agentName ? <span className="node-meta-chip prompt-agent">{data.agentName}</span> : null}
+              <div className="prompt-preview">{data.prompt || 'Empty prompt'}</div>
+            </div>
+          )}
         </div>
       </div>
-    </div>
+    </>
+  );
+}
+
+function UserNode({ id, data, selected }) {
+  const isRunning = data.currentNodeId === id;
+  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
+  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
+  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'User');
+  const expanded = data.expanded;
+  return (
+    <>
+      <NodeResizer
+        minWidth={240}
+        minHeight={expanded ? 200 : 100}
+        isVisible={selected}
+        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
+      />
+      <div className={`workspace-node workflow-graph-node workflow-graph-node--user ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="workspace-handle" />
+        <Handle type="source" position={Position.Right} className="workspace-handle" />
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon user">U</span>
+          <input
+            className="node-title-input"
+            value={data.title}
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+            placeholder="User title"
+          />
+          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
+          <button
+            type="button"
+            className="node-expand-btn nodrag"
+            onClick={() => data.onToggleExpanded(id)}
+            title={expanded ? 'Show data' : 'Show settings'}
+            aria-label={expanded ? 'Show data' : 'Show settings'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+          {data.canDelete ? (
+            <button
+              type="button"
+              className="node-remove-btn"
+              aria-label="Delete user node"
+              onClick={() => data.onDelete(id)}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+        <div className="node-body">
+          {expanded ? (
+            <div className="node-body-expanded workflow-graph-node__body">
+              <label className="workflow-graph-node__field">
+                <span>Delivery</span>
+                <select
+                  value={data.messageType}
+                  onChange={(event) => data.onChange(id, { messageType: event.target.value })}
+                >
+                  {USER_MESSAGE_TYPES.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              {data.messageType === 'notify_user' ? (
+                <>
+                  <label className="workflow-graph-node__field">
+                    <span>Notification title</span>
+                    <input
+                      value={data.notificationTitle}
+                      onChange={(event) => data.onChange(id, { notificationTitle: event.target.value })}
+                      placeholder="Notification title"
+                    />
+                  </label>
+                  <label className="workflow-graph-node__field">
+                    <span>Level</span>
+                    <select
+                      value={data.level}
+                      onChange={(event) => data.onChange(id, { level: event.target.value })}
+                    >
+                      {USER_NOTIFICATION_LEVELS.map((level) => (
+                        <option key={level} value={level}>{level}</option>
+                      ))}
+                    </select>
+                  </label>
+                </>
+              ) : null}
+              <label className="workflow-graph-node__field">
+                <span>Message</span>
+                <textarea
+                  value={data.message}
+                  onChange={(event) => data.onChange(id, { message: event.target.value })}
+                  placeholder="Message to send to the user"
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="node-body-compact">
+              <span className="node-meta-chip prompt-agent">{data.messageType}</span>
+              <div className="prompt-preview">{data.message || 'Empty message'}</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+function CodeNode({ id, data, selected }) {
+  const isRunning = data.currentNodeId === id;
+  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
+  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
+  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Code');
+  const expanded = data.expanded;
+  return (
+    <>
+      <NodeResizer
+        minWidth={260}
+        minHeight={expanded ? 220 : 110}
+        isVisible={selected}
+        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
+      />
+      <div className={`workspace-node workflow-graph-node workflow-graph-node--code ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="workspace-handle" />
+        <Handle type="source" position={Position.Right} className="workspace-handle" />
+        <div className="node-title-bar drag-handle">
+          <span className="node-type-icon code">{'<>'}</span>
+          <input
+            className="node-title-input"
+            value={data.title}
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+            placeholder="Code title"
+          />
+          <span className="code-language-badge">{data.language}</span>
+          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
+          <button
+            type="button"
+            className="node-expand-btn nodrag"
+            onClick={() => data.onToggleExpanded(id)}
+            title={expanded ? 'Show data' : 'Show settings'}
+            aria-label={expanded ? 'Show data' : 'Show settings'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
+          {data.canDelete ? (
+            <button
+              type="button"
+              className="node-remove-btn"
+              aria-label="Delete code node"
+              onClick={() => data.onDelete(id)}
+            >
+              ×
+            </button>
+          ) : null}
+        </div>
+        <div className="node-body">
+          {expanded ? (
+            <div className="node-body-expanded workflow-graph-node__body">
+              <label className="workflow-graph-node__field">
+                <span>Language</span>
+                <select
+                  value={data.language}
+                  onChange={(event) => data.onChange(id, { language: event.target.value })}
+                >
+                  {CODE_LANGUAGES.map((lang) => (
+                    <option key={lang} value={lang}>{lang}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="workflow-graph-node__field">
+                <span>Code</span>
+                <textarea
+                  className="code-editor nodrag nowheel"
+                  value={data.content}
+                  onChange={(event) => data.onChange(id, { content: event.target.value })}
+                  placeholder="// Write code for the agent to run"
+                  spellCheck={false}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="node-body-compact">
+              <pre className="code-preview">{data.content || '// empty'}</pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
 const NODE_TYPES = {
   event: EventNode,
   prompt: PromptNode,
+  user: UserNode,
+  code: CodeNode,
 };
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
@@ -385,29 +805,38 @@ function ChevronRightSmall() {
   );
 }
 
+const DOCK_ITEM_META = {
+  prompt: { icon: 'P', label: 'Prompt', title: 'Add a prompt step' },
+  user: { icon: 'U', label: 'User', title: 'Add a user message step' },
+  code: { icon: '<>', label: 'Code', title: 'Add a code step' },
+};
+
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
 // from the Agents/Sequences canvas's GraphDock: drag onto the canvas or click
-// to add at the next slot. Workflows only offer one draggable kind (prompt;
-// the event node is the fixed start and isn't dock-addable).
+// to add at the next slot. The event node is the fixed start and isn't
+// dock-addable.
 function WorkflowDock({ onAdd }) {
-  const onDragStart = (event) => {
-    event.dataTransfer.setData('application/workflow-node', 'prompt');
+  const onDragStart = (kind) => (event) => {
+    event.dataTransfer.setData('application/workflow-node', kind);
     event.dataTransfer.effectAllowed = 'move';
   };
   return (
     <div className="workspace-dock">
       <div className="workspace-dock-shell">
-        <button
-          type="button"
-          className="workspace-dock-item"
-          draggable
-          onDragStart={onDragStart}
-          onClick={() => onAdd()}
-          title="Add a prompt step"
-        >
-          <span className="workspace-dock-icon prompt">P</span>
-          <span className="workspace-dock-tooltip">Prompt</span>
-        </button>
+        {DOCK_NODE_KINDS.map((kind) => (
+          <button
+            key={kind}
+            type="button"
+            className="workspace-dock-item"
+            draggable
+            onDragStart={onDragStart(kind)}
+            onClick={() => onAdd(kind)}
+            title={DOCK_ITEM_META[kind].title}
+          >
+            <span className={`workspace-dock-icon ${kind}`}>{DOCK_ITEM_META[kind].icon}</span>
+            <span className="workspace-dock-tooltip">{DOCK_ITEM_META[kind].label}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -445,26 +874,24 @@ function WorkflowSideDock({ onSelect }) {
 
 function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
   const path = workflowPath(item.id);
+  const dotTone = workflowDotTone(item, latestRun);
   return (
     <button
       type="button"
-      className={`workflow-list-row ${selectedPath === path ? 'active' : ''}`}
+      className={`pane-card-row ${selectedPath === path ? 'active' : ''}`}
       onClick={() => onSelect(path)}
       title={item.description || item.title}
     >
-      <div className="workflow-list-row__head">
-        <span className="workflow-list-row__title">{item.title}</span>
-        <span className={`workflow-list-row__status workflow-list-row__status--${workflowTone(item, latestRun)}`}>
-          {workflowStatusLabel(item, latestRun)}
-        </span>
-      </div>
-      <div className="workflow-list-row__meta">
-        <span>{item.event_type}</span>
-        <span>{item.node_count} nodes</span>
-      </div>
-      <div className="workflow-list-row__foot">
-        <span>{item.description || 'No description yet.'}</span>
-        <span>{formatRelativeTime(latestRun?.updated_at || item.updated_at)}</span>
+      <span
+        className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`}
+        aria-hidden="true"
+      />
+      <div className="pane-card-row__body">
+        <div className="pane-card-row__top">
+          <span className="pane-card-row__title">{item.title}</span>
+          <span className="pane-card-row__age">{formatRelativeTime(latestRun?.updated_at)}</span>
+        </div>
+        <div className="pane-card-row__preview">{item.description || 'No description yet.'}</div>
       </div>
     </button>
   );
@@ -520,7 +947,6 @@ function WorkflowsInner() {
   const [graphEdges, setGraphEdges] = useState([]);
   const [jsonDraft, setJsonDraft] = useState('');
   const [jsonError, setJsonError] = useState('');
-  const [statusMessage, setStatusMessage] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState('');
   const requestedPath = withJsonExtension(searchParams.get('path') || '');
@@ -658,6 +1084,46 @@ function WorkflowsInner() {
           return nextNodes;
         });
       },
+      onToggleExpanded: (nodeId) => {
+        setGraphNodes((currentNodes) => {
+          const nextNodes = currentNodes.map((node) => {
+            if (node.id !== nodeId) return node;
+            const nextExpanded = !node.data.expanded;
+            const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
+            return {
+              ...node,
+              // React Flow's NodeResizer writes width/height as top-level node
+              // fields (taking precedence over style on later renders once a
+              // manual resize has happened), so both must be kept in sync here.
+              width: nextSize.width,
+              height: nextSize.height,
+              style: { ...node.style, width: nextSize.width, height: nextSize.height },
+              data: { ...node.data, expanded: nextExpanded },
+            };
+          });
+          nodesRef.current = nextNodes;
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
+          return nextNodes;
+        });
+      },
+      onResize: (nodeId, size) => {
+        setGraphNodes((currentNodes) => {
+          const nextNodes = currentNodes.map((node) => {
+            if (node.id !== nodeId) return node;
+            const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
+            return {
+              ...node,
+              width: size.width,
+              height: size.height,
+              style: { ...node.style, width: size.width, height: size.height },
+              data: { ...node.data, [sizeKey]: size },
+            };
+          });
+          nodesRef.current = nextNodes;
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
+          return nextNodes;
+        });
+      },
     }, latestRun);
     nodesRef.current = flow.nodes;
     edgesRef.current = flow.edges;
@@ -667,7 +1133,6 @@ function WorkflowsInner() {
     setGraphEdges(flow.edges);
     setJsonDraft(`${JSON.stringify(cloned, null, 2)}\n`);
     setJsonError('');
-    setStatusMessage('');
     requestAnimationFrame(() => {
       if (flow.nodes.length) {
         reactFlow.setViewport(flow.viewport || DEFAULT_VIEWPORT);
@@ -757,7 +1222,7 @@ function WorkflowsInner() {
     }
     const existingInbound = edgesRef.current.filter((edge) => edge.target === target.id && edge.source !== source.id);
     if (existingInbound.length > 0) {
-      return 'Prompt nodes may have only one inbound edge in v1 workflows.';
+      return 'Each workflow node may have only one inbound edge in v1 workflows.';
     }
     return '';
   }, []);
@@ -765,7 +1230,6 @@ function WorkflowsInner() {
   const onConnect = useCallback((connection) => {
     const validationError = validateConnection(connection);
     if (validationError) {
-      setStatusMessage(validationError);
       show('error', 'Invalid workflow connection', validationError);
       return;
     }
@@ -784,56 +1248,42 @@ function WorkflowsInner() {
   }, []);
 
   const handleSelectWorkflow = (path) => {
-    setStatusMessage('');
     setJsonError('');
     setSelectedPath(path);
   };
 
-  const handleCreateWorkflow = async () => {
-    setBusyAction('create');
-    setStatusMessage('');
-    try {
-      const created = await dispatch(createWorkflow({
-        workflowsUrl,
-        title: 'Untitled workflow',
-        description: '',
-        eventType: WORKFLOW_EVENT_TYPES[0],
-      })).unwrap();
-      setSelectedPath(created.path);
-      setActiveSidePanel(null);
-      setStatusMessage(`Created ${created.workflow.title}.`);
-    } catch (error) {
-      show('error', 'Workflow create failed', error.message);
-    } finally {
-      setBusyAction('');
-    }
+  const openCreateWorkflowChat = () => {
+    window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+      detail: { mode: 'workflow-create' },
+    }));
   };
 
-  const handleRefresh = async () => {
-    await Promise.all([loadWorkflows(), loadRuns()]);
-  };
-
-  const handleAddPromptNode = useCallback((dropPosition) => {
-    if (!draftWorkflow) {
+  const handleAddNode = useCallback((kind, dropPosition) => {
+    if (!draftWorkflow || !DOCK_NODE_DEFAULTS[kind]) {
       return;
     }
-    const nodeId = `prompt_${Math.random().toString(36).slice(2, 10)}`;
-    const position = dropPosition || nextPromptPosition(nodesRef.current);
+    const nodeId = `${kind}_${Math.random().toString(36).slice(2, 10)}`;
+    const position = dropPosition || nextDockNodePosition(nodesRef.current);
+    const sizes = DEFAULT_NODE_SIZES[kind];
     const nextNodes = [
       ...nodesRef.current,
       {
         id: nodeId,
-        type: 'prompt',
+        type: kind,
+        // New nodes start in the settings view (sized accordingly) so their
+        // fields are immediately editable.
+        width: sizes.settings.width,
+        height: sizes.settings.height,
+        style: { ...sizes.settings },
         position,
-        style: { ...DEFAULT_NODE_SIZES.prompt },
         data: {
-          kind: 'prompt',
-          title: 'Prompt',
-          prompt: 'Handle this workflow event.',
-          agentName: 'progenitor',
-          role: '',
+          kind,
+          ...DOCK_NODE_DEFAULTS[kind](),
           currentNodeId: null,
           completedNodeIds: [],
+          expanded: true,
+          dataSize: { ...sizes.data },
+          settingsSize: { ...sizes.settings },
           onChange: (targetId, patch) => {
             setGraphNodes((currentNodes) => {
               const updated = currentNodes.map((node) => (
@@ -849,6 +1299,44 @@ function WorkflowsInner() {
             setGraphNodes(updatedNodes);
             setGraphEdges(updatedEdges);
             syncWorkflowFromGraph(updatedNodes, updatedEdges, viewportRef.current);
+          },
+          onToggleExpanded: (targetId) => {
+            setGraphNodes((currentNodes) => {
+              const nextNodes = currentNodes.map((node) => {
+                if (node.id !== targetId) return node;
+                const nextExpanded = !node.data.expanded;
+                const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
+                return {
+                  ...node,
+                  // React Flow's NodeResizer writes width/height as top-level node
+              // fields (taking precedence over style on later renders once a
+              // manual resize has happened), so both must be kept in sync here.
+              width: nextSize.width,
+              height: nextSize.height,
+              style: { ...node.style, width: nextSize.width, height: nextSize.height },
+                  data: { ...node.data, expanded: nextExpanded },
+                };
+              });
+              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+              return nextNodes;
+            });
+          },
+          onResize: (targetId, size) => {
+            setGraphNodes((currentNodes) => {
+              const nextNodes = currentNodes.map((node) => {
+                if (node.id !== targetId) return node;
+                const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
+                return {
+                  ...node,
+                  width: size.width,
+              height: size.height,
+              style: { ...node.style, width: size.width, height: size.height },
+                  data: { ...node.data, [sizeKey]: size },
+                };
+              });
+              syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+              return nextNodes;
+            });
           },
           canDelete: true,
         },
@@ -866,7 +1354,6 @@ function WorkflowsInner() {
     setGraphNodes(nextNodes);
     setGraphEdges(nextEdges);
     syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
-    setStatusMessage('Added a prompt step to the workflow path.');
   }, [draftWorkflow, setGraphEdges, setGraphNodes, syncWorkflowFromGraph]);
 
   const onCanvasDragOver = useCallback((event) => {
@@ -877,12 +1364,12 @@ function WorkflowsInner() {
   const onCanvasDrop = useCallback((event) => {
     event.preventDefault();
     const kind = event.dataTransfer.getData('application/workflow-node');
-    if (kind !== 'prompt') {
+    if (!DOCK_NODE_DEFAULTS[kind]) {
       return;
     }
     const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    handleAddPromptNode(position);
-  }, [handleAddPromptNode, reactFlow]);
+    handleAddNode(kind, position);
+  }, [handleAddNode, reactFlow]);
 
   const handleFieldChange = (field, value) => {
     updateDraft((current) => ({ ...current, [field]: value }));
@@ -908,6 +1395,44 @@ function WorkflowsInner() {
           setGraphEdges(nextEdges);
           syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
         },
+        onToggleExpanded: (nodeId) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => {
+              if (node.id !== nodeId) return node;
+              const nextExpanded = !node.data.expanded;
+              const nextSize = nextExpanded ? node.data.settingsSize : node.data.dataSize;
+              return {
+                ...node,
+                // React Flow's NodeResizer writes width/height as top-level node
+              // fields (taking precedence over style on later renders once a
+              // manual resize has happened), so both must be kept in sync here.
+              width: nextSize.width,
+              height: nextSize.height,
+              style: { ...node.style, width: nextSize.width, height: nextSize.height },
+                data: { ...node.data, expanded: nextExpanded },
+              };
+            });
+            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+            return nextNodes;
+          });
+        },
+        onResize: (nodeId, size) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => {
+              if (node.id !== nodeId) return node;
+              const sizeKey = node.data.expanded ? 'settingsSize' : 'dataSize';
+              return {
+                ...node,
+                width: size.width,
+              height: size.height,
+              style: { ...node.style, width: size.width, height: size.height },
+                data: { ...node.data, [sizeKey]: size },
+              };
+            });
+            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+            return nextNodes;
+          });
+        },
       }, selectedLatestRun);
       setDraftWorkflow(parsed);
       setGraphNodes(flow.nodes);
@@ -916,7 +1441,6 @@ function WorkflowsInner() {
       edgesRef.current = flow.edges;
       viewportRef.current = flow.viewport;
       setJsonError('');
-      setStatusMessage('Applied JSON changes to the workflow draft.');
       setActiveSidePanel(null);
     } catch (error) {
       setJsonError(error.message || 'Invalid workflow JSON');
@@ -936,7 +1460,6 @@ function WorkflowsInner() {
       return;
     }
     setSaving(true);
-    setStatusMessage('');
     try {
       const saved = await dispatch(saveWorkflow({
         workflowsUrl,
@@ -944,7 +1467,6 @@ function WorkflowsInner() {
         workflow: draftWorkflow,
       })).unwrap();
       syncDraftFromWorkflow(saved.workflow, selectedLatestRun, saved.path);
-      setStatusMessage(`Saved ${saved.workflow.title}.`);
     } catch (error) {
       show('error', 'Workflow save failed', error.message);
     } finally {
@@ -958,12 +1480,10 @@ function WorkflowsInner() {
       return;
     }
     setBusyAction(selectedDetail.workflow.paused ? 'resume' : 'pause');
-    setStatusMessage('');
     try {
       const action = selectedDetail.workflow.paused ? resumeWorkflow : pauseWorkflow;
       const updated = await dispatch(action({ workflowsUrl, workflowId })).unwrap();
       syncDraftFromWorkflow(updated.workflow, selectedLatestRun, updated.path);
-      setStatusMessage(`${updated.workflow.paused ? 'Paused' : 'Resumed'} ${updated.workflow.title}.`);
     } catch (error) {
       show('error', 'Workflow update failed', error.message);
     } finally {
@@ -977,14 +1497,12 @@ function WorkflowsInner() {
       return;
     }
     setBusyAction('trigger');
-    setStatusMessage('');
     try {
-      const response = await dispatch(triggerWorkflow({
+      await dispatch(triggerWorkflow({
         workflowsUrl,
         workflowId,
         eventType: draftWorkflow?.trigger?.event_type,
       })).unwrap();
-      setStatusMessage(response.queued ? 'Workflow queued behind an active run.' : 'Workflow triggered.');
     } catch (error) {
       show('error', 'Workflow trigger failed', error.message);
     } finally {
@@ -1003,7 +1521,6 @@ function WorkflowsInner() {
     setBusyAction('delete');
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
-      setStatusMessage('Workflow deleted.');
       setSelectedPath('');
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
@@ -1026,34 +1543,28 @@ function WorkflowsInner() {
               activeFilter={filter}
               onFilterChange={setFilter}
               actionLabel="+ New"
-              onAction={handleCreateWorkflow}
-              actionDisabled={busyAction === 'create'}
+              onAction={openCreateWorkflowChat}
             />
             <PaneListToolbar>
               <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
               <PaneListSortButton title="Sort workflows" options={SORTS} value={sortMode} onSelect={setSortMode} />
-              <button type="button" className="sess-sort" onClick={handleRefresh}>
-                Refresh
-              </button>
             </PaneListToolbar>
             <PaneListScroll className="workspace-sidebar__scroll">
               {workflowsState.loading && !workflowsState.loaded ? <div className="prompts-empty-state">Loading workflows...</div> : null}
               {workflowsState.error && !workflows.length ? <div className="prompts-empty-state">Failed to load workflows.</div> : null}
               {!workflowsState.loading && !visibleItems.length ? <div className="prompts-empty-state">No workflows match the current filters.</div> : null}
               {!workflowsState.loading && visibleItems.length ? (
-                <PaneListGroup title="Workflow selector" count={visibleItems.length}>
-                  <div className="workflows-list">
-                    {visibleItems.map((item) => (
-                      <WorkflowRow
-                        key={item.id}
-                        item={item}
-                        latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
-                        selectedPath={selectedPath}
-                        onSelect={handleSelectWorkflow}
-                      />
-                    ))}
-                  </div>
-                </PaneListGroup>
+                <div className="workflows-list">
+                  {visibleItems.map((item) => (
+                    <WorkflowRow
+                      key={item.id}
+                      item={item}
+                      latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
+                      selectedPath={selectedPath}
+                      onSelect={handleSelectWorkflow}
+                    />
+                  ))}
+                </div>
               ) : null}
             </PaneListScroll>
             <PaneListFooter>
@@ -1083,42 +1594,41 @@ function WorkflowsInner() {
                     onDragOver={onCanvasDragOver}
                   >
                     <div className="agents-graph-floating">
-                      <span>{draftWorkflow.title || 'Untitled workflow'}</span>
-                      <span>{Object.keys(draftWorkflow.graph?.nodes || {}).length} nodes</span>
-                      <span>{workflowStatusLabel(draftWorkflow, selectedLatestRun)}</span>
-                      {statusMessage ? <span>{statusMessage}</span> : null}
-                      <button
-                        type="button"
-                        onClick={handleTrigger}
-                        disabled={busyAction === 'trigger'}
-                        title="Run workflow now"
-                      >
-                        Run
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handlePauseResume}
-                        disabled={busyAction === 'pause' || busyAction === 'resume'}
-                        title={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
-                      >
-                        {draftWorkflow.paused ? 'Resume' : 'Pause'}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleSaveWorkflow}
-                        disabled={!hasUnsavedChanges || saving}
-                        title="Save workflow"
-                      >
-                        Save
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDeleteWorkflow}
-                        disabled={busyAction === 'delete'}
-                        title="Delete workflow"
-                      >
-                        Delete
-                      </button>
+                      <DetailHeaderActions menuLabel="Workflow actions">
+                        <DetailHeaderAction
+                          icon={<PlayActionIcon />}
+                          label="Run"
+                          tooltip="Run workflow now"
+                          ariaLabel="Run workflow now"
+                          onClick={handleTrigger}
+                          disabled={busyAction === 'trigger'}
+                        />
+                        <DetailHeaderAction
+                          icon={draftWorkflow.paused ? <PlayActionIcon /> : <PauseActionIcon />}
+                          label={draftWorkflow.paused ? 'Resume' : 'Pause'}
+                          tooltip={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
+                          ariaLabel={draftWorkflow.paused ? 'Resume workflow' : 'Pause workflow'}
+                          onClick={handlePauseResume}
+                          disabled={busyAction === 'pause' || busyAction === 'resume'}
+                        />
+                        <DetailHeaderAction
+                          icon={<SaveActionIcon />}
+                          label="Save"
+                          tooltip="Save workflow"
+                          ariaLabel="Save workflow"
+                          onClick={handleSaveWorkflow}
+                          disabled={!hasUnsavedChanges || saving}
+                        />
+                        <DetailHeaderAction
+                          icon={<DeleteActionIcon />}
+                          label="Delete"
+                          tooltip="Delete workflow"
+                          ariaLabel="Delete workflow"
+                          variant="danger"
+                          onClick={handleDeleteWorkflow}
+                          disabled={busyAction === 'delete'}
+                        />
+                      </DetailHeaderActions>
                     </div>
                     <ReactFlow
                       nodes={graphNodes}
@@ -1144,7 +1654,7 @@ function WorkflowsInner() {
                         zoomable
                       />
                     </ReactFlow>
-                    <WorkflowDock onAdd={handleAddPromptNode} />
+                    <WorkflowDock onAdd={handleAddNode} />
                   </div>
                 </div>
               </section>
