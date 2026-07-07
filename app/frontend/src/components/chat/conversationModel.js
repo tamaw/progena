@@ -1,3 +1,5 @@
+import { extractMarkdownImages } from '../../lib/markdown';
+
 export const CHAT_AGENT_NAME = 'Progenitor';
 export const DEFAULT_CHAT_TITLE = 'New chat';
 
@@ -104,6 +106,36 @@ export function deriveChatTitle(messages) {
   }
   const title = firstUserMessage.content.replace(/\s+/g, ' ').trim();
   return title.length > 72 ? `${title.slice(0, 69)}...` : title;
+}
+
+// Single source of truth for "what images does this message have" -- tool-result
+// (base64) images and markdown images from the message text are both image
+// responses in the same sense, so both the image strip (Message.jsx) and the
+// Images filter count (ConversationPage.jsx) must agree on this list, or toggling
+// the filter and the strip's contents can silently drift apart.
+export function collectMessageImages(message) {
+  const role = message?.role;
+  const content = message?.content;
+  const streamEvents = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
+
+  const toolImages = role === 'assistant'
+    ? streamEvents
+      .filter((event) => event?.eventType === 'tool_result' && Array.isArray(event.images) && event.images.length > 0)
+      .flatMap((event) => event.images)
+      .map((image, index) => ({
+        id: image.id || `tool-${index}`,
+        src: `data:${image.media_type || 'image/jpeg'};base64,${image.base64}`,
+        alt: `Image ${index + 1}`,
+      }))
+    : [];
+
+  const markdownImages = extractMarkdownImages(content).map((image, index) => ({
+    id: `md-${index}`,
+    src: image.src,
+    alt: image.alt || `Image ${index + 1}`,
+  }));
+
+  return [...toolImages, ...markdownImages];
 }
 
 export function countToolInvocations(messages) {

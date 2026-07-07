@@ -12,12 +12,15 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 import psycopg
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import CheckpointTuple
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
+
+from app.backend.delta_channel_replay import replay_delta_messages
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
 PROGENITOR_LOG_PREFIX = "progenitor.logs"
@@ -63,18 +66,31 @@ def _reconstruct_checkpoint_messages(
     configurable: dict[str, Any] = {"thread_id": thread_id, "checkpoint_ns": checkpoint_ns}
     if checkpoint_id:
         configurable["checkpoint_id"] = checkpoint_id
-    checkpoint = saver.get_tuple({"configurable": configurable})
+    config: RunnableConfig = {"configurable": configurable}
+    checkpoint = saver.get_tuple(config)
     if checkpoint is None:
         return []
-    return _messages_from_checkpoint_tuple(checkpoint)
+    return _messages_from_checkpoint_tuple(saver, checkpoint)
 
 
-def _messages_from_checkpoint_tuple(checkpoint: CheckpointTuple) -> list[Any]:
+def _messages_from_checkpoint_tuple(saver: PostgresSaver, checkpoint: CheckpointTuple) -> list[Any]:
     channel_values = checkpoint.checkpoint.get("channel_values", {})
-    if not isinstance(channel_values, dict):
+    if isinstance(channel_values, dict) and _MESSAGES_CHANNEL in channel_values:
+        messages = channel_values[_MESSAGES_CHANNEL]
+        return list(messages) if isinstance(messages, list) else []
+
+    # `messages` is a DeltaChannel (deepagents>=0.6): checkpoints only carry a
+    # value in channel_values every snapshot_frequency turns, so its absence
+    # here is normal. Replay the deltas from checkpoint_writes the same way
+    # LangGraph's own channels_from_checkpoint() does -- see
+    # delta_channel_replay.py for the replay itself and its caveats.
+    history = saver.get_delta_channel_history(
+        config=checkpoint.config, channels=[_MESSAGES_CHANNEL]
+    )
+    entry = history.get(_MESSAGES_CHANNEL)
+    if entry is None:
         return []
-    messages = channel_values.get(_MESSAGES_CHANNEL, [])
-    return list(messages) if isinstance(messages, list) else []
+    return replay_delta_messages(entry)
 
 
 class BackendDocumentStore(Protocol):
@@ -517,6 +533,11 @@ class PostgresDocumentStore:
                             ORDER BY (c.checkpoint->>'ts')::timestamptz DESC, c.checkpoint_id DESC
                         ) AS rn
                     FROM checkpoints c
+                    -- Filters on channel_versions, not channel_values: the
+                    -- messages DeltaChannel bumps a version on every write
+                    -- but only lands in channel_values on a snapshot turn.
+                    -- _messages_from_checkpoint_tuple() (above) is what
+                    -- actually reconstructs the value for non-snapshot rows.
                     WHERE c.checkpoint ? 'channel_versions'
                       AND c.checkpoint->'channel_versions' ? 'messages'
                 )
@@ -558,6 +579,8 @@ class PostgresDocumentStore:
         *,
         checkpoint_id: str | None = None,
     ) -> CheckpointThreadSnapshot | None:
+        # Same channel_versions-vs-channel_values caveat as
+        # list_checkpoint_thread_snapshots() above.
         clauses = [
             sql.SQL("c.thread_id = %s"),
             sql.SQL("c.checkpoint ? 'channel_versions'"),
