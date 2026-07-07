@@ -99,6 +99,23 @@ const FALLBACK_GRAPH = {
   edges: [],
 };
 
+// Sequences isn't wired to real data yet — show one pretend entry instead of
+// the live agent list so the page reads as intentional, not empty/broken.
+const DUMMY_SEQUENCES = [{
+  id: 'sequence-demo',
+  kind: 'subagent',
+  name: 'Demo Sequence',
+  role: 'Placeholder — sequences aren’t wired up yet.',
+  summary: 'Placeholder — sequences aren’t wired up yet.',
+  status: 'draft',
+  updated: new Date().toISOString(),
+  model: '',
+  tools: [],
+  repositories: [],
+  knowledge: [],
+  skills: [],
+}];
+
 function normalizeStatus(status) {
   if (!status || status === 'draft') {
     return 'Drafts';
@@ -181,7 +198,7 @@ function AgentRow({ agent, selected, onSelect }) {
     >
       <span className="sess-row__top">
         <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${agent.status}`} />
-        <span className="sess-row__agent agents-agent-row__name" style={{ '--agent-color': agent.color }}>{agent.name}</span>
+        <span className="sess-row__agent agents-agent-row__name">{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
       <span className="sess-row__age">{formatAge(agent.updated)}</span>
@@ -191,6 +208,33 @@ function AgentRow({ agent, selected, onSelect }) {
         <span><span className="num">{(agent.repositories || []).length}</span> repos</span>
         <span><span className="num">{(agent.knowledge || []).length}</span> knowledge</span>
       </span>
+    </button>
+  );
+}
+
+// Sequences card list: a two-line card matching the Chat/Workflows pattern —
+// a leading status dot (empty unless running/failed), name + last-activity
+// on the header line, and the agent's role as a single preview line below.
+function SequenceRow({ agent, selected, onSelect }) {
+  const status = agent.status || 'draft';
+  const dotTone = status === 'running' ? 'info' : (status === 'failed' || status === 'error') ? 'error' : '';
+  return (
+    <button
+      type="button"
+      className={`pane-card-row ${selected ? 'active' : ''}`}
+      onClick={() => onSelect(agent.id)}
+    >
+      <span
+        className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`}
+        aria-hidden="true"
+      />
+      <div className="pane-card-row__body">
+        <div className="pane-card-row__top">
+          <span className="pane-card-row__title">{agent.name}</span>
+          <span className="pane-card-row__age">{formatAge(agent.updated)}</span>
+        </div>
+        <div className="pane-card-row__preview">{agent.role || agent.summary || 'No description yet.'}</div>
+      </div>
     </button>
   );
 }
@@ -338,7 +382,9 @@ function AgentsPage({ variant = 'agents' }) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
-  const agents = useSelector(selectAgentProfiles);
+  const fetchedAgents = useSelector(selectAgentProfiles);
+  // Sequences shows one pretend entry for now instead of the real agent list.
+  const agents = isSequences ? DUMMY_SEQUENCES : fetchedAgents;
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
 
@@ -385,9 +431,10 @@ function AgentsPage({ variant = 'agents' }) {
   const requestedListRef = useRef(null);
 
   // Load the agent list once the realtime stream is connected; the snapshot
-  // arrives on the stream (the GET just acknowledges and triggers it).
+  // arrives on the stream (the GET just acknowledges and triggers it). Skipped
+  // on Sequences, which shows a pretend entry instead of the real list.
   useEffect(() => {
-    if (!realtime.connected) {
+    if (isSequences || !realtime.connected) {
       requestedListRef.current = null;
       return;
     }
@@ -396,7 +443,7 @@ function AgentsPage({ variant = 'agents' }) {
     }
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, realtime.connected]);
+  }, [agentsUrl, dispatch, isSequences, realtime.connected]);
 
   // Selection defaults to the first agent without writing state in an effect.
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
@@ -412,8 +459,9 @@ function AgentsPage({ variant = 'agents' }) {
   }, [navigate, effectiveAgentId]);
 
   // Request the full profile (incl. graph) whenever the selection changes.
+  // Skipped on Sequences — the pretend entry has no real detail to fetch.
   useEffect(() => {
-    if (!effectiveAgentId) {
+    if (isSequences || !effectiveAgentId) {
       return;
     }
     dispatch(requestAgentDetail({
@@ -421,7 +469,7 @@ function AgentsPage({ variant = 'agents' }) {
       agentId: effectiveAgentId,
       requestId: `${effectiveAgentId}-${Date.now()}`,
     }));
-  }, [agentsUrl, dispatch, effectiveAgentId]);
+  }, [agentsUrl, dispatch, effectiveAgentId, isSequences]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -456,7 +504,8 @@ function AgentsPage({ variant = 'agents' }) {
   // "Recent" uses the chat sidebar's recency buckets, and "Type" keeps the
   // agent's own group headers.
   const sections = useMemo(() => {
-    if (sortMode === 'Name') {
+    // Sequences drops category grouping for now — a flat list, appearance-only.
+    if (isSequences || sortMode === 'Name') {
       return [{ key: 'all', title: null, agents: visibleAgents }];
     }
     if (sortMode === 'Recent') {
@@ -473,7 +522,7 @@ function AgentsPage({ variant = 'agents' }) {
     return [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))]
       .map((group) => ({ key: group, title: group, agents: grouped[group] || [] }))
       .filter((section) => section.agents.length);
-  }, [sortMode, visibleAgents]);
+  }, [isSequences, sortMode, visibleAgents]);
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
   const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
@@ -512,12 +561,21 @@ function AgentsPage({ variant = 'agents' }) {
           {visibleAgents.length ? (
             sections.map((section) => {
               const rows = section.agents.map((agent) => (
-                <AgentRow
-                  key={agent.id}
-                  agent={agent}
-                  selected={selectedAgent?.id === agent.id}
-                  onSelect={selectAgent}
-                />
+                isSequences ? (
+                  <SequenceRow
+                    key={agent.id}
+                    agent={agent}
+                    selected={selectedAgent?.id === agent.id}
+                    onSelect={selectAgent}
+                  />
+                ) : (
+                  <AgentRow
+                    key={agent.id}
+                    agent={agent}
+                    selected={selectedAgent?.id === agent.id}
+                    onSelect={selectAgent}
+                  />
+                )
               ));
               return section.title ? (
                 <PaneListGroup key={section.key} title={section.title} count={section.agents.length}>

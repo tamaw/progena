@@ -151,65 +151,6 @@
   gap: 6px;
 }
 
-.workflow-list-row {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  width: 100%;
-  padding: 10px 12px;
-  color: var(--color-text-primary);
-  text-align: left;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 120ms ease, background-color 120ms ease, transform 120ms ease;
-}
-
-.workflow-list-row:hover,
-.workflow-list-row.active {
-  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
-  background: color-mix(in oklab, var(--color-accent) 7%, var(--color-bg-secondary));
-}
-
-.workflow-list-row__head,
-.workflow-list-row__meta,
-.workflow-list-row__foot {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.workflow-list-row__title {
-  overflow: hidden;
-  font-family: var(--font-family-mono);
-  font-size: 12.5px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workflow-list-row__status,
-.workflow-list-row__meta,
-.workflow-list-row__foot {
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.workflow-list-row__status--ok { color: #3fb950; }
-.workflow-list-row__status--info { color: #58a6ff; }
-.workflow-list-row__status--error { color: #f85149; }
-.workflow-list-row__status--muted { color: var(--color-text-muted); }
-
-.workflow-list-row__meta span,
-.workflow-list-row__foot span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .workflow-detail {
   display: flex;
   flex-direction: column;

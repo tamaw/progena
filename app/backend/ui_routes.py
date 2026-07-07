@@ -46,6 +46,8 @@ from app.progenitor.workflows import (
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
     WorkflowListItem,
+    WorkflowNodeCode,
+    WorkflowNodeUser,
     WorkflowRun,
     default_workflow_definition,
     workflow_id_from_path,
@@ -89,6 +91,7 @@ from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
+    build_user_node_instruction,
     delete_workflow_definition,
     find_active_workflow_run,
     get_workflow_definition,
@@ -719,18 +722,45 @@ async def _workflow_prompt_runner(
     input_text: str,
     thread_id: str | None,
 ) -> PromptExecutionResult:
-    response = await action_run(
-        ActionRunRequest(
-            widget_id=f"workflow:{workflow.id}:{node_id}",
+    widget_id = f"workflow:{workflow.id}:{node_id}"
+    root_widget_id = f"workflow:{workflow.id}"
+    if isinstance(node, WorkflowNodeCode):
+        # Code nodes have no dedicated sandboxed executor (same as the old
+        # Workspace canvas): the agent is asked to run the snippet itself
+        # through the normal IPC prompt path.
+        request = ActionRunRequest(
+            widget_id=widget_id,
+            code=node.content,
+            language=node.language,
+            input=input_text,
+            broadcast_response=False,
+            thread_id=thread_id,
+            invocation_type="automation",
+            invocation_source=widget_id,
+            root_widget_id=root_widget_id,
+        )
+    elif isinstance(node, WorkflowNodeUser):
+        request = ActionRunRequest(
+            widget_id=widget_id,
+            prompt=build_user_node_instruction(node, input_text),
+            broadcast_response=False,
+            thread_id=thread_id,
+            invocation_type="automation",
+            invocation_source=widget_id,
+            root_widget_id=root_widget_id,
+        )
+    else:
+        request = ActionRunRequest(
+            widget_id=widget_id,
             prompt=node.prompt,
             input=input_text,
             broadcast_response=False,
             thread_id=thread_id,
             invocation_type="automation",
-            invocation_source=f"workflow:{workflow.id}:{node_id}",
-            root_widget_id=f"workflow:{workflow.id}",
+            invocation_source=widget_id,
+            root_widget_id=root_widget_id,
         )
-    )
+    response = await action_run(request)
     return PromptExecutionResult(response=response.response, thread_id=response.thread_id)
 
 

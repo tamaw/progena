@@ -27,6 +27,11 @@ from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
 )
+from app.progenitor.workflows import (
+    WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_QUEUE_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
+)
 
 from .document_store import (
     BACKEND_STATE_PREFIX,
@@ -483,6 +488,11 @@ class StateSnapshot:
     # snapshot field changes when the agent writes /inbox/<id>.md, so this is
     # the sole signal _state_changed() has for an inbox-only write.
     inbox_fingerprint: str = ""
+    # Content fingerprint of all workflow definition, run, and queue documents.
+    # Like kanban/inbox, no other snapshot field changes when the agent writes
+    # /state/workflows/<id>.json (or the executor updates a run), so this is
+    # the sole signal _state_changed() has for a workflow-only write.
+    workflow_fingerprint: str = ""
 
 
 class StateReader:
@@ -1075,6 +1085,32 @@ class StateReader:
             return ""
         return _hash_material(material)
 
+    def _workflow_fingerprint(self) -> str:
+        """Stable hash of all workflow definition, run, and queue documents.
+
+        Mirrors ``_inbox_fingerprint`` (no index document, so one key-prefix
+        query per document kind), combined into a single fingerprint since a
+        change to any of the three should push a live update the same way.
+        """
+        if self.document_store is None:
+            return ""
+        try:
+            material: list[dict[str, Any]] = []
+            for key_prefix in (
+                WORKFLOW_DEFINITION_KEY_PREFIX,
+                WORKFLOW_RUN_KEY_PREFIX,
+                WORKFLOW_QUEUE_KEY_PREFIX,
+            ):
+                rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, key_prefix)
+                material.extend(
+                    document.payload
+                    for _key, document in rows
+                    if isinstance(document.payload, dict)
+                )
+        except Exception:
+            return ""
+        return _hash_material(material)
+
     def _health_fingerprint(self) -> str:
         """Stable hash of the ``health`` Postgres document's status fields.
 
@@ -1120,6 +1156,7 @@ class StateReader:
             kanban_fingerprint=self._kanban_fingerprint(),
             health_fingerprint=self._health_fingerprint(),
             inbox_fingerprint=self._inbox_fingerprint(),
+            workflow_fingerprint=self._workflow_fingerprint(),
         )
 
     def _iter_log_files(self) -> list[Path]:
@@ -1954,6 +1991,8 @@ class StateReader:
         if new.health_fingerprint != old.health_fingerprint:
             return True
         if new.inbox_fingerprint != old.inbox_fingerprint:
+            return True
+        if new.workflow_fingerprint != old.workflow_fingerprint:
             return True
         return (new.sessions.total if new.sessions else 0) != (
             old.sessions.total if old.sessions else 0

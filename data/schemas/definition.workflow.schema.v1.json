@@ -56,6 +56,16 @@
             "kanban.card.deleted",
             "kanban.card.status_changed"
           ]
+        },
+        "from_column": {
+          "description": "Optional kanban.card.moved filter: only trigger when the card left this column. Null/omitted means any column.",
+          "type": ["string", "null"],
+          "enum": ["backlog", "plan", "build", "validate", "done", null]
+        },
+        "to_column": {
+          "description": "Optional kanban.card.moved filter: only trigger when the card entered this column. Null/omitted means any column.",
+          "type": ["string", "null"],
+          "enum": ["backlog", "plan", "build", "validate", "done", null]
         }
       }
     },
@@ -107,6 +117,57 @@
                     "type": ["string", "null"]
                   }
                 }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title", "message_type", "message", "level"],
+                "properties": {
+                  "kind": {
+                    "const": "user"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "message_type": {
+                    "type": "string",
+                    "enum": ["say_to_user", "notify_user", "ask_user"]
+                  },
+                  "message": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "notification_title": {
+                    "type": ["string", "null"]
+                  },
+                  "level": {
+                    "type": "string",
+                    "enum": ["info", "warning", "error", "success"]
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["kind", "title", "language", "content"],
+                "properties": {
+                  "kind": {
+                    "const": "code"
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "language": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "content": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
               }
             ]
           }
@@ -154,7 +215,48 @@
       }
     },
     "ui": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["position", "size"],
+            "properties": {
+              "position": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["x", "y"],
+                "properties": {
+                  "x": { "type": "number" },
+                  "y": { "type": "number" }
+                }
+              },
+              "size": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["data", "settings"],
+                "description": "Two independent sizes remembered per node: 'data' is the compact read-only view, 'settings' is the full editable form. Switching views resizes the node to whichever one it was last left at.",
+                "properties": {
+                  "data": { "$ref": "#/$defs/dimensions" },
+                  "settings": { "$ref": "#/$defs/dimensions" }
+                }
+              }
+            }
+          }
+        },
+        "viewport": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "zoom": { "type": "number" }
+          }
+        }
+      }
     },
     "updated_at": {
       "type": "string",
@@ -163,6 +265,17 @@
     "created_at": {
       "type": "string",
       "minLength": 1
+    }
+  },
+  "$defs": {
+    "dimensions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": { "type": "number" },
+        "height": { "type": "number" }
+      }
     }
   }
 }

@@ -29,6 +29,10 @@ WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
 WORKFLOW_DEFAULT_AGENT_NAME = "progenitor"
 WORKFLOW_VERSION = 1
 
+# Kanban columns a kanban.card.moved trigger can filter on. Mirrors the fixed
+# pipeline in app/backend/ui_routes.py:_kanban_default_columns().
+WORKFLOW_KANBAN_COLUMNS = ("backlog", "plan", "build", "validate", "done")
+
 WorkflowRunStatus = Literal["queued", "running", "paused", "completed", "failed"]
 
 
@@ -39,6 +43,8 @@ class WorkflowTrigger(BaseModel):
 
     type: Literal["event"] = "event"
     event_type: str
+    from_column: str | None = None
+    to_column: str | None = None
 
 
 class WorkflowNodeEvent(BaseModel):
@@ -62,7 +68,38 @@ class WorkflowNodePrompt(BaseModel):
     role: str | None = None
 
 
-WorkflowNode = Annotated[WorkflowNodeEvent | WorkflowNodePrompt, Field(discriminator="kind")]
+WORKFLOW_MESSAGE_TYPES = ("say_to_user", "notify_user", "ask_user")
+WORKFLOW_NOTIFICATION_LEVELS = ("info", "warning", "error", "success")
+
+
+class WorkflowNodeUser(BaseModel):
+    """User-message node: delivers a message to the user via an agent tool."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["user"] = "user"
+    title: str = "User"
+    message_type: Literal["say_to_user", "notify_user", "ask_user"] = "say_to_user"
+    message: str
+    notification_title: str | None = None
+    level: Literal["info", "warning", "error", "success"] = "info"
+
+
+class WorkflowNodeCode(BaseModel):
+    """Code node that asks the agent to run a code snippet through the IPC path."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["code"] = "code"
+    title: str = "Code"
+    language: str = "javascript"
+    content: str
+
+
+WorkflowNode = Annotated[
+    WorkflowNodeEvent | WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode,
+    Field(discriminator="kind"),
+]
 
 
 class WorkflowEdgeEndpoint(BaseModel):
@@ -253,11 +290,17 @@ def default_workflow_definition(
             "nodes": {
                 event_node_id: {
                     "position": {"x": 96, "y": 160},
-                    "size": {"width": 320, "height": 200},
+                    "size": {
+                        "data": {"width": 320, "height": 120},
+                        "settings": {"width": 320, "height": 190},
+                    },
                 },
                 prompt_node_id: {
                     "position": {"x": 456, "y": 160},
-                    "size": {"width": 320, "height": 220},
+                    "size": {
+                        "data": {"width": 340, "height": 160},
+                        "settings": {"width": 340, "height": 280},
+                    },
                 },
             },
             "viewport": {"x": 0, "y": 0, "zoom": 1},
@@ -280,7 +323,7 @@ def parse_workflow_definition_document(content: str) -> dict[str, Any]:
 def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
     """Validate one workflow definition payload and return its normalized dict."""
 
-    schema = load_schema("workflow_definition")
+    schema = load_schema("definition.workflow")
     schema_error = validate_against_schema(payload, schema)
     if schema_error:
         raise ValueError(f"schema validation failed: {schema_error}")
@@ -378,15 +421,29 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
     _assert_acyclic(node_ids, adjacency)
 
     for node_id, node in definition.graph.nodes.items():
-        if isinstance(node, WorkflowNodePrompt):
+        if isinstance(node, WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode):
             if inbound[node_id] > 1:
-                raise ValueError("prompt nodes may have at most one inbound edge in v1")
+                raise ValueError(f"node '{node_id}' may have at most one inbound edge in v1")
             if outbound[node_id] > 1:
-                raise ValueError("prompt nodes may have at most one outbound edge in v1")
+                raise ValueError(f"node '{node_id}' may have at most one outbound edge in v1")
+        if isinstance(node, WorkflowNodePrompt):
             if not node.prompt.strip():
                 raise ValueError(f"prompt node '{node_id}' is missing a prompt")
             if not str(node.agent_name or "").strip():
                 raise ValueError(f"prompt node '{node_id}' is missing an agent_name")
+        elif isinstance(node, WorkflowNodeUser):
+            if not node.message.strip():
+                raise ValueError(f"user node '{node_id}' is missing a message")
+            if (
+                node.message_type == "notify_user"
+                and not str(node.notification_title or "").strip()
+            ):
+                raise ValueError(f"user node '{node_id}' is missing a notification_title")
+        elif isinstance(node, WorkflowNodeCode):
+            if not node.content.strip():
+                raise ValueError(f"code node '{node_id}' is missing content")
+            if not str(node.language or "").strip():
+                raise ValueError(f"code node '{node_id}' is missing a language")
 
 
 def _assert_acyclic(node_ids: set[str], adjacency: dict[str, list[str]]) -> None:

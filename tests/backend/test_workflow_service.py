@@ -52,11 +52,17 @@ def _three_prompt_workflow():
     ]
     workflow["ui"]["nodes"][prompt_b_id] = {
         "position": {"x": 816, "y": 160},
-        "size": {"width": 320, "height": 220},
+        "size": {
+            "data": {"width": 340, "height": 160},
+            "settings": {"width": 340, "height": 280},
+        },
     }
     workflow["ui"]["nodes"][prompt_c_id] = {
         "position": {"x": 1176, "y": 160},
-        "size": {"width": 320, "height": 220},
+        "size": {
+            "data": {"width": 340, "height": 160},
+            "settings": {"width": 340, "height": 280},
+        },
     }
     return workflow, event_id, prompt_a_id, prompt_b_id, prompt_c_id
 
@@ -269,3 +275,55 @@ async def test_executor_picks_up_definition_updates_from_store_between_nodes():
         )
     )
     assert seen_prompts == ["First prompt", "Updated from virtual file"]
+
+
+def _moved_trigger(from_column, to_column):
+    return {
+        "event_type": "kanban.card.moved",
+        "timestamp": "2026-07-08T00:00:00+00:00",
+        "payload": {
+            "event_type": "kanban.card.moved",
+            "from": {"column_id": from_column, "position": 0},
+            "to": {"column_id": to_column, "position": 0},
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_event_filters_by_from_and_to_column():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(
+        title="Column filter test", event_type="kanban.card.moved"
+    )
+    workflow["trigger"]["from_column"] = "backlog"
+    workflow["trigger"]["to_column"] = "plan"
+    definition = save_workflow_definition(store, workflow)
+
+    async def prompt_runner(**kwargs):
+        return PromptExecutionResult(response="ok", thread_id=kwargs["thread_id"] or "thread_1")
+
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=prompt_runner,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    non_matching = await executor.dispatch_event(
+        "kanban.card.moved", _moved_trigger("plan", "build")
+    )
+    assert non_matching == []
+
+    matching = await executor.dispatch_event("kanban.card.moved", _moved_trigger("backlog", "plan"))
+    assert len(matching) == 1
+    assert matching[0].workflow_id == definition.id
+
+    await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == matching[0].run_id and item.status == "completed"
+            ),
+            None,
+        )
+    )

@@ -134,7 +134,10 @@ def test_workflow_put_rejects_cycle(workflow_env):
         )
         workflow["ui"]["nodes"][prompt_b_id] = {
             "position": {"x": 816, "y": 160},
-            "size": {"width": 320, "height": 220},
+            "size": {
+                "data": {"width": 340, "height": 160},
+                "settings": {"width": 340, "height": 280},
+            },
         }
 
         response = client.put(
@@ -173,7 +176,10 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
         )
         workflow["ui"]["nodes"][prompt_b_id] = {
             "position": {"x": 816, "y": 160},
-            "size": {"width": 320, "height": 220},
+            "size": {
+                "data": {"width": 340, "height": 160},
+                "settings": {"width": 340, "height": 280},
+            },
         }
         saved = client.put(
             "/api/ui/workflows/content",
