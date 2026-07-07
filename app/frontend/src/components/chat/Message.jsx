@@ -195,7 +195,7 @@ function ImageModal({ src, alt, onClose }) {
 }
 
 // Renders both tool-result images and markdown images from the message
-// text (see extractMarkdownImages() in MessageView) as one strip of
+// text (see collectMessageImages() in MessageView, above) as one strip of
 // fixed-size, click-to-expand thumbnails -- callers pass already-normalized
 // { id, src, alt } entries.
 function MessageImageStrip({ images }) {

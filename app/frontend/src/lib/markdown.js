@@ -349,9 +349,9 @@ function renderMarkdownLink(label, href) {
 }
 
 // Chat renders markdown images as thumbnails in a bottom strip alongside
-// tool-result images (see Message.jsx's extractMarkdownImages() usage), not
-// inline -- so inline text just keeps a plain link to the image, the same
-// as any other markdown link.
+// tool-result images (see conversationModel.collectMessageImages(), which
+// calls extractMarkdownImages() below), not inline -- so inline text just
+// keeps a plain link to the image, the same as any other markdown link.
 function renderMarkdownImage(alt, src) {
   return renderMarkdownLink(alt || src, src);
 }
@@ -389,10 +389,16 @@ function autolinkPlainUrls(text) {
   // wrapped around it. Pull them out into placeholders first, same
   // technique as code/writing blocks above, then restore once the bare-URL
   // pass has run.
+  //
+  // The placeholder token includes a per-call random component so that if a
+  // message's own text happens to contain something that looks like
+  // "@@AUTOLINKSKIP_0@@", it's left alone -- only placeholders this exact
+  // call stashed (matching this call's random suffix) are restored.
   const skipped = [];
+  const token = `@@AUTOLINKSKIP_${Math.random().toString(36).slice(2)}_`;
   const stash = (match) => {
     skipped.push(match);
-    return `@@AUTOLINKSKIP_${skipped.length - 1}@@`;
+    return `${token}${skipped.length - 1}@@`;
   };
 
   let working = text.replace(/<a\b[^>]*>[\s\S]*?<\/a>/g, stash);
@@ -407,7 +413,8 @@ function autolinkPlainUrls(text) {
     return url ? `${renderMarkdownLink(url, url)}${trailing}` : match;
   });
 
-  return working.replace(/@@AUTOLINKSKIP_(\d+)@@/g, (match, index) => skipped[Number(index)] || '');
+  const restoreRe = new RegExp(`${token}(\\d+)@@`, 'g');
+  return working.replace(restoreRe, (match, index) => skipped[Number(index)] || '');
 }
 
 function renderCodeBlock(language, code) {
