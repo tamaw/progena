@@ -150,6 +150,7 @@ class LLMClient:
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0),
             headers=headers,
+            transport=httpx.AsyncHTTPTransport(retries=2),
         )
 
         # MCP context is initialized externally (startup)

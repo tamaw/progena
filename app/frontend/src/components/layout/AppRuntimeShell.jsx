@@ -718,9 +718,13 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 }
 
 // Persist the quick chat conversation across panel open/close (the panel unmounts
-// when closed) and config/mode changes, so reopening resumes the same conversation.
-// Cleared only by "New chat" (resetQuickChat). Resets naturally on full page reload.
-const quickChatMemory = { history: [], session: null };
+// when closed), so reopening the *same* mode resumes the same conversation.
+// Cleared by "New chat" (resetQuickChat) and whenever the mode changes between
+// opens (e.g. closing a "connect an MCP server" chat on Tools and opening
+// "create a knowledge base" from Knowledge must not resume the old one, or its
+// suggestion chips never show since the history is no longer empty). Resets
+// naturally on full page reload.
+const quickChatMemory = { history: [], session: null, mode: null };
 
 function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
   const { createSession, sendMessageStream, cancelStream } = useChatApi();
@@ -728,6 +732,15 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const navigate = useNavigate();
   const location = useLocation();
   const isOnChatPage = location.pathname === '/';
+  const normalizedConfig = useMemo(
+    () => normalizeQuickChatConfig(panelConfig),
+    [panelConfig],
+  );
+  if (quickChatMemory.mode !== normalizedConfig.mode) {
+    quickChatMemory.history = [];
+    quickChatMemory.session = null;
+    quickChatMemory.mode = normalizedConfig.mode;
+  }
   const [history, setHistory] = useState(quickChatMemory.history);
   const [scratchSession, setScratchSession] = useState(quickChatMemory.session);
   const [isSending, setIsSending] = useState(false);
@@ -737,10 +750,6 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
   const scrollEndRef = useRef(null);
-  const normalizedConfig = useMemo(
-    () => normalizeQuickChatConfig(panelConfig),
-    [panelConfig],
-  );
 
   // Keep the transcript pinned to the latest message, including as it streams
   // in token by token (mirrors the main Chat page's scroll-to-bottom effect).

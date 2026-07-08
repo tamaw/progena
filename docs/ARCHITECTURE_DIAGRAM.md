@@ -33,6 +33,23 @@ HTTP request
 
 Scheduled work enters the runtime through the same core path as normal user input.
 
+## Invocation entry points
+
+Two distinct ways a prompt reaches the runtime through the backend:
+
+- **Chat session** (quick chat / conversation pages) — `POST /api/ui/chats`
+  creates a persisted session, then messages stream through it
+  (`sendMessageStream`). This is the normal user-facing path; the agent has
+  its full tool set here, including `structured_output`.
+- **Direct action, no session** — `POST /api/ui/actions/run` (and
+  `/actions/generate`), used by frontend-provided triggers (workflow "Run
+  now", a workflow's prompt/user/code node execution, workspace run/generate
+  buttons). This only records a lightweight thread entry (`upsert_thread`)
+  for the automation/thread list UI, not a real chat session. It's a valid
+  way to reach the agent, but isn't currently the intended path for
+  `structured_output`-driven authoring flows (e.g. building a workflow
+  definition) — that happens through a chat session.
+
 ## Runtime responsibilities
 
 - Owns the long-running conversation service.
