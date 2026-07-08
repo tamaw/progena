@@ -57,11 +57,15 @@ def workflow_env(tmp_path, monkeypatch):
     ui_routes._ui_event_replay.clear()
     ui_routes._last_known_kanban_cards.clear()
     ui_routes._kanban_card_cache_seeded = False
+    ui_routes._state_watch_callback = None
+    ui_routes._kanban_trigger_watch_callback = None
     yield store, state_reader
     ui_routes._workflow_executor = None
     ui_routes._ui_event_replay.clear()
     ui_routes._last_known_kanban_cards.clear()
     ui_routes._kanban_card_cache_seeded = False
+    ui_routes._state_watch_callback = None
+    ui_routes._kanban_trigger_watch_callback = None
     set_default_document_store(InMemoryDocumentStore())
 
 
