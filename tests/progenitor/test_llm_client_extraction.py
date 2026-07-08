@@ -4,7 +4,6 @@ import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 
 from app.progenitor.config import LLMConfig, MCPConfig
@@ -84,7 +83,7 @@ def test_build_json_schema_format_from_dict_defaults_missing_root_type():
     assert fmt["json_schema"]["schema"]["type"] == "object"
 
 
-def test_llm_client_retries_transient_connect_failures():
+def test_llm_client_configures_connect_retries():
     # The custom LLMClient's httpx client is idle for most of a turn (only
     # used by structured_output/call_agent, unlike the main chat loop which
     # goes through a separate LangChain client) - past the default 5s
@@ -92,10 +91,20 @@ def test_llm_client_retries_transient_connect_failures():
     # this environment intermittently fails DNS resolution once before
     # succeeding. Without transport-level retries that surfaces as a hard
     # tool failure instead of being absorbed transparently.
-    client = LLMClient(config=LLMConfig(base_url="https://example.test/openai/v1"))
-    transport = client.client._transport
-    assert isinstance(transport, httpx.AsyncHTTPTransport)
-    assert transport._pool._retries > 0
+    #
+    # Assert via the constructor calls rather than the real client's private
+    # httpx internals (`_transport`/`_pool._retries`), which are undocumented
+    # and can shift between httpx versions; this also avoids leaving a real,
+    # unclosed httpx.AsyncClient behind.
+    with (
+        patch("app.progenitor.llm.client.httpx.AsyncHTTPTransport") as mock_transport_cls,
+        patch("app.progenitor.llm.client.httpx.AsyncClient") as mock_client_cls,
+    ):
+        LLMClient(config=LLMConfig(base_url="https://example.test/openai/v1"))
+
+    mock_transport_cls.assert_called_once_with(retries=2)
+    _, kwargs = mock_client_cls.call_args
+    assert kwargs["transport"] is mock_transport_cls.return_value
 
 
 @pytest.mark.asyncio
