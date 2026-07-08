@@ -53,15 +53,6 @@ class RegisterA2AAgentTool(BaseSystemTool):
             "with call_agent. Persists to the database; a restart keeps it."
         )
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "register a2a agent",
-            "add a2a agent",
-            "register agent",
-            "add deployed agent",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         tool_registry = context.tool_registry
         if tool_registry is None or not hasattr(tool_registry, "register_agent"):

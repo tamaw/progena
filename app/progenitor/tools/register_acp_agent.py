@@ -82,15 +82,6 @@ class RegisterACPAgentTool(BaseSystemTool):
             "and an optional profile/model. The agent is sandboxed per run."
         )
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "register acp agent",
-            "add acp agent",
-            "install acp agent",
-            "add copilot agent",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         tool_registry = context.tool_registry
         if tool_registry is None or not hasattr(tool_registry, "register_agent"):
