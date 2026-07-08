@@ -16,7 +16,7 @@ export PYTHONPATH="$PWD"
 Three processes must run concurrently (see `docs/LOCAL_STARTUP.md` for full detail):
 
 ```bash
-# Progenitor runtime (IPC on :9500)
+# Progenitor runtime (HTTP + SSE on :9501)
 python -m app.progenitor.main
 
 # Backend API (:8000)
@@ -70,13 +70,13 @@ PROGENITOR_MOCK_LLM=true python -m app.progenitor.main
 Browser → Frontend (Vite :5173)
              ↓ proxy /api /v1 /health
          Backend (FastAPI :8000)
-             ↓ TCP socket IPC
-         Progenitor runtime (:9500)
+             ↓ HTTP + SSE
+         Progenitor runtime (:9501)
              ↓
          LangGraph + DeepAgent + Postgres
 ```
 
-The frontend never talks directly to the runtime. Vite proxies all `/api/`, `/v1/`, and `/health` paths to the backend at `:8000`; the backend forwards conversation requests over IPC.
+The frontend never talks directly to the runtime. Vite proxies all `/api/`, `/v1/`, and `/health` paths to the backend at `:8000`; the backend forwards conversation requests to the runtime's persistent HTTP server (`POST /v1/chat`, `GET /v1/events`) over HTTP + SSE.
 
 ### Progenitor runtime (`app/progenitor/`)
 
@@ -89,9 +89,10 @@ Key submodules:
 - `graph/` — builds both LangGraph graphs (`progenitor_graph.py`, `heartbeat_graph.py`)
 - `nodes/` — factory functions returning async callables; each returns a partial state dict
 - `state/models.py` — `ProgenitorState` TypedDict; `ConversationMessage`, `ScheduleEntry`, `A2ATaskRecord`
-- `runtime/progenitor.py` — lifecycle (startup, Postgres init, IPC server, loop)
+- `runtime/progenitor.py` — lifecycle (startup, Postgres init, HTTP server, loop)
 - `runtime/heartbeat.py` — background loop execution
-- `ipc/` — TCP socket protocol between runtime and backend (`server.py`, `client.py`, `protocol.py`)
+- `runtime/http.py` — persistent HTTP server (health, agent card, A2A callbacks); mounts `runtime/http_chat.py`'s `RuntimeChatService` (`POST /v1/chat`, `POST /v1/chat/{request_id}/cancel`, `GET /v1/events`)
+- `ipc/` — transport-agnostic stream envelope helpers shared by the chat endpoint (`deepagent_stream.py`, `stream_events.py`, `stream_payloads.py`); despite the name, no longer a transport
 - `tools/` — 23+ LangGraph tools: `call_agent`, `schedule_task`, `mcp`, `shell`, `new_conversation`, etc.
 - `agent/` — DeepAgent integration layer (`agent.py`, `middleware.py`, `subagents.py`)
 
@@ -101,7 +102,7 @@ State persists via native LangGraph Postgres checkpoint/store tables. The LangGr
 
 FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 
-- `ipc_client.py` — talks to the runtime over TCP socket
+- `sse_client.py` — talks to the runtime over HTTP + SSE (`SSEProgenitorClient`)
 - `ui_routes.py` — `/api/ui/*` routes for frontend status, state views, SSE streams
 - `chat_routes.py` / `chat_sessions.py` — chat session management
 - `document_store.py` — Postgres-backed document store
@@ -135,7 +136,7 @@ Runtime config flows from environment variables plus shared runtime state:
 - scheduled tasks — persisted in the shared Postgres document store (the `schedule`
   document under the `("progenitor", "state")` namespace), not a file
 
-Key env vars: `PROGENITOR_DATABASE_URL`, `PROGENITOR_LLM_PROVIDER`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_DEFAULT`, `CHAT_SERVER_IPC_HOST`, `CHAT_SERVER_IPC_PORT`.
+Key env vars: `PROGENITOR_DATABASE_URL`, `PROGENITOR_LLM_PROVIDER`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_DEPLOYMENT_DEFAULT`, `PROGENITOR_RUNTIME_URL`.
 
 ### Node pattern
 

@@ -121,7 +121,7 @@ too (eslint `no-unused-vars` will flag it).
   `npm run test`. Mirror the pattern in `pages/tasksPageModel.test.js` — test the
   pure model module, not the React component.
 - Playwright e2e lives in `e2e/*.spec.js` (not picked up by vitest) and runs against
-  the **live** local stack (postgres :15433, runtime :9500, backend :8000, frontend
+  the **live** local stack (postgres :15433, runtime :9501, backend :8000, frontend
   :5173). `e2e/discovery.spec.js` mounts every route and asserts no uncaught errors.
 
 ## Repo safety

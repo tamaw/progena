@@ -62,8 +62,8 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
 Current compose behavior:
 - Only the frontend is published to the host: `80:80`
 - The backend listens on port `8000` **inside** the compose networks only
-- The Progenitor IPC server listens on port `9500` inside the compose networks
-- The backend connects to the runtime with `CHAT_SERVER_IPC_HOST=progenitor`
+- The Progenitor HTTP server listens on port `9501` inside the compose networks
+- The backend connects to the runtime with `PROGENITOR_RUNTIME_URL=http://progenitor:9501`
 - The compose file attaches services to an internal bridge network and the external `progenitor_network`
 
 Because the backend is not host-published, host access normally goes through nginx on `http://localhost`:

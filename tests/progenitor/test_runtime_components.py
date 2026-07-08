@@ -8,7 +8,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.progenitor.config import ProgenitorConfig, StorageConfig
-from app.progenitor.ipc import IPCServer
 from app.progenitor.mcp import MCPRuntime
 from app.progenitor.nodes import health as health_module
 from app.progenitor.nodes.audit import write_startup_config_audit_to_sink
@@ -45,20 +44,12 @@ def test_runtime_components_wire_configured_paths(tmp_path: Path) -> None:
         port=config.runtime.http_port,
         public_base_url=config.runtime.http_public_base_url,
     )
-    ipc = IPCServer(
-        loop_runner=None,
-        host=config.runtime.ipc_host,
-        port=config.runtime.ipc_port,
-        max_clients=config.runtime.ipc_max_clients,
-    )
 
     assert state_dir == tmp_path / "data" / "state"
     assert config_dir == tmp_path / "data" / "config"
     assert registry.agent_registry.registry_path == tmp_path / "data" / "config" / "agents.json"
     assert http.host == config.runtime.http_host
     assert http.port == config.runtime.http_port
-    assert ipc.host == config.runtime.ipc_host
-    assert ipc.port == config.runtime.ipc_port
 
 
 @pytest.mark.asyncio

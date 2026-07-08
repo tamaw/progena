@@ -7,29 +7,24 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.progenitor.ipc.client import IPCClient
+import httpx
+
+from tests.integration.helpers import DEFAULT_BASE_URL, send_message_and_collect
 
 
 async def ask_about_mcp():
     """Ask agent about MCP tools."""
-    client = IPCClient()
-    await client.connect()
+    async with httpx.AsyncClient(
+        base_url=DEFAULT_BASE_URL, timeout=httpx.Timeout(10.0, read=None)
+    ) as client:
+        print("Asking: What MCP tools are available?\n")
 
-    print("Asking: What MCP tools are available?\n")
-    response_parts = []
+        result = await send_message_and_collect(
+            client, "What MCP tools do you have available? List them.", "mcp_available"
+        )
 
-    async for event in client.send_message_stream_events(
-        "What MCP tools do you have available? List them."
-    ):
-        if event.get("type") != "stream_chunk":
-            continue
-        response_parts.append(str(event.get("content", "")))
-
-    response = "".join(response_parts)
-    print("Response:")
-    print(response)
-
-    await client.disconnect()
+        print("Response:")
+        print(result["response"] if result["success"] else f"Error: {result['error']}")
 
 
 if __name__ == "__main__":

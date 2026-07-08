@@ -1,70 +1,9 @@
 """
-IPC (Inter-Process Communication) module for Progenitor.
+Stream envelope helpers shared between the runtime and its HTTP chat endpoints.
 
-Provides socket-based communication between the backend and Progenitor agent,
-replacing the unreliable stdin/stdout mechanism.
-
-Features:
-- TCP socket-based communication (works on all platforms)
-- Message framing with length-prefix protocol
-- Native streaming support
-- Heartbeat/keepalive mechanism
-- Automatic reconnection
+Despite the package name (kept for now to avoid churning import paths), this
+no longer contains a transport: chat and events are served over HTTP + SSE by
+``app.progenitor.runtime.http_chat``. What remains here is transport-agnostic:
+converting native DeepAgent/LangGraph stream items into normalized envelopes
+(``deepagent_stream.py``, ``stream_events.py``, ``stream_payloads.py``).
 """
-
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .client import IPCClient
-    from .protocol import (
-        IPCMessage,
-        MessageType,
-        agent_event,
-        cancel_request_message,
-        decode_message,
-        encode_message,
-        read_message,
-        stream_event,
-        write_message,
-    )
-    from .server import IPCServer
-
-__all__ = [
-    "MessageType",
-    "IPCMessage",
-    "encode_message",
-    "decode_message",
-    "read_message",
-    "write_message",
-    "agent_event",
-    "cancel_request_message",
-    "stream_event",
-    "IPCClient",
-    "IPCServer",
-]
-
-
-def __getattr__(name: str):
-    if name == "IPCClient":
-        from .client import IPCClient
-
-        return IPCClient
-    if name == "IPCServer":
-        from .server import IPCServer
-
-        return IPCServer
-    if name in {
-        "IPCMessage",
-        "MessageType",
-        "agent_event",
-        "cancel_request_message",
-        "decode_message",
-        "encode_message",
-        "read_message",
-        "stream_event",
-        "write_message",
-    }:
-        from . import protocol
-
-        return getattr(protocol, name)
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

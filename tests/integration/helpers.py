@@ -1,75 +1,65 @@
 """
 Helper utilities for integration tests.
 
-Provides functions to check if Progenitor is running,
-start it if needed, and wait for it to be ready.
+Provides functions to check if Progenitor's runtime HTTP server is running,
+wait for it to be ready, and stream chat requests over HTTP + SSE.
 """
 
 import asyncio
+import json
 import logging
 import sys
+from collections.abc import AsyncIterator
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+import httpx
 
 # Add project root to path
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.progenitor.ipc.client import IPCClient
-
 logger = logging.getLogger(__name__)
 
-DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 9500
+DEFAULT_BASE_URL = "http://127.0.0.1:9501"
 STARTUP_TIMEOUT = 30.0
-CONNECTION_RETRIES = 10
 
 
-async def is_progenitor_running(
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
-) -> bool:
-    """Check if Progenitor IPC server is running and accepting connections.
+async def is_progenitor_running(base_url: str = DEFAULT_BASE_URL) -> bool:
+    """Check if the Progenitor runtime HTTP server is running and healthy.
 
     Args:
-        host: IPC server host
-        port: IPC server port
+        base_url: Runtime HTTP base URL.
 
     Returns:
-        True if server is running and responsive, False otherwise
+        True if the server is running and responsive, False otherwise.
     """
-    client = IPCClient(host=host, port=port, auto_reconnect=False)
-
     try:
-        connected = await client.connect()
-        if connected:
-            # Send a simple heartbeat to verify it's working
-            await asyncio.sleep(0.5)  # Give it time to be ready
-            await client.disconnect()
-            return True
-        return False
+        async with httpx.AsyncClient(base_url=base_url, timeout=5.0) as client:
+            response = await client.get("/health")
+            return response.status_code == 200
     except Exception as e:
-        logger.debug(f"Connection check failed: {e}")
+        logger.debug(f"Health check failed: {e}")
         return False
 
 
 async def wait_for_progenitor(
-    host: str = DEFAULT_HOST,
-    port: int = DEFAULT_PORT,
+    base_url: str = DEFAULT_BASE_URL,
     timeout: float = STARTUP_TIMEOUT,
     retry_interval: float = 2.0,
 ) -> bool:
-    """Wait for Progenitor IPC server to become available.
+    """Wait for the Progenitor runtime HTTP server to become available.
 
     Args:
-        host: IPC server host
-        port: IPC server port
-        timeout: Maximum time to wait in seconds
-        retry_interval: Time between connection attempts
+        base_url: Runtime HTTP base URL.
+        timeout: Maximum time to wait in seconds.
+        retry_interval: Time between connection attempts.
 
     Returns:
-        True if server became available, False if timeout
+        True if the server became available, False if timeout.
     """
-    logger.info(f"Waiting for Progenitor at {host}:{port}...")
+    logger.info(f"Waiting for Progenitor at {base_url}...")
 
     start_time = asyncio.get_event_loop().time()
     attempts = 0
@@ -82,12 +72,96 @@ async def wait_for_progenitor(
             logger.error(f"Timeout waiting for Progenitor after {attempts} attempts")
             return False
 
-        if await is_progenitor_running(host, port):
+        if await is_progenitor_running(base_url):
             logger.info(f"Progenitor is ready (attempt {attempts}, {elapsed:.1f}s)")
             return True
 
         logger.debug(f"Attempt {attempts}: Not ready yet, retrying in {retry_interval}s...")
         await asyncio.sleep(retry_interval)
+
+
+async def iter_chat_sse_frames(
+    response: httpx.Response,
+) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+    """Parse ``event:``/``data:`` SSE frames from a streaming httpx response."""
+    event_name: str | None = None
+    async for line in response.aiter_lines():
+        if line == "" or line.startswith(":"):
+            continue
+        if line.startswith("event: "):
+            event_name = line[len("event: ") :]
+            continue
+        if line.startswith("data: "):
+            if event_name is None:
+                continue
+            yield event_name, json.loads(line[len("data: ") :])
+            event_name = None
+
+
+async def send_message_and_collect(
+    client: httpx.AsyncClient,
+    message: str,
+    test_name: str,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    """Send a message to Progenitor over HTTP and collect the streamed response.
+
+    Args:
+        client: httpx client pointed at the runtime's base URL.
+        message: User message to send.
+        test_name: Name of the test (for logging).
+        timeout: Timeout in seconds.
+
+    Returns:
+        Dictionary with test results.
+    """
+    logger.info(f"[{test_name}] Sending: {message[:100]}...")
+
+    result: dict[str, Any] = {
+        "test_name": test_name,
+        "timestamp": datetime.now().isoformat(),
+        "request": message,
+        "response": "",
+        "chunks": [],
+        "error": None,
+        "duration_seconds": 0,
+        "success": False,
+    }
+
+    start_time = asyncio.get_event_loop().time()
+
+    try:
+        async with client.stream(
+            "POST", "/v1/chat", json={"message": message}, timeout=timeout
+        ) as response:
+            async for event_name, data in iter_chat_sse_frames(response):
+                if event_name == "error":
+                    raise RuntimeError(str(data.get("error", "unknown error")))
+                if event_name == "done":
+                    break
+                if event_name != "stream_chunk":
+                    continue
+                chunk = str(data.get("content", ""))
+                if chunk:
+                    result["chunks"].append(chunk)
+                    result["response"] += chunk
+
+        result["success"] = True
+        logger.info(
+            f"[{test_name}] Response received ({len(result['chunks'])} chunks, "
+            f"{len(result['response'])} chars)"
+        )
+
+    except TimeoutError:
+        result["error"] = f"Timeout after {timeout}s"
+        logger.error(f"[{test_name}] Timeout!")
+
+    except Exception as e:
+        result["error"] = str(e)
+        logger.error(f"[{test_name}] Error: {e}", exc_info=True)
+
+    result["duration_seconds"] = asyncio.get_event_loop().time() - start_time
+    return result
 
 
 def get_results_summary(results_dir: Path) -> dict:
@@ -99,7 +173,6 @@ def get_results_summary(results_dir: Path) -> dict:
     Returns:
         Dictionary with summary statistics
     """
-    import json
     from collections import defaultdict
 
     if not results_dir.exists():

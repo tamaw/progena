@@ -344,7 +344,7 @@ ProgenitorLoop._push_event(...)
   -> loop event queue
   -> IPCServer._event_broadcast_loop()
   -> write agent_event messages to connected clients
-  -> app/backend/ipc_client.py forwards to SSE callback
+  -> app/backend/sse_client.py forwards to SSE callback
 ```
 
 Strength: strongly used when backend talks to a separately running Progenitor
@@ -371,7 +371,7 @@ IPCClient.send_message_stream_events()
   -> handle interleaved AGENT_EVENT messages
 ```
 
-Strength: strongly used by `app/backend/ipc_client.py`.
+Strength: strongly used by `app/backend/sse_client.py`.
 
 ## State and persistence path
 

@@ -34,7 +34,7 @@ def cleanup_event_loop():
 
 @pytest.fixture(autouse=True)
 def mock_progenitor_client():
-    """Mock the get_client and get_ipc_client to avoid connection issues in tests."""
+    """Mock the get_client and get_sse_client to avoid connection issues in tests."""
     mock_client = AsyncMock()
     mock_client.send_message.return_value = AgentResponse(
         response="mocked response", reasoning=None, reasoning_tokens=None
@@ -45,7 +45,7 @@ def mock_progenitor_client():
     mock_client.stop = AsyncMock()
 
     with (
-        patch("app.backend.main.get_ipc_client", return_value=mock_client),
+        patch("app.backend.main.get_sse_client", return_value=mock_client),
         patch("app.backend.main.config.telegram_enabled", False),
     ):
         yield
