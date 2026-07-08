@@ -7,6 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from ..utils import utcnow_isoformat
+from ..workflows import (
+    WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
+    workflow_definition_key,
+    workflow_queue_key,
+    workflow_run_key,
+)
 from . import (
     a2a_store,
     acp_store,
@@ -528,6 +535,121 @@ class StateManager:
             for key, payload in self._state_cache.items()
             if key.startswith(INBOX_MESSAGE_KEY_PREFIX) and isinstance(payload, dict)
         ]
+
+    async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
+        """Return one workflow definition document, or ``None`` if missing."""
+
+        key = workflow_definition_key(workflow_id)
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.peek_document(key)
+        else:
+            payload = self._state_cache.get(key)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_workflow_definition(self, workflow_id: str, payload: dict[str, Any]) -> None:
+        """Persist one workflow definition document."""
+
+        key = workflow_definition_key(workflow_id)
+        if self._runtime_store is not None:
+            await self._save_runtime_document(key, payload)
+            return
+        self._state_cache[key] = payload
+
+    async def delete_workflow_definition(self, workflow_id: str) -> None:
+        """Remove one workflow definition document."""
+
+        key = workflow_definition_key(workflow_id)
+        if self._runtime_store is not None:
+            await self._runtime_store.delete_document(key)
+            return
+        self._state_cache.pop(key, None)
+
+    async def list_workflow_definitions(self) -> list[dict[str, Any]]:
+        """Return all workflow definition documents."""
+
+        if self._runtime_store is not None:
+            rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
+            return [payload for _, payload in rows if isinstance(payload, dict)]
+        return [
+            payload
+            for key, payload in self._state_cache.items()
+            if key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX) and isinstance(payload, dict)
+        ]
+
+    async def get_workflow_run(self, run_id: str) -> dict[str, Any] | None:
+        """Return one workflow run document, or ``None`` if missing."""
+
+        key = workflow_run_key(run_id)
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.peek_document(key)
+        else:
+            payload = self._state_cache.get(key)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_workflow_run(self, run_id: str, payload: dict[str, Any]) -> None:
+        """Persist one workflow run document."""
+
+        key = workflow_run_key(run_id)
+        if self._runtime_store is not None:
+            await self._save_runtime_document(key, payload)
+            return
+        self._state_cache[key] = payload
+
+    async def delete_workflow_run(self, run_id: str) -> None:
+        """Remove one workflow run document."""
+
+        key = workflow_run_key(run_id)
+        if self._runtime_store is not None:
+            await self._runtime_store.delete_document(key)
+            return
+        self._state_cache.pop(key, None)
+
+    async def list_workflow_runs(self) -> list[dict[str, Any]]:
+        """Return all workflow run documents."""
+
+        if self._runtime_store is not None:
+            rows = await self._runtime_store.list_documents(WORKFLOW_RUN_KEY_PREFIX)
+            return [payload for _, payload in rows if isinstance(payload, dict)]
+        return [
+            payload
+            for key, payload in self._state_cache.items()
+            if key.startswith(WORKFLOW_RUN_KEY_PREFIX) and isinstance(payload, dict)
+        ]
+
+    async def get_workflow_queue(self, workflow_id: str) -> list[dict[str, Any]]:
+        """Return the queued trigger payloads for one workflow."""
+
+        key = workflow_queue_key(workflow_id)
+        if self._runtime_store is not None:
+            payload = await self._runtime_store.peek_document(key)
+        else:
+            payload = self._state_cache.get(key)
+        if isinstance(payload, dict):
+            items = payload.get("items")
+            if isinstance(items, list):
+                return [item for item in items if isinstance(item, dict)]
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        return []
+
+    async def save_workflow_queue(self, workflow_id: str, items: list[dict[str, Any]]) -> None:
+        """Persist the queued trigger payloads for one workflow."""
+
+        payload = {"items": [item for item in items if isinstance(item, dict)]}
+        key = workflow_queue_key(workflow_id)
+        if self._runtime_store is not None:
+            await self._save_runtime_document(key, payload)
+            return
+        self._state_cache[key] = payload
+
+    async def delete_workflow_queue(self, workflow_id: str) -> None:
+        """Remove the queued trigger payloads for one workflow."""
+
+        key = workflow_queue_key(workflow_id)
+        if self._runtime_store is not None:
+            await self._runtime_store.delete_document(key)
+            return
+        self._state_cache.pop(key, None)
 
     async def get_mcp_tools(self) -> dict[str, Any]:
         """Return the runtime-owned discovered MCP tools document.

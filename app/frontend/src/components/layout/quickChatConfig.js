@@ -82,6 +82,19 @@ const inboxEditQuickChatConfig = {
   prompts: inboxEditQuickPrompts,
 };
 
+const workflowQuickPrompts = [
+  'Build a workflow that posts a "say to user" message whenever a kanban card moves to Done.',
+  'When a kanban card is created, run a prompt node that drafts a summary and messages me.',
+  'Notify me with a warning-level notification titled "Card status changed" whenever a card moves from Backlog to Plan.',
+];
+const workflowQuickChatConfig = {
+  ...defaultQuickChatConfig,
+  mode: 'workflow-create',
+  title: 'Build a workflow',
+  placeholder: 'Describe the workflow you want...',
+  prompts: workflowQuickPrompts,
+};
+
 const QUICK_CHAT_CONFIGS_BY_MODE = {
   'schedule-create': scheduleQuickChatConfig,
   'mcp-create': mcpQuickChatConfig,
@@ -89,6 +102,7 @@ const QUICK_CHAT_CONFIGS_BY_MODE = {
   'knowledge-create': knowledgeQuickChatConfig,
   'inbox-compose': inboxQuickChatConfig,
   'inbox-edit': inboxEditQuickChatConfig,
+  'workflow-create': workflowQuickChatConfig,
 };
 
 export function normalizeQuickChatConfig(config) {
@@ -182,6 +196,26 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
       'Saving the file updates it; the Inbox page reflects the change live.',
       'Only ask a follow-up question if the requested change is unclear; otherwise make it.',
       'Reply with one short sentence confirming what changed.',
+      '',
+      `User request: ${text}`,
+    ].join('\n');
+  }
+  if (mode === 'workflow-create') {
+    return [
+      'Build a new backend-native workflow from the following user request.',
+      'Follow the managing-workflows skill: read /schemas/definition.workflow.schema.v1.json',
+      'and /schemas/node_prompt.workflow.schema.v1.json, generate ids for the workflow',
+      'and its nodes, then use structured_output to produce a valid definition — one',
+      'event node, one trigger.event_type from the kanban.card.* set, and at least',
+      'one prompt, user, or code node wired to it with an edge. If the request names',
+      'specific kanban columns for a card move (e.g. "from Backlog to Plan"), use',
+      'trigger.event_type "kanban.card.moved" plus trigger.from_column/to_column',
+      '(backlog | plan | build | validate | done) to filter to that transition.',
+      'Write it to /state/workflows/<id>.json. Saving the file persists it and the',
+      'Workflows page updates live.',
+      'Only ask a follow-up question if the trigger event or the desired action is',
+      'unclear; otherwise build it.',
+      'Reply with one short sentence confirming the created workflow title and trigger.',
       '',
       `User request: ${text}`,
     ].join('\n');

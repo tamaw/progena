@@ -218,7 +218,11 @@ def test_resolve_request_tools_includes_tools_for_structured_by_default():
         response_format={"type": "json_schema", "json_schema": {"name": "x", "schema": {}}},
     )
     assert isinstance(resolved, list)
-    assert any(t.get("function", {}).get("name") == "primer" for t in resolved)
+    # Responses API tools are flat ({"type": "function", "name": ...}), not
+    # nested under "function" like the older Chat Completions shape --
+    # nesting them is what produced "Missing required parameter:
+    # 'tools[0].name'" from Azure whenever an MCP tool was registered.
+    assert any(t.get("name") == "primer" for t in resolved)
 
 
 def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
@@ -240,7 +244,11 @@ def test_resolve_request_tools_keeps_tools_for_non_structured_requests():
         response_format=None,
     )
     assert isinstance(resolved, list)
-    assert any(t.get("function", {}).get("name") == "primer" for t in resolved)
+    # Responses API tools are flat ({"type": "function", "name": ...}), not
+    # nested under "function" like the older Chat Completions shape --
+    # nesting them is what produced "Missing required parameter:
+    # 'tools[0].name'" from Azure whenever an MCP tool was registered.
+    assert any(t.get("name") == "primer" for t in resolved)
 
 
 @pytest.mark.asyncio

@@ -12,6 +12,7 @@ from app.progenitor.agent.state_backend import (
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
+    WorkflowDirectoryBackend,
     card_to_markdown,
     create_health_state_file,
     create_mcp_state_file,
@@ -26,6 +27,7 @@ from app.progenitor.agent.state_backend import (
     validate_schedule_document,
 )
 from app.progenitor.state.models import ScheduleEntry
+from app.progenitor.workflows import default_workflow_definition
 
 
 class _FakeStateManager:
@@ -489,6 +491,82 @@ async def test_inbox_adelete_removes_message():
     assert sm.messages == {}
     missing = await backend.adelete("/msg_1.md")
     assert missing.error is not None
+
+
+# ---- workflows (per-workflow JSON directory) ---------------------------------
+
+
+class _FakeWorkflowStateManager:
+    def __init__(self, workflows: list[dict[str, Any]] | None = None) -> None:
+        self.workflows: dict[str, dict[str, Any]] = {
+            workflow["id"]: copy.deepcopy(workflow) for workflow in workflows or []
+        }
+
+    async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
+        workflow = self.workflows.get(workflow_id)
+        return copy.deepcopy(workflow) if workflow is not None else None
+
+    async def save_workflow_definition(self, workflow_id: str, workflow: dict[str, Any]) -> None:
+        self.workflows[workflow_id] = copy.deepcopy(workflow)
+
+    async def delete_workflow_definition(self, workflow_id: str) -> None:
+        self.workflows.pop(workflow_id, None)
+
+    async def list_workflow_definitions(self) -> list[dict[str, Any]]:
+        return [copy.deepcopy(workflow) for workflow in self.workflows.values()]
+
+
+def _workflow_backend(workflows=None) -> tuple[WorkflowDirectoryBackend, _FakeWorkflowStateManager]:
+    sm = _FakeWorkflowStateManager(workflows)
+    return WorkflowDirectoryBackend(sm), sm
+
+
+async def test_workflow_aread_and_ls():
+    workflow = default_workflow_definition(
+        workflow_id="customer-followup", title="Customer follow-up"
+    )
+    backend, _sm = _workflow_backend([workflow])
+    listed = await backend.als("/")
+    assert [entry["path"] for entry in listed.entries] == ["/customer-followup.json"]
+    read = await backend.aread("/customer-followup.json")
+    assert read.error is None
+    assert json.loads(read.file_data["content"])["title"] == "Customer follow-up"
+
+
+async def test_workflow_awrite_persists_valid_definition():
+    workflow = default_workflow_definition(
+        workflow_id="customer-followup", title="Customer follow-up"
+    )
+    backend, sm = _workflow_backend([])
+    result = await backend.awrite("/customer-followup.json", json.dumps(workflow))
+    assert result.error is None
+    assert sm.workflows["customer-followup"]["title"] == "Customer follow-up"
+
+
+async def test_workflow_awrite_rejects_filename_id_mismatch():
+    workflow = default_workflow_definition(
+        workflow_id="customer-followup", title="Customer follow-up"
+    )
+    workflow["id"] = "wrong-id"
+    backend, sm = _workflow_backend([])
+    result = await backend.awrite("/customer-followup.json", json.dumps(workflow))
+    assert result.error and "must match filename" in result.error
+    assert sm.workflows == {}
+
+
+async def test_workflow_aedit_and_adelete_round_trip():
+    workflow = default_workflow_definition(
+        workflow_id="customer-followup", title="Customer follow-up"
+    )
+    backend, sm = _workflow_backend([workflow])
+    edited = await backend.aedit(
+        "/customer-followup.json", "Customer follow-up", "Renewal follow-up"
+    )
+    assert edited.error is None
+    assert sm.workflows["customer-followup"]["title"] == "Renewal follow-up"
+    deleted = await backend.adelete("/customer-followup.json")
+    assert deleted.error is None
+    assert sm.workflows == {}
 
 
 # ---- schedule (single file, object keyed by id) ------------------------------
