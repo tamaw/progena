@@ -273,3 +273,30 @@ async def test_send_completion_notification_pushes_agent_message(state_manager) 
     saved = await state_manager.get_a2a_task("observe-3")
     assert saved is not None
     assert saved.notification_sent_at is not None
+
+
+@pytest.mark.asyncio
+async def test_get_active_a2a_tasks_skips_notified_terminal_tasks(state_manager) -> None:
+    from app.progenitor.utils import utcnow
+
+    def record(task_id: str, status: str, **overrides) -> A2ATaskRecord:
+        return A2ATaskRecord(
+            task_id=task_id,
+            agent_name="observe_agent",
+            agent_url="http://localhost:8108",
+            status=status,
+            **overrides,
+        )
+
+    await state_manager.upsert_a2a_task(record("active-working", "working"))
+    await state_manager.upsert_a2a_task(record("done-needs-notify", "completed"))
+    await state_manager.upsert_a2a_task(
+        record("done-notified", "completed", notification_sent_at=utcnow())
+    )
+    await state_manager.upsert_a2a_task(
+        record("done-no-notify", "completed", notify_on_completion=False)
+    )
+
+    active = await state_manager.get_active_a2a_tasks()
+
+    assert {task.task_id for task in active} == {"active-working", "done-needs-notify"}
