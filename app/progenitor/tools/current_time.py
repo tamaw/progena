@@ -21,20 +21,6 @@ class CurrentTimeTool(BaseSystemTool):
     def description(self) -> str:
         return "Return the current UTC time"
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "current time",
-            "utc time",
-            "time now",
-            "what time is it",
-            "tell me the time",
-            "tell me the current time",
-            "what is the time",
-            "whats the time",
-            "what's the time",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         _ = context
         return ToolResult.ok(

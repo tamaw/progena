@@ -43,16 +43,6 @@ class GetA2ATaskTool(BaseSystemTool):
     def description(self) -> str:
         return "Get the current status, progress, or final result of a tracked A2A task by task_id"
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "get a2a task",
-            "task status",
-            "task progress",
-            "task result",
-            "check task",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
             return ToolResult.fail("state_manager unavailable; cannot query tracked A2A tasks")

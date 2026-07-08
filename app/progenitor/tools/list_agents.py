@@ -22,35 +22,6 @@ class ListAgentsTool(BaseSystemTool):
     def description(self) -> str:
         return "List all registered agents with their status"
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "list agents",
-            "show agents",
-            "what agents",
-            "which agents",
-            "available agents",
-            "running agents",
-            "active agents",
-            "agent status",
-            "agent list",
-            "discover agents",
-            "rediscover agents",
-            "refresh agents",
-            "reload agents",
-            "rescan agents",
-            "scan agents",
-            "rewire agents",
-            "rewire the agents",
-            "refresh registry",
-            "re-scan agents",
-            "re-discover agents",
-            "agent registry",
-            "run discovery",
-            "sync agents",
-            "agent discovery",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         # External deploy pipelines can update agents.json; reload best-effort.
         if hasattr(context.tool_registry, "load"):

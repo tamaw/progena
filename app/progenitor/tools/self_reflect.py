@@ -762,10 +762,6 @@ class SelfReflectModuleTool(BaseSystemTool):
     def description(self) -> str:
         return "Read-only self-reflection helpers (module listing/search/read)"
 
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
     async def execute(self, context: ToolContext) -> ToolResult:
         reflection = SelfReflection(llm_client=context.llm_client)
         modules = reflection.list_modules()
