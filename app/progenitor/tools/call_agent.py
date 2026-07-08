@@ -71,17 +71,6 @@ class CallAgentTool(BaseSystemTool):
             "Defaults to async tracked dispatch; set blocking=true to wait for completion."
         )
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "call agent",
-            "invoke agent",
-            "delegate to deployed agent",
-            "run external agent",
-            "ask hosted agent",
-            "a2a",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         if context.state_manager is None:
             return ToolResult.fail("state_manager unavailable; cannot track A2A tasks")

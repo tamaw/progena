@@ -303,10 +303,6 @@ class SemanticRegistryTool(BaseSystemTool):
         return "Semantic discovery over registry capabilities (if sentence-transformers installed)"
 
     @property
-    def keywords(self) -> list[str]:
-        return []
-
-    @property
     def args_model(self) -> type[BaseModel]:
         return SemanticRegistryArgs
 

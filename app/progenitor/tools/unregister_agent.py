@@ -38,15 +38,6 @@ class UnregisterAgentTool(BaseSystemTool):
             "Deletes it from the database so it is no longer invocable via call_agent."
         )
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "unregister agent",
-            "remove agent",
-            "delete agent",
-            "deregister agent",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         tool_registry = context.tool_registry
         if tool_registry is None or not hasattr(tool_registry, "unregister"):

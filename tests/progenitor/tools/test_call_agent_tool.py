@@ -27,8 +27,6 @@ class TestCallAgentTool:
         tool = CallAgentTool()
         assert tool.name == "call_agent"
         assert "A2A" in tool.description or "agent" in tool.description.lower()
-        assert isinstance(tool.keywords, list)
-        assert len(tool.keywords) > 0
 
     @pytest.mark.asyncio
     async def test_execute_missing_request(self):

@@ -25,10 +25,6 @@ class MCPTool(BaseSystemTool):
     def description(self) -> str:
         return "Show MCP integration status and list discovered MCP tools"
 
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
     async def execute(self, context: ToolContext) -> ToolResult:
         llm_client = context.llm_client
         mcp_config = getattr(llm_client, "mcp_config", None)

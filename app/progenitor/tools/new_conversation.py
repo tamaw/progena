@@ -30,21 +30,6 @@ class NewConversationTool(BaseSystemTool):
         return "Start a new conversation (fresh thread_id, clears server-side context/history)"
 
     @property
-    def keywords(self) -> list[str]:
-        return [
-            "new conversation",
-            "start a new conversation",
-            "start new conversation",
-            "reset conversation",
-            "clear conversation",
-            "clear chat",
-            "reset chat",
-            "fresh thread",
-            "new thread id",
-            "start over",
-        ]
-
-    @property
     def args_model(self) -> type[BaseModel]:
         return NewConversationArgs
 

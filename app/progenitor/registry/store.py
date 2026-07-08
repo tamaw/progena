@@ -391,10 +391,6 @@ class RegistryTool(BaseSystemTool):
     def description(self) -> str:
         return "Show agents.json summary (agents, tools, capabilities)"
 
-    @property
-    def keywords(self) -> list[str]:
-        return []
-
     async def execute(self, context: ToolContext) -> ToolResult:
         registry = context.tool_registry
         agents = registry.get_agents() if hasattr(registry, "get_agents") else []

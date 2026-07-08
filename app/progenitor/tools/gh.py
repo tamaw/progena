@@ -333,10 +333,6 @@ class GhCliTool(BaseSystemTool):
     def description(self) -> str:
         return "Run GitHub CLI commands (gh) at container scope, outside per-worktree execution."
 
-    @property
-    def keywords(self) -> list[str]:
-        return ["gh", "gh cli", "github cli", "gh auth", "gh api"]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
         timeout_raw = args.get("timeout", 60)

@@ -28,32 +28,6 @@ class SelfReflectTool(BaseSystemTool):
     def description(self) -> str:
         return "Introspect own source code to understand how Progenitor works"
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "self reflect",
-            "self-reflect",
-            "introspect",
-            "understand yourself",
-            "examine yourself",
-            "look at your code",
-            "read your code",
-            "your own code",
-            "your source code",
-            "your implementation",
-            "your architecture",
-            "how are you built",
-            "how were you built",
-            "how are you implemented",
-        ]
-
-    @property
-    def trigger_patterns(self) -> list[str]:
-        return [
-            r"\bhow do you (?:work|handle|process)\b",
-            r"\b(?:explain|describe) your\b",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         from .self_reflect import SelfReflection, execute_self_reflect
 
