@@ -3133,8 +3133,14 @@ async def trigger_workflow(workflow_id: str, body: WorkflowManualTriggerRequest)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     active_before = find_active_workflow_run(store, definition.id)
     run = await get_workflow_executor().trigger_workflow(definition.id, trigger)
-    queued = active_before is not None
-    if queued and active_before is not None:
+    if run is None:
+        # Executor refused (workflow paused or disabled) — not queued
+        refreshed = (
+            get_workflow_run(store, active_before.run_id) if active_before is not None else None
+        )
+        return WorkflowTriggerResponse(ok=False, queued=False, run=refreshed or active_before)
+    queued = active_before is not None and run.run_id == active_before.run_id
+    if queued:
         return WorkflowTriggerResponse(ok=True, queued=True, run=active_before)
     refreshed = get_workflow_run(store, run.run_id) if run is not None else None
     return WorkflowTriggerResponse(ok=True, queued=False, run=refreshed or run)
