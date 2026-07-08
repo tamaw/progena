@@ -21,7 +21,6 @@ import httpx
 from app.progenitor.config import LLMConfig
 from app.progenitor.llm.client import _build_responses_endpoint
 
-
 DEFAULT_PROMPT = (
     "Solve this carefully: A train leaves at 3:15pm traveling 72 km/h. "
     "Another leaves the same station at 4:00pm traveling 96 km/h on the same route. "

@@ -42,7 +42,6 @@ from .conversation import (
     ConversationHistory,
 )
 from .document_store import configure_default_document_store
-from .ipc_client import IPCProgenitorClient, get_ipc_client, start_ipc_client_with_retry
 from .knowledge_routes import router as knowledge_router
 from .models import (
     ErrorDetail,
@@ -71,6 +70,7 @@ from .shutdown import (
     GracefulShutdownManager,
     stop_client_safely,
 )
+from .sse_client import SSEProgenitorClient, get_sse_client, start_sse_client_with_retry
 
 # New modules for enhanced features
 from .telegram_client import (
@@ -93,14 +93,14 @@ logger = logging.getLogger(__name__)
 # Global config and client
 config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
-client: ProgenitorClient | IPCProgenitorClient | None = None
+client: ProgenitorClient | SSEProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
 
 
 def get_progenitor_liveness() -> bool:
     """Report whether the runtime is reachable right now, independent of Postgres.
 
-    Backed by the IPC heartbeat/ack (see IPCProgenitorClient.is_running), not a
+    Backed by the SSE heartbeat/ack (see SSEProgenitorClient.is_running), not a
     stored timestamp - this is a live check, not a staleness heuristic.
     """
     return bool(client and client.is_running)
@@ -379,7 +379,7 @@ shutdown_manager = ShutdownManager(drain_timeout=30.0)
 
 async def _send_telegram_connected_message(
     telegram: TelegramClient,
-    progenitor: ProgenitorClient | IPCProgenitorClient,
+    progenitor: ProgenitorClient | SSEProgenitorClient,
 ) -> None:
     """Trigger an agent-generated greeting after Telegram is initialized.
 
@@ -467,7 +467,7 @@ def _build_alert_summary_prompt(alert: AlertInfo) -> str:
 
 
 async def _handle_alert_request(
-    progenitor: ProgenitorClient | IPCProgenitorClient | None,
+    progenitor: ProgenitorClient | SSEProgenitorClient | None,
     *,
     title: str,
     body: str,
@@ -520,7 +520,7 @@ async def _handle_alert_request(
 
 async def _handle_telegram_agent_message(
     telegram: TelegramClient,
-    progenitor: ProgenitorClient | IPCProgenitorClient,
+    progenitor: ProgenitorClient | SSEProgenitorClient,
     chat_id: str,
     message: str,
     metadata: dict[str, Any],
@@ -593,7 +593,7 @@ async def lifespan(app: FastAPI):
     - Graceful shutdown with callbacks
     """
     global client
-    ipc_event_forwarding_task: asyncio.Task | None = None
+    sse_event_forwarding_task: asyncio.Task | None = None
 
     # Startup
     logger.info("Starting backend with enhanced features...")
@@ -681,13 +681,9 @@ async def lifespan(app: FastAPI):
             timeout=5.0,
         )
 
-    # Initialize IPC client
-    logger.info(
-        "Using IPC client (host=%s, port=%d)",
-        config.progenitor_ipc_host,
-        config.progenitor_ipc_port,
-    )
-    # Import broadcast helpers for IPC events and alert state.
+    # Initialize the Progenitor runtime HTTP client
+    logger.info("Using Progenitor runtime client (base_url=%s)", config.progenitor_runtime_url)
+    # Import broadcast helpers for runtime events and alert state.
     from .ui_routes import (
         broadcast_alert,
         broadcast_alerts_state,
@@ -702,7 +698,7 @@ async def lifespan(app: FastAPI):
 
     # Create a combined event callback that handles both SSE and Telegram
     def combined_event_callback(event_type: str, data: dict) -> None:
-        """Route IPC events to SSE and/or Telegram.
+        """Route runtime events to SSE and/or Telegram.
 
         - Always broadcasts to SSE for any connected web clients
         - If no web clients connected, also sends to Telegram
@@ -760,24 +756,24 @@ async def lifespan(app: FastAPI):
                     # Fire and forget - don't block SSE broadcast
                     asyncio.create_task(_send_telegram_message(telegram, content, event_type))
 
-    client = get_ipc_client(config, event_callback=combined_event_callback)
+    client = get_sse_client(config, event_callback=combined_event_callback)
 
     # Register client shutdown callback
     if client:
-        ipc_event_forwarding_task = asyncio.create_task(start_ipc_client_with_retry(client))
+        sse_event_forwarding_task = asyncio.create_task(start_sse_client_with_retry(client))
 
-        async def stop_ipc_event_forwarding_task() -> None:
-            """Stop the background IPC event-forwarding connector."""
-            nonlocal ipc_event_forwarding_task
-            if ipc_event_forwarding_task and not ipc_event_forwarding_task.done():
-                ipc_event_forwarding_task.cancel()
+        async def stop_sse_event_forwarding_task() -> None:
+            """Stop the background HTTP+SSE event-forwarding connector."""
+            nonlocal sse_event_forwarding_task
+            if sse_event_forwarding_task and not sse_event_forwarding_task.done():
+                sse_event_forwarding_task.cancel()
                 with suppress(asyncio.CancelledError):
-                    await ipc_event_forwarding_task
-            ipc_event_forwarding_task = None
+                    await sse_event_forwarding_task
+            sse_event_forwarding_task = None
 
         graceful_shutdown.register_callback(
-            "stop_ipc_event_forwarding_task",
-            stop_ipc_event_forwarding_task,
+            "stop_sse_event_forwarding_task",
+            stop_sse_event_forwarding_task,
             priority=25,
             timeout=5.0,
         )

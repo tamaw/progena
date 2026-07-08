@@ -17,7 +17,7 @@ OpenAI-compatible API server providing responses and streaming endpoints.
 backend/
 ├── main.py              # FastAPI app and endpoints
 ├── models.py            # Request/response models
-├── ipc_client.py        # IPC client for Progenitor runtime
+├── sse_client.py        # HTTP + SSE client for Progenitor runtime
 └── client.py            # Legacy subprocess client
 ```
 

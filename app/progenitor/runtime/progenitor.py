@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from ..config import ProgenitorConfig, get_config
-from ..ipc.server import IPCServer
 from ..llm.client import LLMClient
 from ..mcp import MCPRuntime
 from ..registry import AgentRegistryRuntime
@@ -58,7 +57,6 @@ class Progenitor:
         self.graph: Any = None
         self.loop_runner: Any = None
         self._http_server: ProgenitorHTTPServer | None = None
-        self._ipc_server: IPCServer | None = None
         self._background_tasks: list[asyncio.Task] = []
         self._persistence_stack = contextlib.AsyncExitStack()
         self._store_listener: RuntimeStoreListener | None = None
@@ -222,22 +220,6 @@ class Progenitor:
         )
         await self._http_server.start()
 
-        assert self.loop_runner is not None, "loop_runner must be initialized before IPC server"
-        logger.info(
-            "Starting IPC server on %s:%d",
-            self.config.runtime.ipc_host,
-            self.config.runtime.ipc_port,
-        )
-        self._ipc_server = IPCServer(
-            loop_runner=self.loop_runner,
-            host=self.config.runtime.ipc_host,
-            port=self.config.runtime.ipc_port,
-            max_clients=self.config.runtime.ipc_max_clients,
-        )
-        await self._ipc_server.start()
-        ipc_task = asyncio.create_task(self._ipc_server.serve_forever())
-        self._background_tasks.append(ipc_task)
-
         try:
             done, pending = await asyncio.wait(
                 self._background_tasks,
@@ -272,10 +254,6 @@ class Progenitor:
         if self._mcp_scheduler is not None:
             await self._mcp_scheduler.aclose()
             self._mcp_scheduler = None
-
-        if self._ipc_server is not None:
-            await self._ipc_server.stop()
-            self._ipc_server = None
 
         if self._http_server is not None:
             await self._http_server.stop()
