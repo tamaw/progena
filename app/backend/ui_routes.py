@@ -1844,6 +1844,273 @@ def _kanban_card_store_key(card_id: str) -> str:
     return f"{_KANBAN_CARD_KEY_PREFIX}{card_id}"
 
 
+# Fields whose change fires a `kanban.card.updated` trigger. Keys are also the
+# values: kept as a set-like map for symmetry with the historical body-field
+# names, which happen to match the normalized card's own field names.
+_KANBAN_CARD_CONTENT_FIELDS = (
+    "title",
+    "summary",
+    "description",
+    "agent_name",
+    "owner",
+    "labels",
+    "spec_path",
+    "branch_name",
+    "pr_url",
+    "started_at",
+    "completed_at",
+    "last_error",
+    "metadata",
+)
+
+# Last-dispatched state per card id, used to detect kanban.card.* changes that
+# didn't go through the REST routes below (an agent writing
+# /state/tasks/<id>.md directly bypasses them entirely). Guarded by
+# _kanban_card_trigger_lock wherever it's read-then-written, so a REST-driven
+# change and the store-change reconciler picking up its own resulting NOTIFY
+# can't both decide to dispatch the same change.
+_last_known_kanban_cards: dict[str, dict] = {}
+_kanban_card_trigger_lock = asyncio.Lock()
+_kanban_card_cache_seeded = False
+
+
+def _remember_kanban_card_state(card_id: str, card: dict | None) -> None:
+    if card is None:
+        _last_known_kanban_cards.pop(card_id, None)
+    else:
+        _last_known_kanban_cards[card_id] = dict(card)
+
+
+def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now: str) -> list[dict]:
+    """Diff a kanban card's before/after state into kanban.card.* triggers.
+
+    Shared by the REST kanban routes and the generic store-change reconciler
+    (_reconcile_kanban_card_triggers) so a card edit fires the same triggers
+    whether it came from the UI or an agent writing /state/tasks/<id>.md
+    directly.
+    """
+    triggers: list[dict] = []
+    changed_fields = [
+        field
+        for field in _KANBAN_CARD_CONTENT_FIELDS
+        if previous_card.get(field) != refreshed_card.get(field)
+    ]
+    if changed_fields:
+        triggers.append(
+            {
+                "event_type": "kanban.card.updated",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.updated",
+                    "card": refreshed_card,
+                    "previous_card": previous_card,
+                    "changed_fields": changed_fields,
+                },
+            }
+        )
+    if previous_card.get("column_id") != refreshed_card.get("column_id") or previous_card.get(
+        "position"
+    ) != refreshed_card.get("position"):
+        triggers.append(
+            {
+                "event_type": "kanban.card.moved",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.moved",
+                    "card": refreshed_card,
+                    "previous_card": previous_card,
+                    "from": {
+                        "column_id": previous_card.get("column_id"),
+                        "position": previous_card.get("position"),
+                    },
+                    "to": {
+                        "column_id": refreshed_card.get("column_id"),
+                        "position": refreshed_card.get("position"),
+                    },
+                },
+            }
+        )
+    if previous_card.get("status") != refreshed_card.get("status"):
+        triggers.append(
+            {
+                "event_type": "kanban.card.status_changed",
+                "timestamp": now,
+                "payload": {
+                    "event_type": "kanban.card.status_changed",
+                    "card": refreshed_card,
+                    "previous_card": previous_card,
+                    "from_status": previous_card.get("status"),
+                    "to_status": refreshed_card.get("status"),
+                },
+            }
+        )
+    return triggers
+
+
+def _enrich_kanban_workflow_triggers(triggers: list[dict], now: str) -> list[dict]:
+    return [
+        {
+            **trigger,
+            "payload": {
+                **(trigger.get("payload") or {}),
+                "timestamp": trigger.get("timestamp") or now,
+                "source": "kanban",
+            },
+        }
+        for trigger in triggers
+    ]
+
+
+async def _apply_kanban_card_diff_effects(
+    state_reader: StateReader,
+    *,
+    previous_card: dict,
+    refreshed_card: dict,
+    now: str,
+) -> None:
+    """Fire event-widget triggers, workflow triggers, task-activity entries,
+    and the activity broadcast for one card's before/after diff.
+    """
+    card_id = str(refreshed_card.get("id") or "").strip()
+    triggers = _kanban_card_change_triggers(previous_card, refreshed_card, now)
+    _apply_event_widget_triggers(state_reader, triggers)
+    await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers(triggers, now))
+    if previous_card.get("status") != refreshed_card.get("status"):
+        _append_task_activity_entry(
+            state_reader,
+            card_id=card_id,
+            kind="status",
+            actor="system",
+            message=(
+                f"Status changed from {previous_card.get('status') or 'unknown'} "
+                f"to {refreshed_card.get('status') or 'unknown'}."
+            ),
+            metadata={
+                "from_status": previous_card.get("status"),
+                "to_status": refreshed_card.get("status"),
+            },
+            created_at=now,
+        )
+    if previous_card.get("column_id") != refreshed_card.get("column_id"):
+        _append_task_activity_entry(
+            state_reader,
+            card_id=card_id,
+            kind="move",
+            actor="system",
+            message=(
+                f"Moved from {previous_card.get('column_id') or 'unknown'} "
+                f"to {refreshed_card.get('column_id') or 'unknown'}."
+            ),
+            metadata={
+                "from_column_id": previous_card.get("column_id"),
+                "to_column_id": refreshed_card.get("column_id"),
+            },
+            created_at=now,
+        )
+    if previous_card.get("title") != refreshed_card.get("title"):
+        _append_task_activity_entry(
+            state_reader,
+            card_id=card_id,
+            kind="update",
+            actor="system",
+            message=f"Renamed task to {refreshed_card.get('title') or 'Untitled task'}.",
+            metadata={"field": "title"},
+            created_at=now,
+        )
+    if (
+        previous_card.get("status") != refreshed_card.get("status")
+        or previous_card.get("column_id") != refreshed_card.get("column_id")
+        or previous_card.get("title") != refreshed_card.get("title")
+    ):
+        broadcast_task_activity(card_id)
+
+
+async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
+    """Catch kanban card changes that bypassed the REST routes below.
+
+    The REST routes (create/patch/delete) dispatch triggers inline and then
+    record the resulting state via _remember_kanban_card_state. But the
+    runtime agent's actual day-to-day mechanism for touching cards is
+    writing straight to /state/tasks/<id>.md, which persists via
+    StateManager straight to Postgres -- it never goes through these routes.
+    This reconciler runs off the same store-change watcher that already
+    pushes kanban.snapshot live (see _queue_state_watch_status), diffing the
+    current board against the last state we dispatched triggers for and
+    firing whatever a REST-driven edit would have fired, so an agent marking
+    a card done fires kanban.card.moved (and any workflow watching for it)
+    exactly like a drag-and-drop move does.
+
+    Guarded by _kanban_card_trigger_lock so this can't double-fire against a
+    REST route handling the same underlying change concurrently: whichever
+    one observes the pre-change state first dispatches and updates the
+    cache; the other then sees no diff and no-ops.
+    """
+    global _kanban_card_cache_seeded
+    if not (
+        changed_key is None
+        or changed_key == _kanban_board_store_key()
+        or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
+    ):
+        return
+    state_reader = get_state_reader()
+    try:
+        board = _read_kanban_board(state_reader)
+    except Exception:
+        logger.debug("Failed to read kanban board for trigger reconciliation", exc_info=True)
+        return
+    current_by_id = {
+        str(card["id"]): card for card in board["cards"] if str(card.get("id") or "").strip()
+    }
+    now = utcnow().isoformat()
+    async with _kanban_card_trigger_lock:
+        if not _kanban_card_cache_seeded:
+            # First run since backend startup: the in-memory cache has no
+            # history, so treat the current board as the known baseline
+            # rather than firing a false "created" trigger for every
+            # pre-existing card.
+            for card_id, card in current_by_id.items():
+                _remember_kanban_card_state(card_id, card)
+            _kanban_card_cache_seeded = True
+            return
+
+        known_ids = set(_last_known_kanban_cards)
+        current_ids = set(current_by_id)
+
+        for card_id in current_ids - known_ids:
+            card = current_by_id[card_id]
+            _remember_kanban_card_state(card_id, card)
+            trigger = {
+                "event_type": "kanban.card.created",
+                "timestamp": now,
+                "payload": {"event_type": "kanban.card.created", "card": card},
+            }
+            _apply_event_widget_triggers(state_reader, [trigger])
+            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
+
+        for card_id in known_ids - current_ids:
+            previous = _last_known_kanban_cards.get(card_id)
+            _remember_kanban_card_state(card_id, None)
+            if previous is None:
+                continue
+            trigger = {
+                "event_type": "kanban.card.deleted",
+                "timestamp": now,
+                "payload": {"event_type": "kanban.card.deleted", "card": previous},
+            }
+            _apply_event_widget_triggers(state_reader, [trigger])
+            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
+
+        for card_id in current_ids & known_ids:
+            previous = _last_known_kanban_cards.get(card_id)
+            refreshed = current_by_id[card_id]
+            if previous is None or previous == refreshed:
+                continue
+            _remember_kanban_card_state(card_id, refreshed)
+            await _apply_kanban_card_diff_effects(
+                state_reader, previous_card=previous, refreshed_card=refreshed, now=now
+            )
+
+
 def _task_content_store_key(card_id: str) -> str:
     """Return the shared-store key for one task body."""
     return f"kanban_task_content:{card_id}"
@@ -3519,6 +3786,8 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
             }
         ]
     )
+    async with _kanban_card_trigger_lock:
+        _remember_kanban_card_state(created["id"], created)
     response = _kanban_card_response(state_reader, created)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
     return response
@@ -3607,145 +3876,14 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     )
     board = _write_kanban_board(state_reader, board)
     refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
-    triggers = []
     if previous_card is not None:
-        content_field_map = {
-            "title": "title",
-            "summary": "summary",
-            "description": "description",
-            "agent_name": "agent_name",
-            "owner": "owner",
-            "labels": "labels",
-            "spec_path": "spec_path",
-            "branch_name": "branch_name",
-            "pr_url": "pr_url",
-            "started_at": "started_at",
-            "completed_at": "completed_at",
-            "last_error": "last_error",
-            "metadata": "metadata",
-        }
-        changed_fields = [
-            response_key
-            for request_key, response_key in content_field_map.items()
-            if getattr(body, request_key) is not None
-            and previous_card.get(response_key) != refreshed.get(response_key)
-        ]
-        if changed_fields:
-            triggers.append(
-                {
-                    "event_type": "kanban.card.updated",
-                    "timestamp": now,
-                    "payload": {
-                        "event_type": "kanban.card.updated",
-                        "card": refreshed,
-                        "previous_card": previous_card,
-                        "changed_fields": changed_fields,
-                    },
-                }
-            )
-        if previous_card.get("column_id") != refreshed.get("column_id") or previous_card.get(
-            "position"
-        ) != refreshed.get("position"):
-            triggers.append(
-                {
-                    "event_type": "kanban.card.moved",
-                    "timestamp": now,
-                    "payload": {
-                        "event_type": "kanban.card.moved",
-                        "card": refreshed,
-                        "previous_card": previous_card,
-                        "from": {
-                            "column_id": previous_card.get("column_id"),
-                            "position": previous_card.get("position"),
-                        },
-                        "to": {
-                            "column_id": refreshed.get("column_id"),
-                            "position": refreshed.get("position"),
-                        },
-                    },
-                }
-            )
-        if previous_card.get("status") != refreshed.get("status"):
-            triggers.append(
-                {
-                    "event_type": "kanban.card.status_changed",
-                    "timestamp": now,
-                    "payload": {
-                        "event_type": "kanban.card.status_changed",
-                        "card": refreshed,
-                        "previous_card": previous_card,
-                        "from_status": previous_card.get("status"),
-                        "to_status": refreshed.get("status"),
-                    },
-                }
-            )
-    _apply_event_widget_triggers(state_reader, triggers)
-    workflow_triggers = []
-    for trigger in triggers:
-        raw_payload = trigger.get("payload")
-        payload = dict(raw_payload) if isinstance(raw_payload, dict) else {}
-        workflow_triggers.append(
-            {
-                **trigger,
-                "payload": {
-                    **payload,
-                    "timestamp": trigger.get("timestamp") or now,
-                    "source": "kanban",
-                },
-            }
+        await _apply_kanban_card_diff_effects(
+            state_reader, previous_card=previous_card, refreshed_card=refreshed, now=now
         )
-    await _dispatch_workflow_triggers(workflow_triggers)
-    if previous_card is not None:
-        if previous_card.get("status") != refreshed.get("status"):
-            _append_task_activity_entry(
-                state_reader,
-                card_id=card_id,
-                kind="status",
-                actor="system",
-                message=(
-                    f"Status changed from {previous_card.get('status') or 'unknown'} "
-                    f"to {refreshed.get('status') or 'unknown'}."
-                ),
-                metadata={
-                    "from_status": previous_card.get("status"),
-                    "to_status": refreshed.get("status"),
-                },
-                created_at=now,
-            )
-        if previous_card.get("column_id") != refreshed.get("column_id"):
-            _append_task_activity_entry(
-                state_reader,
-                card_id=card_id,
-                kind="move",
-                actor="system",
-                message=(
-                    f"Moved from {previous_card.get('column_id') or 'unknown'} "
-                    f"to {refreshed.get('column_id') or 'unknown'}."
-                ),
-                metadata={
-                    "from_column_id": previous_card.get("column_id"),
-                    "to_column_id": refreshed.get("column_id"),
-                },
-                created_at=now,
-            )
-        if previous_card.get("title") != refreshed.get("title"):
-            _append_task_activity_entry(
-                state_reader,
-                card_id=card_id,
-                kind="update",
-                actor="system",
-                message=f"Renamed task to {refreshed.get('title') or 'Untitled task'}.",
-                metadata={"field": "title"},
-                created_at=now,
-            )
+    async with _kanban_card_trigger_lock:
+        _remember_kanban_card_state(card_id, refreshed)
     response = _kanban_card_response(state_reader, refreshed)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
-    if previous_card is not None and (
-        previous_card.get("status") != refreshed.get("status")
-        or previous_card.get("column_id") != refreshed.get("column_id")
-        or previous_card.get("title") != refreshed.get("title")
-    ):
-        broadcast_task_activity(card_id)
     return response
 
 
@@ -3790,6 +3928,8 @@ async def delete_kanban_card(card_id: str):
                 }
             ]
         )
+        async with _kanban_card_trigger_lock:
+            _remember_kanban_card_state(card_id, None)
     broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
     return None
 
@@ -4854,21 +4994,46 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     _state_watch_push_task = asyncio.create_task(_broadcast_latest_status())
 
 
+_kanban_trigger_watch_callback = None
+_active_kanban_reconcile_tasks: set[asyncio.Task] = set()
+
+
+def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = None) -> None:
+    """Always-on watcher that reconciles kanban.card.* workflow triggers for
+    changes made outside the REST kanban routes -- chiefly the runtime agent
+    writing /state/tasks/<id>.md directly.
+
+    Registered separately from _queue_state_watch_status, which returns
+    immediately when no UI client is connected (fine for UI-push
+    optimization, wrong here: workflows must keep firing whether or not
+    anyone has the frontend open).
+    """
+    task = asyncio.create_task(_reconcile_kanban_card_triggers(changed_key))
+    _active_kanban_reconcile_tasks.add(task)
+    task.add_done_callback(_active_kanban_reconcile_tasks.discard)
+
+
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
-    global _state_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
         state_reader.add_watcher(_state_watch_callback)
+    if _kanban_trigger_watch_callback is None:
+        _kanban_trigger_watch_callback = _queue_kanban_trigger_reconciliation
+        state_reader.add_watcher(_kanban_trigger_watch_callback)
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
-    global _state_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
         _state_watch_callback = None
+    if _kanban_trigger_watch_callback is not None:
+        state_reader.remove_watcher(_kanban_trigger_watch_callback)
+        _kanban_trigger_watch_callback = None
     await state_reader.stop_watching()
 
 
