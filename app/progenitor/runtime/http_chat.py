@@ -43,6 +43,7 @@ class RuntimeChatService:
         self.loop_runner = loop_runner
         self._bridge_factory = bridge_factory or DeepAgentIPCStream
         self._request_lock = asyncio.Lock()
+        self._chat_waiters = 0
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
@@ -95,18 +96,22 @@ class RuntimeChatService:
         )
         await response.prepare(request)
 
-        if self._request_lock.locked():
-            await self._write_frame(
-                response, "queued", {"request_id": request_id, "streaming": True}
-            )
-            await self._notify_queued_request(request_id, streaming=True)
-
-        cancel_event = self._cancel_events.setdefault(request_id, asyncio.Event())
+        self._chat_waiters += 1
         try:
-            async with self._request_lock:
-                await self._stream_chat(response, message, request_id, metadata, cancel_event)
+            if self._chat_waiters > 1:
+                await self._write_frame(
+                    response, "queued", {"request_id": request_id, "streaming": True}
+                )
+                await self._notify_queued_request(request_id, streaming=True)
+
+            cancel_event = self._cancel_events.setdefault(request_id, asyncio.Event())
+            try:
+                async with self._request_lock:
+                    await self._stream_chat(response, message, request_id, metadata, cancel_event)
+            finally:
+                self._cancel_events.pop(request_id, None)
         finally:
-            self._cancel_events.pop(request_id, None)
+            self._chat_waiters -= 1
         return response
 
     async def _stream_chat(
@@ -276,11 +281,14 @@ class RuntimeChatService:
             state=getattr(self.loop_runner, "state", {}),
         )
 
-    def _direct_graph_lock(self) -> Any:
+    @contextlib.asynccontextmanager
+    async def _direct_graph_lock(self) -> Any:
         lock = getattr(self.loop_runner, "graph_lock", None)
         if lock is None:
-            return contextlib.nullcontext()
-        return lock
+            yield
+        else:
+            async with lock:
+                yield
 
     async def _complete_direct_graph_cycle(self, bridge: DeepAgentIPCStream) -> None:
         state = getattr(self.loop_runner, "state", {})

@@ -698,7 +698,7 @@ async def lifespan(app: FastAPI):
 
     # Create a combined event callback that handles both SSE and Telegram
     def combined_event_callback(event_type: str, data: dict) -> None:
-        """Route IPC events to SSE and/or Telegram.
+        """Route runtime events to SSE and/or Telegram.
 
         - Always broadcasts to SSE for any connected web clients
         - If no web clients connected, also sends to Telegram
@@ -763,7 +763,7 @@ async def lifespan(app: FastAPI):
         sse_event_forwarding_task = asyncio.create_task(start_sse_client_with_retry(client))
 
         async def stop_sse_event_forwarding_task() -> None:
-            """Stop the background IPC event-forwarding connector."""
+            """Stop the background HTTP+SSE event-forwarding connector."""
             nonlocal sse_event_forwarding_task
             if sse_event_forwarding_task and not sse_event_forwarding_task.done():
                 sse_event_forwarding_task.cancel()
