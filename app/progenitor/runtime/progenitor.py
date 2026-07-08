@@ -167,6 +167,11 @@ class Progenitor:
             state_manager=self.state_manager,
             project_root=str(PROJECT_ROOT),
             log_sink=self.log_store,
+            # The loop is created below, after the graph; resolve it lazily so
+            # tools always see the live conversation state once it's running.
+            live_state_provider=lambda: (
+                self.loop_runner.state if self.loop_runner is not None else None
+            ),
         )
 
         self.loop_runner = ProgenitorLoop(

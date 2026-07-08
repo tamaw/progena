@@ -743,6 +743,9 @@ class StateManager:
             a2a_tasks_path=self._core_file_path("a2a_tasks"),
         )
 
+    async def get_active_a2a_tasks(self) -> list[A2ATaskRecord]:
+        return await a2a_store.get_active_a2a_tasks(get_a2a_tasks_fn=self.get_a2a_tasks)
+
     async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
         return await a2a_store.get_a2a_task(task_id=task_id, get_a2a_tasks_fn=self.get_a2a_tasks)
 
