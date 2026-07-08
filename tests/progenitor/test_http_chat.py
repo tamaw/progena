@@ -331,6 +331,29 @@ async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> N
     assert loop_runner.queues.cycle_complete_event.is_set()
 
 
+async def test_chat_checkpoint_failure_emits_error_not_done() -> None:
+    """A checkpoint failure must not be masked by an already-sent 'completed' frame."""
+    loop_runner = FakeLoopRunner()
+
+    async def failing_save_current_state(checkpoint: dict[str, Any]) -> None:
+        raise RuntimeError("disk full")
+
+    loop_runner.state_manager.save_current_state = failing_save_current_state  # type: ignore[method-assign]
+
+    script = [{"type": "stream_chunk", "content": "ok", "is_final": True}]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+    try:
+        async with _client() as client:
+            frames = await _post_chat(client, server.base_url, "hi", "req-checkpoint-fail")
+    finally:
+        await _stop_chat_server(server)
+
+    assert frames[-1][0] == "error"
+    assert frames[-1][1]["code"] == "CHECKPOINT_ERROR"
+    assert "disk full" in frames[-1][1]["error"]
+    assert not any(name == "done" for name, _ in frames)
+
+
 async def test_chat_bridge_error_emits_error_frame_and_releases_lock() -> None:
     loop_runner = FakeLoopRunner()
     script = {
