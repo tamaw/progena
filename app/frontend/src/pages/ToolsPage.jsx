@@ -322,7 +322,7 @@ export default function ToolsPage() {
           filters={SERVER_FILTERS}
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
-          actionLabel="+ Add"
+          actionLabel="+ New"
           onAction={addServer}
         />
         <PaneListToolbar>
@@ -333,7 +333,7 @@ export default function ToolsPage() {
         <PaneListScroll>
           {servers.length === 0 ? (
             <div className="tools-empty-state">
-              No MCP servers configured. Use “+ Add” to ask Progenitor to connect one.
+              No MCP servers configured. Use “+ New” to ask Progenitor to connect one.
             </div>
           ) : visibleServers.length === 0 ? (
             <div className="tools-empty-state">No MCP servers match this view.</div>
@@ -376,7 +376,7 @@ export default function ToolsPage() {
         {!selectedServer ? (
           <div className="detail-pane__body">
             <div className="tools-empty-state">
-              Select a server, or use “+ Add server” to ask Progenitor to connect one.
+              Select a server, or use “+ New” to ask Progenitor to connect one.
             </div>
           </div>
         ) : (

@@ -204,6 +204,62 @@ than checking once immediately after the triggering call returns.
    something unrelated — worth watching for recurrence now that the 400 is
    fixed.
 
+## Bugs found and fixed (2026-07-08, second pass)
+
+Reproduced by asking the agent to create a workflow via `managing-workflows`
+(`POST /api/ui/actions/run`, same pattern as above) repeatedly right after a
+fresh runtime restart. Two independent, unrelated bugs both live in
+`app/progenitor/llm/client.py`'s `structured_output`/`chat_structured_json`
+path — the *only* LLM call path in a turn that doesn't go through the
+separate LangChain `ChatOpenAI` client used for the main conversation loop
+(`app/progenitor/agent/adapters.py::create_langchain_model`), so it's the one
+place these show up:
+
+1. **First `structured_output` call after any idle gap intermittently
+   failed with `httpx.ConnectError: [Errno -3] Temporary failure in name
+   resolution`.** The custom `LLMClient.client` (raw `httpx.AsyncClient`) is
+   idle for most of a turn — only `structured_output`/`call_agent`
+   auto-routing use it, unlike the main model loop's separate LangChain
+   client which is warm throughout. httpx's default `keepalive_expiry` is
+   5s, so the next request after any gap opens a fresh connection, and in
+   this dev environment that fresh DNS+connect intermittently fails once
+   then succeeds on immediate retry. Previously unhandled: the agent
+   happened to retry the tool call itself after seeing the error, papering
+   over it non-deterministically — a script or a less persistent agent would
+   see "workflow creation failed."
+
+   **Fix**: construct both `LLMClient.client` instances (progenitor and
+   `app/agents/builder_agent/llm/client.py`, the duplicated implementation)
+   with `transport=httpx.AsyncHTTPTransport(retries=2)`, which transparently
+   retries connection-establishment failures (DNS/TCP/TLS, never a
+   partially-sent request) before surfacing an error.
+
+2. **`structured_output` 400'd with `"schema must be a JSON Schema of
+   'type: \"object\"', got 'type: \"None\"'"` on some calls.** Two
+   compounding bugs in the schema-closing helpers:
+   - `_close_object_schemas` unconditionally overwrote `additionalProperties`
+     with `False` whenever a node's `"type" == "object"` — including when
+     `additionalProperties` was itself a *schema* (the value shape for an
+     arbitrary-key map, e.g. `graph.nodes` in
+     `definition.workflow.schema.v1.json`, keyed by generated node ids). That
+     produced a self-contradictory closed schema (`minProperties: 1` but no
+     properties allowed at all) that Azure's strict-mode preprocessor
+     rejects.
+   - `_build_json_schema_format_from_dict` never enforced a top-level
+     `"type"` key. Plain JSON Schema treats a root schema with only
+     `properties`/`required` as implicitly object-shaped, but the provider
+     requires it explicit — an ad hoc inline schema (the `structured_output`
+     tool's `json_schema` argument, as opposed to `schema_file`) missing it
+     hits exactly this 400.
+
+   **Fix**: `_close_object_schemas` now only clobbers `additionalProperties`
+   when it isn't already a dict (and recurses into it when it is, so the
+   nested node-kind schemas still get properly closed);
+   `_build_json_schema_format_from_dict` now does
+   `schema.setdefault("type", "object")` before the strict-mode pass, for
+   both strict and non-strict callers. Covered by three new tests in
+   `tests/progenitor/test_llm_client_extraction.py`.
+
 ## Cleanup after a test run
 
 Test cards and workflow edits land in the user's real board/workflow list —
