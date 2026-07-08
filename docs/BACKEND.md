@@ -6,7 +6,7 @@ The backend is the FastAPI app in `app/backend/main.py`.
 
 Current behavior:
 - API-only service: it does **not** serve frontend assets.
-- Uses the HTTP client in `app/backend/ipc_client.py` (`IPCProgenitorClient`; name kept for import stability) to talk to a separately running Progenitor runtime over HTTP + SSE.
+- Uses the HTTP client in `app/backend/sse_client.py` (`SSEProgenitorClient`) to talk to a separately running Progenitor runtime over HTTP + SSE.
 - Mounts UI-specific routes from `app/backend/ui_routes.py` under `/api/ui`.
 - Initializes session management, SSE status watching, and optional Telegram integration during lifespan startup.
 

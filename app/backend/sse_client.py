@@ -2,10 +2,7 @@
 HTTP-based Progenitor Client for Backend.
 
 Talks to the Progenitor runtime's persistent HTTP + SSE endpoints
-(``POST /v1/chat``, ``POST /v1/chat/{request_id}/cancel``, ``GET /v1/events``)
-rather than the old TCP socket IPC protocol. The class name and public API are
-unchanged so callers (``main.py``, ``ui_routes.py``) and tests didn't need to
-change when the transport moved.
+(``POST /v1/chat``, ``POST /v1/chat/{request_id}/cancel``, ``GET /v1/events``).
 
 Features:
 - HTTP/SSE communication (no custom framing)
@@ -58,12 +55,11 @@ async def _iter_sse_frames(response: httpx.Response) -> AsyncIterator[tuple[str,
             event_name = None
 
 
-class IPCProgenitorClient:
-    """Client that communicates with Progenitor via HTTP + SSE.
+class SSEProgenitorClient:
+    """Client that communicates with the Progenitor runtime via HTTP + SSE.
 
-    This is the recommended client for production use, talking to the
-    runtime's persistent HTTP server for chat requests, cancellation, and
-    background event forwarding to the frontend via SSE.
+    Talks to the runtime's persistent HTTP server for chat requests,
+    cancellation, and background event forwarding to the frontend via SSE.
     """
 
     def __init__(self, config: ChatServerConfig, event_callback: EventCallback | None = None):
@@ -357,9 +353,9 @@ def _decode_error_body(body: bytes) -> str:
     return body.decode("utf-8", "replace")
 
 
-def get_ipc_client(
+def get_sse_client(
     config: ChatServerConfig, event_callback: EventCallback | None = None
-) -> IPCProgenitorClient:
+) -> SSEProgenitorClient:
     """Create an HTTP-based Progenitor client.
 
     Args:
@@ -367,13 +363,13 @@ def get_ipc_client(
         event_callback: Optional callback for forwarding events to SSE.
 
     Returns:
-        An IPCProgenitorClient instance.
+        An SSEProgenitorClient instance.
     """
-    return IPCProgenitorClient(config, event_callback=event_callback)
+    return SSEProgenitorClient(config, event_callback=event_callback)
 
 
-async def start_ipc_client_with_retry(
-    client: IPCProgenitorClient,
+async def start_sse_client_with_retry(
+    client: SSEProgenitorClient,
     *,
     retry_delay: float = 5.0,
 ) -> None:

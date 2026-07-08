@@ -79,7 +79,7 @@ def backend_client(monkeypatch):
         reasoning=None,
         reasoning_tokens=None,
     )
-    monkeypatch.setattr("app.backend.main.get_ipc_client", lambda *_a, **_k: mock_client)
+    monkeypatch.setattr("app.backend.main.get_sse_client", lambda *_a, **_k: mock_client)
     backend_main.client = mock_client
     yield mock_client
 

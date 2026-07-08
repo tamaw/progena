@@ -102,7 +102,7 @@ State persists via native LangGraph Postgres checkpoint/store tables. The LangGr
 
 FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 
-- `ipc_client.py` — talks to the runtime over HTTP + SSE (`IPCProgenitorClient`; name kept for import stability)
+- `sse_client.py` — talks to the runtime over HTTP + SSE (`SSEProgenitorClient`)
 - `ui_routes.py` — `/api/ui/*` routes for frontend status, state views, SSE streams
 - `chat_routes.py` / `chat_sessions.py` — chat session management
 - `document_store.py` — Postgres-backed document store
