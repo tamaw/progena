@@ -56,7 +56,7 @@ def run_pytest() -> int:
     logger.info("Running integration tests...")
 
     result = subprocess.run(
-        ["pytest", "tests/integration/test_live_ipc.py", "-v", "-m", "integration"],
+        ["pytest", "tests/integration/test_live_http.py", "-v", "-m", "integration"],
         cwd=PROJECT_ROOT,
     )
 

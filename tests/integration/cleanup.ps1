@@ -4,7 +4,7 @@
     Cleanup script for integration tests - stops Progenitor and related services
 
 .DESCRIPTION
-    This script stops all Python processes using the test ports (9500, 8000)
+    This script stops all Python processes using the test ports (9501, 8000)
     and cleans up any orphaned test processes.
 
 .EXAMPLE
@@ -18,14 +18,14 @@ Write-Host "================================================================`n" 
 # Find processes on test ports
 Write-Host "Checking for processes on test ports..." -ForegroundColor Yellow
 
-$port9500 = Get-NetTCPConnection -State Listen -LocalPort 9500 -ErrorAction SilentlyContinue
+$port9501 = Get-NetTCPConnection -State Listen -LocalPort 9501 -ErrorAction SilentlyContinue
 $port8000 = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
 
 $processesToStop = @()
 
-if ($port9500) {
-    Write-Host "  Found process on port 9500 (Progenitor IPC)" -ForegroundColor White
-    $processesToStop += $port9500.OwningProcess
+if ($port9501) {
+    Write-Host "  Found process on port 9501 (Progenitor HTTP)" -ForegroundColor White
+    $processesToStop += $port9501.OwningProcess
 }
 
 if ($port8000) {
@@ -58,15 +58,15 @@ foreach ($procId in $processesToStop) {
 Start-Sleep -Seconds 2
 
 Write-Host "`nVerifying cleanup..." -ForegroundColor Cyan
-$port9500After = Get-NetTCPConnection -State Listen -LocalPort 9500 -ErrorAction SilentlyContinue
+$port9501After = Get-NetTCPConnection -State Listen -LocalPort 9501 -ErrorAction SilentlyContinue
 $port8000After = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue
 
-if (-not $port9500After -and -not $port8000After) {
+if (-not $port9501After -and -not $port8000After) {
     Write-Host "✓ All test ports are now free" -ForegroundColor Green
 }
 else {
     Write-Host "⚠️ Some ports are still in use:" -ForegroundColor Yellow
-    if ($port9500After) { Write-Host "  - Port 9500" -ForegroundColor White }
+    if ($port9501After) { Write-Host "  - Port 9501" -ForegroundColor White }
     if ($port8000After) { Write-Host "  - Port 8000" -ForegroundColor White }
 }
 

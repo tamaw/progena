@@ -939,56 +939,6 @@ class TestConnectionPooling:
         assert elapsed < 10
 
 
-class TestIPCMessageHandling:
-    """Tests for IPC message handling (if applicable)."""
-
-    def test_ipc_message_encoding(self):
-        """Test IPC message encoding/decoding."""
-        from app.progenitor.ipc.protocol import (
-            HEADER_SIZE,
-            IPCMessage,
-            MessageType,
-            decode_message,
-            encode_message,
-        )
-
-        original = IPCMessage(
-            type=MessageType.USER_MESSAGE,
-            content="Test message",
-            request_id="req-test-001",
-            metadata={"key": "value"},
-        )
-
-        encoded = encode_message(original)
-        assert len(encoded) > HEADER_SIZE
-
-        # Decode (skip header)
-        decoded = decode_message(encoded[HEADER_SIZE:])
-        assert decoded.type == original.type
-        assert decoded.content == original.content
-        assert decoded.request_id == original.request_id
-
-    def test_ipc_stream_messages(self):
-        """Test IPC stream chunk and stream end messages."""
-        from app.progenitor.ipc.protocol import (
-            MessageType,
-            stream_chunk,
-            stream_end,
-        )
-
-        # Test stream chunk
-        chunk = stream_chunk("token data", request_id="req-123")
-        assert chunk.type == MessageType.STREAM_CHUNK
-        assert chunk.content == "token data"
-        assert chunk.request_id == "req-123"
-
-        # Test stream end
-        end = stream_end(request_id="req-123")
-        assert end.type == MessageType.STREAM_END
-        assert end.request_id == "req-123"
-        assert end.is_final is True
-
-
 class TestAsyncCleanup:
     """Tests for async resource cleanup."""
 
