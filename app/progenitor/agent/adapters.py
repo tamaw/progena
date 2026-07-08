@@ -235,8 +235,8 @@ async def _resolve_state(
     if callable(get_state) and inspect.iscoroutinefunction(get_state):
         try:
             return await get_state()
-        except Exception as exc:
-            logger.warning("Failed to load current state for tool context: %s", exc)
+        except Exception:
+            logger.warning("Failed to load current state for tool context", exc_info=True)
     return None
 
 
