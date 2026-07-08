@@ -251,8 +251,8 @@ async def _maybe_reload(tool_registry: Any) -> None:
         maybe = load()
         if inspect.isawaitable(maybe):
             await cast(Any, maybe)
-    except Exception as exc:
-        logger.warning("Failed to reload tool registry before tool execution: %s", exc)
+    except Exception:
+        logger.warning("Failed to reload tool registry before tool execution", exc_info=True)
 
 
 def create_deepagent_tools(
