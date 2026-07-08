@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import json
 import os
 import socket
-import struct
 import subprocess
 import sys
 import time
@@ -15,14 +16,12 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib import error, request
 
-DEFAULT_HTTP_BASE = "http://127.0.0.1:9501"
-DEFAULT_IPC_HOST = "127.0.0.1"
-DEFAULT_IPC_PORT = 9500
+import httpx
+from _live_eval_http import DEFAULT_BASE_URL, EventCollector, http_assistant_response
+
 DEFAULT_STATE_DIR = Path("data/state")
 DEFAULT_CONFIG_DIR = Path("data/config")
-HEADER_SIZE = 4
 ENCODING = "utf-8"
 
 
@@ -67,76 +66,6 @@ def _write_json(path: Path, payload: Any) -> None:
     tmp_path.replace(path)
 
 
-def _write_ipc(sock: socket.socket, payload: dict[str, Any]) -> None:
-    data = json.dumps(payload).encode(ENCODING)
-    sock.sendall(struct.pack(">I", len(data)) + data)
-
-
-def _read_ipc(sock: socket.socket) -> dict[str, Any] | None:
-    header = _recv_exact(sock, HEADER_SIZE)
-    if not header:
-        return None
-    (length,) = struct.unpack(">I", header)
-    payload = _recv_exact(sock, length)
-    if not payload:
-        return None
-    return json.loads(payload.decode(ENCODING))
-
-
-def _recv_exact(sock: socket.socket, size: int) -> bytes | None:
-    chunks: list[bytes] = []
-    remaining = size
-    while remaining:
-        chunk = sock.recv(remaining)
-        if not chunk:
-            return None
-        chunks.append(chunk)
-        remaining -= len(chunk)
-    return b"".join(chunks)
-
-
-def _open_ipc(host: str, port: int, timeout: float) -> socket.socket:
-    sock = socket.create_connection((host, port), timeout=timeout)
-    sock.settimeout(timeout)
-    ready = _read_ipc(sock)
-    if not ready or ready.get("type") != "ready":
-        sock.close()
-        raise RuntimeError(f"IPC server did not send ready message: {ready!r}")
-    return sock
-
-
-def _ipc_assistant_response(
-    host: str,
-    port: int,
-    timeout: float,
-    prompt: str,
-    *,
-    metadata: dict[str, Any] | None = None,
-) -> str:
-    with _open_ipc(host, port, timeout) as sock:
-        _write_ipc(
-            sock,
-            {
-                "type": "user_message",
-                "content": prompt,
-                "request_id": f"heartbeat-live-eval-{uuid.uuid4().hex[:8]}",
-                "metadata": metadata or {"source": "heartbeat_live_evaluation"},
-            },
-        )
-        while True:
-            msg = _read_ipc(sock)
-            if msg is None:
-                raise RuntimeError("connection closed before assistant response")
-            msg_type = msg.get("type")
-            if msg_type == "agent_event":
-                continue
-            if msg_type == "error":
-                raise RuntimeError(str(msg.get("content") or "unknown IPC error"))
-            if msg_type == "assistant_message":
-                return str(msg.get("content") or "")
-            raise RuntimeError(f"unexpected IPC message type: {msg_type}")
-
-
 def _reserve_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
@@ -144,20 +73,21 @@ def _reserve_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def _wait_for_http_ready(url: str, timeout: float) -> bool:
+async def _wait_for_http_ready(url: str, timeout: float) -> bool:
     deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            status, _body = _http_json(url, timeout=5.0)
-            if status == 200:
-                return True
-        except Exception:
-            pass
-        time.sleep(0.5)
+    async with httpx.AsyncClient() as client:
+        while time.time() < deadline:
+            try:
+                response = await client.get(url, timeout=5.0)
+                if response.status_code == 200:
+                    return True
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
     return False
 
 
-def _start_test_a2a_agent(timeout: float) -> tuple[subprocess.Popen[bytes], int]:
+async def _start_test_a2a_agent(timeout: float) -> tuple[subprocess.Popen[bytes], int]:
     port = _reserve_port()
     env = dict(os.environ)
     env["TEST_A2A_AGENT_PORT"] = str(port)
@@ -182,7 +112,7 @@ def _start_test_a2a_agent(timeout: float) -> tuple[subprocess.Popen[bytes], int]
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    if not _wait_for_http_ready(f"http://127.0.0.1:{port}/health", timeout):
+    if not await _wait_for_http_ready(f"http://127.0.0.1:{port}/health", timeout):
         process.terminate()
         raise RuntimeError("test A2A agent did not become ready")
     return process, port
@@ -199,62 +129,7 @@ def _stop_process(process: subprocess.Popen[bytes] | None) -> None:
         process.wait(timeout=5.0)
 
 
-def _http_json(
-    url: str,
-    *,
-    method: str = "GET",
-    payload: dict[str, Any] | None = None,
-    timeout: float = 10.0,
-) -> tuple[int, dict[str, Any]]:
-    body = json.dumps(payload).encode(ENCODING) if payload is not None else None
-    headers = {"Accept": "application/json"}
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-    req = request.Request(url, data=body, method=method, headers=headers)
-    try:
-        with request.urlopen(req, timeout=timeout) as response:
-            raw = response.read().decode(ENCODING)
-            return response.status, json.loads(raw or "{}")
-    except error.HTTPError as exc:
-        raw = exc.read().decode(ENCODING, errors="replace")
-        try:
-            parsed = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            parsed = {"raw": raw}
-        return exc.code, parsed
-
-
-def _wait_for_ipc_events(
-    sock: socket.socket,
-    *,
-    event_types: set[str],
-    token: str,
-    timeout: float,
-) -> list[dict[str, Any]]:
-    deadline = time.time() + timeout
-    observed: list[dict[str, Any]] = []
-    while time.time() < deadline:
-        sock.settimeout(max(0.5, min(5.0, deadline - time.time())))
-        try:
-            message = _read_ipc(sock)
-        except TimeoutError:
-            continue
-        if message is None:
-            continue
-        if message.get("type") != "agent_event":
-            continue
-        event_type = str(message.get("event_type") or "")
-        content = str(message.get("content") or "")
-        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-        serialized = json.dumps(metadata, default=str)
-        if event_type in event_types and (token in content or token in serialized):
-            observed.append(message)
-        if event_types <= {str(event.get("event_type") or "") for event in observed}:
-            break
-    return observed
-
-
-def eval_idle_health_updates(http_base: str, timeout: float) -> EvaluationResult:
+async def eval_idle_health_updates(client: httpx.AsyncClient, timeout: float) -> EvaluationResult:
     name = "heartbeat_idle_health_updates"
     expectation = (
         "With no forced input, the Heartbeat idle path keeps ticking: the runtime's "
@@ -262,25 +137,26 @@ def eval_idle_health_updates(http_base: str, timeout: float) -> EvaluationResult
         "(Health is a Postgres document now, not a file - see nodes/health.py - so "
         "this checks liveness via HTTP rather than reading a file directly.)"
     )
-    status, before = _http_json(f"{http_base}/health")
-    if status != 200 or not isinstance(before, dict):
+    response = await client.get("/health")
+    if response.status_code != 200:
         return _fail(
             name,
             expectation,
-            f"GET {http_base}/health returned status={status}",
+            f"GET /health returned status={response.status_code}",
             root_cause_area="runtime/http.py",
         )
+    before = response.json()
 
     before_timestamp = before.get("timestamp")
     before_cycle = int(before.get("cycle_count") or 0)
     deadline = time.time() + timeout
     after = before
     while time.time() < deadline:
-        time.sleep(2.0)
-        status, candidate = _http_json(f"{http_base}/health")
-        if status != 200 or not isinstance(candidate, dict):
+        await asyncio.sleep(2.0)
+        response = await client.get("/health")
+        if response.status_code != 200:
             continue
-        after = candidate
+        after = response.json()
         after_timestamp = after.get("timestamp")
         after_cycle = int(after.get("cycle_count") or 0)
         if after_timestamp != before_timestamp and after_cycle >= before_cycle:
@@ -303,9 +179,8 @@ def eval_idle_health_updates(http_base: str, timeout: float) -> EvaluationResult
     )
 
 
-def eval_queued_input_heartbeat_flow(
-    host: str,
-    port: int,
+async def eval_queued_input_heartbeat_flow(
+    client: httpx.AsyncClient,
     state_dir: Path,
     timeout: float,
 ) -> EvaluationResult:
@@ -313,8 +188,8 @@ def eval_queued_input_heartbeat_flow(
     token = f"HB_QUEUE_{uuid.uuid4().hex[:8]}"
     expectation = (
         "A real queued runtime input is accepted through the Heartbeat queue, processed by the "
-        "dequeue/setup/cycle path, and surfaced back to connected IPC clients as an agent_message "
-        "callback."
+        "dequeue/setup/cycle path, and surfaced back to connected event subscribers as an "
+        "agent_message callback."
     )
     current_state_path = state_dir / "current_state.json"
     before_state = _read_json(current_state_path, {})
@@ -323,10 +198,9 @@ def eval_queued_input_heartbeat_flow(
     )
 
     try:
-        with _open_ipc(host, port, timeout) as sock:
-            _ipc_assistant_response(
-                host,
-                port,
+        async with EventCollector(client) as collector:
+            await http_assistant_response(
+                client,
                 max(timeout, 120.0),
                 (
                     "Use the enqueue_background_task tool. "
@@ -336,19 +210,17 @@ def eval_queued_input_heartbeat_flow(
                     "isolated_thread should be true."
                 ),
                 metadata={"source": "heartbeat_live_evaluation", "mode": "queued_input_cycle"},
+                request_id_prefix="heartbeat-live-eval",
             )
-            observed = _wait_for_ipc_events(
-                sock,
-                event_types={"agent_message"},
-                token=token,
-                timeout=timeout,
+            observed = await collector.wait_for_types(
+                {"agent_message"}, token, deadline=time.time() + timeout
             )
     except Exception as exc:
         return _fail(
             name,
             expectation,
             f"queued input flow failed: {exc}",
-            root_cause_area="tools/enqueue_background_task.py, nodes/intake.py, nodes/cycle.py, or ipc/server.py",
+            root_cause_area="tools/enqueue_background_task.py, nodes/intake.py, nodes/cycle.py, or runtime/http_chat.py",
         )
 
     after_cycle = before_cycle
@@ -361,13 +233,13 @@ def eval_queued_input_heartbeat_flow(
             after_cycle = int(candidate.get("cycle_count") or 0)
             if after_cycle > before_cycle:
                 break
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
     if observed and after_cycle > before_cycle:
         return _pass(
             name,
             expectation,
-            "queued runtime input was processed by Heartbeat and emitted an IPC agent callback",
+            "queued runtime input was processed by Heartbeat and emitted an event callback",
             token=token,
             before_cycle=before_cycle,
             after_cycle=after_cycle,
@@ -382,8 +254,8 @@ def eval_queued_input_heartbeat_flow(
     return _fail(
         name,
         expectation,
-        "queued runtime input did not complete with the expected IPC callback/cycle advance",
-        root_cause_area="tools/enqueue_background_task.py, nodes/intake.py, nodes/cycle.py, or ipc/server.py",
+        "queued runtime input did not complete with the expected event callback/cycle advance",
+        root_cause_area="tools/enqueue_background_task.py, nodes/intake.py, nodes/cycle.py, or runtime/http_chat.py",
         token=token,
         before_cycle=before_cycle,
         after_cycle=after_cycle,
@@ -394,9 +266,8 @@ def eval_queued_input_heartbeat_flow(
     )
 
 
-def eval_due_schedule_heartbeat_flow(
-    host: str,
-    port: int,
+async def eval_due_schedule_heartbeat_flow(
+    client: httpx.AsyncClient,
     config_dir: Path,
     state_dir: Path,
     timeout: float,
@@ -406,7 +277,7 @@ def eval_due_schedule_heartbeat_flow(
     schedule_id = f"hb_eval_{uuid.uuid4().hex[:12]}"
     expectation = (
         "A due persisted schedule entry is picked up by the Heartbeat idle scheduler, "
-        "enqueued into the input queue, processed, removed, checkpointed, and surfaced via IPC events."
+        "enqueued into the input queue, processed, removed, checkpointed, and surfaced via events."
     )
     schedule_path = config_dir / "schedule.json"
     original_schedule = _read_json(schedule_path, [])
@@ -428,13 +299,12 @@ def eval_due_schedule_heartbeat_flow(
         "created_at": "2000-01-01T00:00:00+00:00",
     }
 
-    with _open_ipc(host, port, timeout) as sock:
+    async with EventCollector(client) as collector:
         _write_json(schedule_path, [*original_schedule, due_entry])
-        observed = _wait_for_ipc_events(
-            sock,
-            event_types={"scheduled_task_triggered", "scheduled_response", "work_completed"},
-            token=token,
-            timeout=timeout,
+        observed = await collector.wait_for_types(
+            {"scheduled_task_triggered", "scheduled_response", "work_completed"},
+            token,
+            deadline=time.time() + timeout,
         )
 
     event_types = {str(event.get("event_type") or "") for event in observed}
@@ -457,7 +327,7 @@ def eval_due_schedule_heartbeat_flow(
             after_cycle = int(after_state.get("cycle_count") or 0)
             if after_checkpoint != before_checkpoint or after_cycle > before_cycle:
                 break
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
     required_events = {"scheduled_task_triggered", "scheduled_response", "work_completed"}
     if (
@@ -491,9 +361,8 @@ def eval_due_schedule_heartbeat_flow(
     )
 
 
-def eval_recurring_schedule_heartbeat_flow(
-    host: str,
-    port: int,
+async def eval_recurring_schedule_heartbeat_flow(
+    client: httpx.AsyncClient,
     config_dir: Path,
     timeout: float,
 ) -> EvaluationResult:
@@ -518,13 +387,12 @@ def eval_recurring_schedule_heartbeat_flow(
         "created_at": "2000-01-01T00:00:00+00:00",
     }
 
-    with _open_ipc(host, port, timeout) as sock:
+    async with EventCollector(client) as collector:
         _write_json(schedule_path, [*original_schedule, due_entry])
-        observed = _wait_for_ipc_events(
-            sock,
-            event_types={"scheduled_task_triggered", "scheduled_response", "work_completed"},
-            token=token,
-            timeout=timeout,
+        observed = await collector.wait_for_types(
+            {"scheduled_task_triggered", "scheduled_response", "work_completed"},
+            token,
+            deadline=time.time() + timeout,
         )
 
     event_types = {str(event.get("event_type") or "") for event in observed}
@@ -543,7 +411,7 @@ def eval_recurring_schedule_heartbeat_flow(
             )
             if isinstance(schedule_entry, dict) and schedule_entry.get("last_run"):
                 break
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
 
     try:
         if (
@@ -580,10 +448,8 @@ def eval_recurring_schedule_heartbeat_flow(
                 _write_json(schedule_path, cleaned)
 
 
-def eval_a2a_callback_heartbeat_flow(
-    host: str,
-    port: int,
-    http_base: str,
+async def eval_a2a_callback_heartbeat_flow(
+    client: httpx.AsyncClient,
     state_dir: Path,
     timeout: float,
 ) -> EvaluationResult:
@@ -592,7 +458,7 @@ def eval_a2a_callback_heartbeat_flow(
     task_id = f"hb-a2a-{uuid.uuid4().hex[:12]}"
     expectation = (
         "A terminal A2A HTTP callback is queued into Heartbeat, applied to conversation state, "
-        "and notified through IPC/event or persisted notification state."
+        "and notified through an event or persisted notification state."
     )
     payload = {
         "kind": "task",
@@ -605,26 +471,24 @@ def eval_a2a_callback_heartbeat_flow(
         "metadata": {"source": "heartbeat_live_evaluation", "token": token},
     }
     try:
-        with _open_ipc(host, port, timeout) as sock:
-            status, body = _http_json(
-                f"{http_base}/a2a/tasks/callback?agent=heartbeat_live_eval",
-                method="POST",
-                payload=payload,
+        async with EventCollector(client) as collector:
+            response = await client.post(
+                "/a2a/tasks/callback",
+                params={"agent": "heartbeat_live_eval"},
+                json=payload,
                 timeout=10.0,
             )
-            if status != 200 or body.get("success") is not True:
+            body = response.json() if response.content else {}
+            if response.status_code != 200 or body.get("success") is not True:
                 return _fail(
                     name,
                     expectation,
-                    f"callback was not accepted: status={status}, body={body}",
+                    f"callback was not accepted: status={response.status_code}, body={body}",
                     root_cause_area="runtime/http.py or a2a/tasks.py",
                     body=body,
                 )
-            observed = _wait_for_ipc_events(
-                sock,
-                event_types={"agent_message"},
-                token=token,
-                timeout=timeout,
+            observed = await collector.wait_for_types(
+                {"agent_message"}, token, deadline=time.time() + timeout
             )
     except Exception as exc:
         return _fail(
@@ -678,10 +542,8 @@ def eval_a2a_callback_heartbeat_flow(
     )
 
 
-def eval_async_a2a_task_heartbeat_flow(
-    host: str,
-    port: int,
-    http_base: str,
+async def eval_async_a2a_task_heartbeat_flow(
+    client: httpx.AsyncClient,
     config_dir: Path,
     state_dir: Path,
     timeout: float,
@@ -702,7 +564,7 @@ def eval_async_a2a_task_heartbeat_flow(
     task_id: str | None = None
     cleanup_needed = False
     try:
-        process, test_port = _start_test_a2a_agent(timeout=20.0)
+        process, test_port = await _start_test_a2a_agent(timeout=20.0)
         base_url = f"http://127.0.0.1:{test_port}"
         updated_registry = dict(original_registry)
         updated_registry[agent_name] = {
@@ -717,17 +579,17 @@ def eval_async_a2a_task_heartbeat_flow(
         }
         _write_json(registry_path, updated_registry)
 
-        with _open_ipc(host, port, timeout) as event_sock:
+        async with EventCollector(client) as collector:
             prompt = (
                 f"Use the call_agent tool with agent '{agent_name}', request 'Complete exactly {token}', "
                 "and blocking false. Reply briefly when the task is submitted."
             )
-            _ipc_assistant_response(
-                host,
-                port,
+            await http_assistant_response(
+                client,
                 max(timeout, 120.0),
                 prompt,
                 metadata={"source": "heartbeat_live_evaluation", "mode": "async_a2a_call"},
+                request_id_prefix="heartbeat-live-eval",
             )
 
             record = None
@@ -749,7 +611,7 @@ def eval_async_a2a_task_heartbeat_flow(
                         task_id = str(record.get("task_id") or "") or None
                         cleanup_needed = task_id is not None
                         break
-                time.sleep(0.5)
+                await asyncio.sleep(0.5)
             if task_id is None:
                 return _fail(
                     name,
@@ -758,11 +620,8 @@ def eval_async_a2a_task_heartbeat_flow(
                     root_cause_area="tools/call_agent.py or a2a/tasks.py",
                 )
 
-            observed = _wait_for_ipc_events(
-                event_sock,
-                event_types={"agent_message"},
-                token=token,
-                timeout=timeout,
+            observed = await collector.wait_for_types(
+                {"agent_message"}, token, deadline=time.time() + timeout
             )
 
         final_record = None
@@ -784,7 +643,7 @@ def eval_async_a2a_task_heartbeat_flow(
                     and final_record.get("notification_sent_at")
                 ):
                     break
-            time.sleep(0.5)
+            await asyncio.sleep(0.5)
 
         current_state = _read_json(state_dir / "current_state.json", {})
         state_text = json.dumps(current_state, default=str)
@@ -818,27 +677,28 @@ def eval_async_a2a_task_heartbeat_flow(
         )
     finally:
         if cleanup_needed and task_id:
-            _http_json(
-                f"{http_base}/a2a/tasks/callback?agent={agent_name}",
-                method="POST",
-                payload={
-                    "kind": "task",
-                    "id": task_id,
-                    "contextId": f"ctx-{task_id}",
-                    "status": {
-                        "state": "completed",
-                        "message": {
-                            "parts": [
-                                {
-                                    "kind": "text",
-                                    "text": f"Cleanup completion for {task_id}",
-                                }
-                            ]
+            with contextlib.suppress(Exception):
+                await client.post(
+                    "/a2a/tasks/callback",
+                    params={"agent": agent_name},
+                    json={
+                        "kind": "task",
+                        "id": task_id,
+                        "contextId": f"ctx-{task_id}",
+                        "status": {
+                            "state": "completed",
+                            "message": {
+                                "parts": [
+                                    {
+                                        "kind": "text",
+                                        "text": f"Cleanup completion for {task_id}",
+                                    }
+                                ]
+                            },
                         },
                     },
-                },
-                timeout=10.0,
-            )
+                    timeout=10.0,
+                )
         if task_id:
             tasks = _read_json(state_dir / "a2a_tasks.json", [])
             if isinstance(tasks, list):
@@ -853,51 +713,29 @@ def eval_async_a2a_task_heartbeat_flow(
         _stop_process(process)
 
 
-def run(args: argparse.Namespace) -> list[EvaluationResult]:
-    return [
-        eval_idle_health_updates(args.http_base, args.idle_timeout),
-        eval_queued_input_heartbeat_flow(
-            args.ipc_host,
-            args.ipc_port,
-            args.state_dir,
-            args.heartbeat_timeout,
-        ),
-        eval_due_schedule_heartbeat_flow(
-            args.ipc_host,
-            args.ipc_port,
-            args.config_dir,
-            args.state_dir,
-            args.heartbeat_timeout,
-        ),
-        eval_recurring_schedule_heartbeat_flow(
-            args.ipc_host,
-            args.ipc_port,
-            args.config_dir,
-            args.heartbeat_timeout,
-        ),
-        eval_a2a_callback_heartbeat_flow(
-            args.ipc_host,
-            args.ipc_port,
-            args.http_base,
-            args.state_dir,
-            args.heartbeat_timeout,
-        ),
-        eval_async_a2a_task_heartbeat_flow(
-            args.ipc_host,
-            args.ipc_port,
-            args.http_base,
-            args.config_dir,
-            args.state_dir,
-            args.heartbeat_timeout,
-        ),
-    ]
+async def run(args: argparse.Namespace) -> list[EvaluationResult]:
+    async with httpx.AsyncClient(
+        base_url=args.base_url, timeout=httpx.Timeout(10.0, read=None)
+    ) as client:
+        return [
+            await eval_idle_health_updates(client, args.idle_timeout),
+            await eval_queued_input_heartbeat_flow(client, args.state_dir, args.heartbeat_timeout),
+            await eval_due_schedule_heartbeat_flow(
+                client, args.config_dir, args.state_dir, args.heartbeat_timeout
+            ),
+            await eval_recurring_schedule_heartbeat_flow(
+                client, args.config_dir, args.heartbeat_timeout
+            ),
+            await eval_a2a_callback_heartbeat_flow(client, args.state_dir, args.heartbeat_timeout),
+            await eval_async_a2a_task_heartbeat_flow(
+                client, args.config_dir, args.state_dir, args.heartbeat_timeout
+            ),
+        ]
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--http-base", default=DEFAULT_HTTP_BASE)
-    parser.add_argument("--ipc-host", default=DEFAULT_IPC_HOST)
-    parser.add_argument("--ipc-port", type=int, default=DEFAULT_IPC_PORT)
+    parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
     parser.add_argument("--state-dir", type=Path, default=DEFAULT_STATE_DIR)
     parser.add_argument("--config-dir", type=Path, default=DEFAULT_CONFIG_DIR)
     parser.add_argument("--idle-timeout", type=float, default=45.0)
@@ -905,11 +743,10 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON results.")
     args = parser.parse_args()
 
-    results = run(args)
+    results = asyncio.run(run(args))
     payload = {
         "target": {
-            "http_base": args.http_base,
-            "ipc": f"{args.ipc_host}:{args.ipc_port}",
+            "base_url": args.base_url,
             "state_dir": str(args.state_dir),
             "config_dir": str(args.config_dir),
         },

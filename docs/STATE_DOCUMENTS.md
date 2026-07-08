@@ -12,7 +12,7 @@ a new document type or "why isn't this abstracted with the others" questions.
 ```
 Postgres store, namespace ("progenitor", "state")
         |
-        +-- app/progenitor (runtime process, :9500)
+        +-- app/progenitor (runtime process, :9501)
         |     StateManager (state/manager.py) <-- LangGraph store
         |     StateDocumentBackend (agent/state_backend.py)
         |       exposes documents as virtual files under /state/*.json

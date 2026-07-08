@@ -1,10 +1,10 @@
 # Progenitor Integration Tests
 
-Live integration tests that interact with the Progenitor agent via IPC.
+Live integration tests that interact with the Progenitor agent via HTTP + SSE.
 
 ## Overview
 
-These tests communicate with a running Progenitor instance through the IPC protocol.
+These tests communicate with a running Progenitor instance through its runtime HTTP server.
 Results are written to files for manual review instead of automated pass/fail assertions.
 
 ## Prerequisites
@@ -26,7 +26,7 @@ docker compose -f docker/docker-compose.progenitor.yml up --build -d
 
 Verify Progenitor is running:
 ```bash
-# Check if IPC port is open
+# Check if the runtime HTTP server (port 9501) is up
 python tests/integration/helpers.py
 ```
 
@@ -51,13 +51,13 @@ source .venv/bin/activate        # Linux/Mac
 pytest tests/integration/ -v -m integration
 
 # Run specific test
-pytest tests/integration/test_live_ipc.py::test_chat_basic -v
+pytest tests/integration/test_live_http.py::test_chat_basic -v
 
 # Run tests and skip if Progenitor not running
 pytest tests/integration/ -v --skip-integration
 
 # Run tests directly (without pytest)
-python tests/integration/test_live_ipc.py
+python tests/integration/test_live_http.py
 ```
 
 ## Output
@@ -100,7 +100,7 @@ After running tests, stop Progenitor to free resources:
 
 ```bash
 # Find and stop Progenitor process
-Get-Process python* | Where-Object { (Get-NetTCPConnection -OwningProcess $_.Id -ErrorAction SilentlyContinue).LocalPort -eq 9500 } | Stop-Process -Force
+Get-Process python* | Where-Object { (Get-NetTCPConnection -OwningProcess $_.Id -ErrorAction SilentlyContinue).LocalPort -eq 9501 } | Stop-Process -Force
 
 # Or stop all test services
 taskkill /F /IM python.exe /FI "WINDOWTITLE eq Progenitor*"
@@ -113,4 +113,3 @@ taskkill /F /IM python.exe /FI "WINDOWTITLE eq Progenitor*"
 - Failed tests include error details in the result file
 - The `results/` directory is gitignored
 - Always stop Progenitor after testing to avoid resource leaks
-

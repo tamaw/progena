@@ -1,6 +1,8 @@
 # Heartbeat live evaluations
 
-This document captures a repeatable live-evaluation model for the Progenitor Heartbeat loop. The scenarios are derived from `tests/progenitor/` and validate the real running loop through IPC events, persisted state/config files, and health/checkpoint artifacts.
+This document captures a repeatable live-evaluation model for the Progenitor Heartbeat loop. The scenarios are derived from `tests/progenitor/` and validate the real running loop through the runtime's `/v1/events` broadcast stream, persisted state/config files, and health/checkpoint artifacts.
+
+Note: earlier evaluation passes (see "Latest live run" below) ran against the old TCP socket IPC transport (`:9500`). Progenitor now serves background events over HTTP + SSE (`GET /v1/events` on `:9501`) from `runtime/http_chat.py`; the "IPC" mentions in the scenario table and historical run below describe those earlier passes faithfully.
 
 ## Runtime model inferred from tests
 
@@ -23,7 +25,7 @@ The repeatable script is `scripts/evaluate_heartbeat_live.py`.
 | Scenario | Live setup/check | Expected outcome | Failure likely area |
 | --- | --- | --- | --- |
 | Idle health updates | Poll the runtime's own HTTP `/health` endpoint while no input is forced (health has no on-disk file anymore) | `timestamp`/`cycle_count` keep advancing, endpoint stays reachable | `nodes/health.py`, `graph/heartbeat_graph.py`, `runtime/heartbeat.py` |
-| Queued input cycle flow | Use the `enqueue_background_task` tool through IPC chat, keep an IPC client connected, and wait for the background callback | Heartbeat drains the persisted background queue, runs a real `dequeue -> setup -> cycle` turn, advances `cycle_count`, and emits an `agent_message` callback with the queued result | `tools/enqueue_background_task.py`, `state/manager.py`, `nodes/intake.py`, `nodes/cycle.py`, `ipc/server.py` |
+| Queued input cycle flow | Use the `enqueue_background_task` tool through IPC chat, keep an IPC client connected, and wait for the background callback | Heartbeat drains the persisted background queue, runs a real `dequeue -> setup -> cycle` turn, advances `cycle_count`, and emits an `agent_message` callback with the queued result | `tools/enqueue_background_task.py`, `state/manager.py`, `nodes/intake.py`, `nodes/cycle.py`, `runtime/http_chat.py` |
 | Due schedule flow | Append a due one-off entry directly to `data/config/schedule.json` while an IPC client listens for events | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the one-off entry is removed; checkpoint/cycle state advances | `nodes/schedule.py`, `schedule/dispatch.py`, `nodes/cycle.py`, `nodes/checkpoint.py` |
 | Recurring schedule flow | Append a due recurring entry directly to `data/config/schedule.json` while an IPC client listens for events | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the recurring entry remains in `schedule.json` and gets `last_run` updated | `nodes/schedule.py`, `schedule/dispatch.py`, `schedule/engine.py` |
 | A2A completion flow | POST a terminal task callback to `/a2a/tasks/callback` while an IPC client listens | Callback is accepted, task record is terminal, and Heartbeat applies/notifies completion via IPC event or persisted notification/message state | `runtime/http.py`, `nodes/a2a.py`, `a2a/tasks.py`, `runtime/queues.py` |
@@ -35,7 +37,6 @@ The evaluator assumes Progenitor is already running.
 
 Default surfaces:
 
-- IPC: `127.0.0.1:9500`
 - HTTP: `http://127.0.0.1:9501`
 - State dir: `data/state`
 - Config dir: `data/config`
@@ -69,9 +70,7 @@ Target a non-default runtime:
 
 ```bash
 PYTHONPATH="$PWD" python scripts/evaluate_heartbeat_live.py \
-  --http-base http://127.0.0.1:9501 \
-  --ipc-host 127.0.0.1 \
-  --ipc-port 9500 \
+  --base-url http://127.0.0.1:9501 \
   --state-dir data/state \
   --config-dir data/config
 ```
@@ -82,7 +81,7 @@ The script exits `0` only if all selected scenarios pass. Each failure includes 
 
 Separate setup failures from Heartbeat failures:
 
-- IPC connection failures usually mean Progenitor is not running or the IPC port differs.
+- Connection failures usually mean Progenitor is not running or its HTTP server is bound to a different port.
 - HTTP callback failures point to runtime HTTP/A2A ingress before Heartbeat has a chance to apply completion.
 - Schedule creation failures should be split into file setup, scheduler pickup, cycle processing, and event delivery.
 - Idle health failures may require checking whether another long-running cycle was active; logs are supporting evidence only.

@@ -6,17 +6,16 @@ The backend is the FastAPI app in `app/backend/main.py`.
 
 Current behavior:
 - API-only service: it does **not** serve frontend assets.
-- Uses the IPC client in `app/backend/ipc_client.py` to talk to a separately running Progenitor runtime.
+- Uses the HTTP client in `app/backend/ipc_client.py` (`IPCProgenitorClient`; name kept for import stability) to talk to a separately running Progenitor runtime over HTTP + SSE.
 - Mounts UI-specific routes from `app/backend/ui_routes.py` under `/api/ui`.
 - Initializes session management, SSE status watching, and optional Telegram integration during lifespan startup.
 
-`app/backend/client.py` still exists, but `app/backend/main.py` currently wires up the IPC client path, not the legacy subprocess client.
+`app/backend/client.py` still exists, but `app/backend/main.py` currently wires up the HTTP client path, not the legacy subprocess client.
 
 ## Runtime dependency
 
-The backend expects Progenitor to be reachable over socket IPC:
-- `CHAT_SERVER_IPC_HOST` (default `127.0.0.1`)
-- `CHAT_SERVER_IPC_PORT` (default `9500`)
+The backend expects Progenitor's runtime HTTP server to be reachable:
+- `PROGENITOR_RUNTIME_URL` (default `http://127.0.0.1:9501`)
 
 The backend does not start Progenitor for you. In local development, start the runtime separately.
 
@@ -29,7 +28,7 @@ The backend does not start Progenitor for you. In local development, start the r
 - `GET /live` - liveness probe
 - `GET /health/features` - feature-manager status (sessions, attachments, conversation, shutdown)
 
-`/ready` is a backend-local check; it does not perform a live IPC handshake to Progenitor.
+`/ready` is a backend-local check; it does not perform a live handshake to Progenitor.
 
 ### Chat API
 - `GET /v1/models` - advertises the configured backend model name
@@ -81,8 +80,7 @@ Backend-specific:
 - `CHAT_SERVER_PORT`
 - `CHAT_SERVER_PROGENITOR_TIMEOUT`
 - `CHAT_SERVER_PROGENITOR_STOP_TIMEOUT`
-- `CHAT_SERVER_IPC_HOST`
-- `CHAT_SERVER_IPC_PORT`
+- `PROGENITOR_RUNTIME_URL`
 - `CHAT_SERVER_MODEL_NAME`
 - `CHAT_SERVER_RATE_LIMIT_ENABLED`
 - `CHAT_SERVER_RATE_LIMIT_PER_MINUTE`

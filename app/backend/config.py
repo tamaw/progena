@@ -35,9 +35,8 @@ class ChatServerConfig:
         default_factory=lambda: sys.executable
     )  # Use same Python as backend
 
-    # Progenitor IPC settings (socket-based communication)
-    progenitor_ipc_host: str = "127.0.0.1"  # IPC server host
-    progenitor_ipc_port: int = 9500  # IPC server port
+    # Progenitor runtime HTTP settings (chat + events over HTTP/SSE)
+    progenitor_runtime_url: str = "http://127.0.0.1:9501"  # Runtime HTTP base URL
     database_url: str = ""  # Postgres URL for the Progenitor runtime database (read)
     # Backend-owned data lives in a separate database on the *same* Postgres
     # server. Only the database name differs from ``database_url``.
@@ -104,9 +103,7 @@ class ChatServerConfig:
             progenitor_timeout=env_int("CHAT_SERVER_PROGENITOR_TIMEOUT", 300),
             progenitor_stop_timeout=env_int("CHAT_SERVER_PROGENITOR_STOP_TIMEOUT", 5),
             progenitor_python=os.getenv("CHAT_SERVER_PYTHON", sys.executable),
-            # IPC settings
-            progenitor_ipc_host=os.getenv("CHAT_SERVER_IPC_HOST", "127.0.0.1"),
-            progenitor_ipc_port=env_int("CHAT_SERVER_IPC_PORT", 9500),
+            progenitor_runtime_url=os.getenv("PROGENITOR_RUNTIME_URL", "http://127.0.0.1:9501"),
             database_url=os.getenv("PROGENITOR_DATABASE_URL", ""),
             backend_database_name=os.getenv("BACKEND_DATABASE_NAME", "backend"),
             # API settings

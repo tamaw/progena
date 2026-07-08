@@ -681,13 +681,9 @@ async def lifespan(app: FastAPI):
             timeout=5.0,
         )
 
-    # Initialize IPC client
-    logger.info(
-        "Using IPC client (host=%s, port=%d)",
-        config.progenitor_ipc_host,
-        config.progenitor_ipc_port,
-    )
-    # Import broadcast helpers for IPC events and alert state.
+    # Initialize the Progenitor runtime HTTP client
+    logger.info("Using Progenitor runtime client (base_url=%s)", config.progenitor_runtime_url)
+    # Import broadcast helpers for runtime events and alert state.
     from .ui_routes import (
         broadcast_alert,
         broadcast_alerts_state,

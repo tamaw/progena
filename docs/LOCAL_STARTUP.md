@@ -3,7 +3,7 @@
 This is the quickest working local setup for running:
 
 - Postgres on `127.0.0.1:15433`
-- Progenitor on `127.0.0.1:9500`
+- Progenitor on `127.0.0.1:9501`
 - Backend on `127.0.0.1:8000`
 - Frontend on `127.0.0.1:5173`
 
@@ -21,9 +21,8 @@ To make local startup more predictable:
    The backend creates this database automatically on startup if it does not already exist.
 2. Quote values with spaces, especially `CHAT_SERVER_API_TITLE`, so `.env` works with both
    `python-dotenv` and `source .env` in a shell.
-3. Keep the IPC settings explicit so the backend always points at the local progenitor process:
-   - `CHAT_SERVER_IPC_HOST=127.0.0.1`
-   - `CHAT_SERVER_IPC_PORT=9500`
+3. Keep the runtime URL explicit so the backend always points at the local progenitor process:
+   - `PROGENITOR_RUNTIME_URL=http://127.0.0.1:9501`
 
 Example additions/adjustments:
 
@@ -87,7 +86,7 @@ export PROGENITOR_DATABASE_URL="postgresql://progenitor:progenitor@127.0.0.1:154
 python -m app.progenitor.main
 ```
 
-The IPC server should listen on `127.0.0.1:9500`.
+The runtime HTTP server should listen on `127.0.0.1:9501` (`curl http://127.0.0.1:9501/health`).
 
 ## Start backend
 
@@ -153,7 +152,7 @@ Expected wiring:
 
 - frontend root is served by Vite on `5173`
 - `/health`, `/api/*`, and `/v1/*` go through the Vite proxy to backend `8000`
-- backend talks to progenitor over IPC on `9500`
+- backend talks to progenitor over HTTP + SSE on `9501`
 
 ## If the frontend looks like a proxy problem
 

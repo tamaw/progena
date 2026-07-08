@@ -13,6 +13,7 @@ from ..a2a import build_task_response, is_task_payload, upsert_tracked_task_from
 from ..async_subagents.hello_world import HelloWorldAsyncAgentProtocol
 from ..state.models import A2ATaskRecord
 from ..utils import utcnow_isoformat
+from .http_chat import RuntimeChatService
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ class ProgenitorHTTPServer:
         self._site: web.TCPSite | None = None
         self._bound_port: int | None = None
         self._hello_world_async_agent = HelloWorldAsyncAgentProtocol()
+        self._chat_service = RuntimeChatService(loop_runner) if loop_runner is not None else None
 
     @property
     def bound_port(self) -> int | None:
@@ -68,6 +70,7 @@ class ProgenitorHTTPServer:
                 web.get("/.well-known/agent-card.json", self._handle_agent_card),
                 web.post("/a2a/tasks/callback", self._handle_a2a_task_callback),
                 *self._hello_world_async_agent.routes(),
+                *(self._chat_service.routes() if self._chat_service is not None else []),
             ]
         )
         self._app = app
@@ -75,6 +78,8 @@ class ProgenitorHTTPServer:
         await self._runner.setup()
         self._site = web.TCPSite(self._runner, self.host, self.port, reuse_address=True)
         await self._site.start()
+        if self._chat_service is not None:
+            await self._chat_service.start()
 
         server = getattr(self._site, "_server", None)
         sockets = getattr(server, "sockets", None)
@@ -89,6 +94,8 @@ class ProgenitorHTTPServer:
         if self._runner is None:
             return
         await self._hello_world_async_agent.stop()
+        if self._chat_service is not None:
+            await self._chat_service.stop()
         await self._runner.cleanup()
         self._site = None
         self._runner = None

@@ -156,13 +156,7 @@ class RuntimeConfig:
     # Health check settings
     health_stale_seconds: int = 120  # Consider unhealthy if not updated in 2 minutes
 
-    # IPC settings (socket-based communication with backend)
-    ipc_enabled: bool = True  # Enable socket IPC (vs stdin/stdout)
-    ipc_host: str = "127.0.0.1"  # IPC server bind host
-    ipc_port: int = 9500  # IPC server bind port
-    ipc_max_clients: int = 10  # Maximum concurrent IPC clients
-
-    # Persistent HTTP service settings (health, agent card, A2A callbacks)
+    # Persistent HTTP service settings (health, agent card, A2A callbacks, chat)
     http_host: str = "127.0.0.1"
     http_port: int = 9501
     http_public_base_url: str | None = None
@@ -188,11 +182,6 @@ class RuntimeConfig:
             max_stream_queue_size=env_int("PROGENITOR_MAX_STREAM_QUEUE_SIZE", 1000),
             # Health check settings
             health_stale_seconds=env_int("PROGENITOR_HEALTH_STALE_SECONDS", 120),
-            # IPC settings
-            ipc_enabled=env_bool("PROGENITOR_IPC_ENABLED", True),
-            ipc_host=os.getenv("PROGENITOR_IPC_HOST", "127.0.0.1"),
-            ipc_port=env_int("PROGENITOR_IPC_PORT", 9500),
-            ipc_max_clients=env_int("PROGENITOR_IPC_MAX_CLIENTS", 10),
             http_host=os.getenv("PROGENITOR_HTTP_HOST", "127.0.0.1"),
             http_port=env_int("PROGENITOR_HTTP_PORT", 9501),
             http_public_base_url=os.getenv("PROGENITOR_HTTP_PUBLIC_BASE_URL") or None,
