@@ -46,7 +46,12 @@ def _close_object_schemas(node: Any) -> None:
             node["$ref"] = ref
             return
         if node.get("type") == "object":
-            node["additionalProperties"] = False
+            # A dict-valued additionalProperties is itself a schema (an
+            # arbitrary-key map's value shape) and must be preserved and
+            # recursed into, not clobbered with False - overwriting it here
+            # would leave the map unable to hold any properties at all.
+            if not isinstance(node.get("additionalProperties"), dict):
+                node["additionalProperties"] = False
             properties = node.get("properties")
             if isinstance(properties, dict):
                 node["required"] = list(properties.keys())
@@ -92,10 +97,27 @@ def _build_json_schema_format_from_dict(
 
     When ``strict`` is True the schema is rewritten into the closed-object form
     the provider's strict mode requires. When False the schema is passed through
-    as-is, which is necessary for schemas that use features strict mode forbids
-    (e.g. arbitrary-key maps via ``additionalProperties``).
+    as-is.
+
+    ``strict=False`` is still required for schemas with arbitrary-key maps
+    (dict-valued ``additionalProperties``): the provider's real strict mode
+    rejects anything but a literal ``additionalProperties: false`` on every
+    object, so such a schema is never strict-mode-compatible regardless of
+    this function. ``_close_object_schemas`` recursing into a dict-valued
+    ``additionalProperties`` instead of clobbering it with ``False`` only
+    keeps the *closed* schema self-consistent (no longer claiming
+    ``minProperties: 1`` while simultaneously forbidding every property) for
+    callers that pass ``strict=True`` anyway; it does not make the provider
+    accept the map.
+
+    The provider requires an explicit top-level ``"type": "object"`` even
+    outside strict mode. Plain JSON Schema treats a root schema with no
+    ``type`` key (just ``properties``/``required``) as implicitly
+    object-shaped, so default it in rather than rejecting otherwise-valid
+    schemas the provider is stricter than the spec about.
     """
     schema = deepcopy(json_schema)
+    schema.setdefault("type", "object")
     if strict:
         _close_object_schemas(schema)
 
@@ -138,6 +160,7 @@ class LLMClient:
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(120.0),
             headers=headers,
+            transport=httpx.AsyncHTTPTransport(retries=2),
         )
 
         # MCP runtime is initialized externally (startup)

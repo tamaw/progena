@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.config import MCPConfig
+from app.progenitor.config import LLMConfig, MCPConfig
 from app.progenitor.llm.client import (
     LLMClient,
     _build_json_schema_format_from_dict,
@@ -43,6 +43,68 @@ def test_build_json_schema_format_from_dict_closes_objects_without_mutation():
     assert inner["schema"]["required"] == ["timezone"]
     # ...and the caller's dict is left untouched.
     assert "additionalProperties" not in source
+
+
+def test_build_json_schema_format_from_dict_preserves_dict_additional_properties():
+    # A map-typed field's "additionalProperties" is itself a value schema
+    # (e.g. dict[str, OneOfNodeShape]), not a boolean - closing must recurse
+    # into it rather than clobbering it with False, which would leave the
+    # map unable to hold any properties at all (self-contradictory schema).
+    source = {
+        "type": "object",
+        "properties": {
+            "nodes": {
+                "type": "object",
+                "minProperties": 1,
+                "additionalProperties": {
+                    "type": "object",
+                    "properties": {"kind": {"type": "string"}},
+                },
+            }
+        },
+    }
+    fmt = _build_json_schema_format_from_dict(source, "graph")
+    nodes_schema = fmt["json_schema"]["schema"]["properties"]["nodes"]
+    node_value_schema = nodes_schema["additionalProperties"]
+
+    assert isinstance(node_value_schema, dict)
+    assert node_value_schema["type"] == "object"
+    # The recursed-into value schema is itself closed.
+    assert node_value_schema["additionalProperties"] is False
+    assert node_value_schema["required"] == ["kind"]
+
+
+def test_build_json_schema_format_from_dict_defaults_missing_root_type():
+    # Plain JSON Schema treats a root schema with only properties/required as
+    # implicitly object-shaped, but the provider requires an explicit
+    # top-level "type": "object" even in non-strict mode.
+    source = {"properties": {"foo": {"type": "string"}}, "required": ["foo"]}
+    fmt = _build_json_schema_format_from_dict(source, "ad_hoc", strict=False)
+    assert fmt["json_schema"]["schema"]["type"] == "object"
+
+
+def test_llm_client_configures_connect_retries():
+    # The custom LLMClient's httpx client is idle for most of a turn (only
+    # used by structured_output/call_agent, unlike the main chat loop which
+    # goes through a separate LangChain client) - past the default 5s
+    # keepalive expiry, its next request opens a fresh connection, which in
+    # this environment intermittently fails DNS resolution once before
+    # succeeding. Without transport-level retries that surfaces as a hard
+    # tool failure instead of being absorbed transparently.
+    #
+    # Assert via the constructor calls rather than the real client's private
+    # httpx internals (`_transport`/`_pool._retries`), which are undocumented
+    # and can shift between httpx versions; this also avoids leaving a real,
+    # unclosed httpx.AsyncClient behind.
+    with (
+        patch("app.progenitor.llm.client.httpx.AsyncHTTPTransport") as mock_transport_cls,
+        patch("app.progenitor.llm.client.httpx.AsyncClient") as mock_client_cls,
+    ):
+        LLMClient(config=LLMConfig(base_url="https://example.test/openai/v1"))
+
+    mock_transport_cls.assert_called_once_with(retries=2)
+    _, kwargs = mock_client_cls.call_args
+    assert kwargs["transport"] is mock_transport_cls.return_value
 
 
 @pytest.mark.asyncio
