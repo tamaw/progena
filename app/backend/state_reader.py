@@ -344,7 +344,10 @@ class ScheduleItem:
         return cls(
             id=data.get("id", ""),
             name=data.get("name") or data.get("message", ""),
-            schedule=data.get("schedule") or data.get("cron_expression", ""),
+            schedule=data.get("schedule")
+            or data.get("cron_expression")
+            or data.get("scheduled_at")
+            or "",
             next_run=data.get("next_run") or data.get("last_run"),
             enabled=data.get("enabled", True),
             raw=data,
