@@ -137,6 +137,349 @@
   position: relative;
 }
 
+.workflows-page {
+  min-height: 0;
+}
+
+.workflows-sidebar {
+  min-width: 0;
+}
+
+.workflows-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.workflow-detail {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.workflow-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  padding: 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.workflow-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.workflow-form label span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.workflow-form input,
+.workflow-form textarea,
+.workflow-form select {
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.workflow-form textarea {
+  min-height: 84px;
+  resize: vertical;
+}
+
+.workflow-form__full {
+  grid-column: 1 / -1;
+}
+
+.workflow-form__toggle {
+  justify-content: flex-end;
+}
+
+.workflow-form__toggle input {
+  width: auto;
+  align-self: flex-start;
+}
+
+.workflow-json-tab__error {
+  margin: 0;
+  color: #f85149;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.workflow-json-tab__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Collapsed right-edge tools dock (Details/JSON/Runs) for the workflow
+   canvas — ported directly from .agents-graph-side on the Agents/Sequences
+   canvas, just under a workflow-specific class name. */
+.workflow-side-dock {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 40px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+.workflow-side-dock__item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 14px 0;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-border);
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.workflow-side-dock__item:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.workflow-side-dock__label {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+
+/* Expanded side panel (Details form / JSON editor / Runs list) — replaces the
+   side dock in place. Ported from .agents-graph-editor on the Agents/
+   Sequences canvas, generalized to hold any of the three panel contents. */
+.workflow-details-panel {
+  position: relative;
+  flex: none;
+  width: min(420px, 42vw);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-left: 1px solid var(--color-border);
+  background: var(--color-bg-secondary);
+}
+
+/* Scrolls independently of the panel itself so the collapse chevron (which
+   pokes out past the panel's own left edge via translateX(-100%)) never gets
+   clipped — overflow-y: auto on the panel would also compute overflow-x to
+   auto per spec, hiding it. */
+.workflow-details-panel__content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+/* Collapse seam on the panel's left edge (chevron points away to collapse) —
+   matches .agents-graph-editor__collapse. */
+.workflow-details-panel__collapse {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translate(-100%, -50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 48px;
+  padding: 0;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-right: 0;
+  border-radius: 7px 0 0 7px;
+  cursor: pointer;
+  transition: color 120ms ease, background 120ms ease;
+}
+
+.workflow-details-panel__collapse:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.workflow-details-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-details-panel__head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.workflow-details-panel .workflow-form {
+  grid-template-columns: 1fr;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.workflow-canvas {
+  min-height: 420px;
+}
+
+.workflow-graph-node {
+  --workflow-node-color: #58a6ff;
+  width: 100%;
+  height: 100%;
+}
+
+.workflow-graph-node--event {
+  --workflow-node-color: #ffa657;
+}
+
+.workflow-graph-node .node-type-icon {
+  color: var(--workflow-node-color);
+  background: color-mix(in oklab, var(--workflow-node-color) 18%, transparent);
+}
+
+.workflow-graph-node .workspace-handle {
+  background: var(--workflow-node-color);
+}
+
+.workflow-graph-node.selected {
+  border-color: var(--workflow-node-color);
+  box-shadow: 0 0 0 1px var(--workflow-node-color), var(--shadow-md);
+}
+
+.workflow-graph-node__body {
+  gap: 10px;
+}
+
+.workflow-graph-node__field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.workflow-graph-node__field span {
+  color: var(--color-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.workflow-graph-node__field input,
+.workflow-graph-node__field select,
+.workflow-graph-node__field textarea {
+  width: 100%;
+  padding: 7px 8px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.workflow-graph-node__field textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.workflow-graph-node__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.workflow-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workflow-run-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+}
+
+.workflow-run-card__head,
+.workflow-run-card__meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workflow-run-card__head strong {
+  text-transform: capitalize;
+}
+
+.workflow-run-card__meta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.workflow-run-card__error {
+  margin: 0;
+  color: #f85149;
+  font-size: 12px;
+}
+
+.workflow-run-card__output {
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-family: var(--font-family-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 1080px) {
+  .workflow-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 780px) {
+  .workflow-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .workspace-canvas .react-flow {
   padding-bottom: 76px;
 }

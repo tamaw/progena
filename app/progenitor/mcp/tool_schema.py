@@ -39,7 +39,16 @@ def get_mcp_tool_parameters(
 
 
 def normalize_mcp_tool_definition(tool: dict[str, Any]) -> dict[str, Any] | None:
-    """Normalize an MCP tool into OpenAI-compatible function-tool format."""
+    """Normalize an MCP tool into the Responses API's flat function-tool format.
+
+    The Responses API wants {"type": "function", "name": ..., "parameters": ...}
+    at the top level, unlike the older Chat Completions API's nested
+    {"type": "function", "function": {"name": ...}}. Both callers of this
+    (app/progenitor/llm/client.py and app/agents/builder_agent/llm/client.py)
+    send the result straight to a /responses endpoint, so the nested shape
+    used to fail upstream with "Missing required parameter: 'tools[0].name'"
+    whenever any MCP tool was registered.
+    """
     name = get_mcp_tool_name(tool)
     if not name:
         return None
@@ -49,9 +58,7 @@ def normalize_mcp_tool_definition(tool: dict[str, Any]) -> dict[str, Any] | None
 
     return {
         "type": "function",
-        "function": {
-            "name": name,
-            "description": get_mcp_tool_description(tool),
-            "parameters": parameters,
-        },
+        "name": name,
+        "description": get_mcp_tool_description(tool),
+        "parameters": parameters,
     }

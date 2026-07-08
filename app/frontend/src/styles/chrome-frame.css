@@ -3586,6 +3586,97 @@ body,
   color: var(--color-error);
 }
 
+/* Generic two-line list card: a leading status dot (empty unless something
+   needs surfacing), a title/last-activity header line, and a single preview
+   line below. Shared by the Workflows list and the Sequences card list so
+   both read the same way as the Chat sidebar's session cards. */
+.pane-card-row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: start;
+  width: 100%;
+  padding: 8px 10px;
+  color: var(--color-text-primary);
+  text-align: left;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.pane-card-row:hover,
+.pane-card-row.active {
+  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  background: color-mix(in oklab, var(--color-accent) 7%, var(--color-bg-secondary));
+}
+
+.pane-card-row__dot {
+  grid-column: 1;
+  grid-row: 1;
+  align-self: center;
+  justify-self: center;
+  width: 7px;
+  height: 7px;
+  margin-top: 2px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.pane-card-row__dot--info {
+  background: #58a6ff;
+}
+
+.pane-card-row__dot--error {
+  background: #f85149;
+}
+
+.pane-card-row__dot--paused {
+  background: var(--color-warning);
+}
+
+.pane-card-row__body {
+  grid-column: 2;
+  min-width: 0;
+}
+
+.pane-card-row__top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pane-card-row__title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  font-family: var(--font-family-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-card-row__age {
+  flex: none;
+  white-space: nowrap;
+  color: var(--color-text-muted);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pane-card-row__preview {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Left-pane list footers (Agents/Tools/Repositories/Knowledge/Schedules/
    Sessions/Workspace) hidden for now. */
 .sess-list__foot {
@@ -5823,7 +5914,7 @@ body,
 
 .agents-agent-row__name {
   font-weight: 700;
-  color: var(--agent-color, var(--color-text-primary));
+  color: var(--color-text-primary);
 }
 
 /* Agent accent dot, driven by the per-agent --agent-color custom property
@@ -6419,6 +6510,39 @@ body,
   background: var(--color-accent-soft);
 }
 
+/* Workflows' floating bar holds only icon actions (DetailHeaderAction), not the
+   plain text buttons above — reset those generic button styles so the icon
+   buttons render as a clean icon row instead of accent-bordered pills. */
+.agents-graph-floating .detail-header-action {
+  min-height: 30px;
+  width: 30px;
+  padding: 0;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+}
+
+.agents-graph-floating .detail-header-action:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+/* The icon glyph is itself a <span> (.detail-header-action__icon), so the
+   generic ".agents-graph-floating span" rule above (min-height/padding) would
+   otherwise squeeze its fixed 19px box down to a sliver. Reset it back to the
+   plain icon sizing from detail-header.css. */
+.agents-graph-floating .detail-header-action__icon {
+  min-height: 0;
+  padding: 0;
+  width: 19px;
+  height: 19px;
+}
+
+.agents-graph-floating .detail-header-action--danger,
+.agents-graph-floating .detail-header-action--danger:hover {
+  color: var(--color-error);
+}
+
 /* ── Subagent workflow canvas ──────────────────────────────────────────────
    The canvas chrome (node card, title bar, body, dock, minimap, controls,
    background) is shared with the Workspace canvas via the .workspace-* and
@@ -6567,6 +6691,15 @@ body,
 .agents-graph-dock .workspace-dock-icon.tool { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
 .agents-graph-dock .workspace-dock-icon.decision { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
 .agents-graph-dock .workspace-dock-icon.end { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
+
+/* Workflows dock items are also <button>s (see comment above) — same native
+   chrome reset so the tinted .workspace-dock-icon colours aren't sitting on
+   top of the browser's opaque default button background. */
+.workflow-canvas .workspace-dock-item {
+  background: transparent;
+  border: none;
+  font: inherit;
+}
 
 /* Per-kind accents for the executable workflow node kinds. Each overrides the
    shared --node-color (defaulted to the agent colour) so steps read at a glance. */

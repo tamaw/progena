@@ -278,7 +278,10 @@ class LLMClient:
 
         mcp_runtime = self._mcp_runtime
         for normalized in mcp_runtime.iter_openai_tools() if mcp_runtime is not None else []:
-            name = normalized.get("function", {}).get("name")
+            # iter_openai_tools() returns the Responses API's flat shape
+            # ({"type": "function", "name": ...}), not the nested
+            # Chat-Completions shape the loop above tolerates.
+            name = normalized.get("name")
             if not name or name in seen_names:
                 continue
             seen_names.add(name)

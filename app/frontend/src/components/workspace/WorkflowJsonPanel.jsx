@@ -24,7 +24,7 @@ function ChevronRightSmall() {
 // layers share identical typography so the caret/text line up; the textarea text
 // is transparent and the highlighted layer shows through. Mirrors the Sequences
 // page editor on the Agents canvas.
-function JsonCodeEditor({ value, onChange }) {
+export function JsonCodeEditor({ value, onChange }) {
   const highlightRef = useRef(null);
   const highlighted = useMemo(() => {
     try {
@@ -80,10 +80,8 @@ export function WorkflowJsonDock({ onOpen }) {
   );
 }
 
-// Edit the workflow graph as JSON ({ nodes, edges }). Apply parses, validates the
-// arrays, and hands the parsed graph to `onApply` (WorkspaceContext.replaceGraph),
-// which sanitizes and persists it. Keyed by `value` at mount so opening starts
-// from the current canvas state.
+// Edit the workflow document as JSON and hand the parsed object back to the
+// caller. Keyed by `value` at mount so opening starts from the current state.
 export function WorkflowJsonEditor({ value, onApply, onClose }) {
   const [draft, setDraft] = useState(value);
   const [error, setError] = useState(null);
@@ -95,10 +93,6 @@ export function WorkflowJsonEditor({ value, onApply, onClose }) {
       parsed = JSON.parse(draft);
     } catch (parseError) {
       setError(`Invalid JSON: ${parseError.message}`);
-      return;
-    }
-    if (!Array.isArray(parsed.nodes) || !Array.isArray(parsed.edges)) {
-      setError('Workflow must include "nodes" and "edges" arrays.');
       return;
     }
     try {

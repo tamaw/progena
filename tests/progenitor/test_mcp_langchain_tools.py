@@ -95,7 +95,7 @@ async def test_mcp_runtime_disabled_tools_are_hidden_and_rejected() -> None:
 
     # Disabled tool is hidden from both agent-facing surfaces.
     assert {t.name for t in runtime.get_langchain_tools()} == {"jina_search_web"}
-    assert {d["function"]["name"] for d in runtime.iter_openai_tools()} == {"jina_search_web"}
+    assert {d["name"] for d in runtime.iter_openai_tools()} == {"jina_search_web"}
 
     # And rejected at call time.
     result = await runtime.call_tool({"name": "jina_read_url", "arguments": {}})

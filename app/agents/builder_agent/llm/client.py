@@ -318,7 +318,10 @@ class LLMClient:
             normalized = self._normalize_tool_definition(tool)
             if not normalized:
                 continue
-            name = normalized.get("function", {}).get("name")
+            # normalize_mcp_tool_definition() returns the Responses API's flat
+            # shape ({"type": "function", "name": ...}), not the nested
+            # Chat-Completions shape the loop above tolerates.
+            name = normalized.get("name")
             if not name or name in seen_names:
                 continue
             seen_names.add(name)

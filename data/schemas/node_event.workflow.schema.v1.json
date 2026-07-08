@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow Event Node",
+  "description": "The single event node used as the entrypoint in a v1 workflow graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "title"],
+  "properties": {
+    "kind": {
+      "const": "event"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}
