@@ -64,7 +64,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
-    return formatMessage(content);
+    return sanitizeHtmlFragment(formatMessage(content));
   }, [content]);
 
   const formattedTime = useMemo(() => {
@@ -264,7 +264,7 @@ function StreamEvents({ events }) {
               {description.bodyHtml && (
                 <div
                   className="message-stream-event-body entry__content"
-                  dangerouslySetInnerHTML={{ __html: description.bodyHtml }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
                 />
               )}
               {description.bodyDetail && !tool && !description.bodyHtml && (
@@ -575,6 +575,54 @@ function summarizeNodeKind(nodeName) {
 
 function formatMessage(content) {
   return renderMarkdownToHtml(content);
+}
+
+const ALLOWED_TAGS = new Set([
+  'p', 'br', 'b', 'i', 'em', 'strong', 'code', 'pre', 'blockquote',
+  'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'span', 'div',
+  'del', 'ins', 'sup', 'sub',
+]);
+const ALLOWED_ATTRS = new Set(['href', 'title', 'class', 'id', 'target', 'rel']);
+
+function sanitizeHtmlFragment(html) {
+  if (!html) return '';
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  sanitizeNode(template.content);
+  const div = document.createElement('div');
+  div.appendChild(template.content.cloneNode(true));
+  return div.innerHTML;
+}
+
+function isSafeHref(rawValue) {
+  const colonIdx = rawValue.trim().indexOf(':');
+  if (colonIdx === -1) return true; // relative URL, no scheme
+  // Validate scheme portion strictly — any non-alpha char (including control chars
+  // browsers normalize away) makes this an unrecognised / potentially obfuscated scheme.
+  const schemePart = rawValue.trim().slice(0, colonIdx);
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(schemePart)) return false;
+  const scheme = schemePart.toLowerCase();
+  return scheme === 'http' || scheme === 'https' || scheme === 'mailto';
+}
+
+function sanitizeNode(node) {
+  for (const child of Array.from(node.childNodes)) {
+    if (child.nodeType === Node.ELEMENT_NODE) {
+      const tag = child.tagName.toLowerCase();
+      if (!ALLOWED_TAGS.has(tag)) {
+        child.replaceWith(document.createTextNode(child.textContent || ''));
+        continue;
+      }
+      for (const attr of Array.from(child.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (!ALLOWED_ATTRS.has(name) || (name === 'href' && !isSafeHref(attr.value))) {
+          child.removeAttribute(attr.name);
+        }
+      }
+      sanitizeNode(child);
+    }
+  }
 }
 
 // Memoized so a streamed token only re-renders the streaming message, not the
