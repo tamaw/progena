@@ -300,11 +300,11 @@ def create_deepagent_tools(
                 if callable(update) and inspect.iscoroutinefunction(update):
                     try:
                         await update(result.state_updates)
-                    except Exception as exc:
+                    except Exception:
                         logger.warning(
-                            "Failed to persist state updates from tool %s: %s",
+                            "Failed to persist state updates from tool %s",
                             getattr(system_tool, "name", "system_tool"),
-                            exc,
+                            exc_info=True,
                         )
             return result.data or {}
 
