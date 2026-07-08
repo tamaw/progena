@@ -30,7 +30,7 @@ def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
 async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
     state_manager = MagicMock()
     state_manager.get_schedule = AsyncMock(return_value=[])
-    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
     state_manager.log_conversation = AsyncMock()
     state_manager.save_messages = AsyncMock()
     state_manager.update_a2a_task = AsyncMock()
@@ -60,7 +60,7 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
 async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_path) -> None:
     state_manager = MagicMock()
     state_manager.get_schedule = AsyncMock(return_value=[])
-    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
     state_manager.get_async_subagent_tasks = AsyncMock(
         return_value=[
             AsyncSubagentTaskRecord(

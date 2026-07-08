@@ -27,6 +27,7 @@ It delegates the conversational graph to the agent factory and returns it.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.graph.state import CompiledStateGraph
@@ -46,6 +47,7 @@ def create_conversation_graph(
     state_manager: Any | None = None,
     project_root: str | None = None,
     log_sink: Any | None = None,
+    live_state_provider: Callable[[], Any] | None = None,
 ) -> CompiledStateGraph:
     """Create the primary user-facing graph.
 
@@ -64,6 +66,7 @@ def create_conversation_graph(
         state_manager=state_manager,
         project_root=project_root,
         log_sink=log_sink,
+        live_state_provider=live_state_provider,
     )
     logger.info("Created Progenitor conversation graph")
     return graph

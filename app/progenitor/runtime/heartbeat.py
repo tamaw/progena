@@ -6,7 +6,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from langgraph.runtime import Runtime
 
@@ -47,15 +47,6 @@ _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
     (_REGISTRY_REFRESH, "last_registry_refresh_at", "registry_refresh_seconds"),
     (_IDLE_HEALTH, "last_health_write_at", "heartbeat_health_seconds"),
 )
-
-
-# Module-level reference to the current loop instance for agent tools.
-_current_loop: Optional["ProgenitorLoop"] = None
-
-
-def get_current_loop() -> Optional["ProgenitorLoop"]:
-    """Get the current loop instance for agent tools."""
-    return _current_loop
 
 
 def _parse_iso_datetime(value: Any) -> datetime | None:
@@ -150,8 +141,6 @@ class ProgenitorLoop:
 
     async def run_forever(self) -> None:
         """Run the perpetual graph loop."""
-        global _current_loop
-        _current_loop = self
         self.running = True
 
         boot_thread_id = str(uuid.uuid4())

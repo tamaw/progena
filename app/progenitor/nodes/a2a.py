@@ -138,7 +138,7 @@ def _completed_records(state: ProgenitorState) -> list[Any]:
 
 async def _poll_tracked_tasks(runtime: Runtime[HeartbeatContext]) -> list[Any]:
     completed: list[Any] = []
-    tasks = await runtime.context.state_manager.get_a2a_tasks()
+    tasks = await runtime.context.state_manager.get_active_a2a_tasks()
     for record in tasks:
         current = record
         if not record.is_terminal:

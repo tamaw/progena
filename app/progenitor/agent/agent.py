@@ -10,6 +10,7 @@ skills, memory files, and native DeepAgent subagents.
 """
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -131,6 +132,7 @@ def create_progenitor_agent(
     log_sink: Any | None = None,
     skills_dirs: list[str] | None = None,
     memory_paths: list[str] | None = None,
+    live_state_provider: Callable[[], Any] | None = None,
 ) -> CompiledStateGraph:
     """Create the Progenitor DeepAgent instance.
 
@@ -150,6 +152,9 @@ def create_progenitor_agent(
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
                       via Deep Agents' `memory=` middleware. If None, Progenitor
                       loads runtime memory from `/data/memories/*.md`.
+        live_state_provider: Callable returning the running loop's live state
+                             dict for tool execution; falls back to the
+                             state manager snapshot when None.
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
     """
@@ -202,6 +207,7 @@ def create_progenitor_agent(
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
+        live_state_provider=live_state_provider,
     )
 
     # Custom middleware stack (appended after DeepAgent's built-in middleware)
