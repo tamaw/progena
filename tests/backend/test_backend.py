@@ -12,7 +12,7 @@ import pytest
 from app.backend.alerts import AlertInfo
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
-from app.backend.ipc_client import start_ipc_client_with_retry
+from app.backend.sse_client import start_sse_client_with_retry
 from app.backend.main import _build_alert_summary_prompt, _handle_alert_request
 from app.backend.models import (
     AgentResponse,
@@ -137,14 +137,14 @@ class TestIPCEventForwardingStartup:
     """Tests for background IPC event-forwarding startup."""
 
     @pytest.mark.asyncio
-    async def test_start_ipc_client_with_retry_retries_until_started(self):
+    async def test_start_sse_client_with_retry_retries_until_started(self):
         """Background startup should retry until the IPC client connects."""
         client = AsyncMock()
         client.start = AsyncMock(side_effect=[RuntimeError("offline"), None])
 
         sleep = AsyncMock()
-        with patch("app.backend.ipc_client.asyncio.sleep", sleep):
-            await start_ipc_client_with_retry(client, retry_delay=0.25)
+        with patch("app.backend.sse_client.asyncio.sleep", sleep):
+            await start_sse_client_with_retry(client, retry_delay=0.25)
 
         assert client.start.await_count == 2
         sleep.assert_awaited_once_with(0.25)

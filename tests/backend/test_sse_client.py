@@ -1,4 +1,4 @@
-"""Contract tests for the HTTP-based IPCProgenitorClient (backend <-> runtime).
+"""Contract tests for the HTTP-based SSEProgenitorClient (backend <-> runtime).
 
 Runs a real ``ProgenitorHTTPServer`` (port=0) backed by fakes and exercises the
 backend client against it, mirroring ``tests/progenitor/test_http_chat.py`` on
@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 
 from app.backend.config import ChatServerConfig
-from app.backend.ipc_client import IPCProgenitorClient
+from app.backend.sse_client import SSEProgenitorClient
 from app.progenitor.config import RuntimeConfig
 from app.progenitor.runtime.http import ProgenitorHTTPServer
 from app.progenitor.runtime.queues import RuntimeQueues
@@ -122,7 +122,7 @@ async def test_send_message_folds_reasoning_and_collects_chunks() -> None:
         {"type": "stream_chunk", "content": "", "is_final": True},
     ]
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = IPCProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
     try:
         response = await client.send_message("hi", request_id="req-1")
     finally:
@@ -137,7 +137,7 @@ async def test_send_message_folds_reasoning_and_collects_chunks() -> None:
 async def test_send_message_stream_events_yields_verbatim_and_swallows_queued() -> None:
     script = [{"type": "stream_chunk", "content": "ok", "is_final": True}]
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = IPCProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
     try:
         events = [
             event async for event in client.send_message_stream_events("hi", request_id="req-2")
@@ -161,7 +161,7 @@ async def test_send_message_stream_events_raises_on_error_frame() -> None:
         raise RuntimeError("kaboom")
 
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(raising_script))
-    client = IPCProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
     try:
         with pytest.raises(RuntimeError, match="kaboom"):
             async for _ in client.send_message_stream_events("hi", request_id="req-3"):
@@ -176,7 +176,7 @@ async def test_cancel_request_true_and_false() -> None:
     script = [_Wait(gate), {"type": "stream_chunk", "content": "x", "is_final": True}]
 
     runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
-    client = IPCProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
     task = None
     try:
         assert (await client.cancel_request("unknown-request")) is False
@@ -195,7 +195,7 @@ async def test_cancel_request_true_and_false() -> None:
 
 
 async def test_cancel_request_false_when_unreachable() -> None:
-    client = IPCProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
+    client = SSEProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
     assert (await client.cancel_request("anything")) is False
 
 
@@ -206,7 +206,7 @@ async def test_event_forwarding_from_runtime_broadcast() -> None:
     def callback(event_type: str, data: dict[str, Any]) -> None:
         received.append((event_type, data))
 
-    client = IPCProgenitorClient(_client_config(runtime.base_url), event_callback=callback)
+    client = SSEProgenitorClient(_client_config(runtime.base_url), event_callback=callback)
     try:
         await client.start()
         await asyncio.sleep(0.2)
@@ -229,7 +229,7 @@ async def test_event_forwarding_from_runtime_broadcast() -> None:
 
 async def test_start_liveness_and_status() -> None:
     runtime = await _start_runtime_server()
-    client = IPCProgenitorClient(_client_config(runtime.base_url))
+    client = SSEProgenitorClient(_client_config(runtime.base_url))
     try:
         assert client.is_running is False
         await client.start()
@@ -246,6 +246,6 @@ async def test_start_liveness_and_status() -> None:
 
 
 async def test_start_raises_when_runtime_unreachable() -> None:
-    client = IPCProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
+    client = SSEProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
     with pytest.raises(RuntimeError):
         await asyncio.wait_for(client.start(), timeout=15.0)

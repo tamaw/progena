@@ -457,7 +457,7 @@ class TestBuildStateTracking:
 class TestChatAPIStreaming:
     """Tests for chat API streaming responses."""
 
-    @patch("app.backend.main.get_ipc_client")
+    @patch("app.backend.main.get_sse_client")
     def test_responses_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
@@ -484,7 +484,7 @@ class TestChatAPIStreaming:
         # May return error but endpoint should be reachable
         assert response.status_code in [200, 500, 503, 504]
 
-    @patch("app.backend.main.get_ipc_client")
+    @patch("app.backend.main.get_sse_client")
     def test_responses_api_endpoint_exists(self, mock_get_client):
         """Test responses endpoint accepts requests."""
         from fastapi.testclient import TestClient
