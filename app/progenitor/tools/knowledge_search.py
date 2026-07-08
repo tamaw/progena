@@ -51,18 +51,6 @@ class KnowledgeSearchTool(BaseSystemTool):
         )
 
     @property
-    def keywords(self) -> list[str]:
-        return [
-            "knowledge base",
-            "recall",
-            "look up",
-            "search knowledge",
-            "what do you know about",
-            "remember",
-            "vector search",
-        ]
-
-    @property
     def args_model(self) -> type[BaseModel]:
         return KnowledgeSearchArgs
 

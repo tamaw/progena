@@ -23,24 +23,6 @@ class ListToolsTool(BaseSystemTool):
     def description(self) -> str:
         return "List all available tools and their capabilities"
 
-    @property
-    def keywords(self) -> list[str]:
-        return [
-            "list tools",
-            "show tools",
-            "list your tools",
-            "show your tools",
-            "what tools",
-            "which tools",
-            "available tools",
-            "list all tool",
-            "show all tool",
-            "list capabilit",
-            "show capabilit",
-            "what can you do",
-            "your capabilit",
-        ]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         from .system_registry import get_all_system_tools
 

@@ -127,10 +127,6 @@ class ShellCheckTool(BaseSystemTool):
     def description(self) -> str:
         return "Check whether a POSIX shell is available and whether we're running in Docker"
 
-    @property
-    def keywords(self) -> list[str]:
-        return ["shell_check", "shell check"]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         shell = _resolve_shell()
         return ToolResult.ok(
@@ -152,16 +148,6 @@ class ShellExecTool(BaseSystemTool):
         return (
             "Execute a non-interactive shell command inside the container (uses bash if available)"
         )
-
-    @property
-    def keywords(self) -> list[str]:
-        # Intentionally requires explicit intent to run shell commands.
-        return ["shell_exec", "shell exec"]
-
-    @property
-    def trigger_patterns(self) -> list[str]:
-        # Allow "bash:" / "sh:" / "shell:" only when it looks like an invocation.
-        return [r"^\s*(?:bash|sh|shell)\s*[:>-]\s*\S+"]
 
     @property
     def args_model(self) -> type[BaseModel]:

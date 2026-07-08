@@ -20,10 +20,6 @@ class MCPRefreshTool(BaseSystemTool):
     def description(self) -> str:
         return "Refresh MCP tool discovery from configured external MCP servers"
 
-    @property
-    def keywords(self) -> list[str]:
-        return ["mcp refresh", "refresh mcp", "reload mcp"]
-
     async def execute(self, context: ToolContext) -> ToolResult:
         llm_client = context.llm_client
         if llm_client is None:
