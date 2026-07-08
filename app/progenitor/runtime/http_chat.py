@@ -11,6 +11,7 @@ import contextlib
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from aiohttp import web
@@ -282,7 +283,7 @@ class RuntimeChatService:
         )
 
     @contextlib.asynccontextmanager
-    async def _direct_graph_lock(self) -> Any:
+    async def _direct_graph_lock(self) -> AsyncIterator[None]:
         lock = getattr(self.loop_runner, "graph_lock", None)
         if lock is None:
             yield
