@@ -284,19 +284,16 @@ def build_user_node_instruction(node: WorkflowNodeUser, input_text: str) -> str:
 
     if node.message_type == "notify_user":
         payload = {
-            "request": message,
-            "tool_args": {
-                "title": str(node.notification_title or "").strip(),
-                "body": message,
-                "level": node.level,
-            },
+            "title": str(node.notification_title or "").strip(),
+            "body": message,
+            "level": node.level,
         }
         tool = "notify_user"
     elif node.message_type == "ask_user":
-        payload = {"request": message}
+        payload = {"question": message}
         tool = "ask_user"
     else:
-        payload = {"request": message}
+        payload = {"message": message}
         tool = "say_to_user"
 
     return "\n".join(

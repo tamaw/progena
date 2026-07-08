@@ -335,6 +335,12 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         raise ValueError(
             f"unsupported workflow trigger event type: {definition.trigger.event_type}"
         )
+    if (
+        definition.trigger.from_column is not None or definition.trigger.to_column is not None
+    ) and definition.trigger.event_type != "kanban.card.moved":
+        raise ValueError(
+            "from_column and to_column filters are only valid for kanban.card.moved triggers"
+        )
 
     _validate_workflow_graph(definition)
     return definition.model_dump(mode="json", by_alias=True)
