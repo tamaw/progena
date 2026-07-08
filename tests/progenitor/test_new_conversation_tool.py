@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -12,29 +12,25 @@ import pytest
 async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None:
     from app.progenitor.agent.adapters import create_deepagent_tools
 
-    class _FakeLoop:  # noqa: D401
-        """Minimal loop stub for get_current_loop()."""
+    live_state = {
+        "thread_id": "thread_old",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
 
-        def __init__(self):
-            self._state = {
-                "thread_id": "thread_old",
-                "messages": [{"role": "user", "content": "hello"}],
-            }
+    tools = create_deepagent_tools(
+        tool_registry=MagicMock(),
+        llm_client=MagicMock(),
+        state_manager=None,
+        live_state_provider=lambda: live_state,
+    )
 
-    fake_loop = _FakeLoop()
-
-    with patch("app.progenitor.agent.adapters.get_current_loop", return_value=fake_loop):
-        tools = create_deepagent_tools(
-            tool_registry=MagicMock(), llm_client=MagicMock(), state_manager=None
-        )
-
-        new_conv = next(t for t in tools if t.name == "new_conversation")
-        result = await new_conv.ainvoke({"request": "reset the conversation"})
+    new_conv = next(t for t in tools if t.name == "new_conversation")
+    result = await new_conv.ainvoke({"request": "reset the conversation"})
 
     assert isinstance(result, dict)
     assert result.get("reset") is True
-    assert fake_loop._state["thread_id"] != "thread_old"
-    assert fake_loop._state["messages"] == []
+    assert live_state["thread_id"] != "thread_old"
+    assert live_state["messages"] == []
 
 
 @dataclass
@@ -106,7 +102,7 @@ async def test_loop_preserves_persisted_thread_id_on_startup(tmp_path: Path) -> 
 
     state_manager = MagicMock()
     state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread_persisted"})
-    state_manager.get_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
     state_manager.save_current_state = AsyncMock()
     state_manager.save_health = AsyncMock()
     state_manager.state_dir = tmp_path

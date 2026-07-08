@@ -41,6 +41,22 @@ async def save_a2a_tasks(
         state_cache["a2a_tasks"] = task_rows
 
 
+async def get_active_a2a_tasks(
+    *,
+    get_a2a_tasks_fn: Callable[[], Awaitable[list[A2ATaskRecord]]],
+) -> list[A2ATaskRecord]:
+    """Return tasks that still need polling or a completion notification.
+
+    Historical terminal tasks whose notifications are already sent (or never
+    wanted) are excluded so pollers don't rescan the full task history forever.
+    """
+    return [
+        task
+        for task in await get_a2a_tasks_fn()
+        if not task.is_terminal or (task.notify_on_completion and task.notification_sent_at is None)
+    ]
+
+
 async def get_a2a_task(
     *,
     task_id: str,

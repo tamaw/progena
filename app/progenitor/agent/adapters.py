@@ -9,7 +9,6 @@ Supports optional extended thinking/reasoning for models that support it
 (e.g., GPT-5.2-chat with reasoning enabled).
 """
 
-import contextlib
 import inspect
 import logging
 from collections.abc import Awaitable, Callable
@@ -25,7 +24,6 @@ from langgraph.types import Command
 from pydantic import SecretStr
 
 from ..config import LLMConfig
-from ..runtime.heartbeat import get_current_loop
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
 
@@ -222,17 +220,23 @@ class DynamicMCPToolMiddleware(AgentMiddleware):
         return await handler(self._bind_tool_request(request))
 
 
-async def _resolve_state(state_manager: Any) -> Any:
-    """Return the live ProgenitorLoop state, falling back to the state manager."""
-    loop = get_current_loop()
-    if loop is not None and isinstance(getattr(loop, "_state", None), dict):
-        return loop._state
+async def _resolve_state(
+    state_manager: Any,
+    live_state_provider: Callable[[], Any] | None = None,
+) -> Any:
+    """Return the live runtime state, falling back to the state manager."""
+    if live_state_provider is not None:
+        state = live_state_provider()
+        if isinstance(state, dict):
+            return state
     if state_manager is None:
         return None
     get_state = getattr(state_manager, "get_current_state", None)
     if callable(get_state) and inspect.iscoroutinefunction(get_state):
-        with contextlib.suppress(Exception):
+        try:
             return await get_state()
+        except Exception:
+            logger.warning("Failed to load current state for tool context", exc_info=True)
     return None
 
 
@@ -243,23 +247,31 @@ async def _maybe_reload(tool_registry: Any) -> None:
     load = getattr(tool_registry, "load", None)
     if not callable(load):
         return
-    with contextlib.suppress(Exception):
+    try:
         maybe = load()
         if inspect.isawaitable(maybe):
             await cast(Any, maybe)
+    except Exception:
+        logger.warning("Failed to reload tool registry before tool execution", exc_info=True)
 
 
 def create_deepagent_tools(
     tool_registry: Any = None,
     llm_client: Any = None,
     state_manager: Any = None,
+    live_state_provider: Callable[[], Any] | None = None,
 ) -> list[StructuredTool]:
-    """Wrap every registered system tool as a DeepAgent-compatible StructuredTool."""
+    """Wrap every registered system tool as a DeepAgent-compatible StructuredTool.
+
+    ``live_state_provider`` returns the running loop's mutable state dict so tool
+    state updates land in live conversation state; without it, tools fall back to
+    a snapshot from ``state_manager``.
+    """
 
     def _wrap(system_tool: Any) -> StructuredTool:
         async def _run(**kwargs: Any) -> dict[str, Any]:
             await _maybe_reload(tool_registry)
-            state = await _resolve_state(state_manager)
+            state = await _resolve_state(state_manager, live_state_provider)
 
             ctx = ToolContext(
                 tool_registry=tool_registry,
@@ -286,8 +298,14 @@ def create_deepagent_tools(
                     getattr(state_manager, "update_current_state", None) if state_manager else None
                 )
                 if callable(update) and inspect.iscoroutinefunction(update):
-                    with contextlib.suppress(Exception):
+                    try:
                         await update(result.state_updates)
+                    except Exception:
+                        logger.warning(
+                            "Failed to persist state updates from tool %s",
+                            getattr(system_tool, "name", "system_tool"),
+                            exc_info=True,
+                        )
             return result.data or {}
 
         return StructuredTool.from_function(
@@ -309,6 +327,7 @@ def create_deep_agent_for_runtime(
     state_manager: Any | None = None,
     project_root: str | None = None,
     log_sink: Any | None = None,
+    live_state_provider: Callable[[], Any] | None = None,
 ) -> Any:
     """Create the runtime conversation graph backed by Progenitor's agent setup."""
     from ..config import get_config
@@ -326,4 +345,5 @@ def create_deep_agent_for_runtime(
         state_manager=state_manager,
         project_root=project_root,
         log_sink=log_sink,
+        live_state_provider=live_state_provider,
     )
