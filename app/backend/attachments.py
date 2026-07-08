@@ -496,7 +496,7 @@ class AttachmentManager:
                                 f"Max: {self.config.max_file_size_mb}MB"
                             )
 
-                    content = await response.read()
+                    content = await response.content.read(max_bytes + 1)
                     if len(content) > max_bytes:
                         raise ValueError(
                             f"Remote file too large ({len(content) / 1024 / 1024:.1f}MB). "
@@ -509,12 +509,16 @@ class AttachmentManager:
             parsed = urlparse(current_url)
             filename = Path(parsed.path).name or "downloaded_file"
 
+            resolved_metadata = dict(metadata or {})
+            if current_url != url:
+                resolved_metadata["final_url"] = current_url
+
             return await self.process_file(
                 filename=filename,
                 content=content,
                 source_type="url",
-                source_url=current_url,
-                metadata=metadata,
+                source_url=url,
+                metadata=resolved_metadata,
             )
 
         except Exception as e:

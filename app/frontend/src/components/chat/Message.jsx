@@ -595,6 +595,17 @@ function sanitizeHtmlFragment(html) {
   return div.innerHTML;
 }
 
+function isSafeHref(rawValue) {
+  const colonIdx = rawValue.trim().indexOf(':');
+  if (colonIdx === -1) return true; // relative URL, no scheme
+  // Validate scheme portion strictly — any non-alpha char (including control chars
+  // browsers normalize away) makes this an unrecognised / potentially obfuscated scheme.
+  const schemePart = rawValue.trim().slice(0, colonIdx);
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(schemePart)) return false;
+  const scheme = schemePart.toLowerCase();
+  return scheme === 'http' || scheme === 'https' || scheme === 'mailto';
+}
+
 function sanitizeNode(node) {
   for (const child of Array.from(node.childNodes)) {
     if (child.nodeType === Node.ELEMENT_NODE) {
@@ -605,8 +616,7 @@ function sanitizeNode(node) {
       }
       for (const attr of Array.from(child.attributes)) {
         const name = attr.name.toLowerCase();
-        const value = attr.value.trim().toLowerCase();
-        if (!ALLOWED_ATTRS.has(name) || (name === 'href' && (value.startsWith('javascript:') || value.startsWith('data:')))) {
+        if (!ALLOWED_ATTRS.has(name) || (name === 'href' && !isSafeHref(attr.value))) {
           child.removeAttribute(attr.name);
         }
       }
