@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
+import httpx
 import pytest
 
 from app.backend.config import ChatServerConfig
@@ -249,3 +250,22 @@ async def test_start_raises_when_runtime_unreachable() -> None:
     client = SSEProgenitorClient(ChatServerConfig(progenitor_runtime_url="http://127.0.0.1:1"))
     with pytest.raises(RuntimeError):
         await asyncio.wait_for(client.start(), timeout=15.0)
+
+
+async def test_send_message_stream_events_times_out_on_stuck_runtime() -> None:
+    """A wedged runtime (see WORKFLOW_TESTING_PLAYBOOK.md) must not hang forever."""
+    gate = asyncio.Event()  # never set
+    script = [_Wait(gate)]
+
+    runtime = await _start_runtime_server(bridge_factory=make_bridge_factory(script))
+    config = _client_config(runtime.base_url)
+    config.progenitor_timeout = 0.3
+    client = SSEProgenitorClient(config)
+    try:
+        with pytest.raises(httpx.ReadTimeout):
+            async for _ in client.send_message_stream_events("hi", request_id="req-stuck"):
+                pass
+    finally:
+        gate.set()
+        await client.stop()
+        await _stop_runtime_server(runtime)

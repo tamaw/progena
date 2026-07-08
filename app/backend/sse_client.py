@@ -277,7 +277,10 @@ class SSEProgenitorClient:
         if metadata:
             body["metadata"] = metadata
 
-        async with self._client.stream("POST", "/v1/chat", json=body) as response:
+        request_timeout = httpx.Timeout(5.0, read=self.config.progenitor_timeout)
+        async with self._client.stream(
+            "POST", "/v1/chat", json=body, timeout=request_timeout
+        ) as response:
             if response.status_code != 200:
                 error_body = await response.aread()
                 raise RuntimeError(f"Progenitor error: {_decode_error_body(error_body)}")

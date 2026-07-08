@@ -175,10 +175,21 @@ class RuntimeChatService:
                     )
                 return
 
+            try:
+                await self._complete_direct_graph_cycle(bridge)
+            except Exception as exc:
+                logger.error("Checkpoint error for %s: %s", request_id, exc, exc_info=True)
+                with contextlib.suppress(ConnectionResetError, ConnectionError):
+                    await self._write_frame(
+                        response,
+                        "error",
+                        {"request_id": request_id, "error": str(exc), "code": "CHECKPOINT_ERROR"},
+                    )
+                return
+
             await self._write_frame(
                 response, "done", {"request_id": request_id, "status": "completed"}
             )
-            await self._complete_direct_graph_cycle(bridge)
 
     # -- POST /v1/chat/{request_id}/cancel -------------------------------
 
