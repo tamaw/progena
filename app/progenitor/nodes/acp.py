@@ -12,7 +12,7 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from ..acp import build_acp_completion_message, send_acp_completion_notification
+from ..acp import build_acp_completion_message, enqueue_acp_completion_followup
 from ..state.models import ConversationMessage, ProgenitorState
 from ..utils import utcnow
 from .context import HeartbeatContext
@@ -110,9 +110,9 @@ async def notify_completed_acp_tasks_node(
 
     notified = 0
     for record in records:
-        if runtime.context.llm_client is not None and await send_acp_completion_notification(
+        if await enqueue_acp_completion_followup(
             runtime.context.state_manager,
-            runtime.context.llm_client,
+            runtime.context.queues,
             record,
         ):
             notified += 1
