@@ -115,6 +115,8 @@ class A2AClient:
         if not task_id:
             return payload
 
+        import asyncio
+
         deadline = time.monotonic() + max(timeout, 0.0)
         latest = payload
         while time.monotonic() < deadline:
@@ -133,6 +135,7 @@ class A2AClient:
             latest = result
             if self._task_state(latest) in _TERMINAL_TASK_STATES:
                 return latest
+            await asyncio.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
         return latest
 
     async def call_agent(
