@@ -4,7 +4,7 @@ Minimal standalone A2A test agent for exercising Progenitor's A2A flow end to en
 
 It is intentionally isolated:
 
-- Single file runtime in [agent.py](/home/tama/source/progenitor/main/app/agents/greetings_agent/agent.py)
+- Single file runtime in [agent.py](./agent.py)
 - No imports from `app.progenitor` or other `app.agents.*`
 - In-memory task store and push-notification config store
 
