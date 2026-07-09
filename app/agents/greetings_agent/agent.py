@@ -389,6 +389,26 @@ def _extract_text(result: dict[str, Any]) -> str:
     return "Hello! (greetings_agent produced no text)"
 
 
+def _extract_tool_calls(result: dict[str, Any]) -> list[str]:
+    tool_calls: list[str] = []
+    messages = result.get("messages")
+    if not isinstance(messages, list):
+        return tool_calls
+    for msg in messages:
+        raw_calls = getattr(msg, "tool_calls", None) or (
+            msg.get("tool_calls") if isinstance(msg, dict) else None
+        )
+        if not isinstance(raw_calls, list):
+            continue
+        for call in raw_calls:
+            if not isinstance(call, dict):
+                continue
+            name = str(call.get("name") or "").strip()
+            if name:
+                tool_calls.append(name)
+    return tool_calls
+
+
 _SLEEP_RE = re.compile(r"sleep\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 
@@ -414,6 +434,29 @@ async def _run_greeting(request_text: str) -> str:
     agent = await _get_deep_agent()
     result = await agent.ainvoke({"messages": [{"role": "user", "content": request_text}]})
     return _extract_text(result)
+
+
+async def _run_greeting_payload(request_text: str) -> tuple[str, dict[str, Any]]:
+    if _is_mock():
+        text = await _mock_response(request_text)
+        tool_calls = []
+        lowered = request_text.lower()
+        if _SLEEP_RE.search(request_text):
+            tool_calls.append("sleep")
+        if "copilot" in lowered:
+            tool_calls.append("probe_copilot")
+        return text, {
+            "display_agent_name": AGENT_ID,
+            "display_model_name": _model_name(),
+            "display_tool_calls": tool_calls or None,
+        }
+    agent = await _get_deep_agent()
+    result = await agent.ainvoke({"messages": [{"role": "user", "content": request_text}]})
+    return _extract_text(result), {
+        "display_agent_name": AGENT_ID,
+        "display_model_name": _model_name(),
+        "display_tool_calls": _extract_tool_calls(result) or None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +571,7 @@ class GreetingsExecutor(AgentExecutor):
             await self._notify(working)
 
             try:
-                text = await _run_greeting(request_text)
+                text, metadata = await _run_greeting_payload(request_text)
                 state = TaskState.completed
             except asyncio.CancelledError:
                 raise
@@ -536,11 +579,12 @@ class GreetingsExecutor(AgentExecutor):
                 logger.exception("Greeting task %s failed", task_id)
                 text = f"Greetings agent failed: {exc}"
                 state = TaskState.failed
+                metadata = {"display_agent_name": AGENT_ID}
 
             if task_id in self._cancelled:
                 return
 
-            terminal = await self._save_state(task_id, context_id, state, text)
+            terminal = await self._save_state(task_id, context_id, state, text, metadata=metadata)
             await tapped_queue.enqueue_event(
                 TaskStatusUpdateEvent(
                     task_id=task_id,
@@ -561,14 +605,33 @@ class GreetingsExecutor(AgentExecutor):
             except Exception:
                 logger.exception("Failed to record crash for task %s", task_id)
 
-    async def _save_state(self, task_id: str, context_id: str, state: TaskState, text: str) -> Task:
+    async def _save_state(
+        self,
+        task_id: str,
+        context_id: str,
+        state: TaskState,
+        text: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+    ) -> Task:
         """Read-modify-write the stored task; the store is what pollers observe."""
-        status = TaskStatus(state=state, message=_text_message(text), timestamp=_utc_now_iso())
+        message = _text_message(text)
+        if metadata:
+            message.metadata = {k: v for k, v in metadata.items() if v not in (None, "", [])}
+        status = TaskStatus(state=state, message=message, timestamp=_utc_now_iso())
         task = await self._task_store.get(task_id)
         if task is None:
-            task = Task(id=task_id, context_id=context_id, history=[], status=status)
+            task = Task(
+                id=task_id,
+                context_id=context_id,
+                history=[],
+                status=status,
+                metadata=dict(message.metadata or {}),
+            )
         else:
             task.status = status
+            if metadata:
+                task.metadata = {**dict(task.metadata or {}), **dict(message.metadata or {})}
         if status.message is not None:
             history = list(task.history or [])
             history.append(status.message)

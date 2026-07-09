@@ -30,6 +30,7 @@ from .backends import create_progenitor_backend
 from .middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
+    DirectA2AFastPathMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
@@ -212,6 +213,7 @@ def create_progenitor_agent(
 
     # Custom middleware stack (appended after DeepAgent's built-in middleware)
     custom_middleware = [
+        DirectA2AFastPathMiddleware(tool_registry=tool_registry),
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_sink=log_sink),
@@ -250,7 +252,7 @@ def create_progenitor_agent(
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # durable filesystem-backed memories directory.
     custom_middleware.insert(
-        3,
+        4,
         AsyncSubagentTrackingMiddleware(
             state_manager=state_manager,
             async_subagents=async_subagents,

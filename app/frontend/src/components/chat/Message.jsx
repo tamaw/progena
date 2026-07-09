@@ -35,6 +35,20 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
   ];
 }
 
+export function formatDisplayToolCalls(displayToolCalls) {
+  if (!Array.isArray(displayToolCalls) || displayToolCalls.length === 0) {
+    return '';
+  }
+  return displayToolCalls
+    .map((call) => {
+      if (typeof call === 'string') return call;
+      if (call && typeof call === 'object' && typeof call.name === 'string') return call.name;
+      return '';
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
 function MessageView({ message, streamEventFilter, hideContent = false, showImages = true }) {
   const {
     role,
@@ -49,6 +63,9 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     reasoningTokenCount = 0,
     reasoningText = '',
     model = '',
+    displayAgentName = '',
+    displayModelName = '',
+    displayToolCalls = [],
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -94,6 +111,12 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   }, [isStreaming, reasoningTokenCount, role]);
 
   const tokenMetaItems = [formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const displayName = role === 'assistant' && displayAgentName ? displayAgentName : 'Progenitor';
+  const displayModel = role === 'assistant' && displayModelName ? displayModelName : model;
+  const displayTools = useMemo(
+    () => (role === 'assistant' ? formatDisplayToolCalls(displayToolCalls) : ''),
+    [displayToolCalls, role],
+  );
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
@@ -118,7 +141,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
           {role === 'assistant' ? (
             <>
               <span className="entry__tag entry__tag--assistant">agent</span>
-              <span className="msg__role">Progenitor</span>
+              <span className="msg__role">{displayName}</span>
             </>
           ) : (
             <>
@@ -142,7 +165,8 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
                 <span className="msg__stat message-token-count">{item}</span>
               </Fragment>
             ))}
-            {model && <span className="msg__model">{model}</span>}
+            {displayModel && <span className="msg__model">{displayModel}</span>}
+            {displayTools && <span className="msg__model">{displayTools}</span>}
             <MessageActions role={role} content={content} />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>

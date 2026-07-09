@@ -18,6 +18,7 @@ from app.backend.chat_sessions import (
     _resolve_metadata_key,
     acquire_reusable_draft,
     create_chat_metadata,
+    get_chat_detail,
     list_chat_sessions,
     materialize_chat_metadata,
     patch_chat_metadata,
@@ -198,6 +199,40 @@ class TestCheckpointSnapshotCache:
 
         assert result is snapshot
         assert store.get_checkpoint_thread_snapshot_calls == 0
+
+
+class TestDisplayMetadataNormalization:
+    def test_chat_detail_preserves_optional_assistant_display_metadata(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_meta"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_meta",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-09T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "hi"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "Hello there",
+                        "response_metadata": {
+                            "display_agent_name": "greetings_agent",
+                            "display_model_name": "gpt-5-mini",
+                            "display_tool_calls": ["sleep"],
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_meta")
+
+        assert detail is not None
+        assistant = next(message for message in detail.messages if message.role == "assistant")
+        assert assistant.display_agent_name == "greetings_agent"
+        assert assistant.display_model_name == "gpt-5-mini"
+        assert assistant.display_tool_calls == ["sleep"]
 
     def test_falls_back_to_a_fresh_fetch_when_metadata_pins_a_different_checkpoint(self):
         store = _CountingDocumentStore()

@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+import { selectAgentProfiles } from '../../store/uiData/agents';
 
 const SLASH_COMMANDS = [
   {
@@ -29,6 +31,22 @@ function getSlashQuery(value) {
   return firstToken.slice(1).toLowerCase();
 }
 
+export function getAgentMentionContext(value, cursor) {
+  const text = typeof value === 'string' ? value : '';
+  const position = Number.isFinite(cursor) ? cursor : text.length;
+  const uptoCursor = text.slice(0, position);
+  const match = uptoCursor.match(/(^|\s)@([A-Za-z0-9_.-]*)$/);
+  if (!match) {
+    return null;
+  }
+  const tokenStart = uptoCursor.length - match[0].length + match[1].length;
+  return {
+    query: match[2].toLowerCase(),
+    tokenStart,
+    tokenEnd: position,
+  };
+}
+
 function ChatInput({
   onSend,
   onStop,
@@ -47,8 +65,12 @@ function ChatInput({
 }) {
   const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
+  const [activeMentionIndex, setActiveMentionIndex] = useState(0);
+  const [selectionStart, setSelectionStart] = useState(initialMessage.length);
   const textareaRef = useRef(null);
+  const agentProfiles = useSelector(selectAgentProfiles);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
+  const mentionContext = getAgentMentionContext(message, selectionStart);
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) {
       return [];
@@ -60,7 +82,17 @@ function ChatInput({
       || command.title.toLowerCase().includes(slashQuery)
     ));
   }, [slashQuery]);
+  const mentionCandidates = useMemo(() => {
+    if (!mentionContext) {
+      return [];
+    }
+    const names = agentProfiles
+      .map((agent) => (typeof agent?.name === 'string' ? agent.name : ''))
+      .filter(Boolean);
+    return names.filter((name) => name.toLowerCase().includes(mentionContext.query));
+  }, [agentProfiles, mentionContext]);
   const isSlashMenuOpen = !disabled && !isGenerating && filteredSlashCommands.length > 0;
+  const isMentionMenuOpen = !disabled && !isGenerating && mentionCandidates.length > 0;
 
   useEffect(() => {
     if (textareaRef.current) {
@@ -86,7 +118,42 @@ function ChatInput({
     onCommand?.(command.name);
   };
 
+  const applyMention = (agentName) => {
+    if (!mentionContext) {
+      return;
+    }
+    const nextMessage = `${message.slice(0, mentionContext.tokenStart)}@${agentName} ${message.slice(mentionContext.tokenEnd)}`;
+    setMessage(nextMessage);
+    setActiveMentionIndex(0);
+    requestAnimationFrame(() => {
+      if (textareaRef.current) {
+        const cursor = mentionContext.tokenStart + agentName.length + 2;
+        textareaRef.current.focus();
+        textareaRef.current.setSelectionRange(cursor, cursor);
+        setSelectionStart(cursor);
+      }
+    });
+  };
+
   const handleKeyDown = (e) => {
+    if (isMentionMenuOpen && e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveMentionIndex((prev) => (prev + 1) % mentionCandidates.length);
+      return;
+    }
+
+    if (isMentionMenuOpen && e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveMentionIndex((prev) => (prev - 1 + mentionCandidates.length) % mentionCandidates.length);
+      return;
+    }
+
+    if (isMentionMenuOpen && (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey))) {
+      e.preventDefault();
+      applyMention(mentionCandidates[activeMentionIndex] ?? mentionCandidates[0]);
+      return;
+    }
+
     if (isSlashMenuOpen && e.key === 'ArrowDown') {
       e.preventDefault();
       setActiveSlashIndex((prev) => (prev + 1) % filteredSlashCommands.length);
@@ -108,6 +175,9 @@ function ChatInput({
         return;
       }
       handleSend();
+    } else if (e.key === 'Escape' && isMentionMenuOpen) {
+      e.preventDefault();
+      setActiveMentionIndex(0);
     } else if (e.key === 'Escape' && isGenerating) {
       if (allowStop) {
         onStop?.();
@@ -141,6 +211,28 @@ function ChatInput({
   return (
     <div className={`chat-input-container ${className}`.trim()}>
       <div className="chat-input-stack">
+        {isMentionMenuOpen && (
+          <div className="slash-command-menu" role="listbox" aria-label="Agent mentions">
+            {mentionCandidates.map((agentName, index) => (
+              <button
+                key={agentName}
+                type="button"
+                className={`slash-command-item${index === activeMentionIndex ? ' active' : ''}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setActiveMentionIndex(index);
+                  applyMention(agentName);
+                }}
+              >
+                <div className="slash-command-item-header">
+                  <span className="slash-command-item-title">{agentName}</span>
+                  <code className="slash-command-item-syntax">@{agentName}</code>
+                </div>
+                <span className="slash-command-item-description">Direct-call this registered agent.</span>
+              </button>
+            ))}
+          </div>
+        )}
         {isSlashMenuOpen && (
           <div className="slash-command-menu" role="listbox" aria-label="Slash commands">
             {filteredSlashCommands.map((command, index) => (
@@ -172,7 +264,11 @@ function ChatInput({
             onChange={(e) => {
               setMessage(e.target.value);
               setActiveSlashIndex(0);
+              setActiveMentionIndex(0);
+              setSelectionStart(e.target.selectionStart ?? e.target.value.length);
             }}
+            onClick={(e) => setSelectionStart(e.currentTarget.selectionStart ?? message.length)}
+            onKeyUp={(e) => setSelectionStart(e.currentTarget.selectionStart ?? message.length)}
             onKeyDown={handleKeyDown}
             rows={1}
             disabled={disabled || isGenerating}
@@ -206,6 +302,7 @@ function ChatInput({
       {showHints ? (
         <div className="input-hints">
           <span className="hint">Type <kbd>/</kbd> for commands</span>
+          <span className="hint">Type <kbd>@</kbd> for agents</span>
           <span className="hint">Press <kbd>Enter</kbd> to send</span>
           <span className="hint">Press <kbd>Shift+Enter</kbd> for new line</span>
           <span className="hint">Press <kbd>Esc</kbd> to stop generation</span>
