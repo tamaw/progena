@@ -184,3 +184,34 @@ async def test_execute_dispatches_async_metadata():
     assert kwargs["request_metadata"]["dispatch_mode"] == "async"
     assert kwargs["request_metadata"]["caller"] == "progenitor"
     assert kwargs["request_metadata"]["routing_mode"] == "explicit"
+
+
+@pytest.mark.asyncio
+async def test_execute_dispatches_async_metadata_with_thread_id():
+    tool = CallAgentTool()
+    mock_registry = MagicMock()
+    mock_registry.get_agents.return_value = [{"name": "builder_agent"}]
+    mock_registry.find_by_name.return_value = {
+        "url": "http://localhost:8108",
+        "transport": "http",
+        "status": "running",
+    }
+    context = ToolContext(
+        user_input="Build it",
+        tool_args={"agent": "builder_agent", "timeout": 1},
+        tool_registry=mock_registry,
+        llm_client=MagicMock(),
+        state_manager=MagicMock(),
+        state={"thread_id": "thread-abc"},
+    )
+
+    with patch(
+        "app.progenitor.tools.call_agent.dispatch_tracked_a2a_task",
+        new_callable=AsyncMock,
+        return_value=({"success": True, "result": {"id": "builder_agent_abc123"}}, _tracked_task()),
+    ) as dispatch_mock:
+        result = await tool.execute(context)
+
+    assert result.success
+    kwargs = dispatch_mock.await_args.kwargs
+    assert kwargs["request_metadata"]["thread_id"] == "thread-abc"

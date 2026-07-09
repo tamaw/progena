@@ -8,8 +8,8 @@ import pytest
 
 from app.progenitor.a2a.tasks import (
     dispatch_tracked_a2a_task,
+    enqueue_completion_followup,
     refresh_tracked_a2a_task,
-    send_completion_notification,
 )
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import A2ATaskRecord
@@ -245,7 +245,7 @@ async def test_get_a2a_task_tool_surfaces_refresh_error(monkeypatch, state_manag
 
 
 @pytest.mark.asyncio
-async def test_send_completion_notification_pushes_agent_message(state_manager) -> None:
+async def test_enqueue_completion_followup_queues_same_thread_turn(state_manager) -> None:
     record = A2ATaskRecord(
         task_id="observe-3",
         agent_name="observe_agent",
@@ -253,23 +253,26 @@ async def test_send_completion_notification_pushes_agent_message(state_manager) 
         context_id="ctx-3",
         source="call_agent",
         request_text="Inspect pipeline",
+        request_metadata={"thread_id": "thread-123"},
         status="completed",
         summary="Observe task completed.",
         latest_message="Observe task completed.",
     )
     await state_manager.upsert_a2a_task(record)
 
-    llm_client = MagicMock()
-    llm_client._push_event = AsyncMock()
-    state_manager.get_current_state = AsyncMock(return_value={"thread_id": "thread-123"})
+    queues = MagicMock()
+    queues.enqueue_input = AsyncMock(return_value=True)
 
-    sent = await send_completion_notification(state_manager, llm_client, record)
+    sent = await enqueue_completion_followup(state_manager, queues, record)
 
     assert sent is True
-    llm_client._push_event.assert_awaited_once()
-    args = llm_client._push_event.await_args.args
-    assert args[0] == "agent_message"
-    assert "observe agent task completed" in args[1]
+    queues.enqueue_input.assert_awaited_once()
+    args = queues.enqueue_input.await_args.args
+    kwargs = queues.enqueue_input.await_args.kwargs
+    assert "async external agent task" in args[0]
+    assert "Observe task completed." in args[0]
+    assert kwargs["metadata"]["thread_id"] == "thread-123"
+    assert kwargs["metadata"]["notify_on_completion"] is True
     saved = await state_manager.get_a2a_task("observe-3")
     assert saved is not None
     assert saved.notification_sent_at is not None

@@ -13,8 +13,8 @@ from .tasks import (
     DEFAULT_A2A_HISTORY_LENGTH,
     DEFAULT_A2A_POLL_SECONDS,
     dispatch_tracked_a2a_task,
+    enqueue_completion_followup,
     refresh_tracked_a2a_task,
-    send_completion_notification,
     upsert_tracked_task_from_payload,
 )
 
@@ -25,11 +25,11 @@ __all__ = [
     "build_completion_message",
     "build_task_response",
     "dispatch_tracked_a2a_task",
+    "enqueue_completion_followup",
     "extract_message_text",
     "is_task_payload",
     "normalize_a2a_task_status",
     "refresh_tracked_a2a_task",
-    "send_completion_notification",
     "summarize_task_payload",
     "upsert_tracked_task_from_payload",
 ]
