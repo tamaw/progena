@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { collectMessageImages } from './conversationModel';
+import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 
 function isTimelineStreamEvent(event) {
@@ -49,6 +50,9 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     reasoningTokenCount = 0,
     reasoningText = '',
     model = '',
+    displayAgentName = '',
+    displayModelName = '',
+    displayToolCalls = [],
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -94,6 +98,12 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   }, [isStreaming, reasoningTokenCount, role]);
 
   const tokenMetaItems = [formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const displayName = role === 'assistant' && displayAgentName ? displayAgentName : 'Progenitor';
+  const displayModel = role === 'assistant' && displayModelName ? displayModelName : model;
+  const displayTools = useMemo(
+    () => (role === 'assistant' ? formatDisplayToolCalls(displayToolCalls) : ''),
+    [displayToolCalls, role],
+  );
   const hasConnectedEvents = role === 'assistant' && visibleStreamEvents.length > 0;
   const entryStateClass = hasConnectedEvents ? 'entry--chain-end' : 'entry--standalone';
 
@@ -118,7 +128,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
           {role === 'assistant' ? (
             <>
               <span className="entry__tag entry__tag--assistant">agent</span>
-              <span className="msg__role">Progenitor</span>
+              <span className="msg__role">{displayName}</span>
             </>
           ) : (
             <>
@@ -142,7 +152,8 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
                 <span className="msg__stat message-token-count">{item}</span>
               </Fragment>
             ))}
-            {model && <span className="msg__model">{model}</span>}
+            {displayModel && <span className="msg__model">{displayModel}</span>}
+            {displayTools && <span className="msg__model">{displayTools}</span>}
             <MessageActions role={role} content={content} />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>

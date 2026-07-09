@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -23,6 +24,7 @@ from a2a.types import (
 )
 
 logger = logging.getLogger(__name__)
+_TERMINAL_TASK_STATES = {"completed", "failed", "canceled", "cancelled"}
 
 
 class A2AClient:
@@ -89,6 +91,53 @@ class A2AClient:
             return payload.model_dump(mode="json", by_alias=True, exclude_none=True)
         return payload
 
+    @staticmethod
+    def _task_state(payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        status = payload.get("status")
+        if not isinstance(status, dict):
+            return ""
+        return str(status.get("state") or "").strip().lower()
+
+    async def _await_terminal_task(
+        self,
+        agent_config: dict[str, Any],
+        payload: dict[str, Any],
+        *,
+        timeout: float,
+    ) -> dict[str, Any]:
+        state = self._task_state(payload)
+        if state in _TERMINAL_TASK_STATES:
+            return payload
+
+        task_id = str(payload.get("id") or "").strip()
+        if not task_id:
+            return payload
+
+        import asyncio
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        latest = payload
+        while time.monotonic() < deadline:
+            remaining = max(deadline - time.monotonic(), 0.1)
+            polled = await self.get_task(
+                agent_config,
+                task_id,
+                history_length=None,
+                timeout=min(remaining, 15.0),
+            )
+            if not polled.get("success"):
+                return latest
+            result = polled.get("result")
+            if not isinstance(result, dict):
+                return latest
+            latest = result
+            if self._task_state(latest) in _TERMINAL_TASK_STATES:
+                return latest
+            await asyncio.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
+        return latest
+
     async def call_agent(
         self,
         agent_config: dict[str, Any],
@@ -153,6 +202,12 @@ class A2AClient:
 
         if last_payload is None:
             return {"success": False, "error": "Agent returned no response"}
+        if blocking and isinstance(last_payload, dict):
+            last_payload = await self._await_terminal_task(
+                agent_config,
+                last_payload,
+                timeout=timeout,
+            )
         return {"success": True, "result": last_payload}
 
     async def get_task(

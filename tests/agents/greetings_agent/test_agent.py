@@ -100,6 +100,7 @@ async def test_mock_end_to_end_greeting(monkeypatch: pytest.MonkeyPatch) -> None
     terminal = await _poll_terminal(handler, result.id)
     assert terminal.status.state == TaskState.completed
     assert "Hello from greetings_agent!" in terminal.status.message.parts[0].root.text
+    assert terminal.status.message.metadata["display_agent_name"] == "greetings_agent"
 
 
 @pytest.mark.asyncio
@@ -167,6 +168,7 @@ async def test_copilot_probe_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> N
     terminal = await _poll_terminal(handler, result.id)
     assert terminal.status.state == TaskState.completed
     assert "Hello back from Copilot!" in terminal.status.message.parts[0].root.text
+    assert "probe_copilot" in terminal.status.message.metadata["display_tool_calls"]
     probe.assert_awaited_once()
 
 

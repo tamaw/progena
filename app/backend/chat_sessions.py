@@ -36,6 +36,9 @@ class ChatMessage(BaseModel):
     token_count: int = 0
     reasoning_token_count: int = 0
     reasoning_text: str = ""
+    display_agent_name: str | None = None
+    display_model_name: str | None = None
+    display_tool_calls: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
@@ -475,6 +478,25 @@ def _raw_message_payload(raw: Any) -> dict[str, Any]:
     }
 
 
+def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
+    metadata = (
+        raw.get("response_metadata")
+        if isinstance(raw, dict)
+        else getattr(raw, "response_metadata", None)
+    )
+    if not isinstance(metadata, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("display_agent_name", "display_model_name"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            result[key] = value
+    tool_calls = metadata.get("display_tool_calls")
+    if isinstance(tool_calls, list):
+        result["display_tool_calls"] = tool_calls
+    return result
+
+
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     """Return tool_calls list from an AIMessage (normalized LangChain format)."""
     if isinstance(raw, dict):
@@ -527,6 +549,9 @@ def _chat_message_from_raw(
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
         reasoning_text=extract_reasoning_trace(raw) or "",
+        display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
+        display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
+        display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
         tool_calls=tool_calls or [],
         raw=_raw_message_payload(raw),
     )
