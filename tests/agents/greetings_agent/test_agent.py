@@ -173,7 +173,7 @@ async def test_copilot_probe_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.asyncio
 async def test_push_notification_sent_on_completion(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
-    captured: list[dict] = []
+    captured: list[bytes] = []
 
     async def _handler(request: httpx.Request) -> httpx.Response:
         captured.append(await request.aread())
