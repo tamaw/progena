@@ -174,6 +174,7 @@ class CallAgentTool(BaseSystemTool):
                 "caller": "progenitor",
                 "dispatch_mode": "blocking" if blocking else "async",
                 "routing_mode": routing_mode,
+                "thread_id": str((context.state or {}).get("thread_id") or "").strip() or None,
             },
             source="call_agent",
             timeout=timeout_seconds,

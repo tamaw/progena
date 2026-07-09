@@ -57,6 +57,43 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_heartbeat_graph_queues_same_thread_followup_for_a2a_completion() -> None:
+    state_manager = MagicMock()
+    state_manager.get_schedule = AsyncMock(return_value=[])
+    state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
+    state_manager.get_acp_tasks = AsyncMock(return_value=[])
+    state_manager.dequeue_background_task = AsyncMock(return_value=None)
+    state_manager.log_conversation = AsyncMock()
+    state_manager.save_messages = AsyncMock()
+    state_manager.update_a2a_task = AsyncMock()
+    record = A2ATaskRecord(
+        task_id="task-2",
+        agent_name="greetings_agent",
+        status="completed",
+        request_text="Ask for a greeting.",
+        request_metadata={"thread_id": "thread-1"},
+        summary="Hello from greetings_agent!",
+    )
+    queues = _FakeQueues(a2a_completions=[record])
+    graph = create_runtime_heartbeat_graph()
+    context = _heartbeat_context(
+        state_manager=state_manager,
+        queues=queues,
+        tool_registry=_tool_registry(),
+    )
+
+    await graph.ainvoke({"messages": []}, context=context)
+
+    queues.enqueue_input.assert_awaited_once()
+    enqueued_message = queues.enqueue_input.await_args.args[0]
+    enqueued_metadata = queues.enqueue_input.await_args.kwargs["metadata"]
+    assert "async external agent task" in enqueued_message
+    assert "Hello from greetings_agent!" in enqueued_message
+    assert enqueued_metadata["thread_id"] == "thread-1"
+    assert enqueued_metadata["source"] == "a2a_task_completion_followup"
+
+
+@pytest.mark.asyncio
 async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_path) -> None:
     state_manager = MagicMock()
     state_manager.get_schedule = AsyncMock(return_value=[])

@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Any, cast
 
 from ..state.models import ACPAgentConfig, ACPTaskRecord, ACPTaskStatus
-from ..tools.user_communication import EventPusher, UserCommunicationTools
 from ..utils import utcnow
 from .agents import build_agent_args
 from .runner import ACPRunner, ACPRunResult
@@ -214,21 +213,40 @@ def _notification_title(record: ACPTaskRecord) -> str:
     return f"{name} run {record.status}"
 
 
-async def send_acp_completion_notification(
-    state_manager: Any, llm_client: Any, record: ACPTaskRecord
-) -> bool:
-    """Emit a completion update for a terminal ACP run and mark it notified."""
-    push = getattr(llm_client, "_push_event", None)
-    if not callable(push):
-        return False
+def _completion_followup_thread_id(record: ACPTaskRecord) -> str | None:
+    return str(record.request_metadata.get("thread_id") or "").strip() or None
 
-    current_state = await state_manager.get_current_state()
-    thread_id = str(current_state.get("thread_id") or "").strip() or None
-    tools = UserCommunicationTools(cast(EventPusher, push), thread_id=thread_id)
-    await tools.say_to_user(
-        message=build_acp_completion_message(record),
-        context="acp_task_completion",
+
+def _build_completion_followup_prompt(record: ACPTaskRecord) -> str:
+    raw_result = build_acp_completion_message(record).strip()
+    original_request = record.request_text.strip() or "(missing original request)"
+    return (
+        "An async ACP agent run that the user started earlier in this conversation has finished.\n\n"
+        f"Agent: {record.agent_name}\n"
+        f"Status: {record.status}\n"
+        f"Original request: {original_request}\n\n"
+        "Raw task result:\n"
+        f"{raw_result}\n\n"
+        "Respond to the user in this same conversation with a short, helpful update. "
+        "Summarize the result clearly. If the run failed, explain the failure briefly and "
+        "suggest the next step."
+    )
+
+
+async def enqueue_acp_completion_followup(
+    state_manager: Any, queues: Any, record: ACPTaskRecord
+) -> bool:
+    """Queue a same-thread follow-up turn for a terminal ACP run."""
+    thread_id = _completion_followup_thread_id(record)
+    if not thread_id:
+        return False
+    await queues.enqueue_input(
+        _build_completion_followup_prompt(record),
         metadata={
+            "thread_id": thread_id,
+            "notify_on_completion": True,
+            "completion_event_type": "agent_message",
+            "source": "acp_task_completion_followup",
             "task_id": record.task_id,
             "agent": record.agent_name,
             "acp_status": record.status,

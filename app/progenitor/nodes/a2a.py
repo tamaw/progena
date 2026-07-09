@@ -8,8 +8,8 @@ from langgraph.runtime import Runtime
 
 from ..a2a import (
     build_completion_message,
+    enqueue_completion_followup,
     refresh_tracked_a2a_task,
-    send_completion_notification,
 )
 from ..state.models import ConversationMessage, ProgenitorState
 from ..utils import utcnow, utcnow_isoformat
@@ -94,14 +94,13 @@ async def notify_completed_tasks_node(
 
     notified = 0
     for record in records:
-        if runtime.context.llm_client is not None:
-            sent = await send_completion_notification(
-                runtime.context.state_manager,
-                runtime.context.llm_client,
-                record,
-            )
-            if sent:
-                notified += 1
+        sent = await enqueue_completion_followup(
+            runtime.context.state_manager,
+            runtime.context.queues,
+            record,
+        )
+        if sent:
+            notified += 1
             continue
         await runtime.context.state_manager.update_a2a_task(
             record.task_id,

@@ -6,7 +6,6 @@ import logging
 from typing import Any, cast
 
 from ..state.models import A2ATaskRecord, A2ATaskStatus
-from ..tools.user_communication import EventPusher, UserCommunicationTools
 from ..utils import utcnow
 from .client import A2AClient
 from .payloads import (
@@ -28,6 +27,27 @@ def _build_notification_title(record: A2ATaskRecord) -> str:
     agent_name = record.agent_name.replace("_", " ").strip() or "Agent"
     status = record.status.replace("-", " ")
     return f"{agent_name} task {status}"
+
+
+def _completion_followup_thread_id(record: A2ATaskRecord) -> str | None:
+    return str(record.request_metadata.get("thread_id") or "").strip() or None
+
+
+def _build_completion_followup_prompt(record: A2ATaskRecord) -> str:
+    raw_result = build_completion_message(record).strip()
+    original_request = record.request_text.strip() or "(missing original request)"
+    return (
+        "An async external agent task that the user started earlier in this conversation has "
+        "finished.\n\n"
+        f"Agent: {record.agent_name}\n"
+        f"Status: {record.status}\n"
+        f"Original request: {original_request}\n\n"
+        "Raw task result:\n"
+        f"{raw_result}\n\n"
+        "Respond to the user in this same conversation with a short, helpful update. "
+        "Summarize the result clearly. If the task failed, explain the failure briefly and "
+        "suggest the next step."
+    )
 
 
 def _build_task_record(
@@ -262,21 +282,20 @@ async def refresh_tracked_a2a_task(
     )
 
 
-async def send_completion_notification(
-    state_manager: Any, llm_client: Any, record: A2ATaskRecord
+async def enqueue_completion_followup(
+    state_manager: Any, queues: Any, record: A2ATaskRecord
 ) -> bool:
-    """Emit a completion update for a tracked terminal task."""
-    push = getattr(llm_client, "_push_event", None)
-    if not callable(push):
+    """Queue a same-thread follow-up turn for a tracked terminal A2A task."""
+    thread_id = _completion_followup_thread_id(record)
+    if not thread_id:
         return False
-
-    current_state = await state_manager.get_current_state()
-    thread_id = str(current_state.get("thread_id") or "").strip() or None
-    tools = UserCommunicationTools(cast(EventPusher, push), thread_id=thread_id)
-    await tools.say_to_user(
-        message=build_completion_message(record),
-        context="a2a_task_completion",
+    await queues.enqueue_input(
+        _build_completion_followup_prompt(record),
         metadata={
+            "thread_id": thread_id,
+            "notify_on_completion": True,
+            "completion_event_type": "agent_message",
+            "source": "a2a_task_completion_followup",
             "task_id": record.task_id,
             "agent": record.agent_name,
             "a2a_status": record.status,
