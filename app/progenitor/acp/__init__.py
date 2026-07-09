@@ -23,7 +23,7 @@ from .tasks import (
     build_acp_completion_message,
     build_acp_task_response,
     dispatch_tracked_acp_task,
-    send_acp_completion_notification,
+    enqueue_acp_completion_followup,
 )
 
 __all__ = [
@@ -36,6 +36,6 @@ __all__ = [
     "build_agent_args",
     "build_copilot_args",
     "dispatch_tracked_acp_task",
+    "enqueue_acp_completion_followup",
     "parse_acp_connection",
-    "send_acp_completion_notification",
 ]
