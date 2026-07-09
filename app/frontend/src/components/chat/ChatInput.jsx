@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
-import { selectAgentProfiles } from '../../store/uiData/agents';
+import { useDispatch, useSelector } from 'react-redux';
+import { useConfig } from '../../context/ConfigContext';
+import { fetchAgentProfiles } from '../../store/uiData/agents';
+import { selectAgentProfiles, selectAgentProfilesState } from '../../store/uiDataSlice';
 import { getAgentMentionContext } from './chatInputModel';
 
 const SLASH_COMMANDS = [
@@ -13,6 +15,8 @@ const SLASH_COMMANDS = [
     requiresArguments: false,
   },
 ];
+
+const DIRECT_AGENT_NAME_RE = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 
 function getSlashQuery(value) {
   const trimmedValue = value.trimStart();
@@ -52,8 +56,11 @@ function ChatInput({
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [selectionStart, setSelectionStart] = useState(initialMessage.length);
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
   const textareaRef = useRef(null);
   const agentProfiles = useSelector(selectAgentProfiles);
+  const agentProfilesState = useSelector(selectAgentProfilesState);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
   const mentionContext = getAgentMentionContext(message, selectionStart);
   const filteredSlashCommands = useMemo(() => {
@@ -72,6 +79,13 @@ function ChatInput({
       return [];
     }
     const names = agentProfiles
+      .filter((agent) => (
+        agent?.kind === 'a2a'
+        && typeof agent?.url === 'string'
+        && agent.url.trim()
+        && typeof agent?.name === 'string'
+        && DIRECT_AGENT_NAME_RE.test(agent.name)
+      ))
       .map((agent) => (typeof agent?.name === 'string' ? agent.name : ''))
       .filter(Boolean);
     return names.filter((name) => name.toLowerCase().includes(mentionContext.query));
@@ -91,6 +105,13 @@ function ChatInput({
       requestAnimationFrame(() => textareaRef.current?.focus());
     }
   }, [autoFocus, disabled, focusToken, isGenerating]);
+
+  useEffect(() => {
+    if (agentProfilesState.loaded || agentProfilesState.loading) {
+      return;
+    }
+    dispatch(fetchAgentProfiles({ agentsUrl: getApiUrl('agentProfiles') }));
+  }, [agentProfilesState.loaded, agentProfilesState.loading, dispatch, getApiUrl]);
 
   const executeSlashCommand = (command) => {
     if (command.requiresArguments) {
