@@ -9,14 +9,15 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from langchain.agents.middleware.types import ModelRequest, ToolCallRequest
-from langchain_core.messages import ToolMessage
+from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolCallRequest
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
 from app.progenitor.agent.adapters import DynamicMCPToolMiddleware
 from app.progenitor.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
+    DirectA2AFastPathMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
@@ -144,6 +145,116 @@ class TestDynamicMCPToolMiddleware:
 
         assert result == "ok"
         assert handler.call_args.args[0] is request
+
+
+class TestDirectA2AFastPathMiddleware:
+    @staticmethod
+    def _request(content: str, *, state: dict[str, Any] | None = None) -> ModelRequest[Any]:
+        return ModelRequest(
+            model=MagicMock(),
+            messages=[HumanMessage(content=content)],
+            tools=[],
+            state=state or {},
+        )
+
+    async def test_non_matching_message_calls_handler(self):
+        mw = DirectA2AFastPathMiddleware(tool_registry=MagicMock())
+        handler = AsyncMock(return_value=ModelResponse(result=[AIMessage(content="llm")]))
+
+        result = await mw.awrap_model_call(self._request("hello"), handler)
+
+        handler.assert_awaited_once()
+        assert result.result[0].content == "llm"
+
+    async def test_matching_prefix_bypasses_handler_and_returns_agent_text(self):
+        registry = MagicMock()
+        registry.find_by_name.return_value = {
+            "name": "greetings_agent",
+            "transport": "http",
+            "url": "http://localhost:8109",
+        }
+        client = MagicMock()
+        client.call_agent = AsyncMock(
+            return_value={
+                "success": True,
+                "result": {
+                    "status": {
+                        "message": {
+                            "parts": [{"root": {"text": "Hello from greetings_agent!"}}],
+                            "metadata": {"display_agent_name": "greetings_agent"},
+                        }
+                    }
+                },
+            }
+        )
+        mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
+
+        result = await mw.awrap_model_call(self._request("@greetings_agent hey"), AsyncMock())
+
+        client.call_agent.assert_awaited_once()
+        assert result.result[0].content == "Hello from greetings_agent!"
+        assert result.result[0].response_metadata["display_agent_name"] == "greetings_agent"
+
+    async def test_prefix_only_matches_at_start_of_latest_user_message(self):
+        registry = MagicMock()
+        client = MagicMock()
+        client.call_agent = AsyncMock()
+        mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
+        handler = AsyncMock(return_value=ModelResponse(result=[AIMessage(content="llm")]))
+
+        result = await mw.awrap_model_call(self._request("hello @greetings_agent hey"), handler)
+
+        handler.assert_awaited_once()
+        client.call_agent.assert_not_called()
+        assert result.result[0].content == "llm"
+
+    async def test_unknown_agent_returns_direct_error(self):
+        registry = MagicMock()
+        registry.find_by_name.return_value = None
+        mw = DirectA2AFastPathMiddleware(tool_registry=registry)
+
+        result = await mw.awrap_model_call(self._request("@missing_agent hey"), AsyncMock())
+
+        assert "unknown agent 'missing_agent'" in result.result[0].content
+
+    async def test_non_http_agent_returns_direct_error(self):
+        registry = MagicMock()
+        registry.find_by_name.return_value = {"name": "copilot", "transport": "acp", "url": None}
+        mw = DirectA2AFastPathMiddleware(tool_registry=registry)
+
+        result = await mw.awrap_model_call(self._request("@copilot hey"), AsyncMock())
+
+        assert "not an HTTP A2A agent" in result.result[0].content
+
+    async def test_empty_body_returns_direct_error(self):
+        mw = DirectA2AFastPathMiddleware(tool_registry=MagicMock())
+
+        result = await mw.awrap_model_call(self._request("@greetings_agent "), AsyncMock())
+
+        assert "requires a request" in result.result[0].content
+
+    async def test_blocking_invocation_passes_thread_metadata(self):
+        registry = MagicMock()
+        registry.find_by_name.return_value = {
+            "name": "greetings_agent",
+            "transport": "http",
+            "url": "http://localhost:8109",
+        }
+        client = MagicMock()
+        client.call_agent = AsyncMock(
+            return_value={"success": True, "result": {"status": {"message": {"text": "ok"}}}}
+        )
+        mw = DirectA2AFastPathMiddleware(tool_registry=registry, client_factory=lambda: client)
+
+        await mw.awrap_model_call(
+            self._request("@greetings_agent hello", state={"thread_id": "thread-direct"}),
+            AsyncMock(),
+        )
+
+        kwargs = client.call_agent.await_args.kwargs
+        assert kwargs["blocking"] is True
+        assert kwargs["context"]["thread_id"] == "thread-direct"
+        assert kwargs["context"]["routing_mode"] == "direct_prefix"
 
 
 class TestAuditLoggingMiddleware:

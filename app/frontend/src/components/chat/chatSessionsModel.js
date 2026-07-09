@@ -92,7 +92,11 @@ export function normalizeBackendChatMessage(message, index) {
       ? message.reasoning_token_count
       : 0,
     reasoningText: typeof message.reasoning_text === 'string' ? message.reasoning_text : '',
+    displayAgentName: typeof message.display_agent_name === 'string' ? message.display_agent_name : '',
+    displayModelName: typeof message.display_model_name === 'string' ? message.display_model_name : '',
+    displayToolCalls: Array.isArray(message.display_tool_calls) ? message.display_tool_calls : [],
     model: (() => {
+      if (typeof message.display_model_name === 'string' && message.display_model_name) return message.display_model_name;
       if (typeof message.model === 'string' && message.model) return message.model;
       if (typeof raw.model === 'string' && raw.model) return raw.model;
       const rm = raw.response_metadata && typeof raw.response_metadata === 'object' ? raw.response_metadata : {};

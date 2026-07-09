@@ -8,7 +8,9 @@ import {
   visibleGroupsForFilter,
   sidebarEmptyMessage,
 } from './chatSessionsModel';
+import { getAgentMentionContext } from './chatInputModel';
 import { groupSessionItems } from './conversationModel';
+import { formatDisplayToolCalls } from './messageDisplayModel';
 
 describe('compareSessionItems', () => {
   it('orders pinned before unpinned', () => {
@@ -60,6 +62,22 @@ describe('normalizeBackendChatMessage', () => {
     expect(m.content).toBe('hello');
     expect(m.tokenCount).toBe(5);
     expect(m.model).toBe('gpt-x');
+  });
+
+  it('preserves optional assistant display metadata', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm3',
+      role: 'assistant',
+      content: 'hello',
+      display_agent_name: 'greetings_agent',
+      display_model_name: 'gpt-5-mini',
+      display_tool_calls: ['sleep'],
+      raw: { response_metadata: {} },
+    }, 0);
+    expect(m.displayAgentName).toBe('greetings_agent');
+    expect(m.displayModelName).toBe('gpt-5-mini');
+    expect(m.displayToolCalls).toEqual(['sleep']);
+    expect(m.model).toBe('gpt-5-mini');
   });
 
   it('expands tool_calls into tool_start + tool_result stream events', () => {
@@ -184,6 +202,30 @@ describe('buildChatSessionItems', () => {
     expect(items.some((i) => i.source === 'local' && i.id === 'archived-1')).toBe(true);
     // The transient current-draft card is still correctly hidden.
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
+  });
+});
+
+describe('getAgentMentionContext', () => {
+  it('detects an @mention token at the cursor', () => {
+    expect(getAgentMentionContext('@greet', 6)).toEqual({
+      query: 'greet',
+      tokenStart: 0,
+      tokenEnd: 6,
+    });
+  });
+
+  it('returns null when the cursor is not inside a mention token', () => {
+    expect(getAgentMentionContext('hello @greet there', 18)).toBeNull();
+  });
+});
+
+describe('formatDisplayToolCalls', () => {
+  it('renders string and object tool names compactly', () => {
+    expect(formatDisplayToolCalls(['sleep', { name: 'probe_copilot' }])).toBe('sleep, probe_copilot');
+  });
+
+  it('omits output when metadata is absent', () => {
+    expect(formatDisplayToolCalls([])).toBe('');
   });
 });
 
