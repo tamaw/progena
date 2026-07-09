@@ -13,11 +13,16 @@ from app.progenitor.ipc.stream_events import (
     build_tool_error_event,
     build_tool_result_event,
     build_tool_start_event,
-    emit_stream_event,
 )
 from app.progenitor.state.models import redact_secrets
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_stream_event(payload: dict[str, Any]) -> None:
+    from app.progenitor.agent import middleware as middleware_exports
+
+    middleware_exports.emit_stream_event(payload)
 
 
 class AuditLogSink(Protocol):
@@ -53,7 +58,7 @@ class AuditLoggingMiddleware(AgentMiddleware):
             for key, value in raw_args.items()
         }
 
-        emit_stream_event(build_tool_start_event(tool_name, tool_id, raw_args))
+        _emit_stream_event(build_tool_start_event(tool_name, tool_id, raw_args))
 
         start_time = time.monotonic()
         error: str | None = None
@@ -77,9 +82,9 @@ class AuditLoggingMiddleware(AgentMiddleware):
             }
             logger.info("Tool call: %s (%.1fms)", tool_name, duration_ms)
             if error is None:
-                emit_stream_event(build_tool_result_event(tool_name, tool_id, duration_ms, result))
+                _emit_stream_event(build_tool_result_event(tool_name, tool_id, duration_ms, result))
             else:
-                emit_stream_event(build_tool_error_event(tool_name, tool_id, duration_ms, error))
+                _emit_stream_event(build_tool_error_event(tool_name, tool_id, duration_ms, error))
             if self._log_sink is None:
                 logger.warning("No audit log sink configured; dropping tool audit entry")
             else:
