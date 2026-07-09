@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { collectMessageImages } from './conversationModel';
+import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 
 function isTimelineStreamEvent(event) {
@@ -33,20 +34,6 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
     },
     ...timelineEvents,
   ];
-}
-
-export function formatDisplayToolCalls(displayToolCalls) {
-  if (!Array.isArray(displayToolCalls) || displayToolCalls.length === 0) {
-    return '';
-  }
-  return displayToolCalls
-    .map((call) => {
-      if (typeof call === 'string') return call;
-      if (call && typeof call === 'object' && typeof call.name === 'string') return call.name;
-      return '';
-    })
-    .filter(Boolean)
-    .join(', ');
 }
 
 function MessageView({ message, streamEventFilter, hideContent = false, showImages = true }) {

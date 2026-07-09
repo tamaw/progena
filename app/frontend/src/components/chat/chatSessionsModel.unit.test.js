@@ -8,9 +8,9 @@ import {
   visibleGroupsForFilter,
   sidebarEmptyMessage,
 } from './chatSessionsModel';
+import { getAgentMentionContext } from './chatInputModel';
 import { groupSessionItems } from './conversationModel';
-import { getAgentMentionContext } from './ChatInput';
-import { formatDisplayToolCalls } from './Message';
+import { formatDisplayToolCalls } from './messageDisplayModel';
 
 describe('compareSessionItems', () => {
   it('orders pinned before unpinned', () => {

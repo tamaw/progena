@@ -1,5 +1,7 @@
 """Custom middleware exports for the Progenitor DeepAgent."""
 
+from app.progenitor.ipc.stream_events import emit_stream_event
+
 from .async_subagent_tracking import AsyncSubagentTrackingMiddleware
 from .audit_logging import AuditLoggingMiddleware
 from .direct_a2a_fast_path import DirectA2AFastPathMiddleware
@@ -10,6 +12,7 @@ __all__ = [
     "AsyncSubagentTrackingMiddleware",
     "AuditLoggingMiddleware",
     "DirectA2AFastPathMiddleware",
+    "emit_stream_event",
     "MetricsMiddleware",
     "SecretRedactionMiddleware",
 ]
