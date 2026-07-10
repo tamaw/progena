@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { buildEntityPath } from '../lib/entityUrl';
+import { useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import {
   PaneList,
   PaneListFilters,
@@ -273,8 +273,6 @@ function SchedulesPage() {
   const { getSchedules, retriggerSchedule } = useSchedulesApi();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /schedules/sch_42/daily-digest)
   // -- selection is driven entirely by the id, never by the slug.
   const { scheduleId: urlScheduleId } = useParams();
@@ -386,12 +384,7 @@ function SchedulesPage() {
   // deep-linked or stale id falls back to the top visible schedule the same
   // way `selectedSchedule` already does above. The title slug is cosmetic;
   // only the id segment is ever read back.
-  useEffect(() => {
-    const nextPath = buildEntityPath('/schedules', selectedSchedule?.id, selectedSchedule?.name || selectedSchedule?.id);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [selectedSchedule?.id, selectedSchedule?.name, location.pathname, navigate]);
+  useEntityUrlSync('/schedules', selectedSchedule?.id, selectedSchedule?.name);
 
   const activeCount = schedules.filter((schedule) => !schedule.paused).length;
   const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;

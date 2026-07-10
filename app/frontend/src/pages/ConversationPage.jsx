@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -85,7 +85,7 @@ import {
   persistPinnedSessionIds,
   persistSharedSessionIds,
 } from '../components/chat/chatStorage';
-import { buildChatPath } from '../components/chat/chatUrl';
+import { useEntityUrlSync } from '../lib/routes';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -183,7 +183,6 @@ function stripEphemeralStreamEvents(message) {
 function ConversationPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
   // session selection is driven entirely by the id, never by the slug.
   const { threadId: urlThreadId } = useParams();
@@ -1022,13 +1021,8 @@ function ConversationPage() {
   // Keep the URL in sync with whichever session is actually selected (either
   // a backend chat, or a local draft that already has messages). The title
   // slug is cosmetic; only the id segment is ever read back.
-  useEffect(() => {
-    const activeRouteThreadId = selectedBackendChatId || (messages.length > 0 ? threadId : null);
-    const nextPath = buildChatPath(activeRouteThreadId, chatTitle);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [selectedBackendChatId, threadId, messages.length, chatTitle, location.pathname, navigate]);
+  const activeRouteThreadId = selectedBackendChatId || (messages.length > 0 ? threadId : null);
+  useEntityUrlSync('/chat', activeRouteThreadId, chatTitle);
 
   const archiveSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.threadId) {

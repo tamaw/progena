@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { slugifyTitle, buildEntityPath } from './entityUrl';
+import { slugifyTitle, buildEntityPath } from './routes';
 
 describe('slugifyTitle', () => {
   it('lowercases and hyphenates', () => {

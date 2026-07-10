@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { buildEntityPath } from '../lib/entityUrl';
+import { useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
 import {
   fetchKnowledge,
@@ -116,8 +116,6 @@ function InfoRow({ title, sub, chip }) {
 export default function KnowledgePage() {
   const { getApiUrl } = useConfig();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /knowledge/src-abc123/docs) --
   // selection is driven entirely by the id, never by the slug.
   const { baseId: urlBaseId } = useParams();
@@ -212,12 +210,7 @@ export default function KnowledgePage() {
   // deep-linked or stale id falls back to the top visible base the same way
   // `selectedBase` already does above. The title slug is cosmetic; only the
   // id segment is ever read back.
-  useEffect(() => {
-    const nextPath = buildEntityPath('/knowledge', selectedBase?.id, selectedBase?.name || selectedBase?.id);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [selectedBase?.id, selectedBase?.name, location.pathname, navigate]);
+  useEntityUrlSync('/knowledge', selectedBase?.id, selectedBase?.name);
 
   const connectedCount = bases.filter((base) => base.status === 'connected').length;
   const sources = selectedBase?.sources || [];

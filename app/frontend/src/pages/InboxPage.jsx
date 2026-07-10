@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { buildEntityPath } from '../lib/entityUrl';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -68,7 +68,6 @@ function InboxMessageBody({ content }) {
 export default function InboxPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /inbox/msg_42/weekly-digest) --
   // selection is driven entirely by the id, never by the slug.
   const { messageId: urlMessageId } = useParams();
@@ -149,12 +148,7 @@ export default function InboxPage() {
 
   // Keep the URL in sync with whichever message is selected. The title slug
   // is cosmetic; only the id segment is ever read back.
-  useEffect(() => {
-    const nextPath = buildEntityPath('/inbox', selectedMessage?.id, selectedMessage?.title || selectedMessage?.id);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [selectedMessage?.id, selectedMessage?.title, location.pathname, navigate]);
+  useEntityUrlSync('/inbox', selectedMessage?.id, selectedMessage?.title);
 
   const selectedMessageId = selectedMessage?.id;
   const selectedMessageRead = selectedMessage?.read;

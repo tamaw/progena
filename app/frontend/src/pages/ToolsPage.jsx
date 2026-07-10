@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { buildEntityPath } from '../lib/entityUrl';
+import { useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import {
   PaneList,
   PaneListFilters,
@@ -134,8 +134,6 @@ function MetricCard({ label, value, detail }) {
 
 export default function ToolsPage() {
   const dispatch = useDispatch();
-  const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /tools/mcp%3Ajina/jina) --
   // selection is driven entirely by the id, never by the slug.
   const { serverId: urlServerId } = useParams();
@@ -206,12 +204,7 @@ export default function ToolsPage() {
   // deep-linked or stale id falls back to the top visible server the same
   // way `selectedServer` already does above. The title slug is cosmetic;
   // only the id segment is ever read back.
-  useEffect(() => {
-    const nextPath = buildEntityPath('/tools', selectedServer?.id, selectedServer?.name || selectedServer?.id);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [selectedServer?.id, selectedServer?.name, location.pathname, navigate]);
+  useEntityUrlSync('/tools', selectedServer?.id, selectedServer?.name);
 
   const totals = useMemo(() => ({
     connected: servers.filter((server) => statusOf(server) === 'connected').length,
