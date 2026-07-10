@@ -1773,9 +1773,9 @@ class TestSplitSSEEndpoints:
             await generator.aclose()
             clear_alerts()
 
-        assert "event: connected" in connected_event
-        assert "event: alerts" in alerts_event
-        payload = json.loads(alerts_event.split("data: ", 1)[1].strip())
+        assert connected_event.event == "connected"
+        assert alerts_event.event == "alerts"
+        payload = alerts_event.data
         assert payload["unread"] == 1
         assert payload["alerts"][0]["id"] == alert.id
 

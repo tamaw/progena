@@ -32,8 +32,9 @@ from typing import Any, Literal, cast
 
 import httpx
 from croniter import croniter
-from fastapi import APIRouter, Header, HTTPException, Query
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import Response
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from app.progenitor.schedule import Scheduler, default_timezone_name
@@ -5159,12 +5160,6 @@ async def close_all_sse_connections():
 # ============================================================================
 
 
-def _format_sse(event_type: str, data: Mapping[str, Any] | str, event_id: str | None = None) -> str:
-    payload = data if isinstance(data, str) else json.dumps(data, default=str)
-    id_line = f"id: {event_id}\n" if event_id else ""
-    return f"{id_line}event: {event_type}\ndata: {payload}\n\n"
-
-
 def _next_ui_envelope(
     event_type: str,
     payload: Mapping[str, Any],
@@ -5184,7 +5179,10 @@ def _next_ui_envelope(
     )
 
 
-async def _generate_ui_stream(last_event_id: str | None = None) -> AsyncGenerator[str, None]:
+async def _generate_ui_stream(
+    last_event_id: str | None = None,
+    request: Request | None = None,
+) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     _ui_stream_subscribers.append(queue)
@@ -5196,6 +5194,17 @@ async def _generate_ui_stream(last_event_id: str | None = None) -> AsyncGenerato
     shutdown_event = get_sse_shutdown_event()
     start_status_monitor()
 
+    # Detect client disconnect promptly rather than waiting for the next failed write.
+    disconnected = asyncio.Event()
+
+    async def _watch_disconnect() -> None:
+        if request is not None:
+            with contextlib.suppress(Exception):
+                await request.is_disconnected()
+                disconnected.set()
+
+    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
+
     try:
         if last_event_id:
             try:
@@ -5204,53 +5213,60 @@ async def _generate_ui_stream(last_event_id: str | None = None) -> AsyncGenerato
                 replay_after = 0
             for envelope in _ui_event_replay:
                 if envelope.seq > replay_after:
-                    yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                    yield ServerSentEvent(
+                        event="ui.event",
+                        data=envelope.model_dump(),
+                        id=envelope.id,
+                    )
 
         initial_status = await _get_current_status()
         connected = _next_ui_envelope(
             "connection.ready",
             {"stream": "ui", "status": initial_status, "alerts": _alerts_payload()},
         )
-        yield _format_sse("ui.event", connected.model_dump(), connected.id)
+        yield ServerSentEvent(event="ui.event", data=connected.model_dump(), id=connected.id)
 
         while True:
+            if disconnected.is_set():
+                break
+
             if shutdown_event.is_set():
                 envelope = _next_ui_envelope(
                     "connection.shutdown",
                     {"reason": "server_shutdown", "message": "Server is shutting down"},
                 )
-                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
                 break
 
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                event = await asyncio.wait_for(queue.get(), timeout=5.0)
                 if event.get("type") == "shutdown":
                     envelope = _next_ui_envelope(
                         "connection.shutdown",
                         {"reason": "server_shutdown", "message": "Server is shutting down"},
                     )
-                    yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                    yield ServerSentEvent(
+                        event="ui.event", data=envelope.model_dump(), id=envelope.id
+                    )
                     break
                 envelope = event["envelope"]
-                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
+                if disconnected.is_set():
+                    break
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
-                yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
-    except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
-            envelope = _next_ui_envelope(
-                "connection.shutdown",
-                {"reason": "connection_cancelled", "message": "Connection closed"},
-            )
-            yield _format_sse("ui.event", envelope.model_dump(), envelope.id)
+                yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
+        disconnect_watcher.cancel()
         if queue in _ui_stream_subscribers:
             _ui_stream_subscribers.remove(queue)
         if current_task and current_task in _active_ui_stream_tasks:
             _active_ui_stream_tasks.remove(current_task)
 
 
-async def _generate_chat_events() -> AsyncGenerator[str, None]:
+async def _generate_chat_events(
+    request: Request | None = None,
+) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate SSE events for chat/IPC stream only.
 
     This stream receives:
@@ -5263,57 +5279,72 @@ async def _generate_chat_events() -> AsyncGenerator[str, None]:
 
     Does NOT receive status/health updates (use /status for those).
     """
-
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     _chat_subscribers.append(queue)
 
-    # Track current task for cancellation during shutdown
     current_task = asyncio.current_task()
     if current_task:
         _active_chat_tasks.append(current_task)
 
-    # Get shutdown event to watch for server shutdown
     shutdown_event = get_sse_shutdown_event()
 
+    disconnected = asyncio.Event()
+
+    async def _watch_disconnect() -> None:
+        if request is not None:
+            with contextlib.suppress(Exception):
+                await request.is_disconnected()
+                disconnected.set()
+
+    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
+
     try:
-        # Send initial connection event
-        yield f'event: connected\ndata: {{"stream": "chat", "timestamp": {time.time()}}}\n\n'
+        yield ServerSentEvent(
+            event="connected",
+            data={"stream": "chat", "timestamp": time.time()},
+        )
 
         while True:
-            # Check if shutdown has been requested
+            if disconnected.is_set():
+                break
+
             if shutdown_event.is_set():
                 logger.debug("Chat SSE connection closing due to server shutdown")
-                yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                yield ServerSentEvent(
+                    event="shutdown",
+                    data={"reason": "server_shutdown", "message": "Server is shutting down"},
+                )
                 break
 
             try:
-                # Wait for event with timeout (30s keepalive)
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
-
-                # Check if this is a shutdown event
+                event = await asyncio.wait_for(queue.get(), timeout=5.0)
                 if event.get("type") == "shutdown":
-                    yield f"event: shutdown\ndata: {event['data']}\n\n"
+                    yield ServerSentEvent(event="shutdown", raw_data=event["data"])
                     break
-
-                yield f"event: {event['type']}\ndata: {event['data']}\n\n"
+                yield ServerSentEvent(event=event["type"], raw_data=event["data"])
             except TimeoutError:
-                # Check shutdown again on timeout
-                if shutdown_event.is_set():
-                    yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                if disconnected.is_set():
                     break
-                # Send heartbeat (no status payload - just keepalive)
-                yield f'event: heartbeat\ndata: {{"timestamp": {time.time()}}}\n\n'
-    except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
-            yield 'event: shutdown\ndata: {"reason": "connection_cancelled", "message": "Connection closed"}\n\n'
+                if shutdown_event.is_set():
+                    yield ServerSentEvent(
+                        event="shutdown",
+                        data={"reason": "server_shutdown", "message": "Server is shutting down"},
+                    )
+                    break
+                # EventSourceResponse sends automatic keepalive pings; only yield
+                # a heartbeat here so clients can detect stale connections.
+                yield ServerSentEvent(event="heartbeat", data={"timestamp": time.time()})
     finally:
+        disconnect_watcher.cancel()
         if queue in _chat_subscribers:
             _chat_subscribers.remove(queue)
         if current_task and current_task in _active_chat_tasks:
             _active_chat_tasks.remove(current_task)
 
 
-async def _generate_status_events() -> AsyncGenerator[str, None]:
+async def _generate_status_events(
+    request: Request | None = None,
+) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate SSE events for status/health stream only.
 
     This stream receives:
@@ -5322,57 +5353,62 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
 
     Does NOT receive chat/IPC events (use /events for those).
     """
-    import json
-
-    queue: asyncio.Queue = asyncio.Queue()
+    queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     _status_subscribers.append(queue)
 
-    # Track current task for cancellation during shutdown
     current_task = asyncio.current_task()
     if current_task:
         _active_status_tasks.append(current_task)
 
-    # Get shutdown event to watch for server shutdown
     shutdown_event = get_sse_shutdown_event()
-
-    # Start status monitor if not running
     start_status_monitor()
 
+    disconnected = asyncio.Event()
+
+    async def _watch_disconnect() -> None:
+        if request is not None:
+            with contextlib.suppress(Exception):
+                await request.is_disconnected()
+                disconnected.set()
+
+    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
+
     try:
-        # Send initial connection event with current status
         initial_status = await _get_current_status()
-        yield f"event: connected\ndata: {json.dumps(initial_status)}\n\n"
-        yield f"event: alerts\ndata: {json.dumps(_alerts_payload())}\n\n"
+        yield ServerSentEvent(event="connected", data=initial_status)
+        yield ServerSentEvent(event="alerts", data=_alerts_payload())
 
         while True:
-            # Check if shutdown has been requested
+            if disconnected.is_set():
+                break
+
             if shutdown_event.is_set():
                 logger.debug("Status SSE connection closing due to server shutdown")
-                yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                yield ServerSentEvent(
+                    event="shutdown",
+                    data={"reason": "server_shutdown", "message": "Server is shutting down"},
+                )
                 break
 
             try:
-                # Wait for event with timeout (5s for responsive status updates)
                 event = await asyncio.wait_for(queue.get(), timeout=5.0)
-
-                # Check if this is a shutdown event
                 if event.get("type") == "shutdown":
-                    yield f"event: shutdown\ndata: {event['data']}\n\n"
+                    yield ServerSentEvent(event="shutdown", raw_data=event["data"])
                     break
-
-                yield f"event: {event['type']}\ndata: {event['data']}\n\n"
+                yield ServerSentEvent(event=event["type"], raw_data=event["data"])
             except TimeoutError:
-                # Check shutdown again on timeout
-                if shutdown_event.is_set():
-                    yield 'event: shutdown\ndata: {"reason": "server_shutdown", "message": "Server is shutting down"}\n\n'
+                if disconnected.is_set():
                     break
-                # Send heartbeat with current status
+                if shutdown_event.is_set():
+                    yield ServerSentEvent(
+                        event="shutdown",
+                        data={"reason": "server_shutdown", "message": "Server is shutting down"},
+                    )
+                    break
                 heartbeat_status = await _get_current_status()
-                yield f"event: heartbeat\ndata: {json.dumps(heartbeat_status)}\n\n"
-    except asyncio.CancelledError:
-        with contextlib.suppress(Exception):
-            yield 'event: shutdown\ndata: {"reason": "connection_cancelled", "message": "Connection closed"}\n\n'
+                yield ServerSentEvent(event="heartbeat", data=heartbeat_status)
     finally:
+        disconnect_watcher.cancel()
         if queue in _status_subscribers:
             _status_subscribers.remove(queue)
         if current_task and current_task in _active_status_tasks:
@@ -5380,21 +5416,16 @@ async def _generate_status_events() -> AsyncGenerator[str, None]:
 
 
 @router.get("/stream")
-async def ui_stream(last_event_id: str | None = Header(default=None, alias="Last-Event-ID")):
+async def ui_stream(
+    request: Request,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
     """Canonical typed SSE stream for all frontend UI updates."""
-    return StreamingResponse(
-        _generate_ui_stream(last_event_id),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return EventSourceResponse(_generate_ui_stream(last_event_id, request))
 
 
 @router.get("/events")
-async def events_stream():
+async def events_stream(request: Request):
     """
     Server-Sent Events endpoint for IPC events.
 
@@ -5419,19 +5450,11 @@ async def events_stream():
     - agent_question: {"content": "...", "metadata": {...}, "timestamp": ...}
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
-    return StreamingResponse(
-        _generate_chat_events(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering
-        },
-    )
+    return EventSourceResponse(_generate_chat_events(request))
 
 
 @router.get("/status")
-async def status_stream():
+async def status_stream(request: Request):
     """
     Server-Sent Events endpoint for continuous status updates.
 
@@ -5457,15 +5480,7 @@ async def status_stream():
     - heartbeat: Keepalive with status (during quiet periods)
     - shutdown: Server shutting down
     """
-    return StreamingResponse(
-        _generate_status_events(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # Disable nginx buffering
-        },
-    )
+    return EventSourceResponse(_generate_status_events(request))
 
 
 # ============================================================================
@@ -5486,11 +5501,16 @@ def broadcast_ui_event(
     del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
 
     event = {"type": "ui.event", "envelope": envelope}
+    dead: list[asyncio.Queue] = []
     for queue in _ui_stream_subscribers:
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Event queue full for UI stream subscriber")
+            logger.warning("Event queue full for UI stream subscriber — evicting dead connection")
+            dead.append(queue)
+    for q in dead:
+        with contextlib.suppress(ValueError):
+            _ui_stream_subscribers.remove(q)
     return envelope
 
 
@@ -5710,12 +5730,16 @@ def broadcast_chat_event(event_type: str, data: dict):
     event = {"type": event_type, "data": json.dumps(data)}
     broadcast_ui_event(event_type, data, scope="chat")
 
-    # Push to /events subscribers
+    dead: list[asyncio.Queue] = []
     for queue in _chat_subscribers:
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Event queue full for chat subscriber")
+            logger.warning("Event queue full for chat subscriber — evicting dead connection")
+            dead.append(queue)
+    for q in dead:
+        with contextlib.suppress(ValueError):
+            _chat_subscribers.remove(q)
 
 
 def broadcast_status_event(event_type: str, data: Mapping[str, object]):
@@ -5743,12 +5767,16 @@ def broadcast_status_event(event_type: str, data: Mapping[str, object]):
     }.get(event_type, event_type)
     broadcast_ui_event(mapped_type, data)
 
-    # Push to /status subscribers only
+    dead: list[asyncio.Queue] = []
     for queue in _status_subscribers:
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Event queue full for status subscriber")
+            logger.warning("Event queue full for status subscriber — evicting dead connection")
+            dead.append(queue)
+    for q in dead:
+        with contextlib.suppress(ValueError):
+            _status_subscribers.remove(q)
 
 
 def broadcast_alert(alert: AlertInfo):
