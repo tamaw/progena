@@ -53,7 +53,7 @@ function App() {
                   <Route element={<AppRuntimeShell />}>
                     <Route path="/" element={<Navigate to="/chat" replace />} />
                     <Route path="/chat/:threadId?/:titleSlug?" element={<ConversationPage />} />
-                    <Route path="/inbox" element={<InboxPage />} />
+                    <Route path="/inbox/:messageId?/:titleSlug?" element={<InboxPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/models" element={<ModelsPage />} />
                     <Route path="/channels" element={<ChannelsPage />} />
