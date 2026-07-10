@@ -5226,6 +5226,8 @@ async def _generate_ui_stream(
         _ui_stream_subscribers.discard(queue)
         if current_task:
             _active_ui_stream_tasks.discard(current_task)
+        if not _ui_stream_subscribers:
+            stop_status_monitor()
 
 
 @router.get("/stream", response_class=EventSourceResponse)
