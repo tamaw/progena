@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
+    extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
@@ -479,22 +480,7 @@ def _raw_message_payload(raw: Any) -> dict[str, Any]:
 
 
 def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
-    metadata = (
-        raw.get("response_metadata")
-        if isinstance(raw, dict)
-        else getattr(raw, "response_metadata", None)
-    )
-    if not isinstance(metadata, dict):
-        return {}
-    result: dict[str, Any] = {}
-    for key in ("display_agent_name", "display_model_name"):
-        value = metadata.get(key)
-        if isinstance(value, str) and value:
-            result[key] = value
-    tool_calls = metadata.get("display_tool_calls")
-    if isinstance(tool_calls, list):
-        result["display_tool_calls"] = tool_calls
-    return result
+    return extract_display_metadata(raw)
 
 
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:

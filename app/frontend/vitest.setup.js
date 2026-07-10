@@ -35,3 +35,28 @@ Object.defineProperty(globalThis, 'localStorage', {
 beforeEach(() => {
   globalThis.localStorage.clear();
 });
+
+// Minimal document mock for Message component rendering tests.
+// sanitizeHtmlFragment in Message.jsx uses document.createElement('template')
+// to parse HTML; renderToStaticMarkup in tests doesn't need a real browser DOM.
+if (typeof globalThis.document === 'undefined') {
+  const mockTemplate = {
+    innerHTML: '',
+    content: {
+      childNodes: [],
+      querySelectorAll: () => [],
+      removeChild: () => {},
+      appendChild: () => {},
+    },
+  };
+  globalThis.document = {
+    createElement: (tag) => {
+      if (tag === 'template') return { ...mockTemplate };
+      return { ...mockTemplate };
+    },
+    createTreeWalker: () => ({
+      nextNode: () => null,
+      currentNode: null,
+    }),
+  };
+}

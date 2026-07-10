@@ -18,6 +18,7 @@ const DEFAULT_FILTERS = STREAM_EVENT_CATEGORIES.reduce((acc, c) => {
 export function categoryForEventType(eventType) {
   if (typeof eventType !== 'string') return 'debug';
   if (eventType === 'message_delta') return null;
+  if (eventType === 'assistant_metadata') return null;
   if (eventType === 'node_update') return 'debug';
   if (eventType === 'reasoning_delta' || eventType === 'reasoning_summary') return 'reasoning';
   if (eventType === 'tool_error') return 'errors';

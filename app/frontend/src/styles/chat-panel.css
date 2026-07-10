@@ -241,6 +241,22 @@
     50% { opacity: 0; }
 }
 
+/* Pending cursor — rendered as a chat-row shell before any assistant
+   output arrives, so the user sees the assistant is thinking without an
+   agent header or timestamp.  Reuses the same blink keyframe above. */
+.pending-cursor .message.streaming .message-content::after {
+    content: "▋";
+    animation: blink 0.7s infinite;
+    color: var(--color-accent);
+}
+.pending-cursor__body {
+    min-height: 1.4em;
+}
+.thinking-label {
+    color: var(--color-text-muted);
+    font-style: italic;
+}
+
 /* Chat Input Container */
 .chat-input-container {
     padding: 10px var(--chat-content-gutter) 10px;

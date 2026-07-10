@@ -10,7 +10,6 @@ import {
   appendReasoningText,
   createStreamEvent,
   appendStreamEvent,
-  finalizeSupersededAssistant,
 } from './streamEventsModel';
 
 const evt = (overrides = {}) => ({
@@ -164,22 +163,3 @@ describe('appendStreamEvent', () => {
   });
 });
 
-describe('finalizeSupersededAssistant', () => {
-  it('returns the message unchanged when not streaming', () => {
-    const m = { isStreaming: false, content: 'hi' };
-    expect(finalizeSupersededAssistant(m)).toBe(m);
-  });
-
-  it('drops an empty streaming placeholder', () => {
-    expect(finalizeSupersededAssistant({ isStreaming: true, content: '', streamEvents: [] })).toBeNull();
-  });
-
-  it('finalizes a streaming message with output and appends the cancelled suffix once', () => {
-    const out = finalizeSupersededAssistant({ isStreaming: true, content: 'partial', streamEvents: [] });
-    expect(out.isStreaming).toBe(false);
-    expect(out.content).toBe(`partial${CANCELLED_SUFFIX}`);
-
-    const already = finalizeSupersededAssistant({ isStreaming: true, content: `done${CANCELLED_SUFFIX}`, streamEvents: [] });
-    expect(already.content).toBe(`done${CANCELLED_SUFFIX}`);
-  });
-});

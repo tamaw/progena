@@ -5,7 +5,7 @@ import {
   getTimeBucket,
   toValidTimestamp,
 } from './conversationModel';
-
+import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -82,7 +82,7 @@ export function normalizeBackendChatMessage(message, index) {
     id,
   );
 
-  return {
+  const normalized = {
     id,
     role,
     content,
@@ -105,6 +105,15 @@ export function normalizeBackendChatMessage(message, index) {
     streamEvents,
     raw,
   };
+
+  // Attach a synthetic fallback timeline for backend-loaded messages.
+  // Backend checkpoint data does not preserve the exact live interleave
+  // between assistant text and stream events, so we build a fallback order
+  // (assistant row first, then known stream events).
+  if (role === 'assistant') {
+    normalized.timelineItems = buildDefaultAssistantTimeline(normalized);
+  }
+  return normalized;
 }
 
 function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating) {

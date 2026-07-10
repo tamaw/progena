@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from ..runtime.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
+    extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
@@ -54,6 +55,7 @@ class DeepAgentIPCStream:
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
+        self._last_emitted_assistant_metadata: dict[str, Any] | None = None
 
     async def stream(
         self,
@@ -190,6 +192,7 @@ class DeepAgentIPCStream:
                 }
             self.state.update(node_output)
             model_name: str | None = None
+            display_metadata: dict[str, Any] = {}
             if "messages" in node_output:
                 last_msg = get_last_ai_message(node_output.get("messages"))
                 if last_msg is not None:
@@ -199,6 +202,22 @@ class DeepAgentIPCStream:
                         if isinstance(rm, dict)
                         else None
                     )
+                    display_metadata = extract_display_metadata(last_msg)
+
+            # Emit assistant_metadata once per changed payload, before the
+            # node_update event so the frontend can label the assistant row
+            # before any text chunk or tool/debug event arrives. Some direct
+            # A2A replies do not carry a stable AI message id, so payload
+            # change — not message identity — is the safe dedupe key here.
+            if display_metadata and display_metadata != self._last_emitted_assistant_metadata:
+                self._last_emitted_assistant_metadata = dict(display_metadata)
+                yield {
+                    "type": "stream_event",
+                    "event_type": "assistant_metadata",
+                    "content": "",
+                    "metadata": dict(display_metadata),
+                }
+
             yield {
                 "type": "stream_event",
                 "event_type": "node_update",
@@ -223,10 +242,19 @@ class DeepAgentIPCStream:
 
     async def _finalize_stream(self) -> AsyncIterator[dict[str, Any]]:
         last_ai_msg = get_last_ai_message(self.state.get("messages"))
+        display_metadata = extract_display_metadata(last_ai_msg) if last_ai_msg is not None else {}
         response_text = self.last_response
         if response_text is None:
             response_text = extract_message_text(last_ai_msg)
             if response_text:
+                if display_metadata and display_metadata != self._last_emitted_assistant_metadata:
+                    self._last_emitted_assistant_metadata = dict(display_metadata)
+                    yield {
+                        "type": "stream_event",
+                        "event_type": "assistant_metadata",
+                        "content": "",
+                        "metadata": dict(display_metadata),
+                    }
                 async for item in self._ensure_response_streamed(response_text):
                     yield item
                 self.last_response = response_text
