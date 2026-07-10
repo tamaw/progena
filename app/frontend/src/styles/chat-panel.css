@@ -248,14 +248,15 @@
 /* Pending cursor — rendered as a bare chat-row shell before any assistant
    output arrives, so the user sees the assistant is responding without
    committing to a badge/tag/timestamp for an entry type we don't know yet.
-   Reuses the same blink keyframe above. */
+   The word itself is typed out a character at a time by
+   PendingAssistantCursor.jsx; the trailing cursor reuses .stream-cursor so
+   it sits glued to the end of the word exactly like the real streaming
+   cursor does. */
 .pending-cursor__blink {
     min-height: 1.4em;
 }
-.pending-cursor__blink::before {
-    content: "▋";
-    animation: blink 0.7s infinite;
-    color: var(--color-accent);
+.pending-cursor__word {
+    color: var(--color-text-muted);
 }
 
 /* Chat Input Container */
