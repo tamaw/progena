@@ -1541,44 +1541,6 @@
     font-size: 13px;
 }
 
-/* IRC-style transcript: HH:MM <nick> message, nick column aligned across
-   rows, wrapped lines hang-indented under the message column. */
-.chat-text-export {
-    display: grid;
-    grid-template-columns: auto auto minmax(0, 1fr);
-    align-items: baseline;
-    column-gap: 8px;
-    row-gap: 2px;
-    margin: 0;
-    color: var(--color-text-primary);
-    font-family: var(--font-family-mono);
-    font-size: 12.5px;
-    line-height: 1.45;
-}
-
-.irc-line {
-    display: contents;
-}
-
-.irc-line__time {
-    color: var(--color-text-muted);
-    text-align: right;
-    white-space: nowrap;
-    font-variant-numeric: tabular-nums;
-}
-
-.irc-line__nick {
-    text-align: right;
-    white-space: nowrap;
-    font-weight: 600;
-}
-
-.irc-line__text {
-    min-width: 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-
 .welcome-message {
     max-width: 540px;
     padding: 44px 28px;
