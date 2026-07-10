@@ -8,13 +8,14 @@
  * the cursor lines up with wherever that real entry lands, avoiding a
  * layout jump on the swap.
  *
- * While waiting, a single word from PENDING_WORDS is typed out one
- * character at a time next to the cursor, purely to signal "still working":
- * blink on empty, type forward, hold, delete backward, blink on empty again,
- * then repeat with a new word. The animation is entirely local (a setTimeout
- * loop cleaned up on unmount), so cancelling the turn or the real entry
- * arriving unmounts this component and the animation stops immediately with
- * no extra teardown.
+ * While waiting, a single word from PENDING_WORDS (plus a trailing "...")
+ * is typed out one character at a time next to the cursor, purely to
+ * signal "still working": blink on empty, type forward (through the dots
+ * too), hold, delete backward, blink on empty again, then repeat with a
+ * new word. The animation is entirely local (a setTimeout loop cleaned up
+ * on unmount), so cancelling the turn or the real entry arriving unmounts
+ * this component and the animation stops immediately with no extra
+ * teardown.
  */
 
 import { useEffect, useState } from 'react';
@@ -36,6 +37,7 @@ const PENDING_WORDS = [
 
 const TYPE_INTERVAL_MS = 90;
 const PAUSE_MS = 1000;
+const WORD_SUFFIX = '...';
 
 function pickWord(exclude) {
   if (PENDING_WORDS.length <= 1) return PENDING_WORDS[0];
@@ -53,7 +55,8 @@ export default function PendingAssistantCursor() {
   useEffect(() => {
     let cancelled = false;
     let timeoutId;
-    let currentWord = pickWord(null);
+    let bareWord = pickWord(null);
+    let currentWord = bareWord + WORD_SUFFIX;
 
     const typeForward = (charIndex) => {
       if (cancelled) return;
@@ -74,7 +77,8 @@ export default function PendingAssistantCursor() {
       } else {
         timeoutId = setTimeout(() => {
           if (cancelled) return;
-          currentWord = pickWord(currentWord);
+          bareWord = pickWord(bareWord);
+          currentWord = bareWord + WORD_SUFFIX;
           typeForward(1);
         }, PAUSE_MS);
       }
