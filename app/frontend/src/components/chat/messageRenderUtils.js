@@ -99,13 +99,6 @@ function prettifyLabel(value) {
     .join(' ');
 }
 
-function summarizeNodeKind(nodeName) {
-  const normalized = typeof nodeName === 'string' ? nodeName.trim().toLowerCase() : '';
-  if (normalized.includes('tool')) return 'Tool';
-  if (normalized.includes('model') || normalized.includes('llm')) return 'Model';
-  return 'Step';
-}
-
 function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
   if (typeof args === 'string') return args;
@@ -121,6 +114,13 @@ function formatDuration(ms) {
   if (!Number.isFinite(ms)) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
+}
+
+export function formatTimestamp(value) {
+  if (!Number.isFinite(value)) return '';
+  return new Date(value).toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
 }
 
 function summarizeMetadata(metadata) {
@@ -174,13 +174,13 @@ export function describeStreamEvent(event) {
       detailParts.push('draft updated');
     }
     return {
+      // The "Step" tag already labels this as a graph node execution, and
+      // the title already carries the node's own name, so there's nothing
+      // meaningful left to put in metaDetail (it used to leak a stray
+      // "Model"/"Step" kind label here, which just repeated the tag).
       badge: 'Step',
       title: prettifyLabel(nodeName),
-      // Node-update steps are graph node executions, not model calls -- even
-      // when the node happened to invoke a model, showing that model name
-      // here reads as if the step itself were the model, so we always fall
-      // back to the generic node-kind label instead.
-      metaDetail: summarizeNodeKind(nodeName),
+      metaDetail: '',
       bodyDetail: detailParts.join(' • '),
     };
   }

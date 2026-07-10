@@ -23,8 +23,8 @@ import { useEffect, useState } from 'react';
 const PENDING_WORDS = [
   'Thinking',
   'Ideating',
-  'Strategizing',
-  'Synergizing',
+  'Strategising',
+  'Synergising',
   'Orchestrating',
   'Calibrating',
   'Percolating',
@@ -32,7 +32,7 @@ const PENDING_WORDS = [
   'Cogitating',
   'Noodling',
   'Workshopping',
-  'Optimizing',
+  'Optimising',
 ];
 
 const TYPE_INTERVAL_MS = 90;
