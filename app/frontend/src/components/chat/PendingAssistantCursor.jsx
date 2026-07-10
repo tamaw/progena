@@ -20,19 +20,16 @@
 
 import { useEffect, useState } from 'react';
 
+// Mirrors the nav group headings in AppRuntimeShell (Orchestrate, Spectate,
+// Operate, Automate, Delegate, Facilitate, Integrate), gerund-ified.
 const PENDING_WORDS = [
-  'Thinking',
-  'Ideating',
-  'Strategising',
-  'Synergising',
   'Orchestrating',
-  'Calibrating',
-  'Percolating',
-  'Formulating',
-  'Cogitating',
-  'Noodling',
-  'Workshopping',
-  'Optimising',
+  'Spectating',
+  'Operating',
+  'Automating',
+  'Delegating',
+  'Facilitating',
+  'Integrating',
 ];
 
 const TYPE_INTERVAL_MS = 90;
