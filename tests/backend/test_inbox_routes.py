@@ -63,11 +63,11 @@ class _StreamCapture:
         self.queue = asyncio.Queue()
 
     def __enter__(self):
-        self._ui_routes._ui_stream_subscribers.append(self.queue)
+        self._ui_routes._ui_stream_subscribers.add(self.queue)
         return self
 
     def __exit__(self, *exc_info):
-        self._ui_routes._ui_stream_subscribers.remove(self.queue)
+        self._ui_routes._ui_stream_subscribers.discard(self.queue)
         return False
 
     def event_types(self):
