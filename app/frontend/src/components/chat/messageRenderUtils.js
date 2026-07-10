@@ -163,7 +163,6 @@ export function describeStreamEvent(event) {
 
   if (eventType === 'node_update') {
     const nodeName = typeof metadata.node_name === 'string' ? metadata.node_name : 'unknown';
-    const modelName = typeof metadata.model_name === 'string' ? metadata.model_name : null;
     const detailParts = [];
     if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
       detailParts.push(`outputs: ${metadata.output_keys.join(', ')}`);
@@ -177,7 +176,11 @@ export function describeStreamEvent(event) {
     return {
       badge: 'Step',
       title: prettifyLabel(nodeName),
-      metaDetail: modelName || summarizeNodeKind(nodeName),
+      // Node-update steps are graph node executions, not model calls -- even
+      // when the node happened to invoke a model, showing that model name
+      // here reads as if the step itself were the model, so we always fall
+      // back to the generic node-kind label instead.
+      metaDetail: summarizeNodeKind(nodeName),
       bodyDetail: detailParts.join(' • '),
     };
   }

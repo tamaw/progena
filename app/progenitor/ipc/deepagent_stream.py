@@ -191,17 +191,10 @@ class DeepAgentIPCStream:
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
             self.state.update(node_output)
-            model_name: str | None = None
             display_metadata: dict[str, Any] = {}
             if "messages" in node_output:
                 last_msg = get_last_ai_message(node_output.get("messages"))
                 if last_msg is not None:
-                    rm = getattr(last_msg, "response_metadata", None) or {}
-                    model_name = (
-                        (rm.get("model_name") or rm.get("model") or rm.get("model_id"))
-                        if isinstance(rm, dict)
-                        else None
-                    )
                     display_metadata = extract_display_metadata(last_msg)
 
             # Emit assistant_metadata once per changed payload, before the
@@ -227,7 +220,6 @@ class DeepAgentIPCStream:
                     "output_keys": output_info,
                     "contains_messages": "messages" in node_output,
                     "contains_pending_response": "pending_response" in node_output,
-                    **({"model_name": str(model_name)} if model_name else {}),
                 },
             }
 
