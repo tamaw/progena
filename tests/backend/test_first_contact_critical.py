@@ -320,7 +320,7 @@ class TestRealTimeFeedbackConsistency:
         # Create multiple subscriber queues (like multiple alien terminals)
         queues = [asyncio.Queue() for _ in range(5)]
         for q in queues:
-            _chat_subscribers.append(q)
+            _chat_subscribers.add(q)
 
         try:
             # Broadcast an important message
@@ -343,13 +343,13 @@ class TestRealTimeFeedbackConsistency:
                 assert event_data["status"] == "initiated"
         finally:
             for q in queues:
-                _chat_subscribers.remove(q)
+                _chat_subscribers.discard(q)
 
     def test_multiple_broadcasts_in_sequence(self):
         """Multiple events must arrive in order."""
         _chat_subscribers.clear()
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _chat_subscribers.add(queue)
 
         try:
             events = [
@@ -373,7 +373,7 @@ class TestRealTimeFeedbackConsistency:
             assert received[2]["type"] == "signal_decoded"
             assert received[3]["type"] == "response_sent"
         finally:
-            _chat_subscribers.remove(queue)
+            _chat_subscribers.discard(queue)
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""

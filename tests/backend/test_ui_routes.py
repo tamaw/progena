@@ -179,11 +179,11 @@ class TestUIRoutes:
         from app.backend import ui_routes
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.append(queue)
+        ui_routes._ui_stream_subscribers.add(queue)
         try:
             response = client.get("/api/ui/widgets")
         finally:
-            ui_routes._ui_stream_subscribers.remove(queue)
+            ui_routes._ui_stream_subscribers.discard(queue)
 
         assert response.status_code == 200
         streamed = queue.get_nowait()
@@ -196,11 +196,11 @@ class TestUIRoutes:
         from app.backend import ui_routes
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.append(queue)
+        ui_routes._ui_stream_subscribers.add(queue)
         try:
             response = client.get("/api/ui/mcp")
         finally:
-            ui_routes._ui_stream_subscribers.remove(queue)
+            ui_routes._ui_stream_subscribers.discard(queue)
 
         assert response.status_code == 200
         data = response.json()
@@ -1557,11 +1557,11 @@ class TestScheduleEndpoint:
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.append(queue)
+        ui_routes._ui_stream_subscribers.add(queue)
         try:
             envelope = ui_routes.broadcast_schedule_snapshot()
         finally:
-            ui_routes._ui_stream_subscribers.remove(queue)
+            ui_routes._ui_stream_subscribers.discard(queue)
 
         assert envelope.type == "schedule.snapshot"
         assert envelope.payload["items"][0]["id"] == "sched-live"
@@ -1739,12 +1739,12 @@ class TestSplitSSEEndpoints:
         clear_alerts()
         alert = create_alert(type="warning", title="Build", message="Build failed")
         queue = ui_routes.asyncio.Queue()
-        ui_routes._status_subscribers.append(queue)
+        ui_routes._status_subscribers.add(queue)
         try:
             ui_routes.broadcast_alerts_state()
             event = queue.get_nowait()
         finally:
-            ui_routes._status_subscribers.remove(queue)
+            ui_routes._status_subscribers.discard(queue)
             clear_alerts()
 
         assert event["type"] == "alerts"

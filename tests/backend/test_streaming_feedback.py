@@ -525,7 +525,7 @@ class TestRealTimeUpdates:
 
         # Add test queue
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _chat_subscribers.add(queue)
 
         try:
             # Broadcast event
@@ -534,7 +534,7 @@ class TestRealTimeUpdates:
             # Verify event was added
             assert not queue.empty()
         finally:
-            _chat_subscribers.remove(queue)
+            _chat_subscribers.discard(queue)
 
     def test_status_monitor_function_exists(self):
         """Test status monitor functions exist."""

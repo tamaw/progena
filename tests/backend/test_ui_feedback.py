@@ -751,7 +751,7 @@ class TestBroadcastEvent:
 
         # Create a mock queue
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _chat_subscribers.add(queue)
 
         try:
             # Broadcast an event
@@ -760,4 +760,4 @@ class TestBroadcastEvent:
             # Verify event was queued (non-blocking check)
             assert not queue.empty()
         finally:
-            _chat_subscribers.remove(queue)
+            _chat_subscribers.discard(queue)

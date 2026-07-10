@@ -446,7 +446,7 @@ class TestSubscriberTracking:
         try:
             assert has_active_ui_stream_subscribers() is False
         finally:
-            _ui_stream_subscribers.extend(original)
+            _ui_stream_subscribers.update(original)
 
     def test_has_active_ui_stream_subscribers_with_subscriber(self):
         """Test when subscribers are connected."""
@@ -458,13 +458,13 @@ class TestSubscriberTracking:
         # Add a mock subscriber
         original = _ui_stream_subscribers.copy()
         _ui_stream_subscribers.clear()
-        _ui_stream_subscribers.append(asyncio.Queue())
+        _ui_stream_subscribers.add(asyncio.Queue())
 
         try:
             assert has_active_ui_stream_subscribers() is True
         finally:
             _ui_stream_subscribers.clear()
-            _ui_stream_subscribers.extend(original)
+            _ui_stream_subscribers.update(original)
 
     def test_get_subscriber_counts(self):
         """Test getting subscriber counts."""
