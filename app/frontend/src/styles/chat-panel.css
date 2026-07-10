@@ -229,9 +229,13 @@
     opacity: 0.7;
 }
 
-/* Streaming message */
-.message.streaming .message-content::after {
-    content: "▋";
+/* Streaming message — cursor is a real trailing element spliced onto the
+   end of the rendered HTML (see appendStreamingCursor in
+   messageRenderUtils.js), not a container-level ::after, so it sits right
+   after the last character instead of on its own line below the last
+   block element. Removed once the turn finishes streaming. */
+.stream-cursor {
+    display: inline;
     animation: blink 0.7s infinite;
     color: var(--color-accent);
 }
@@ -241,20 +245,17 @@
     50% { opacity: 0; }
 }
 
-/* Pending cursor — rendered as a chat-row shell before any assistant
-   output arrives, so the user sees the assistant is thinking without an
-   agent header or timestamp.  Reuses the same blink keyframe above. */
-.pending-cursor .message.streaming .message-content::after {
+/* Pending cursor — rendered as a bare chat-row shell before any assistant
+   output arrives, so the user sees the assistant is responding without
+   committing to a badge/tag/timestamp for an entry type we don't know yet.
+   Reuses the same blink keyframe above. */
+.pending-cursor__blink {
+    min-height: 1.4em;
+}
+.pending-cursor__blink::before {
     content: "▋";
     animation: blink 0.7s infinite;
     color: var(--color-accent);
-}
-.pending-cursor__body {
-    min-height: 1.4em;
-}
-.thinking-label {
-    color: var(--color-text-muted);
-    font-style: italic;
 }
 
 /* Chat Input Container */

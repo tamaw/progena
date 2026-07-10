@@ -11,6 +11,7 @@ import { formatDisplayToolCalls } from './messageDisplayModel';
 import {
   formatMessage,
   sanitizeHtmlFragment,
+  appendStreamingCursor,
   describeStreamEvent,
   badgeForEvent,
   toolDetailsForEvent,
@@ -20,7 +21,10 @@ import {
 
 export default function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'assistant_message') {
-    const formattedContent = sanitizeHtmlFragment(formatMessage(item.content || ''));
+    const sanitizedContent = sanitizeHtmlFragment(formatMessage(item.content || ''));
+    const formattedContent = item.isStreaming && item.content
+      ? appendStreamingCursor(sanitizedContent)
+      : sanitizedContent;
     const formattedTime = item.timestamp
       ? new Date(item.timestamp).toLocaleTimeString([], {
           hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,

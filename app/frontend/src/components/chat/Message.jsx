@@ -11,6 +11,7 @@ import {
   tagClassForEventType,
   formatMessage,
   sanitizeHtmlFragment,
+  appendStreamingCursor,
 } from './messageRenderUtils';
 
 function isTimelineStreamEvent(event) {
@@ -78,8 +79,9 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
-    return sanitizeHtmlFragment(formatMessage(content));
-  }, [content]);
+    const sanitized = sanitizeHtmlFragment(formatMessage(content));
+    return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
+  }, [content, isStreaming]);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
