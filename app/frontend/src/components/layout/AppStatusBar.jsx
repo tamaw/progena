@@ -1,5 +1,5 @@
 function getPageStatusContext(pathname, runtime, counts) {
-  const route = pathname === '/' ? 'chat' : pathname.replace(/^\//, '').split('/')[0];
+  const route = pathname.replace(/^\//, '').split('/')[0] || 'chat';
   const runningCount = counts.runningSessions;
   if (route === 'solutions' || route === 'projects' || route === 'kanban') {
     return ['Project kanban', 'main solution', `${runningCount} active cards`];

@@ -77,7 +77,7 @@ const navGroups = [
     label: 'Orchestrate',
     items: [
       { to: '/inbox', icon: <InboxNavIcon />, label: 'Inbox', unreadDot: true },
-      { to: '/', end: true, icon: <ChatNavIcon />, label: 'Chat', dot: true },
+      { to: '/chat', icon: <ChatNavIcon />, label: 'Chat', dot: true },
     ],
   },
   {
@@ -157,13 +157,10 @@ const settingsSections = [
 const workspaceOptions = ['progenitor-main', 'local-development', 'agent-lab'];
 
 function getPageLabel(pathname) {
-  if (pathname === '/') {
-    return navItems.find((item) => item.to === '/')?.label ?? 'Chat';
-  }
   if (pathname.startsWith('/solutions') || pathname.startsWith('/projects')) {
     return 'Projects';
   }
-  const match = breadcrumbRoutes.find((item) => item.to !== '/' && pathname.startsWith(item.to));
+  const match = breadcrumbRoutes.find((item) => pathname.startsWith(item.to));
   return match?.label ?? 'Chat';
 }
 
@@ -524,7 +521,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
   return (
     <aside className={`app-shell__sidebar ${isOpen ? 'is-open' : ''} ${isCollapsed ? 'is-collapsed' : ''}`}>
       <div className="app-shell__rail-logo">
-        <Link to="/" className="app-shell__brand-link" aria-label="Progenitor home">
+        <Link to="/chat" className="app-shell__brand-link" aria-label="Progenitor home">
           <span className="app-shell__brand-mark" aria-hidden="true">🧬</span>
           <span className="app-shell__brand-name">Progenitor</span>
         </Link>
@@ -731,7 +728,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   const { config } = useConfig();
   const navigate = useNavigate();
   const location = useLocation();
-  const isOnChatPage = location.pathname === '/';
+  const isOnChatPage = location.pathname.startsWith('/chat');
   const normalizedConfig = useMemo(
     () => normalizeQuickChatConfig(panelConfig),
     [panelConfig],
@@ -946,7 +943,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     }
     onClose();
     if (!isOnChatPage) {
-      navigate('/');
+      navigate('/chat');
     }
   }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchSession?.conversation_id]);
 
@@ -1239,7 +1236,7 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
     .map((item) => ({
       id: `route:${item.to}`,
       title: item.label,
-      description: item.to === '/' ? 'Open chat workspace' : `Open ${item.to}`,
+      description: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
       meta: 'route',
       to: item.to,
     }));
