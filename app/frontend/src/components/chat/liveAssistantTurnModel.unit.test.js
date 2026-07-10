@@ -231,7 +231,7 @@ describe('applyAssistantStreamEvent', () => {
   });
 
   // Reasoning events
-  it('handles reasoning_delta: updates reasoningText and reasoningTokenCount, does NOT append timeline item', () => {
+  it('handles reasoning_delta: updates reasoningText/reasoningTokenCount and seeds a timeline row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('reasoning_delta', {
       content: 'thinking step 1',
@@ -240,11 +240,15 @@ describe('applyAssistantStreamEvent', () => {
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next.reasoningText).toBe('thinking step 1');
     expect(next.reasoningTokenCount).toBe(5);
-    // reasoning_delta does NOT add a timeline item when there is no prior reasoning item.
-    expect(next.timelineItems).toHaveLength(0);
+    // The first reasoning_delta seeds a row so live reasoning is visible while
+    // it streams, instead of waiting for a terminal reasoning_summary.
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('stream_event');
+    expect(next.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(next.timelineItems[0].event.content).toBe('thinking step 1');
   });
 
-  it('reasoning_delta: replaces trailing reasoning_delta timeline item when one exists', () => {
+  it('reasoning_delta: merges into an existing reasoning row instead of replacing its content', () => {
     const turn = baseTurn();
     const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
       content: 'initial',
@@ -258,9 +262,11 @@ describe('applyAssistantStreamEvent', () => {
       content: ' step 2',
       metadata: { reasoning_tokens: 7 },
     }), NOW);
-    // Should replace (not append): still 1 item, with merged content.
+    // Still 1 item, with the delta concatenated onto the existing content
+    // rather than replacing it outright.
     expect(second.timelineItems).toHaveLength(1);
     expect(second.reasoningText).toBe('initial step 2');
+    expect(second.timelineItems[0].event.content).toBe('initial step 2');
   });
 
   it('reasoning_summary: adds a timeline item when there is no prior reasoning item', () => {
@@ -276,26 +282,47 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.reasoningTokenCount).toBe(10);
   });
 
-  it('reasoning_summary: replaces trailing reasoning_delta timeline item when one exists', () => {
+  it('reasoning_summary: merges into the row seeded by an earlier reasoning_delta', () => {
     const turn = baseTurn();
     const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
       content: 'thinking...',
       metadata: { reasoning_tokens: 2 },
     }), NOW);
-    // reasoning_delta with no prior item -> no timeline item added.
-    expect(first.timelineItems).toHaveLength(0);
+    // reasoning_delta with no prior item seeds a new row.
+    expect(first.timelineItems).toHaveLength(1);
+    expect(first.timelineItems[0].event.eventType).toBe('reasoning_delta');
 
-    // Now push a non-reasoning event so we have a timeline item.
+    // Now push a non-reasoning event so there's another row after it.
     const withTool = applyAssistantStreamEvent(first, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
-    expect(withTool.timelineItems).toHaveLength(1);
+    expect(withTool.timelineItems).toHaveLength(2);
 
     const summary = applyAssistantStreamEvent(withTool, rawStreamEvent('reasoning_summary', {
       content: 'summary',
       metadata: { reasoning_tokens: 42 },
     }), NOW);
-    // reasoning_summary after tool_start should append (not replace) since trailing item is tool_start.
+    // Merges into the existing reasoning row (still at its original position)
+    // instead of appending a duplicate row after tool_start.
     expect(summary.timelineItems).toHaveLength(2);
-    expect(summary.timelineItems[1].event.eventType).toBe('reasoning_summary');
+    expect(summary.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(summary.reasoningTokenCount).toBe(42);
+  });
+
+  it('reasoning arriving after the assistant_message row is inserted before it, not appended after', () => {
+    const turn = baseTurn();
+    const withText = applyAssistantChunk(turn, 'Hello', NOW);
+    expect(withText.timelineItems).toHaveLength(1);
+    expect(withText.timelineItems[0].kind).toBe('assistant_message');
+
+    // The backend can retrieve/emit the reasoning summary only after the
+    // answer text has already streamed -- the row must still land above it.
+    const withReasoning = applyAssistantStreamEvent(withText, rawStreamEvent('reasoning_summary', {
+      content: 'because reasons',
+      metadata: { reasoning_tokens: 9 },
+    }), NOW);
+    expect(withReasoning.timelineItems).toHaveLength(2);
+    expect(withReasoning.timelineItems[0].kind).toBe('stream_event');
+    expect(withReasoning.timelineItems[0].event.eventType).toBe('reasoning_summary');
+    expect(withReasoning.timelineItems[1].kind).toBe('assistant_message');
   });
 });
 
