@@ -28,8 +28,8 @@ from app.backend.state_reader import (
     StateReader,
 )
 from app.backend.ui_routes import (
-    _chat_subscribers,
-    broadcast_chat_event,
+    _ui_stream_subscribers,
+    broadcast_ui_event,
 )
 
 
@@ -315,41 +315,42 @@ class TestRealTimeFeedbackConsistency:
 
     def test_broadcast_event_reaches_subscribers(self):
         """Events must be broadcast to all subscribers - aliens might be listening."""
-        _chat_subscribers.clear()
+        _ui_stream_subscribers.clear()
 
         # Create multiple subscriber queues (like multiple alien terminals)
         queues = [asyncio.Queue() for _ in range(5)]
         for q in queues:
-            _chat_subscribers.append(q)
+            _ui_stream_subscribers.add(q)
 
         try:
             # Broadcast an important message
-            broadcast_chat_event(
+            broadcast_ui_event(
                 "first_contact",
                 {
                     "status": "initiated",
                     "signal_strength": 0.98,
                     "decoded_message": "Greetings from Earth",
                 },
+                scope="chat",
             )
 
             # All subscribers must receive the event
             for i, q in enumerate(queues):
                 assert not q.empty(), f"Subscriber {i} did not receive the event"
                 event = q.get_nowait()
-                assert event["type"] == "first_contact"
-                # Data is JSON-encoded as string
-                event_data = json.loads(event["data"])
-                assert event_data["status"] == "initiated"
+                assert event["type"] == "ui.event"
+                envelope = event["envelope"]
+                assert envelope.type == "first_contact"
+                assert envelope.payload["status"] == "initiated"
         finally:
             for q in queues:
-                _chat_subscribers.remove(q)
+                _ui_stream_subscribers.discard(q)
 
     def test_multiple_broadcasts_in_sequence(self):
         """Multiple events must arrive in order."""
-        _chat_subscribers.clear()
+        _ui_stream_subscribers.clear()
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _ui_stream_subscribers.add(queue)
 
         try:
             events = [
@@ -360,7 +361,7 @@ class TestRealTimeFeedbackConsistency:
             ]
 
             for event_type, data in events:
-                broadcast_chat_event(event_type, data)
+                broadcast_ui_event(event_type, data, scope="chat")
 
             # Verify all events arrived in order
             received = []
@@ -368,12 +369,12 @@ class TestRealTimeFeedbackConsistency:
                 received.append(queue.get_nowait())
 
             assert len(received) == 4
-            assert received[0]["type"] == "signal_detected"
-            assert received[1]["type"] == "signal_analyzing"
-            assert received[2]["type"] == "signal_decoded"
-            assert received[3]["type"] == "response_sent"
+            assert received[0]["envelope"].type == "signal_detected"
+            assert received[1]["envelope"].type == "signal_analyzing"
+            assert received[2]["envelope"].type == "signal_decoded"
+            assert received[3]["envelope"].type == "response_sent"
         finally:
-            _chat_subscribers.remove(queue)
+            _ui_stream_subscribers.discard(queue)
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""

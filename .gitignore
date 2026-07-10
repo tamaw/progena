@@ -1,6 +1,9 @@
 # Playwright MCP output
 .playwright-mcp/
 
+# Node modules (frontend build tooling; should never be committed from root)
+node_modules/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
