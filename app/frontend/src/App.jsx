@@ -51,7 +51,8 @@ function App() {
               <BrowserRouter>
                 <Routes>
                   <Route element={<AppRuntimeShell />}>
-                    <Route path="/" element={<ConversationPage />} />
+                    <Route path="/" element={<Navigate to="/chat" replace />} />
+                    <Route path="/chat/:threadId?/:titleSlug?" element={<ConversationPage />} />
                     <Route path="/inbox" element={<InboxPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/models" element={<ModelsPage />} />
@@ -93,7 +94,7 @@ function App() {
                       )}
                     />
                   </Route>
-                  <Route path="*" element={<Navigate to="/" replace />} />
+                  <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>
               </BrowserRouter>
             </ChromeRuntimeProvider>

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -84,6 +85,7 @@ import {
   persistPinnedSessionIds,
   persistSharedSessionIds,
 } from '../components/chat/chatStorage';
+import { buildChatPath } from '../components/chat/chatUrl';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -180,6 +182,11 @@ function stripEphemeralStreamEvents(message) {
 
 function ConversationPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
+  // session selection is driven entirely by the id, never by the slug.
+  const { threadId: urlThreadId } = useParams();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
   const { connectionState, sendMessageStream, cancelStream, getSession, createSession } = useChatApi();
@@ -986,18 +993,42 @@ function ConversationPage() {
     errorTitle: 'Shared chats sync failed',
   });
 
-  // Auto-select the top card when sessions load (or are already loaded on remount).
-  // Fires once per component lifetime; if there are no backend sessions, the new-chat
-  // pane is shown naturally since selectedBackendChatId stays null.
+  // On mount, a URL that already names a thread (bookmark, reload, shared
+  // link) opens that chat directly instead of auto-selecting the top card.
+  // Otherwise, auto-select the top card once sessions load (or are already
+  // loaded on remount). Fires once per component lifetime; if there are no
+  // backend sessions, the new-chat pane is shown naturally since
+  // selectedBackendChatId stays null.
   useEffect(() => {
     if (hasAutoSelectedOnMountRef.current) return;
+    if (urlThreadId) {
+      hasAutoSelectedOnMountRef.current = true;
+      openBackendChat(urlThreadId).catch(() => {
+        // The linked thread doesn't exist (deleted, or never a real backend
+        // chat) - fall back to auto-selecting the top card once loaded.
+        hasAutoSelectedOnMountRef.current = false;
+        navigate('/chat', { replace: true });
+      });
+      return;
+    }
     if (!backendChatSessionsState.loaded) return;
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
       selectSessionItem(topItem);
     }
-  }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
+  }, [urlThreadId, backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem, openBackendChat, navigate]);
+
+  // Keep the URL in sync with whichever session is actually selected (either
+  // a backend chat, or a local draft that already has messages). The title
+  // slug is cosmetic; only the id segment is ever read back.
+  useEffect(() => {
+    const activeRouteThreadId = selectedBackendChatId || (messages.length > 0 ? threadId : null);
+    const nextPath = buildChatPath(activeRouteThreadId, chatTitle);
+    if (nextPath !== location.pathname) {
+      navigate(nextPath, { replace: true });
+    }
+  }, [selectedBackendChatId, threadId, messages.length, chatTitle, location.pathname, navigate]);
 
   const archiveSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.threadId) {
