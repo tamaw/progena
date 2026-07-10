@@ -4699,7 +4699,24 @@ def create_alert(
 # SSE heartbeat interval in seconds.  The SSE connection itself is the primary
 # liveness signal; heartbeats exist only to prevent TCP-level timeouts on idle
 # streams.  Override with SSE_HEARTBEAT_INTERVAL env var.
-_SSE_HEARTBEAT_INTERVAL: float = float(os.getenv("SSE_HEARTBEAT_INTERVAL", "15"))
+def _parse_heartbeat_interval(raw: str, default: float = 15.0) -> float:
+    try:
+        val = float(raw)
+        if val <= 0:
+            raise ValueError("must be positive")
+        return val
+    except ValueError:
+        logger.warning(
+            "Invalid SSE_HEARTBEAT_INTERVAL %r — must be a positive number; using %.0fs",
+            raw,
+            default,
+        )
+        return default
+
+
+_SSE_HEARTBEAT_INTERVAL: float = _parse_heartbeat_interval(
+    os.getenv("SSE_HEARTBEAT_INTERVAL", "15")
+)
 
 # Event subscribers for SSE - split into chat and status streams
 _chat_subscribers: set[asyncio.Queue] = set()  # For IPC events (chat, tasks, alerts)
@@ -5363,14 +5380,18 @@ async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
 @router.get("/stream", response_class=EventSourceResponse)
 async def ui_stream(
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    response: Response = None,
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Canonical typed SSE stream for all frontend UI updates."""
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Connection"] = "keep-alive"
     async for event in _generate_ui_stream(last_event_id):
         yield event
 
 
 @router.get("/events", response_class=EventSourceResponse)
-async def events_stream() -> AsyncGenerator[ServerSentEvent, None]:
+async def events_stream(response: Response = None) -> AsyncGenerator[ServerSentEvent, None]:
     """
     Server-Sent Events endpoint for IPC events.
 
@@ -5395,12 +5416,15 @@ async def events_stream() -> AsyncGenerator[ServerSentEvent, None]:
     - agent_question: {"content": "...", "metadata": {...}, "timestamp": ...}
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Connection"] = "keep-alive"
     async for event in _generate_chat_events():
         yield event
 
 
 @router.get("/status", response_class=EventSourceResponse)
-async def status_stream() -> AsyncGenerator[ServerSentEvent, None]:
+async def status_stream(response: Response = None) -> AsyncGenerator[ServerSentEvent, None]:
     """
     Server-Sent Events endpoint for continuous status updates.
 
@@ -5426,6 +5450,9 @@ async def status_stream() -> AsyncGenerator[ServerSentEvent, None]:
     - heartbeat: Keepalive with status (during quiet periods)
     - shutdown: Server shutting down
     """
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Connection"] = "keep-alive"
     async for event in _generate_status_events():
         yield event
 
