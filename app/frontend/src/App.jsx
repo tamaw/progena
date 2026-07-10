@@ -73,7 +73,7 @@ function App() {
                         </Suspense>
                       )}
                     />
-                    <Route path="/tools" element={<ToolsPage />} />
+                    <Route path="/tools/:serverId?/:titleSlug?" element={<ToolsPage />} />
                     <Route path="/tasks/:cardId?/:titleSlug?" element={<TasksPage />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />
                     <Route path="/kanban" element={<KanbanPage />} />

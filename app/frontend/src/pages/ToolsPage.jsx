@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { buildEntityPath } from '../lib/entityUrl';
 import {
   PaneList,
   PaneListFilters,
@@ -132,6 +134,11 @@ function MetricCard({ label, value, detail }) {
 
 export default function ToolsPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // `titleSlug` is display context only (e.g. /tools/mcp%3Ajina/jina) --
+  // selection is driven entirely by the id, never by the slug.
+  const { serverId: urlServerId } = useParams();
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
@@ -140,7 +147,7 @@ export default function ToolsPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(() => urlServerId || null);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState(null);
 
@@ -194,6 +201,17 @@ export default function ToolsPage() {
   const selectedServer =
     servers.find((server) => server.id === selectedId) || visibleServers[0] || servers[0] || null;
   const selectedStatus = selectedServer ? statusOf(selectedServer) : 'disabled';
+
+  // Keep the URL in sync with whichever server is actually selected -- a
+  // deep-linked or stale id falls back to the top visible server the same
+  // way `selectedServer` already does above. The title slug is cosmetic;
+  // only the id segment is ever read back.
+  useEffect(() => {
+    const nextPath = buildEntityPath('/tools', selectedServer?.id, selectedServer?.name || selectedServer?.id);
+    if (nextPath !== location.pathname) {
+      navigate(nextPath, { replace: true });
+    }
+  }, [selectedServer?.id, selectedServer?.name, location.pathname, navigate]);
 
   const totals = useMemo(() => ({
     connected: servers.filter((server) => statusOf(server) === 'connected').length,
