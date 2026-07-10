@@ -471,8 +471,6 @@ class TestSubscriberTracking:
         from app.backend.ui_routes import get_subscriber_counts
 
         counts = get_subscriber_counts()
-        assert "chat" in counts
-        assert "status" in counts
         assert "stream" in counts
         assert "web" in counts
         assert "total" in counts

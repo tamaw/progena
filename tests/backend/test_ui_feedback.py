@@ -27,7 +27,7 @@ from app.backend.state_reader import (
     StateReader,
 )
 from app.backend.ui_routes import (
-    broadcast_chat_event,
+    broadcast_ui_event,
 )
 
 
@@ -743,21 +743,21 @@ class TestBroadcastEvent:
     """Tests for event broadcasting to UI subscribers."""
 
     def test_broadcast_event_structure(self):
-        """Test broadcast_chat_event creates proper structure."""
-        from app.backend.ui_routes import _chat_subscribers
+        """Test broadcast_ui_event creates proper structure."""
+        from app.backend.ui_routes import _ui_stream_subscribers
 
         # Clear any existing subscribers
-        _chat_subscribers.clear()
+        _ui_stream_subscribers.clear()
 
         # Create a mock queue
         queue = asyncio.Queue()
-        _chat_subscribers.add(queue)
+        _ui_stream_subscribers.add(queue)
 
         try:
             # Broadcast an event
-            broadcast_chat_event("test_event", {"key": "value"})
+            broadcast_ui_event("test_event", {"key": "value"}, scope="chat")
 
             # Verify event was queued (non-blocking check)
             assert not queue.empty()
         finally:
-            _chat_subscribers.discard(queue)
+            _ui_stream_subscribers.discard(queue)

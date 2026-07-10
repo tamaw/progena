@@ -1702,36 +1702,32 @@ class TestSplitSSEEndpoints:
     The endpoints are verified indirectly via route registration checks.
     """
 
-    def test_events_endpoint_is_registered(self, client):
-        """Test that /api/ui/events endpoint is registered (via OpenAPI)."""
+    def test_stream_endpoint_is_registered(self, client):
+        """Test that /api/ui/stream canonical SSE endpoint is registered."""
         response = client.get("/openapi.json")
         assert response.status_code == 200
         openapi = response.json()
         paths = openapi.get("paths", {})
-        assert "/api/ui/events" in paths, "Events SSE endpoint should be registered"
+        assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
 
     def test_status_stream_endpoint_is_registered(self, client):
-        """Test that /api/ui/status SSE stream endpoint is registered."""
+        """Test that /api/ui/status/snapshot (REST) and /api/ui/stream (SSE) are registered."""
         response = client.get("/openapi.json")
         assert response.status_code == 200
         openapi = response.json()
         paths = openapi.get("paths", {})
-        # The SSE stream endpoint has the same path as the snapshot but different handler
-        # The snapshot is registered first, so check both handlers exist
-        assert "/api/ui/status" in paths or "/api/ui/status/snapshot" in paths, (
-            "Status endpoint should be registered"
-        )
+        assert "/api/ui/status/snapshot" in paths, "Status snapshot endpoint should be registered"
+        assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
 
     def test_broadcast_functions_exist(self):
         """Test that the broadcast functions are available."""
         from app.backend.ui_routes import (
-            broadcast_chat_event,
-            broadcast_status_event,
+            broadcast_alert,
+            broadcast_ui_event,
         )
 
-        # Just verify they're callable
-        assert callable(broadcast_chat_event)
-        assert callable(broadcast_status_event)
+        assert callable(broadcast_ui_event)
+        assert callable(broadcast_alert)
 
     def test_broadcast_alerts_state_pushes_full_alert_payload(self):
         from app.backend import ui_routes
@@ -1739,23 +1735,24 @@ class TestSplitSSEEndpoints:
         clear_alerts()
         alert = create_alert(type="warning", title="Build", message="Build failed")
         queue = ui_routes.asyncio.Queue()
-        ui_routes._status_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers.add(queue)
         try:
             ui_routes.broadcast_alerts_state()
             event = queue.get_nowait()
         finally:
-            ui_routes._status_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.discard(queue)
             clear_alerts()
 
-        assert event["type"] == "alerts"
-        payload = json.loads(event["data"])
-        assert payload["unread"] == 1
-        assert payload["total"] == 1
-        assert payload["alerts"][0]["id"] == alert.id
-        assert payload["alerts"][0]["title"] == "Build"
+        assert event["type"] == "ui.event"
+        envelope = event["envelope"]
+        assert envelope.type == "alerts.updated"
+        assert envelope.payload["unread"] == 1
+        assert envelope.payload["total"] == 1
+        assert envelope.payload["alerts"][0]["id"] == alert.id
+        assert envelope.payload["alerts"][0]["title"] == "Build"
 
     @pytest.mark.asyncio
-    async def test_status_stream_connected_emits_alerts_payload(self, monkeypatch):
+    async def test_ui_stream_connected_emits_alerts_in_connection_ready(self, monkeypatch):
         from app.backend import ui_routes
 
         clear_alerts()
@@ -1765,19 +1762,19 @@ class TestSplitSSEEndpoints:
             ui_routes, "_get_current_status", AsyncMock(return_value={"connected": True})
         )
 
-        generator = ui_routes._generate_status_events()
+        generator = ui_routes._generate_ui_stream()
         try:
             connected_event = await generator.__anext__()
-            alerts_event = await generator.__anext__()
         finally:
             await generator.aclose()
             clear_alerts()
 
-        assert connected_event.event == "connected"
-        assert alerts_event.event == "alerts"
-        payload = alerts_event.data
-        assert payload["unread"] == 1
-        assert payload["alerts"][0]["id"] == alert.id
+        assert connected_event.event == "ui.event"
+        payload = connected_event.data
+        assert isinstance(payload, dict)
+        assert payload["type"] == "connection.ready"
+        alerts_payload = payload["payload"].get("alerts") or payload["payload"]
+        assert any(a["id"] == alert.id for a in alerts_payload.get("alerts", []))
 
 
 class TestWorkspaceBridgeActions:
