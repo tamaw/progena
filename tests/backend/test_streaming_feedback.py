@@ -518,23 +518,23 @@ class TestRealTimeUpdates:
         """Test broadcast_event adds to subscriber queues."""
         import asyncio
 
-        from app.backend.ui_routes import _chat_subscribers, broadcast_chat_event
+        from app.backend.ui_routes import _ui_stream_subscribers, broadcast_ui_event
 
         # Clear subscribers
-        _chat_subscribers.clear()
+        _ui_stream_subscribers.clear()
 
         # Add test queue
         queue = asyncio.Queue()
-        _chat_subscribers.add(queue)
+        _ui_stream_subscribers.add(queue)
 
         try:
             # Broadcast event
-            broadcast_chat_event("test", {"data": "value"})
+            broadcast_ui_event("test", {"data": "value"}, scope="chat")
 
             # Verify event was added
             assert not queue.empty()
         finally:
-            _chat_subscribers.discard(queue)
+            _ui_stream_subscribers.discard(queue)
 
     def test_status_monitor_function_exists(self):
         """Test status monitor functions exist."""

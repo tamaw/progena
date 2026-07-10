@@ -687,8 +687,8 @@ async def lifespan(app: FastAPI):
     from .ui_routes import (
         broadcast_alert,
         broadcast_alerts_state,
-        broadcast_chat_event,
         broadcast_schedule_snapshot,
+        broadcast_ui_event,
         create_alert,
     )
 
@@ -728,7 +728,7 @@ async def lifespan(app: FastAPI):
             return
 
         # Always broadcast to SSE
-        broadcast_chat_event(event_type, data)
+        broadcast_ui_event(event_type, data, scope="chat")
 
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
