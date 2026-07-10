@@ -42,8 +42,7 @@ function ChatInput({
   onCommand,
   isGenerating,
   disabled,
-  placeholder = 'Type your message here',
-  showHints = true,
+  placeholder = 'What should we work on next?',
   enableSlashCommands = true,
   allowStop = true,
   autoFocus = false,
@@ -279,41 +278,63 @@ function ChatInput({
             rows={1}
             disabled={disabled || isGenerating}
           />
-          <div className="input-actions">
-            {isGenerating && allowStop ? (
-              <button type="button" className="btn-stop" title="Stop Generation (Esc)" onClick={onStop}>
-                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                  <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+          <div className="input-toolbar">
+            <div className="input-toolbar__left">
+              <button type="button" className="btn-icon" title="Attach file (coming soon)" aria-label="Attach file" disabled>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
                 </svg>
               </button>
-            ) : (
-              <button
-                className="btn-send"
-                title="Send Message (Enter)"
-                onClick={handleSend}
-                disabled={!message.trim() || disabled || isGenerating}
-              >
-                {isGenerating ? (
-                  <span aria-hidden="true">...</span>
-                ) : (
-                  <svg className="send-icon" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-                    <path d="M2.5 8L13.5 3l-2 5 2 5z" fill="currentColor" />
+              <div className="chat-help-control" tabIndex={0} aria-label="Keyboard shortcuts">
+                <span className="btn-icon chat-help-btn" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
+                    <circle cx="12" cy="12" r="10" />
+                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+                    <line x1="12" y1="17" x2="12.01" y2="17" />
                   </svg>
-                )}
+                </span>
+                <div className="chat-help-tooltip" role="tooltip">
+                  <div className="chat-help-tooltip__row">Type <kbd>/</kbd> for commands</div>
+                  <div className="chat-help-tooltip__row">Type <kbd>@</kbd> for agents</div>
+                  <div className="chat-help-tooltip__row">Press <kbd>Enter</kbd> to send</div>
+                  <div className="chat-help-tooltip__row">Press <kbd>Shift+Enter</kbd> for new line</div>
+                  <div className="chat-help-tooltip__row">Press <kbd>Esc</kbd> to stop generation</div>
+                </div>
+              </div>
+            </div>
+            <div className="input-toolbar__right">
+              <button type="button" className="btn-icon" title="Voice input (coming soon)" aria-label="Voice input" disabled>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                  <line x1="12" y1="19" x2="12" y2="23" />
+                  <line x1="8" y1="23" x2="16" y2="23" />
+                </svg>
               </button>
-            )}
+              {isGenerating && allowStop ? (
+                <button type="button" className="btn-send btn-send--stop" aria-label="Stop generation" onClick={onStop}>
+                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                    <rect x="4" y="4" width="8" height="8" rx="1.5" fill="currentColor" />
+                  </svg>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="btn-send"
+                  aria-label="Send message"
+                  onClick={handleSend}
+                  disabled={!message.trim() || disabled || isGenerating}
+                >
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <line x1="12" y1="19" x2="12" y2="5" />
+                    <polyline points="5 12 12 5 19 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
-      {showHints ? (
-        <div className="input-hints">
-          <span className="hint">Type <kbd>/</kbd> for commands</span>
-          <span className="hint">Type <kbd>@</kbd> for agents</span>
-          <span className="hint">Press <kbd>Enter</kbd> to send</span>
-          <span className="hint">Press <kbd>Shift+Enter</kbd> for new line</span>
-          <span className="hint">Press <kbd>Esc</kbd> to stop generation</span>
-        </div>
-      ) : null}
     </div>
   );
 }

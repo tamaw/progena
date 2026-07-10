@@ -1039,7 +1039,6 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
         onStop={stopQuickChat}
         isGenerating={isSending}
         disabled={false}
-        showHints={false}
         enableSlashCommands={false}
         allowStop
         autoFocus

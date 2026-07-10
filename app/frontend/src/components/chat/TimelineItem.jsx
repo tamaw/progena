@@ -17,6 +17,7 @@ import {
   toolDetailsForEvent,
   tokenMetaItemsForEvent,
   tagClassForEventType,
+  formatTimestamp,
 } from './messageRenderUtils';
 
 export default function TimelineItem({ item, itemIndex }) {
@@ -25,11 +26,7 @@ export default function TimelineItem({ item, itemIndex }) {
     const formattedContent = item.isStreaming && item.content
       ? appendStreamingCursor(sanitizedContent)
       : sanitizedContent;
-    const formattedTime = item.timestamp
-      ? new Date(item.timestamp).toLocaleTimeString([], {
-          hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-        })
-      : '';
+    const formattedTime = formatTimestamp(item.timestamp);
     const tokenMeta = [
       Number.isFinite(item.tokenCount) && item.tokenCount > 0
         ? `${new Intl.NumberFormat().format(item.tokenCount)} token${item.tokenCount === 1 ? '' : 's'}`
@@ -78,6 +75,7 @@ export default function TimelineItem({ item, itemIndex }) {
     const badge = badgeForEvent(event.eventType || 'stream_event');
     const tool = toolDetailsForEvent(event, description);
     const eventTokenMetaItems = tokenMetaItemsForEvent(event);
+    const eventFormattedTime = formatTimestamp(event.timestamp);
 
     return (
       <div key={event.id || `tl-${itemIndex}`} className="chat-entry-chain--item">
@@ -100,6 +98,7 @@ export default function TimelineItem({ item, itemIndex }) {
                     <span className="msg__stat message-token-count">{meta}</span>
                   </Fragment>
                 ))}
+                {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
               </span>
             </div>
             {description.bodyHtml && (
