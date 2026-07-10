@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams, useLocation } from 'react-router-dom';
-import { buildEntityPath } from '../lib/entityUrl';
+import { useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import DetailHeader, {
   DeleteActionIcon,
   DetailHeaderAction,
@@ -470,8 +470,6 @@ export default function TasksPage({ context = null }) {
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const dispatch = useDispatch();
-  const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /tasks/card_42/fix-the-thing) --
   // selection is driven entirely by the id, never by the slug. Only the
   // unscoped /tasks page (no project `context`) owns the URL -- Tasks
@@ -540,16 +538,9 @@ export default function TasksPage({ context = null }) {
   // Keep the URL in sync with whichever task is actually selected (a
   // deep-linked or stale id falls back to the top visible card the same way
   // `selectedCard` already does above). The title slug is cosmetic; only the
-  // id segment is ever read back.
-  useEffect(() => {
-    if (!isStandaloneTasksPage) {
-      return;
-    }
-    const nextPath = buildEntityPath('/tasks', selectedCard?.id, selectedCard?.title || selectedCard?.id);
-    if (nextPath !== location.pathname) {
-      navigate(nextPath, { replace: true });
-    }
-  }, [isStandaloneTasksPage, selectedCard?.id, selectedCard?.title, location.pathname, navigate]);
+  // id segment is ever read back. Disabled when embedded in a project's
+  // kanban board, which doesn't own the /tasks URL.
+  useEntityUrlSync(isStandaloneTasksPage ? '/tasks' : null, selectedCard?.id, selectedCard?.title);
 
   const selectedColumn = useMemo(
     () => board?.columns.find((column) => column.id === selectedCard?.column_id) || null,
