@@ -172,6 +172,7 @@
     border: 0;
     border-radius: 0;
     background: transparent !important;
+    animation: fadeIn 0.2s ease;
 }
 
 .chat-event-entry .entry__badge--tool {
