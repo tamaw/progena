@@ -118,6 +118,13 @@
     margin-top: var(--spacing-sm);
 }
 
+/* Aligns with the content column of the .entry grid (28px gutter + 10px gap)
+   since this sits outside any individual .entry row, after the whole chain. */
+.chat-entry-chain__images {
+    margin-top: var(--spacing-sm);
+    margin-left: 38px;
+}
+
 .message-stream-event {
     padding: var(--spacing-sm);
     border: 1px solid var(--color-border);

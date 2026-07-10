@@ -1,8 +1,9 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, memo, useMemo } from 'react';
 import { collectMessageImages } from './conversationModel';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 import TimelineItem from './TimelineItem';
+import MessageImageStrip from './MessageImageStrip';
 import {
   describeStreamEvent,
   badgeForEvent,
@@ -18,6 +19,22 @@ function isTimelineStreamEvent(event) {
   return event?.eventType !== 'message_delta';
 }
 
+function buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId) {
+  const trimmed = reasoningText.trim();
+  return {
+    id: `${messageId}-reasoning`,
+    eventType: 'reasoning_summary',
+    content: reasoningText,
+    metadata: {
+      source: 'message_reasoning',
+      text_length: trimmed.length,
+      ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
+        ? { reasoning_tokens: reasoningTokenCount }
+        : {}),
+    },
+  };
+}
+
 function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCount, messageId) {
   const timelineEvents = streamEvents.filter(isTimelineStreamEvent);
   const hasReasoningEntry = timelineEvents.some((event) =>
@@ -29,20 +46,31 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
     return timelineEvents;
   }
 
+  return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId), ...timelineEvents];
+}
+
+// Backend-loaded (non-live) assistant messages carry reasoningText as a plain
+// field rather than a reasoning stream_event in their timelineItems -- see
+// chatSessionsModel.js's buildDefaultAssistantTimeline, which never synthesizes
+// one. Inject a synthetic reasoning row here, ahead of the assistant_message
+// row, so history reloads don't silently lose the reasoning trace that live
+// streaming shows via liveAssistantTurnModel.js.
+function withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId) {
+  const hasReasoningEntry = timelineItems.some((item) =>
+    item.kind === 'stream_event' && isReasoningEvent(item.event) && hasReasoningContent(item.event)
+  );
+  const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
+  if (hasReasoningEntry || !fallbackReasoningText) {
+    return timelineItems;
+  }
+  const event = buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId);
+  const reasoningItem = { kind: 'stream_event', id: event.id, event };
+  const assistantIndex = timelineItems.findIndex((item) => item.kind === 'assistant_message');
+  if (assistantIndex < 0) return [reasoningItem, ...timelineItems];
   return [
-    {
-      id: `${messageId}-reasoning`,
-      eventType: 'reasoning_summary',
-      content: reasoningText,
-      metadata: {
-        source: 'message_reasoning',
-        text_length: fallbackReasoningText.length,
-        ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
-          ? { reasoning_tokens: reasoningTokenCount }
-          : {}),
-      },
-    },
-    ...timelineEvents,
+    ...timelineItems.slice(0, assistantIndex),
+    reasoningItem,
+    ...timelineItems.slice(assistantIndex),
   ];
 }
 
@@ -182,11 +210,26 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
 
   // If the message has explicit timelineItems, render them in array order.
   if (role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0) {
+    const fullTimelineItems = withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId);
+    const visibleTimelineItems = fullTimelineItems.filter((item) => {
+      if (item.kind === 'stream_event') {
+        return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);
+      }
+      if (item.kind === 'assistant_message') {
+        return !hideContent;
+      }
+      return true;
+    });
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
-        {timelineItems.map((item, idx) => (
+        {visibleTimelineItems.map((item, idx) => (
           <TimelineItem key={item.id || `tl-${idx}`} item={item} itemIndex={idx} />
         ))}
+        {showImages && messageImages.length > 0 && (
+          <div className="chat-entry-chain__images">
+            <MessageImageStrip images={messageImages} />
+          </div>
+        )}
       </div>
     );
   }
@@ -205,63 +248,6 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   return (
     <>
       {messageEntry}
-    </>
-  );
-}
-
-function ImageModal({ src, alt, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div className="img-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="img-modal-inner" onClick={(e) => e.stopPropagation()}>
-        <button className="img-modal-close" onClick={onClose} aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M1 1l12 12M13 1L1 13" />
-          </svg>
-        </button>
-        <img className="img-modal-img" src={src} alt={alt || 'Full size'} />
-      </div>
-    </div>
-  );
-}
-
-// Renders both tool-result images and markdown images from the message
-// text (see collectMessageImages() in MessageView, above) as one strip of
-// fixed-size, click-to-expand thumbnails -- callers pass already-normalized
-// { id, src, alt } entries.
-function MessageImageStrip({ images }) {
-  const [lightboxImage, setLightboxImage] = useState(null);
-  const openLightbox = useCallback((image) => setLightboxImage(image), []);
-  const closeLightbox = useCallback(() => setLightboxImage(null), []);
-
-  return (
-    <>
-      {lightboxImage && (
-        <ImageModal src={lightboxImage.src} alt={lightboxImage.alt} onClose={closeLightbox} />
-      )}
-      <div className="img-strip msg-img-strip">
-        {images.map((image, index) => (
-          <div
-            key={image.id || index}
-            className="img-thumb img-thumb--photo"
-            data-label={`image_${index + 1}`}
-            onClick={() => openLightbox(image)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === 'Enter' && openLightbox(image)}
-            aria-label={`View image ${index + 1} full size`}
-          >
-            <div className="img-thumb__inner img-thumb__inner--photo">
-              <img src={image.src} alt={image.alt} />
-            </div>
-          </div>
-        ))}
-      </div>
     </>
   );
 }
