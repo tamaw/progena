@@ -614,10 +614,12 @@ function ConversationPage() {
     }
   }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new messages, and keep following along as the live
+  // assistant turn streams in (liveAssistantTurn only lands in `messages`
+  // once the turn finishes, so without it here we'd only scroll at the end).
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [messages, isGenerating]);
+  }, [messages, isGenerating, liveAssistantTurn]);
 
   // Handle chat events (from /chat SSE stream)
   const handleChatEvent = useCallback((event) => {
