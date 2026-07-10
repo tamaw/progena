@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { buildEntityPath } from '../lib/entityUrl';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -65,6 +67,11 @@ function InboxMessageBody({ content }) {
 
 export default function InboxPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // `titleSlug` is display context only (e.g. /inbox/msg_42/weekly-digest) --
+  // selection is driven entirely by the id, never by the slug.
+  const { messageId: urlMessageId } = useParams();
   const { getApiUrl } = useConfig();
   const inboxUrl = getApiUrl('inbox');
   const messages = useSelector(selectInboxMessages);
@@ -110,23 +117,44 @@ export default function InboxPage() {
     }
   }, [dispatch, inboxUrl]);
 
-  // Default to the top of the (filtered/sorted) card list once, the same way
-  // the Chat page opens onto its top session — only on initial load, so it
-  // doesn't fight a selection the user already made.
+  // On mount, a URL that already names a message (bookmark, reload, shared
+  // link) selects that message directly instead of auto-selecting the top
+  // card. Otherwise, default to the top of the (filtered/sorted) card list
+  // once, the same way the Chat page opens onto its top session — only on
+  // initial load, so it doesn't fight a selection the user already made.
   const hasAutoSelectedRef = useRef(false);
   useEffect(() => {
     if (hasAutoSelectedRef.current || selectedId || !inboxState.loaded) {
       return;
     }
+    hasAutoSelectedRef.current = true;
+    if (urlMessageId) {
+      const target = messages.find((message) => message.id === urlMessageId);
+      if (target) {
+        Promise.resolve().then(() => selectMessage(target));
+        return;
+      }
+      // The linked message doesn't exist (deleted, or never real) - fall
+      // back to auto-selecting the top card below.
+      navigate('/inbox', { replace: true });
+    }
     if (visibleMessages.length === 0) {
       return;
     }
-    hasAutoSelectedRef.current = true;
     const topMessage = visibleMessages[0];
     // Deferred a tick so the state update happens in a callback rather than
     // synchronously in the effect body (react-hooks/set-state-in-effect).
     Promise.resolve().then(() => selectMessage(topMessage));
-  }, [inboxState.loaded, selectMessage, selectedId, visibleMessages]);
+  }, [inboxState.loaded, messages, navigate, selectMessage, selectedId, urlMessageId, visibleMessages]);
+
+  // Keep the URL in sync with whichever message is selected. The title slug
+  // is cosmetic; only the id segment is ever read back.
+  useEffect(() => {
+    const nextPath = buildEntityPath('/inbox', selectedMessage?.id, selectedMessage?.title || selectedMessage?.id);
+    if (nextPath !== location.pathname) {
+      navigate(nextPath, { replace: true });
+    }
+  }, [selectedMessage?.id, selectedMessage?.title, location.pathname, navigate]);
 
   const selectedMessageId = selectedMessage?.id;
   const selectedMessageRead = selectedMessage?.read;
