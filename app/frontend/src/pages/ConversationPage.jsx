@@ -68,9 +68,13 @@ import {
 import {
   appendStreamEvent,
   countReasoningTimelineEntries,
-  finalizeSupersededAssistant,
   normalizeStreamEvent,
 } from '../components/chat/streamEventsModel';
+import {
+  buildDefaultAssistantTimeline,
+  toCommittedAssistantMessage,
+} from '../components/chat/liveAssistantTurnModel';
+import PendingAssistantCursor from '../components/chat/PendingAssistantCursor';
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
   CUSTOM_CHAT_TITLE_KEY,
@@ -116,7 +120,7 @@ function normalizeStoredMessage(message, index) {
     }
   }
 
-  return {
+  const base = {
     ...message,
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
@@ -138,6 +142,17 @@ function normalizeStoredMessage(message, index) {
       : [],
     timestamp,
   };
+
+  // Preserve existing timelineItems from stored history. For old history
+  // entries with no timelineItems, build a fallback order so the frontend
+  // does not reintroduce "tool rows above agent row" on reload.
+  if (Array.isArray(message.timelineItems)) {
+    base.timelineItems = message.timelineItems;
+  } else if (role === 'assistant') {
+    base.timelineItems = buildDefaultAssistantTimeline(base);
+  }
+
+  return base;
 }
 
 // Stable per-nick colours, the way IRC clients hash a nick to a palette entry.
@@ -179,20 +194,24 @@ function nickColor(name) {
 }
 
 function formatIrcTime(timestamp) {
-  if (!Number.isFinite(timestamp)) {
+  if (!timestamp) {
     return '';
   }
   return new Date(timestamp).toLocaleTimeString([], {
     hour: '2-digit',
     minute: '2-digit',
+    second: '2-digit',
     hour12: false,
   });
 }
 
-// Plain-text (IRC-style) transcript rows: one line per message, no images.
 function buildTranscriptRows(messages) {
   return messages.map((message) => {
-    const nick = message.role === 'assistant' ? CHAT_AGENT_NAME : 'You';
+    const nick = message.role === 'assistant'
+      ? (typeof message.displayAgentName === 'string' && message.displayAgentName
+          ? message.displayAgentName
+          : CHAT_AGENT_NAME)
+      : 'You';
     return {
       id: message.id,
       time: formatIrcTime(message.timestamp),
@@ -332,7 +351,8 @@ function ConversationPage() {
     unreadChatIds,
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    activeAssistantIdRef,
+    activeStreamIdRef,
+    liveAssistantTurn,
     preserveStreamInBackground,
     handleSend,
     handleStop,
@@ -355,7 +375,7 @@ function ConversationPage() {
     if (!threadId) {
       return;
     }
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
     setSelectedBackendChatId(threadId);
@@ -369,7 +389,7 @@ function ConversationPage() {
       threadId,
       requestId,
     })).unwrap();
-  }, [activeAssistantIdRef, dispatch, getApiUrl, setIsGenerating]);
+  }, [activeStreamIdRef, dispatch, getApiUrl, setIsGenerating]);
 
   const materializeCurrentChatCard = useCallback(async (title) => {
     if (!threadId) {
@@ -529,7 +549,7 @@ function ConversationPage() {
         return;
       }
 
-      activeAssistantIdRef.current = null;
+      activeStreamIdRef.current = null;
       setMessages(normalizedMessages);
       setIsGenerating(false);
       setIsEditingTitle(false);
@@ -544,7 +564,7 @@ function ConversationPage() {
     return () => {
       window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
     };
-  }, [activeAssistantIdRef, config.storage.quickChatHandoff, setIsGenerating]);
+  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating]);
 
   // Save chat history to localStorage only for locally-owned sessions.
   // Backend chat messages must not leak into localStorage — they are the server's
@@ -578,7 +598,7 @@ function ConversationPage() {
       activeBackendChat.thread_id
       || null;
 
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages(backendMessages);
     setIsGenerating(false);
@@ -592,7 +612,7 @@ function ConversationPage() {
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeAssistantIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
+  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -701,7 +721,7 @@ function ConversationPage() {
   }, []);
 
   const dismissCurrentSession = useCallback(() => {
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages([]);
     setIsGenerating(false);
@@ -715,7 +735,7 @@ function ConversationPage() {
     setActiveDetailTab('Chat');
     localStorage.removeItem(config.storage.chatHistory);
     localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
-  }, [activeAssistantIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
+  }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
 
   useEffect(() => {
     if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
@@ -758,7 +778,7 @@ function ConversationPage() {
       return;
     }
 
-    const previousAssistantId = activeAssistantIdRef.current;
+    const previousAssistantId = activeStreamIdRef.current;
     const previousThreadId = threadId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
@@ -767,7 +787,7 @@ function ConversationPage() {
     // of cancelling it — starting a new chat shouldn't discard another chat's
     // in-flight response.
     preserveStreamInBackground();
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
 
     try {
@@ -817,15 +837,6 @@ function ConversationPage() {
         show('error', 'Archive failed', archiveError.message);
       }
     } catch (error) {
-      if (previousAssistantId) {
-        setMessages((prev) => prev
-          .map((message) => (
-            message.id === previousAssistantId
-              ? finalizeSupersededAssistant(message)
-              : message
-          ))
-          .filter(Boolean));
-      }
       setIsGenerating(false);
       setIsEditingTitle(false);
       show('error', 'New chat failed', error.message);
@@ -833,7 +844,7 @@ function ConversationPage() {
       setIsClearingSession(false);
     }
   }, [
-    activeAssistantIdRef,
+    activeStreamIdRef,
     chatTitle,
     focusComposer,
     materializeCurrentChatCard,
@@ -1421,6 +1432,17 @@ function ConversationPage() {
                     />
                   );
                 })}
+                {liveAssistantTurn && (
+                  liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0
+                    ? <PendingAssistantCursor />
+                    : <Message
+                        key={liveAssistantTurn.streamId}
+                        message={toCommittedAssistantMessage(liveAssistantTurn)}
+                        streamEventFilter={streamEventFilter}
+                        hideContent={streamFilters.agent === false}
+                        showImages={streamFilters.images !== false}
+                      />
+                )}
               </>
             )}
             <div ref={messagesEndRef} />

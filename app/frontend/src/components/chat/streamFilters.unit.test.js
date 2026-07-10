@@ -9,6 +9,7 @@ import {
 describe('categoryForEventType', () => {
   it('maps event types to categories', () => {
     expect(categoryForEventType('message_delta')).toBeNull();
+    expect(categoryForEventType('assistant_metadata')).toBeNull();
     expect(categoryForEventType('node_update')).toBe('debug');
     expect(categoryForEventType('reasoning_delta')).toBe('reasoning');
     expect(categoryForEventType('reasoning_summary')).toBe('reasoning');

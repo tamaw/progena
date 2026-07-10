@@ -13,12 +13,12 @@ import {
   touchChatSession,
 } from '../store/uiDataSlice';
 import {
-  appendReasoningText,
-  appendStreamEvent,
-  createStreamEvent,
-  extractReasoningTokenCount,
-  finalizeSupersededAssistant,
-} from '../components/chat/streamEventsModel';
+  createLiveAssistantTurn,
+  applyAssistantMetadata,
+  applyAssistantStreamEvent,
+  applyAssistantChunk,
+  finalizeLiveAssistantTurn,
+} from '../components/chat/liveAssistantTurnModel';
 import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
 
 function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
@@ -29,6 +29,14 @@ function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
     return null;
   }
   return activeBackendChat;
+}
+
+function extractDirectAgentName(content) {
+  if (typeof content !== 'string') {
+    return '';
+  }
+  const match = content.trim().match(/^@([A-Za-z0-9_][A-Za-z0-9_.-]*)\s+/);
+  return match ? match[1] : '';
 }
 
 // Owns the streaming-send lifecycle and the background generation/unread
@@ -51,14 +59,23 @@ export function useChatStream({
   reloadOpenChat,
 }) {
   const [isGenerating, setIsGenerating] = useState(false);
+  const [liveAssistantTurn, setLiveAssistantTurn] = useState(null);
   const unreadChatIdList = useSelector(selectUnreadChatIds);
   const generatingChatIdList = useSelector(selectGeneratingChatIds);
   const erroredChatIdList = useSelector(selectErroredChatIds);
   const unreadChatIds = useMemo(() => new Set(unreadChatIdList), [unreadChatIdList]);
   const backgroundGeneratingChatIds = useMemo(() => new Set(generatingChatIdList), [generatingChatIdList]);
   const backgroundErrorChatIds = useMemo(() => new Set(erroredChatIdList), [erroredChatIdList]);
-  const activeAssistantIdRef = useRef(null);
+  const activeStreamIdRef = useRef(null);
   const backgroundOriginChatIdRef = useRef(null);
+  const liveTurnRef = useRef(null);
+
+  // Keep the ref in sync with state so callbacks (onComplete, onError)
+  // created inside handleSend can read the latest turn without a stale
+  // closure — the ref is never passed as a useCallback dependency.
+  useEffect(() => {
+    liveTurnRef.current = liveAssistantTurn;
+  }, [liveAssistantTurn]);
 
   // Marks the chat currently streaming (if any) as generating-in-background.
   // Called whenever the caller is about to stop treating that stream as the
@@ -66,7 +83,7 @@ export function useChatStream({
   const preserveStreamInBackground = useCallback(() => {
     if (shouldPreserveStreamInBackground({
       streamingOriginId: backgroundOriginChatIdRef.current,
-      activeAssistantId: activeAssistantIdRef.current,
+      activeStreamId: activeStreamIdRef.current,
     })) {
       dispatch(markChatGenerating(backgroundOriginChatIdRef.current));
     }
@@ -75,13 +92,13 @@ export function useChatStream({
   // If the page unmounts (navigating to a different nav item) while a stream
   // is in flight, treat it exactly like switching chats: preserve it as a
   // background stream instead of leaving it orphaned. Without this, nothing
-  // ever marks activeAssistantIdRef stale, so the stream's completion takes
+  // ever marks activeStreamIdRef stale, so the stream's completion takes
   // the foreground branch on a dead closure — no unread marker, no reload,
   // and the reply silently goes nowhere once it finishes.
   useEffect(() => {
     return () => {
       preserveStreamInBackground();
-      activeAssistantIdRef.current = null;
+      activeStreamIdRef.current = null;
     };
   }, [preserveStreamInBackground]);
 
@@ -120,35 +137,18 @@ export function useChatStream({
     setMessages(prev => [...prev, userMessage]);
     setIsGenerating(true);
 
-    let assistantContent = '';
-    const assistantId = `msg_${Date.now()}_assistant`;
-    const previousAssistantId = activeAssistantIdRef.current;
-    activeAssistantIdRef.current = assistantId;
+    const streamId = `stream_${Date.now()}`;
+    const previousStreamId = activeStreamIdRef.current;
+    activeStreamIdRef.current = streamId;
 
-    // Add placeholder assistant message; clear isStreaming on any prior
-    // placeholder that is being superseded so the spinner doesn't stick.
-    setMessages(prev => {
-      const next = previousAssistantId
-        ? prev
-          .map((m) => (
-            m.id === previousAssistantId
-              ? finalizeSupersededAssistant(m)
-              : m
-          ))
-          .filter(Boolean)
-        : prev;
-      return [...next, {
-        id: assistantId,
-        role: 'assistant',
-        content: '',
-        timestamp: Date.now(),
-        tokenCount: 0,
-        reasoningTokenCount: 0,
-        reasoningText: '',
-        isStreaming: true,
-        streamEvents: [],
-      }];
-    });
+    // Start the live turn — no assistant message created yet.
+    const initialTurn = createLiveAssistantTurn({ streamId, startedAt: Date.now() });
+    const directAgentName = extractDirectAgentName(content);
+    const initialTurnWithMetadata = directAgentName
+      ? applyAssistantMetadata(initialTurn, { display_agent_name: directAgentName })
+      : initialTurn;
+    setLiveAssistantTurn(initialTurnWithMetadata);
+    liveTurnRef.current = initialTurnWithMetadata;
 
     const history = messages.slice(-10).map(m => ({
       role: m.role,
@@ -182,20 +182,20 @@ export function useChatStream({
     // targets the same chat; sending in a different chat leaves this running.
     const streamKey = originChatId ?? threadId ?? null;
 
+    // Helper to update the live turn state without stale closures.
+    const updateLiveTurn = (updater) => {
+      setLiveAssistantTurn(prev => prev ? updater(prev) : prev);
+    };
+
     try {
-      const isStale = () => activeAssistantIdRef.current !== assistantId;
+      const isStale = () => activeStreamIdRef.current !== streamId;
       await sendMessageStream(
         content,
         history,
         // onChunk
         (chunk) => {
           if (isStale()) return;
-          assistantContent += chunk;
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, content: assistantContent, tokenCount: (m.tokenCount || 0) + 1 }
-              : m
-          ));
+          updateLiveTurn((prev) => applyAssistantChunk(prev, chunk, Date.now()));
         },
         // onComplete
         (status) => {
@@ -211,15 +211,22 @@ export function useChatStream({
           }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
+            setLiveAssistantTurn(null);
             return;
           }
-          // Foreground stream finished — clear the in-flight origin marker.
+          // Foreground stream finished — finalise the live turn.
           backgroundOriginChatIdRef.current = null;
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, isStreaming: false, content: assistantContent + (status === 'cancelled' ? ' [Cancelled]' : '') }
-              : m
-          ));
+          const turn = liveTurnRef.current;
+          if (turn) {
+            const committed = finalizeLiveAssistantTurn(turn, {
+              status,
+              now: Date.now(),
+            });
+            if (committed) {
+              setMessages(prevMessages => [...prevMessages, committed]);
+            }
+          }
+          setLiveAssistantTurn(null);
           dispatch(fetchChatSessions({
             chatsUrl: getApiUrl('chats'),
             includeArchived: true,
@@ -240,14 +247,22 @@ export function useChatStream({
           }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
+            setLiveAssistantTurn(null);
             return;
           }
           show('error', 'Chat Error', error.message);
-          setMessages(prev => prev.map(m =>
-            m.id === assistantId
-              ? { ...m, isStreaming: false, error: true, content: `Error: ${error.message}` }
-              : m
-          ));
+          const turn = liveTurnRef.current;
+          if (turn) {
+            const committed = finalizeLiveAssistantTurn(turn, {
+              status: 'error',
+              now: Date.now(),
+              errorMessage: error.message,
+            });
+            if (committed) {
+              setMessages(prevMessages => [...prevMessages, committed]);
+            }
+          }
+          setLiveAssistantTurn(null);
           setIsGenerating(false);
         },
         // onStreamEvent
@@ -257,26 +272,13 @@ export function useChatStream({
           if (isStale()) {
             return;
           }
-          const nextEvent = createStreamEvent(streamEvent);
-          if (!nextEvent) {
+
+          if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
+            updateLiveTurn((prev) => applyAssistantMetadata(prev, streamEvent.metadata));
             return;
           }
-          const reasoningTokenCount = extractReasoningTokenCount(nextEvent);
-          const modelName = nextEvent.eventType === 'node_update'
-            && typeof nextEvent.metadata?.model_name === 'string'
-            ? nextEvent.metadata.model_name
-            : null;
-          setMessages((prev) => prev.map(m =>
-            m.id === assistantId
-              ? {
-                ...m,
-                streamEvents: appendStreamEvent(m.streamEvents, nextEvent),
-                reasoningText: appendReasoningText(m.reasoningText, nextEvent),
-                reasoningTokenCount: reasoningTokenCount ?? m.reasoningTokenCount ?? 0,
-                ...(modelName && !m.model ? { model: modelName } : {}),
-              }
-              : m
-          ));
+
+          updateLiveTurn((prev) => applyAssistantStreamEvent(prev, streamEvent, Date.now()));
         },
         threadMetadata,
         streamKey,
@@ -284,6 +286,7 @@ export function useChatStream({
     } catch (error) {
       show('error', 'Chat Error', error.message);
       setIsGenerating(false);
+      setLiveAssistantTurn(null);
     }
   }, [
     activeBackendChat,
@@ -309,10 +312,11 @@ export function useChatStream({
     unreadChatIds,
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    activeAssistantIdRef,
+    activeStreamIdRef,
     backgroundOriginChatIdRef,
     preserveStreamInBackground,
     handleSend,
     handleStop,
+    liveAssistantTurn,
   };
 }
