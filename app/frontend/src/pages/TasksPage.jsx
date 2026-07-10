@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { buildEntityPath } from '../lib/entityUrl';
 import DetailHeader, {
   DeleteActionIcon,
   DetailHeaderAction,
@@ -468,9 +470,20 @@ export default function TasksPage({ context = null }) {
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // `titleSlug` is display context only (e.g. /tasks/card_42/fix-the-thing) --
+  // selection is driven entirely by the id, never by the slug. Only the
+  // unscoped /tasks page (no project `context`) owns the URL -- Tasks
+  // embedded in a project's kanban board (KanbanPage/ProjectPage) keeps its
+  // own route untouched.
+  const { cardId: urlCardId } = useParams();
+  const isStandaloneTasksPage = context === null;
   const board = useSelector(selectKanbanBoard);
   const tasksState = useSelector(selectTasksState);
-  const [selectedCardId, setSelectedCardId] = useState(null);
+  const [selectedCardId, setSelectedCardId] = useState(() => (
+    isStandaloneTasksPage && urlCardId ? urlCardId : null
+  ));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [taskFilter, setTaskFilter] = useState('all');
@@ -523,6 +536,20 @@ export default function TasksPage({ context = null }) {
     }
     return board.cards.find((card) => card.id === selectedCardId) || visibleCards[0] || null;
   }, [board, selectedCardId, visibleCards]);
+
+  // Keep the URL in sync with whichever task is actually selected (a
+  // deep-linked or stale id falls back to the top visible card the same way
+  // `selectedCard` already does above). The title slug is cosmetic; only the
+  // id segment is ever read back.
+  useEffect(() => {
+    if (!isStandaloneTasksPage) {
+      return;
+    }
+    const nextPath = buildEntityPath('/tasks', selectedCard?.id, selectedCard?.title || selectedCard?.id);
+    if (nextPath !== location.pathname) {
+      navigate(nextPath, { replace: true });
+    }
+  }, [isStandaloneTasksPage, selectedCard?.id, selectedCard?.title, location.pathname, navigate]);
 
   const selectedColumn = useMemo(
     () => board?.columns.find((column) => column.id === selectedCard?.column_id) || null,

@@ -74,7 +74,7 @@ function App() {
                       )}
                     />
                     <Route path="/tools" element={<ToolsPage />} />
-                    <Route path="/tasks" element={<TasksPage />} />
+                    <Route path="/tasks/:cardId?/:titleSlug?" element={<TasksPage />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />
                     <Route path="/kanban" element={<KanbanPage />} />
                     <Route path="/solutions/:solutionId/projects/:projectId" element={<ProjectPage />} />
