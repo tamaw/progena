@@ -32,7 +32,7 @@ from typing import Any, Literal, cast
 
 import httpx
 from croniter import croniter
-from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
@@ -5181,7 +5181,6 @@ def _next_ui_envelope(
 
 async def _generate_ui_stream(
     last_event_id: str | None = None,
-    request: Request | None = None,
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
@@ -5193,17 +5192,6 @@ async def _generate_ui_stream(
 
     shutdown_event = get_sse_shutdown_event()
     start_status_monitor()
-
-    # Detect client disconnect promptly rather than waiting for the next failed write.
-    disconnected = asyncio.Event()
-
-    async def _watch_disconnect() -> None:
-        if request is not None:
-            with contextlib.suppress(Exception):
-                await request.is_disconnected()
-                disconnected.set()
-
-    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
 
     try:
         if last_event_id:
@@ -5227,9 +5215,6 @@ async def _generate_ui_stream(
         yield ServerSentEvent(event="ui.event", data=connected.model_dump(), id=connected.id)
 
         while True:
-            if disconnected.is_set():
-                break
-
             if shutdown_event.is_set():
                 envelope = _next_ui_envelope(
                     "connection.shutdown",
@@ -5252,21 +5237,16 @@ async def _generate_ui_stream(
                 envelope = event["envelope"]
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
-                if disconnected.is_set():
-                    break
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
-        disconnect_watcher.cancel()
         if queue in _ui_stream_subscribers:
             _ui_stream_subscribers.remove(queue)
         if current_task and current_task in _active_ui_stream_tasks:
             _active_ui_stream_tasks.remove(current_task)
 
 
-async def _generate_chat_events(
-    request: Request | None = None,
-) -> AsyncGenerator[ServerSentEvent, None]:
+async def _generate_chat_events() -> AsyncGenerator[ServerSentEvent, None]:
     """Generate SSE events for chat/IPC stream only.
 
     This stream receives:
@@ -5288,16 +5268,6 @@ async def _generate_chat_events(
 
     shutdown_event = get_sse_shutdown_event()
 
-    disconnected = asyncio.Event()
-
-    async def _watch_disconnect() -> None:
-        if request is not None:
-            with contextlib.suppress(Exception):
-                await request.is_disconnected()
-                disconnected.set()
-
-    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
-
     try:
         yield ServerSentEvent(
             event="connected",
@@ -5305,9 +5275,6 @@ async def _generate_chat_events(
         )
 
         while True:
-            if disconnected.is_set():
-                break
-
             if shutdown_event.is_set():
                 logger.debug("Chat SSE connection closing due to server shutdown")
                 yield ServerSentEvent(
@@ -5323,28 +5290,21 @@ async def _generate_chat_events(
                     break
                 yield ServerSentEvent(event=event["type"], raw_data=event["data"])
             except TimeoutError:
-                if disconnected.is_set():
-                    break
                 if shutdown_event.is_set():
                     yield ServerSentEvent(
                         event="shutdown",
                         data={"reason": "server_shutdown", "message": "Server is shutting down"},
                     )
                     break
-                # EventSourceResponse sends automatic keepalive pings; only yield
-                # a heartbeat here so clients can detect stale connections.
                 yield ServerSentEvent(event="heartbeat", data={"timestamp": time.time()})
     finally:
-        disconnect_watcher.cancel()
         if queue in _chat_subscribers:
             _chat_subscribers.remove(queue)
         if current_task and current_task in _active_chat_tasks:
             _active_chat_tasks.remove(current_task)
 
 
-async def _generate_status_events(
-    request: Request | None = None,
-) -> AsyncGenerator[ServerSentEvent, None]:
+async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
     """Generate SSE events for status/health stream only.
 
     This stream receives:
@@ -5363,25 +5323,12 @@ async def _generate_status_events(
     shutdown_event = get_sse_shutdown_event()
     start_status_monitor()
 
-    disconnected = asyncio.Event()
-
-    async def _watch_disconnect() -> None:
-        if request is not None:
-            with contextlib.suppress(Exception):
-                await request.is_disconnected()
-                disconnected.set()
-
-    disconnect_watcher = asyncio.ensure_future(_watch_disconnect())
-
     try:
         initial_status = await _get_current_status()
         yield ServerSentEvent(event="connected", data=initial_status)
         yield ServerSentEvent(event="alerts", data=_alerts_payload())
 
         while True:
-            if disconnected.is_set():
-                break
-
             if shutdown_event.is_set():
                 logger.debug("Status SSE connection closing due to server shutdown")
                 yield ServerSentEvent(
@@ -5397,8 +5344,6 @@ async def _generate_status_events(
                     break
                 yield ServerSentEvent(event=event["type"], raw_data=event["data"])
             except TimeoutError:
-                if disconnected.is_set():
-                    break
                 if shutdown_event.is_set():
                     yield ServerSentEvent(
                         event="shutdown",
@@ -5408,24 +5353,23 @@ async def _generate_status_events(
                 heartbeat_status = await _get_current_status()
                 yield ServerSentEvent(event="heartbeat", data=heartbeat_status)
     finally:
-        disconnect_watcher.cancel()
         if queue in _status_subscribers:
             _status_subscribers.remove(queue)
         if current_task and current_task in _active_status_tasks:
             _active_status_tasks.remove(current_task)
 
 
-@router.get("/stream")
+@router.get("/stream", response_class=EventSourceResponse)
 async def ui_stream(
-    request: Request,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-):
+) -> AsyncGenerator[ServerSentEvent, None]:
     """Canonical typed SSE stream for all frontend UI updates."""
-    return EventSourceResponse(_generate_ui_stream(last_event_id, request))
+    async for event in _generate_ui_stream(last_event_id):
+        yield event
 
 
-@router.get("/events")
-async def events_stream(request: Request):
+@router.get("/events", response_class=EventSourceResponse)
+async def events_stream() -> AsyncGenerator[ServerSentEvent, None]:
     """
     Server-Sent Events endpoint for IPC events.
 
@@ -5450,11 +5394,12 @@ async def events_stream(request: Request):
     - agent_question: {"content": "...", "metadata": {...}, "timestamp": ...}
     - alert: {"id": "...", "type": "...", "title": "...", "message": "...", "urgent": false}
     """
-    return EventSourceResponse(_generate_chat_events(request))
+    async for event in _generate_chat_events():
+        yield event
 
 
-@router.get("/status")
-async def status_stream(request: Request):
+@router.get("/status", response_class=EventSourceResponse)
+async def status_stream() -> AsyncGenerator[ServerSentEvent, None]:
     """
     Server-Sent Events endpoint for continuous status updates.
 
@@ -5480,7 +5425,8 @@ async def status_stream(request: Request):
     - heartbeat: Keepalive with status (during quiet periods)
     - shutdown: Server shutting down
     """
-    return EventSourceResponse(_generate_status_events(request))
+    async for event in _generate_status_events():
+        yield event
 
 
 # ============================================================================
