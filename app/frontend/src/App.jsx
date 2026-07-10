@@ -82,7 +82,7 @@ function App() {
                     <Route path="/skills" element={<SkillsPage />} />
                     <Route path="/prompts" element={<PromptsPage />} />
                     <Route path="/sessions" element={<SessionsPage />} />
-                    <Route path="/schedules" element={<SchedulesPage />} />
+                    <Route path="/schedules/:scheduleId?/:titleSlug?" element={<SchedulesPage />} />
                     <Route path="/repositories" element={<RepositoriesPage />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<KnowledgePage />} />
                     <Route

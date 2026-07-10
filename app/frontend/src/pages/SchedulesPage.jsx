@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams, useLocation } from 'react-router-dom';
+import { buildEntityPath } from '../lib/entityUrl';
 import {
   PaneList,
   PaneListFilters,
@@ -271,6 +273,11 @@ function SchedulesPage() {
   const { getSchedules, retriggerSchedule } = useSchedulesApi();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // `titleSlug` is display context only (e.g. /schedules/sch_42/daily-digest)
+  // -- selection is driven entirely by the id, never by the slug.
+  const { scheduleId: urlScheduleId } = useParams();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once via REST on mount; every change after that arrives as an event.
@@ -280,7 +287,7 @@ function SchedulesPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [selectedScheduleId, setSelectedScheduleId] = useState(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState(() => urlScheduleId || null);
   const [mutating, setMutating] = useState(false);
   const [scheduleWidgets, setScheduleWidgets] = useState({});
   const [isEditingTitle, setIsEditingTitle] = useState(false);
@@ -374,6 +381,18 @@ function SchedulesPage() {
 
   const selectedSchedule =
     schedules.find((schedule) => schedule.id === selectedScheduleId) || visibleSchedules[0] || null;
+
+  // Keep the URL in sync with whichever schedule is actually selected -- a
+  // deep-linked or stale id falls back to the top visible schedule the same
+  // way `selectedSchedule` already does above. The title slug is cosmetic;
+  // only the id segment is ever read back.
+  useEffect(() => {
+    const nextPath = buildEntityPath('/schedules', selectedSchedule?.id, selectedSchedule?.name || selectedSchedule?.id);
+    if (nextPath !== location.pathname) {
+      navigate(nextPath, { replace: true });
+    }
+  }, [selectedSchedule?.id, selectedSchedule?.name, location.pathname, navigate]);
+
   const activeCount = schedules.filter((schedule) => !schedule.paused).length;
   const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;
   const completedCount = schedules.filter((schedule) => statusOf(schedule) === 'completed').length;
