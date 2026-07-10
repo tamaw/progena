@@ -84,7 +84,7 @@ function App() {
                     <Route path="/sessions" element={<SessionsPage />} />
                     <Route path="/schedules" element={<SchedulesPage />} />
                     <Route path="/repositories" element={<RepositoriesPage />} />
-                    <Route path="/knowledge" element={<KnowledgePage />} />
+                    <Route path="/knowledge/:baseId?/:titleSlug?" element={<KnowledgePage />} />
                     <Route
                       path="/workflows"
                       element={(
