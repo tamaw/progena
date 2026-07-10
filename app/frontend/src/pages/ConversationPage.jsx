@@ -232,6 +232,7 @@ function ConversationPage() {
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
+  const [showEventFilters, setShowEventFilters] = useState(false);
   const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
   const [customChatTitleThreadId, setCustomChatTitleThreadId] = useState(() => initialStoredCustomTitle.threadId);
   const [sidebarFilter, setSidebarFilter] = useState('all');
@@ -1084,6 +1085,20 @@ function ConversationPage() {
   const isShared = currentSessionItem?.shared === true;
   const chatActions = [
     {
+      key: 'filters',
+      label: showEventFilters ? 'Hide filters' : 'Show filters',
+      role: 'menuitemcheckbox',
+      checked: showEventFilters,
+      active: showEventFilters,
+      disabled: isContentLoading || isEmptyConversationPane,
+      onClick: () => setShowEventFilters((value) => !value),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M2.5 3.5h11l-4 5v4l-3 1.5v-5.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      ),
+    },
+    {
       key: 'pin',
       label: isPinned ? 'Unpin' : 'Pin',
       role: 'menuitemcheckbox',
@@ -1319,7 +1334,7 @@ function ConversationPage() {
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
         />
-        {!isContentLoading && !isEmptyConversationPane && (
+        {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
