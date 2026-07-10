@@ -155,23 +155,6 @@ function normalizeStoredMessage(message, index) {
   return base;
 }
 
-// Stable per-nick colours, the way IRC clients hash a nick to a palette entry.
-const NICK_COLORS = [
-  '#e06c75',
-  '#e5c07b',
-  '#98c379',
-  '#56b6c2',
-  '#61afef',
-  '#c678dd',
-  '#d19a66',
-  '#7fdbb6',
-  '#f0a0c0',
-  '#b0a0ff',
-];
-
-// Your own nick gets a fixed warm signature colour (IRC clients highlight your
-// own nick); everyone else hashes to a palette entry.
-const OWN_NICK_COLOR = '#f5b942';
 // Sort modes for the chat sidebar dropdown (mirrors the Agents/Tasks dropdown).
 // "Recent" keeps the recency-bucketed grouping; "Name" is a flat A→Z list.
 const SIDEBAR_SORT_MODES = ['Recent', 'Name'];
@@ -181,46 +164,6 @@ const CHAT_FILTERS = [
   { value: 'shared', label: 'Shared' },
   { value: 'archived', label: 'Archived' },
 ];
-
-function nickColor(name) {
-  if (name === 'You') {
-    return OWN_NICK_COLOR;
-  }
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  }
-  return NICK_COLORS[Math.abs(hash) % NICK_COLORS.length];
-}
-
-function formatIrcTime(timestamp) {
-  if (!timestamp) {
-    return '';
-  }
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function buildTranscriptRows(messages) {
-  return messages.map((message) => {
-    const nick = message.role === 'assistant'
-      ? (typeof message.displayAgentName === 'string' && message.displayAgentName
-          ? message.displayAgentName
-          : CHAT_AGENT_NAME)
-      : 'You';
-    return {
-      id: message.id,
-      time: formatIrcTime(message.timestamp),
-      nick,
-      color: nickColor(nick),
-      content: typeof message.content === 'string' ? message.content : '',
-    };
-  });
-}
 
 function stripEphemeralStreamEvents(message) {
   const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
@@ -294,7 +237,6 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
-  const [activeDetailTab, setActiveDetailTab] = useState('Chat');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -734,7 +676,6 @@ function ConversationPage() {
     setTitleDraft('');
     setIsEditingTitle(false);
     setThreadId(null);
-    setActiveDetailTab('Chat');
     localStorage.removeItem(config.storage.chatHistory);
     localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
@@ -753,7 +694,6 @@ function ConversationPage() {
       draftThreadId = session.conversation_id || null;
     }
 
-    setActiveDetailTab('Chat');
     setIsEditingTitle(false);
     const draftChat = await dispatch(ensureDraftChatSession({
       chatsUrl: getApiUrl('chats'),
@@ -774,7 +714,6 @@ function ConversationPage() {
 
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {
-      setActiveDetailTab('Chat');
       setIsEditingTitle(false);
       focusComposer();
       return;
@@ -916,7 +855,6 @@ function ConversationPage() {
     await startNewChatSession();
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
-  const transcriptRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const totalTokenCount = useMemo(
     () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
     [messages],
@@ -1380,12 +1318,8 @@ function ConversationPage() {
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
-          tabs={isContentLoading || isEmptyConversationPane ? [] : ['Chat', 'Text']}
-          activeTab={activeDetailTab}
-          onTabChange={setActiveDetailTab}
-          tabLabel="Conversation detail tabs"
         />
-        {!isContentLoading && !isEmptyConversationPane && activeDetailTab === 'Chat' && (
+        {!isContentLoading && !isEmptyConversationPane && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
@@ -1407,18 +1341,6 @@ function ConversationPage() {
               <div className="welcome-message">
                 <h2>{welcomeMessage}</h2>
                 <QuickActions onAction={handleQuickAction} />
-              </div>
-            ) : activeDetailTab === 'Text' ? (
-              <div className="chat-text-export" role="log" aria-label="Conversation transcript">
-                {transcriptRows.map((row) => (
-                  <div className="irc-line" key={row.id}>
-                    <span className="irc-line__time">{row.time}</span>
-                    <span className="irc-line__nick" style={{ color: row.color }}>
-                      {`<${row.nick}>`}
-                    </span>
-                    <span className="irc-line__text">{row.content}</span>
-                  </div>
-                ))}
               </div>
             ) : (
               <>
