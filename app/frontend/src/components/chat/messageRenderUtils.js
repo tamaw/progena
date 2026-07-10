@@ -63,6 +63,32 @@ export function sanitizeHtmlFragment(html) {
   return div.innerHTML;
 }
 
+// Splices a blinking cursor span onto the very end of already-sanitized
+// message HTML, rather than relying on a container-level `::after` (which
+// lands on its own line after the last block element -- e.g. after a </p>
+// or </li> -- instead of glued to the last character). Walks to the
+// deepest last element (last <li>, last table cell, last line of a code
+// block, ...) so the cursor tracks wherever the streamed text actually
+// ends, then appends it there as a real trailing node.
+export function appendStreamingCursor(html) {
+  const cursor = document.createElement('span');
+  cursor.className = 'stream-cursor';
+  cursor.textContent = '▋';
+
+  const template = document.createElement('template');
+  template.innerHTML = html || '';
+
+  let host = template.content;
+  while (host.lastElementChild) {
+    host = host.lastElementChild;
+  }
+  host.appendChild(cursor);
+
+  const div = document.createElement('div');
+  div.appendChild(template.content.cloneNode(true));
+  return div.innerHTML;
+}
+
 // ─── Label / display helpers ─────────────────────────────────────────────
 
 function prettifyLabel(value) {
