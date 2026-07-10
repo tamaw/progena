@@ -4696,10 +4696,15 @@ def create_alert(
     )
 
 
+# SSE heartbeat interval in seconds.  The SSE connection itself is the primary
+# liveness signal; heartbeats exist only to prevent TCP-level timeouts on idle
+# streams.  Override with SSE_HEARTBEAT_INTERVAL env var.
+_SSE_HEARTBEAT_INTERVAL: float = float(os.getenv("SSE_HEARTBEAT_INTERVAL", "15"))
+
 # Event subscribers for SSE - split into chat and status streams
-_chat_subscribers: list[asyncio.Queue] = []  # For IPC events (chat, tasks, alerts)
-_status_subscribers: list[asyncio.Queue] = []  # For state file status updates
-_ui_stream_subscribers: list[asyncio.Queue] = []  # Canonical typed UI event envelopes
+_chat_subscribers: set[asyncio.Queue] = set()  # For IPC events (chat, tasks, alerts)
+_status_subscribers: set[asyncio.Queue] = set()  # For state file status updates
+_ui_stream_subscribers: set[asyncio.Queue] = set()  # Canonical typed UI event envelopes
 _ui_event_seq = 0
 _ui_event_replay: list[UiEventEnvelope] = []
 _UI_EVENT_REPLAY_LIMIT = 200
@@ -4714,12 +4719,12 @@ _state_watch_callback = None
 _state_watch_push_task: asyncio.Task | None = None
 
 # Track active SSE response tasks so we can cancel them on shutdown
-_active_chat_tasks: list[asyncio.Task] = []
-_active_status_tasks: list[asyncio.Task] = []
+_active_chat_tasks: set[asyncio.Task] = set()
+_active_status_tasks: set[asyncio.Task] = set()
 # Keep a strong reference to fire-and-forget agent-profile broadcasts so the
 # event loop's weak task reference can't let one get garbage-collected mid-run.
 _active_agent_profile_broadcast_tasks: set[asyncio.Task] = set()
-_active_ui_stream_tasks: list[asyncio.Task] = []
+_active_ui_stream_tasks: set[asyncio.Task] = set()
 
 
 def has_active_ui_stream_subscribers() -> bool:
@@ -5136,7 +5141,7 @@ async def close_all_sse_connections():
     stop_status_monitor()
 
     # Cancel any remaining SSE tasks that have not exited
-    all_tasks = _active_chat_tasks + _active_status_tasks + _active_ui_stream_tasks
+    all_tasks = [*_active_chat_tasks, *_active_status_tasks, *_active_ui_stream_tasks]
     tasks_to_cancel = [t for t in all_tasks if not t.done()]
     if tasks_to_cancel:
         logger.info("Force-cancelling %d SSE tasks", len(tasks_to_cancel))
@@ -5184,11 +5189,11 @@ async def _generate_ui_stream(
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _ui_stream_subscribers.append(queue)
+    _ui_stream_subscribers.add(queue)
 
     current_task = asyncio.current_task()
     if current_task:
-        _active_ui_stream_tasks.append(current_task)
+        _active_ui_stream_tasks.add(current_task)
 
     shutdown_event = get_sse_shutdown_event()
     start_status_monitor()
@@ -5199,7 +5204,7 @@ async def _generate_ui_stream(
                 replay_after = int(str(last_event_id).removeprefix("ui-") or 0)
             except ValueError:
                 replay_after = 0
-            for envelope in _ui_event_replay:
+            for envelope in list(_ui_event_replay):
                 if envelope.seq > replay_after:
                     yield ServerSentEvent(
                         event="ui.event",
@@ -5224,7 +5229,7 @@ async def _generate_ui_stream(
                 break
 
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                event = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_INTERVAL)
                 if event.get("type") == "shutdown":
                     envelope = _next_ui_envelope(
                         "connection.shutdown",
@@ -5240,10 +5245,9 @@ async def _generate_ui_stream(
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
-        if queue in _ui_stream_subscribers:
-            _ui_stream_subscribers.remove(queue)
-        if current_task and current_task in _active_ui_stream_tasks:
-            _active_ui_stream_tasks.remove(current_task)
+        _ui_stream_subscribers.discard(queue)
+        if current_task:
+            _active_ui_stream_tasks.discard(current_task)
 
 
 async def _generate_chat_events() -> AsyncGenerator[ServerSentEvent, None]:
@@ -5260,11 +5264,11 @@ async def _generate_chat_events() -> AsyncGenerator[ServerSentEvent, None]:
     Does NOT receive status/health updates (use /status for those).
     """
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _chat_subscribers.append(queue)
+    _chat_subscribers.add(queue)
 
     current_task = asyncio.current_task()
     if current_task:
-        _active_chat_tasks.append(current_task)
+        _active_chat_tasks.add(current_task)
 
     shutdown_event = get_sse_shutdown_event()
 
@@ -5284,7 +5288,7 @@ async def _generate_chat_events() -> AsyncGenerator[ServerSentEvent, None]:
                 break
 
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                event = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_INTERVAL)
                 if event.get("type") == "shutdown":
                     yield ServerSentEvent(event="shutdown", raw_data=event["data"])
                     break
@@ -5298,10 +5302,9 @@ async def _generate_chat_events() -> AsyncGenerator[ServerSentEvent, None]:
                     break
                 yield ServerSentEvent(event="heartbeat", data={"timestamp": time.time()})
     finally:
-        if queue in _chat_subscribers:
-            _chat_subscribers.remove(queue)
-        if current_task and current_task in _active_chat_tasks:
-            _active_chat_tasks.remove(current_task)
+        _chat_subscribers.discard(queue)
+        if current_task:
+            _active_chat_tasks.discard(current_task)
 
 
 async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
@@ -5314,11 +5317,11 @@ async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
     Does NOT receive chat/IPC events (use /events for those).
     """
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _status_subscribers.append(queue)
+    _status_subscribers.add(queue)
 
     current_task = asyncio.current_task()
     if current_task:
-        _active_status_tasks.append(current_task)
+        _active_status_tasks.add(current_task)
 
     shutdown_event = get_sse_shutdown_event()
     start_status_monitor()
@@ -5338,7 +5341,7 @@ async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
                 break
 
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=5.0)
+                event = await asyncio.wait_for(queue.get(), timeout=_SSE_HEARTBEAT_INTERVAL)
                 if event.get("type") == "shutdown":
                     yield ServerSentEvent(event="shutdown", raw_data=event["data"])
                     break
@@ -5350,13 +5353,11 @@ async def _generate_status_events() -> AsyncGenerator[ServerSentEvent, None]:
                         data={"reason": "server_shutdown", "message": "Server is shutting down"},
                     )
                     break
-                heartbeat_status = await _get_current_status()
-                yield ServerSentEvent(event="heartbeat", data=heartbeat_status)
+                yield ServerSentEvent(event="heartbeat", data=_last_status or {"status": "healthy"})
     finally:
-        if queue in _status_subscribers:
-            _status_subscribers.remove(queue)
-        if current_task and current_task in _active_status_tasks:
-            _active_status_tasks.remove(current_task)
+        _status_subscribers.discard(queue)
+        if current_task:
+            _active_status_tasks.discard(current_task)
 
 
 @router.get("/stream", response_class=EventSourceResponse)
@@ -5455,8 +5456,7 @@ def broadcast_ui_event(
             logger.warning("Event queue full for UI stream subscriber — evicting dead connection")
             dead.append(queue)
     for q in dead:
-        with contextlib.suppress(ValueError):
-            _ui_stream_subscribers.remove(q)
+        _ui_stream_subscribers.discard(q)
     return envelope
 
 
@@ -5671,8 +5671,6 @@ def broadcast_chat_event(event_type: str, data: dict):
         event_type: Type of event
         data: Event data as JSON-serializable dict
     """
-    import json
-
     event = {"type": event_type, "data": json.dumps(data)}
     broadcast_ui_event(event_type, data, scope="chat")
 
@@ -5684,8 +5682,7 @@ def broadcast_chat_event(event_type: str, data: dict):
             logger.warning("Event queue full for chat subscriber — evicting dead connection")
             dead.append(queue)
     for q in dead:
-        with contextlib.suppress(ValueError):
-            _chat_subscribers.remove(q)
+        _chat_subscribers.discard(q)
 
 
 def broadcast_status_event(event_type: str, data: Mapping[str, object]):
@@ -5702,8 +5699,6 @@ def broadcast_status_event(event_type: str, data: Mapping[str, object]):
         event_type: Type of event
         data: Event data as JSON-serializable dict
     """
-    import json
-
     event = {"type": event_type, "data": json.dumps(data)}
     mapped_type = {
         "status": "status.updated",
@@ -5721,8 +5716,7 @@ def broadcast_status_event(event_type: str, data: Mapping[str, object]):
             logger.warning("Event queue full for status subscriber — evicting dead connection")
             dead.append(queue)
     for q in dead:
-        with contextlib.suppress(ValueError):
-            _status_subscribers.remove(q)
+        _status_subscribers.discard(q)
 
 
 def broadcast_alert(alert: AlertInfo):

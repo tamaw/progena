@@ -224,7 +224,7 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.append(queue)
+    ui_routes._ui_stream_subscribers.add(queue)
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Broadcast workflow"})
@@ -263,7 +263,7 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
                 "workflow.run.completed",
             } <= seen
     finally:
-        ui_routes._ui_stream_subscribers.remove(queue)
+        ui_routes._ui_stream_subscribers.discard(queue)
 
 
 def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, backend_client):
@@ -275,7 +275,7 @@ def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, back
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.append(queue)
+    ui_routes._ui_stream_subscribers.add(queue)
     try:
         with TestClient(app) as client:
             client.post("/api/ui/workflows", json={"title": "Alias check"})
@@ -290,4 +290,4 @@ def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, back
                 assert "node" in edge["from"]
                 assert "node" in edge["to"]
     finally:
-        ui_routes._ui_stream_subscribers.remove(queue)
+        ui_routes._ui_stream_subscribers.discard(queue)

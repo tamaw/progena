@@ -477,7 +477,7 @@ class TestRealTimeSSEFeedback:
 
         # Add test subscriber
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _chat_subscribers.add(queue)
 
         try:
             # Broadcast test event
@@ -496,7 +496,7 @@ class TestRealTimeSSEFeedback:
             event = queue.get_nowait()
             assert event["type"] == "alien_contact"
         finally:
-            _chat_subscribers.remove(queue)
+            _chat_subscribers.discard(queue)
 
 
 class TestChatFlowFeedback:

@@ -259,7 +259,7 @@ class TestSSEEventDelivery:
         _chat_subscribers.clear()
 
         chat_queue = asyncio.Queue()
-        _chat_subscribers.append(chat_queue)
+        _chat_subscribers.add(chat_queue)
 
         try:
             # Broadcast a chat event
@@ -275,7 +275,7 @@ class TestSSEEventDelivery:
             assert data["content"] == "Hello from agent"
         finally:
             if chat_queue in _chat_subscribers:
-                _chat_subscribers.remove(chat_queue)
+                _chat_subscribers.discard(chat_queue)
 
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_status_event adds events to status subscribers only."""
@@ -291,8 +291,8 @@ class TestSSEEventDelivery:
         status_queue = asyncio.Queue()
         chat_queue = asyncio.Queue()
 
-        _status_subscribers.append(status_queue)
-        _chat_subscribers.append(chat_queue)
+        _status_subscribers.add(status_queue)
+        _chat_subscribers.add(chat_queue)
 
         try:
             # Broadcast a status event
@@ -306,9 +306,9 @@ class TestSSEEventDelivery:
             assert status_event["type"] == "status"
         finally:
             if status_queue in _status_subscribers:
-                _status_subscribers.remove(status_queue)
+                _status_subscribers.discard(status_queue)
             if chat_queue in _chat_subscribers:
-                _chat_subscribers.remove(chat_queue)
+                _chat_subscribers.discard(chat_queue)
 
 
 class TestEventPayloadValidation:
@@ -550,7 +550,7 @@ class TestTypingIndicatorEvents:
         _chat_subscribers.clear()
 
         queue = asyncio.Queue()
-        _chat_subscribers.append(queue)
+        _chat_subscribers.add(queue)
 
         try:
             # Simulate typing indicator sequence
@@ -567,7 +567,7 @@ class TestTypingIndicatorEvents:
             assert events[1]["type"] == "typing_update"
             assert events[2]["type"] == "typing_stop"
         finally:
-            _chat_subscribers.remove(queue)
+            _chat_subscribers.discard(queue)
 
 
 class TestAgentActivityEvents:
