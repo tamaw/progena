@@ -198,34 +198,22 @@ function collectTodosByToolCallId(streamEvents) {
  * Build a fallback timeline order for a committed assistant message that has
  * no recorded `timelineItems` (e.g. backend-loaded history).
  *
- * The synthetic order places the assistant text row first, then known stream
- * events — this avoids reintroducing the "tool rows above agent row" layout
- * on reload even though exact history is unavailable.
+ * The backend attaches a turn's tool calls to whichever message carries the
+ * final answer text, so the live interleave itself isn't recorded -- but
+ * every item here carries a real timestamp (an AIMessage's
+ * response_metadata.created_at: stamped onto each tool call by
+ * _extract_raw_tool_calls on the backend, and onto the assistant row via
+ * ChatMessage.created_at), so a plain sort on that reproduces true order.
  */
 export function buildDefaultAssistantTimeline(message) {
   if (!message || message.role !== 'assistant') return undefined;
   const items = [];
   const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
 
-  items.push({
-    kind: 'assistant_message',
-    id: message.id || `msg_${Date.now()}`,
-    content: typeof message.content === 'string' ? message.content : '',
-    timestamp: typeof message.timestamp === 'number' ? message.timestamp : Date.now(),
-    isStreaming: !!message.isStreaming,
-    error: !!message.error,
-    displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : CHAT_AGENT_NAME,
-    displayModelName: typeof message.displayModelName === 'string' ? message.displayModelName : '',
-    displayToolCalls: Array.isArray(message.displayToolCalls) ? message.displayToolCalls : [],
-    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
-    reasoningTokenCount: Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0,
-    reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
-  });
-
   const todosByCallId = collectTodosByToolCallId(streamEvents);
   let todosSeq = 0;
   for (const event of streamEvents) {
-    items.push({ kind: 'stream_event', id: event.id, event });
+    items.push({ kind: 'stream_event', id: event.id, event, timestamp: event.timestamp });
 
     if (event?.eventType !== 'tool_result' || event?.metadata?.tool_name !== 'write_todos') {
       continue;
@@ -238,16 +226,33 @@ export function buildDefaultAssistantTimeline(message) {
     items.push({
       kind: 'stream_event',
       id: restoredId,
+      timestamp: event.timestamp,
       event: {
         id: restoredId,
         eventType: 'todos_update',
         content: '',
+        timestamp: event.timestamp,
         metadata: { todos },
       },
     });
   }
 
-  return items;
+  items.push({
+    kind: 'assistant_message',
+    id: message.id || `msg_${Date.now()}`,
+    content: typeof message.content === 'string' ? message.content : '',
+    timestamp: message.timestamp,
+    isStreaming: !!message.isStreaming,
+    error: !!message.error,
+    displayAgentName: typeof message.displayAgentName === 'string' ? message.displayAgentName : CHAT_AGENT_NAME,
+    displayModelName: typeof message.displayModelName === 'string' ? message.displayModelName : '',
+    displayToolCalls: Array.isArray(message.displayToolCalls) ? message.displayToolCalls : [],
+    tokenCount: Number.isFinite(message.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0,
+    reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
+  });
+
+  return items.sort((a, b) => a.timestamp - b.timestamp);
 }
 
 /**

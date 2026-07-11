@@ -484,13 +484,22 @@ def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
 
 
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
-    """Return tool_calls list from an AIMessage (normalized LangChain format)."""
+    """Return tool_calls list from an AIMessage (normalized LangChain format).
+
+    Tool-call-only AIMessages (no visible content) are discarded before they
+    ever become a ChatMessage -- see _chat_message_from_raw's `if not content
+    and role == "assistant": return None` -- so their created_at would
+    otherwise be lost. Stamping it onto each extracted tool call here is what
+    lets the frontend reconstruct true chronological order (tool calls vs. the
+    answer text they get bundled with) on reload instead of guessing.
+    """
     if isinstance(raw, dict):
         tool_calls = raw.get("tool_calls")
     else:
         tool_calls = getattr(raw, "tool_calls", None)
     if not isinstance(tool_calls, list):
         return []
+    created_at = _raw_message_created_at(raw)
     result: list[dict[str, Any]] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
@@ -503,6 +512,7 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
                 "id": str(tc.get("id") or ""),
                 "name": name,
                 "args": tc.get("args") if isinstance(tc.get("args"), dict) else {},
+                "created_at": created_at,
             }
         )
     return result

@@ -29,10 +29,17 @@ function buildToolStreamEvents(toolCalls, messageId) {
     const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
     const result = typeof tc.result === 'string' ? tc.result : '';
+    // The backend stamps the declaring AIMessage's created_at onto each tool
+    // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
+    // history reloads can sort tool calls against the answer text by real
+    // time instead of guessing an order. No separate timestamp exists for
+    // the result, so it reuses the call's.
+    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
     events.push({
       id: `${messageId}-tool-start-${index}`,
       eventType: 'tool_start',
       content: '',
+      timestamp,
       metadata: {
         tool_name: toolName,
         args_preview: args,
@@ -45,6 +52,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
         id: `${messageId}-tool-result-${index}`,
         eventType: 'tool_result',
         content: '',
+        timestamp,
         metadata: {
           tool_name: toolName,
           result_preview: Array.isArray(tc.images) && tc.images.length > 0
