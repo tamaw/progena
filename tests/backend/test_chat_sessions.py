@@ -277,3 +277,48 @@ class TestDisplayMetadataNormalization:
 
         assert result is not None
         assert store.get_checkpoint_thread_snapshot_calls == 1
+
+    def test_tool_call_created_at_survives_from_the_discarded_tool_only_aimessage(self):
+        """A tool-call-only AIMessage never becomes a ChatMessage of its own (no
+        visible content), so its created_at would otherwise be lost. It must
+        still land on the tool_calls attached to the later text-bearing
+        AIMessage -- the frontend needs it to sort tool calls against the
+        answer by real time instead of guessing an order.
+        """
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_tool_ts"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_tool_ts",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-11T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "search for x"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "call_1", "name": "search", "args": {"q": "x"}}],
+                        "response_metadata": {"created_at": 1783736960.0},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "result text",
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here you go",
+                        "response_metadata": {"created_at": 1783736979.0},
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_tool_ts")
+
+        assert detail is not None
+        assistant = next(message for message in detail.messages if message.role == "assistant")
+        assert assistant.tool_calls[0]["created_at"] == "2026-07-11T02:29:20Z"

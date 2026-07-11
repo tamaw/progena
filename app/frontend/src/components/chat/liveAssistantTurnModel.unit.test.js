@@ -471,13 +471,15 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(buildDefaultAssistantTimeline(undefined)).toBeUndefined();
   });
 
-  // Acceptance: assistant_message first, then stream_event items.
-  it('produces an assistant_message item first, then stream_event items in order', () => {
+  // Acceptance: items are ordered purely by real timestamp -- a tool call
+  // timestamped after the answer message sorts after it, one timestamped
+  // before sorts before it. No rule about tool calls vs. text is encoded.
+  it('sorts items by real timestamp', () => {
     const message = {
       role: 'assistant',
       id: 'msg_1',
       content: 'Hello',
-      timestamp: 1000,
+      timestamp: 2000,
       isStreaming: false,
       error: false,
       displayAgentName: 'MyAgent',
@@ -487,23 +489,19 @@ describe('buildDefaultAssistantTimeline', () => {
       reasoningTokenCount: 0,
       reasoningText: '',
       streamEvents: [
-        { id: 'e1', eventType: 'tool_start', content: 'searching' },
-        { id: 'e2', eventType: 'tool_result', content: 'result' },
+        { id: 'before', eventType: 'tool_start', content: 'searching', timestamp: 1000 },
+        { id: 'after', eventType: 'tool_start', content: 'follow-up', timestamp: 3000 },
       ],
     };
     const items = buildDefaultAssistantTimeline(message);
-    expect(items).toHaveLength(3);
-    expect(items[0].kind).toBe('assistant_message');
-    expect(items[0].id).toBe('msg_1');
-    expect(items[0].content).toBe('Hello');
-    expect(items[0].timestamp).toBe(1000);
-    expect(items[0].displayAgentName).toBe('MyAgent');
-    expect(items[0].displayModelName).toBe('gpt-4');
-    expect(items[0].displayToolCalls).toEqual([{ name: 'search' }]);
-    expect(items[1].kind).toBe('stream_event');
-    expect(items[1].id).toBe('e1');
-    expect(items[2].kind).toBe('stream_event');
-    expect(items[2].id).toBe('e2');
+    expect(items.map((item) => item.id)).toEqual(['before', 'msg_1', 'after']);
+    const assistantItem = items[1];
+    expect(assistantItem.kind).toBe('assistant_message');
+    expect(assistantItem.content).toBe('Hello');
+    expect(assistantItem.timestamp).toBe(2000);
+    expect(assistantItem.displayAgentName).toBe('MyAgent');
+    expect(assistantItem.displayModelName).toBe('gpt-4');
+    expect(assistantItem.displayToolCalls).toEqual([{ name: 'search' }]);
   });
 
   // Acceptance: the backend persists raw write_todos tool_start/tool_result
@@ -585,10 +583,10 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items[0].kind).toBe('assistant_message');
   });
 
-  it('uses default id and timestamp when message lacks them', () => {
+  it('uses a default id when the message lacks one; timestamp is passed through as-is', () => {
     const items = buildDefaultAssistantTimeline({ role: 'assistant', content: 'txt' });
     expect(items[0].id).toBeTruthy();
-    expect(typeof items[0].timestamp).toBe('number');
+    expect(items[0].timestamp).toBeUndefined();
   });
 });
 
