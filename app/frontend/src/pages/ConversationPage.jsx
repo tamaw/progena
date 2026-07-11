@@ -302,6 +302,7 @@ function ConversationPage() {
     backgroundErrorChatIds,
     activeStreamIdRef,
     liveAssistantTurn,
+    setLiveAssistantTurn,
     preserveStreamInBackground,
     handleSend,
     handleStop,
@@ -501,6 +502,7 @@ function ConversationPage() {
       activeStreamIdRef.current = null;
       setMessages(normalizedMessages);
       setIsGenerating(false);
+      setLiveAssistantTurn(null);
       setIsEditingTitle(false);
       setTitleDraft('');
       if (typeof event.detail?.threadId === 'string') {
@@ -513,7 +515,7 @@ function ConversationPage() {
     return () => {
       window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
     };
-  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating]);
+  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn]);
 
   // Save chat history to localStorage only for locally-owned sessions.
   // Backend chat messages must not leak into localStorage — they are the server's
@@ -551,6 +553,11 @@ function ConversationPage() {
     recentScheduledContent.current.clear();
     setMessages(backendMessages);
     setIsGenerating(false);
+    // The chat being displayed just changed identity -- a live turn still
+    // sitting in state belongs to whatever chat was previously on screen
+    // (its background bookkeeping lives in activeStreamIdRef/originChatId,
+    // not here), so drop it rather than let it render under the new chat.
+    setLiveAssistantTurn(null);
     setIsClearingSession(false);
     setCustomChatTitle(activeBackendChat.title || '');
     setCustomChatTitleThreadId(nextSessionId);
@@ -561,7 +568,7 @@ function ConversationPage() {
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
+  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
 
   // Scroll to bottom on new messages, and keep following along as the live
   // assistant turn streams in (liveAssistantTurn only lands in `messages`
@@ -676,6 +683,7 @@ function ConversationPage() {
     recentScheduledContent.current.clear();
     setMessages([]);
     setIsGenerating(false);
+    setLiveAssistantTurn(null);
     setIsClearingSession(false);
     clearBackendSelection();
     setCustomChatTitle('');
@@ -685,7 +693,7 @@ function ConversationPage() {
     setThreadId(null);
     localStorage.removeItem(config.storage.chatHistory);
     localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
-  }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
+  }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
     if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {

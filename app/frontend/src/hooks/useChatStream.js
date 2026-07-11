@@ -166,21 +166,30 @@ export function useChatStream({
       : null;
 
     // The chat this stream belongs to, captured as a closure-local so
-    // background completion can update the right sidebar card later.
-    const originChatId = selectedBackendChat?.thread_id ?? null;
+    // background completion can update the right sidebar card later. Falls
+    // back to the local draft threadId when this chat hasn't been sent to
+    // the backend yet (selectedBackendChat is only set for chats already
+    // materialized as a backend card) -- switching away from a brand-new
+    // chat materializes it under this same threadId (see
+    // materializeCurrentChatCard), so without this fallback a background
+    // stream from an unmaterialized chat can never be matched back up:
+    // resolveBackgroundStreamOutcome always takes its `!originChatId`
+    // foreground branch, and the stale-foreground guard below then silently
+    // discards the finished reply instead of finalizing or backgrounding it.
+    const originChatId = selectedBackendChat?.thread_id ?? threadId ?? null;
     // Mirror the foreground stream's origin into the ref for selectSessionItem
     // (deciding which card shows the orange "generating in background" dot).
     backgroundOriginChatIdRef.current = originChatId;
     // Bump this chat's activity now so "Recent" sorts it to the top right
     // away, instead of waiting for the stream to finish and a fresh chat list
-    // snapshot to arrive.
+    // snapshot to arrive. A no-op if no backend card exists yet for this id.
     if (originChatId) {
       dispatch(touchChatSession(originChatId));
     }
 
     // Identifies this stream's chat so a later send only aborts it when it
     // targets the same chat; sending in a different chat leaves this running.
-    const streamKey = originChatId ?? threadId ?? null;
+    const streamKey = originChatId;
 
     // Helper to update the live turn state without stale closures.
     const updateLiveTurn = (updater) => {
@@ -318,5 +327,6 @@ export function useChatStream({
     handleSend,
     handleStop,
     liveAssistantTurn,
+    setLiveAssistantTurn,
   };
 }
