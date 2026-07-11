@@ -16,7 +16,7 @@ describe('categoryForEventType', () => {
     expect(categoryForEventType('tool_error')).toBe('errors');
     expect(categoryForEventType('tool_start')).toBe('tools');
     expect(categoryForEventType('tool_result')).toBe('tools');
-    expect(categoryForEventType('todos_update')).toBe('tools');
+    expect(categoryForEventType('todos_update')).toBe('plan');
     expect(categoryForEventType('something_else')).toBe('debug');
     expect(categoryForEventType(123)).toBe('debug');
   });

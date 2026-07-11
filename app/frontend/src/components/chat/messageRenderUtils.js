@@ -243,9 +243,16 @@ export function describeStreamEvent(event) {
   if (eventType === 'todos_update') {
     const todos = Array.isArray(metadata.todos) ? metadata.todos : [];
     const completed = todos.filter((todo) => todo?.status === 'completed').length;
+    // Todos carry no plan-level name of their own (write_todos items only
+    // have content/status) -- the in_progress item is the closest thing to a
+    // label for "what this plan update is about", falling back to the next
+    // pending item, then the last item once everything is done.
+    const activeTodo = todos.find((todo) => todo?.status === 'in_progress')
+      || todos.find((todo) => todo?.status === 'pending')
+      || todos[todos.length - 1];
     return {
       badge: 'Plan',
-      title: 'Plan',
+      title: activeTodo?.content || 'Plan',
       metaDetail: todos.length > 0 ? `${completed}/${todos.length} done` : '',
       bodyDetail: '',
     };
