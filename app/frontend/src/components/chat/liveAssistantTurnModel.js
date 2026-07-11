@@ -107,6 +107,14 @@ export function applyAssistantStreamEvent(turn, streamEvent, now) {
     return next;
   }
 
+  // todos_update carries the agent's FULL current plan snapshot on every call
+  // (not a delta), but each call still gets its own timeline row -- the plan
+  // can be many tool calls deep by the time it's next updated, so merging in
+  // place would bury the current state under everything that ran since the
+  // last update. A fresh row per update instead reads as plan progress
+  // checkpoints threaded through the transcript. Falls through to the
+  // generic append path below.
+
   // All other visible events.
   const isVisibleKind = nextEvent.eventType !== 'node_update' || (
     nextEvent.metadata?.node_name && nextEvent.metadata.node_name !== 'pending_response'
@@ -164,6 +172,28 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
   return next;
 }
 
+// The backend persists raw tool_start/tool_result events but not the
+// synthetic todos_update events the live turn appends (see
+// applyAssistantStreamEvent) -- there's no message backing a todos_update,
+// it's a side-channel snapshot of graph state. Reconstruct one entry per
+// write_todos call from its tool_start args (structured JSON, see
+// build_tool_start_event on the backend), keyed by tool_call_id so each can
+// be re-inserted next to its matching tool_result below.
+function collectTodosByToolCallId(streamEvents) {
+  const todosByCallId = new Map();
+  for (const event of streamEvents) {
+    if (event?.eventType !== 'tool_start' || event?.metadata?.tool_name !== 'write_todos') {
+      continue;
+    }
+    const callId = event.metadata?.tool_call_id;
+    const todos = event.metadata?.args_preview?.todos;
+    if (callId && Array.isArray(todos)) {
+      todosByCallId.set(callId, todos);
+    }
+  }
+  return todosByCallId;
+}
+
 /**
  * Build a fallback timeline order for a committed assistant message that has
  * no recorded `timelineItems` (e.g. backend-loaded history).
@@ -192,8 +222,29 @@ export function buildDefaultAssistantTimeline(message) {
     reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
   });
 
+  const todosByCallId = collectTodosByToolCallId(streamEvents);
+  let todosSeq = 0;
   for (const event of streamEvents) {
     items.push({ kind: 'stream_event', id: event.id, event });
+
+    if (event?.eventType !== 'tool_result' || event?.metadata?.tool_name !== 'write_todos') {
+      continue;
+    }
+    const todos = todosByCallId.get(event.metadata?.tool_call_id);
+    if (!todos) continue;
+
+    todosSeq += 1;
+    const restoredId = `${message.id || 'msg'}-todos-restored-${todosSeq}`;
+    items.push({
+      kind: 'stream_event',
+      id: restoredId,
+      event: {
+        id: restoredId,
+        eventType: 'todos_update',
+        content: '',
+        metadata: { todos },
+      },
+    });
   }
 
   return items;

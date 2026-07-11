@@ -157,6 +157,54 @@ describe('applyAssistantStreamEvent', () => {
     expect(next).toBe(turn);
   });
 
+  it('appends a stream_event timeline item for todos_update', () => {
+    const turn = baseTurn();
+    const todos = [
+      { content: 'Investigate the bug', status: 'completed' },
+      { content: 'Write the fix', status: 'in_progress' },
+    ];
+    const evt = rawStreamEvent('todos_update', { metadata: { todos } });
+    const next = applyAssistantStreamEvent(turn, evt, NOW);
+
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('stream_event');
+    expect(next.timelineItems[0].event.eventType).toBe('todos_update');
+    expect(next.timelineItems[0].event.metadata.todos).toEqual(todos);
+  });
+
+  it('appends a new row for each later todos_update instead of replacing in place', () => {
+    const turn = baseTurn();
+    const withTool = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
+    const first = applyAssistantStreamEvent(
+      withTool,
+      rawStreamEvent('todos_update', { metadata: { todos: [{ content: 'Step 1', status: 'in_progress' }] } }),
+      NOW,
+    );
+    const second = applyAssistantStreamEvent(
+      first,
+      rawStreamEvent('todos_update', {
+        metadata: {
+          todos: [
+            { content: 'Step 1', status: 'completed' },
+            { content: 'Step 2', status: 'in_progress' },
+          ],
+        },
+      }),
+      NOW,
+    );
+
+    // tool_start + two distinct todos rows, one per update.
+    expect(second.timelineItems).toHaveLength(3);
+    const todosItems = second.timelineItems.filter((item) => item.event.eventType === 'todos_update');
+    expect(todosItems).toHaveLength(2);
+    expect(todosItems[0].id).not.toBe(todosItems[1].id);
+    expect(todosItems[0].event.metadata.todos).toEqual([{ content: 'Step 1', status: 'in_progress' }]);
+    expect(todosItems[1].event.metadata.todos).toEqual([
+      { content: 'Step 1', status: 'completed' },
+      { content: 'Step 2', status: 'in_progress' },
+    ]);
+  });
+
   // Acceptance: first tool_start creates ONLY a stream-event row.
   it('appends a stream_event timeline item for tool_start (no assistant row)', () => {
     const turn = baseTurn();
@@ -456,6 +504,63 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items[1].id).toBe('e1');
     expect(items[2].kind).toBe('stream_event');
     expect(items[2].id).toBe('e2');
+  });
+
+  // Acceptance: the backend persists raw write_todos tool_start/tool_result
+  // events but not the synthetic todos_update rows the live turn appends --
+  // reconstruct one row per write_todos call, next to its tool_result, keyed
+  // by tool_call_id.
+  it('synthesizes a todos_update item next to each write_todos tool_result', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'done',
+      streamEvents: [
+        {
+          id: 'e1',
+          eventType: 'tool_start',
+          metadata: {
+            tool_name: 'write_todos',
+            tool_call_id: 'call_1',
+            args_preview: { todos: [{ content: 'a', status: 'in_progress' }] },
+          },
+        },
+        { id: 'e2', eventType: 'tool_result', metadata: { tool_name: 'write_todos', tool_call_id: 'call_1' } },
+        { id: 'e3', eventType: 'tool_start', metadata: { tool_name: 'search' } },
+        { id: 'e4', eventType: 'tool_result', metadata: { tool_name: 'search' } },
+        {
+          id: 'e5',
+          eventType: 'tool_start',
+          metadata: {
+            tool_name: 'write_todos',
+            tool_call_id: 'call_2',
+            args_preview: { todos: [{ content: 'a', status: 'completed' }] },
+          },
+        },
+        { id: 'e6', eventType: 'tool_result', metadata: { tool_name: 'write_todos', tool_call_id: 'call_2' } },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    const todosItems = items.filter((item) => item.event?.eventType === 'todos_update');
+
+    // One per write_todos call, not just the last -- each threaded in right
+    // after its tool_result so the reload order matches the live order.
+    expect(todosItems).toHaveLength(2);
+    expect(items[items.findIndex((item) => item.id === 'e2') + 1]).toBe(todosItems[0]);
+    expect(todosItems[0].event.metadata.todos).toEqual([{ content: 'a', status: 'in_progress' }]);
+    expect(items[items.findIndex((item) => item.id === 'e6') + 1]).toBe(todosItems[1]);
+    expect(todosItems[1].event.metadata.todos).toEqual([{ content: 'a', status: 'completed' }]);
+  });
+
+  it('does not add a todos_update item when there was no write_todos call', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'hi',
+      streamEvents: [{ id: 'e1', eventType: 'tool_start', metadata: { tool_name: 'search' } }],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    expect(items.some((item) => item.event?.eventType === 'todos_update')).toBe(false);
   });
 
   it('uses CHAT_AGENT_NAME when displayAgentName is missing', () => {
