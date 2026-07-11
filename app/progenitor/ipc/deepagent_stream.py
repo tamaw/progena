@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -62,10 +63,17 @@ class DeepAgentIPCStream:
         message: str,
         *,
         thread_id: str,
+        received_at: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield IPC stream items from ``graph.astream``."""
 
-        graph_input: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
+        human_message = HumanMessage(
+            content=message,
+            additional_kwargs={
+                "created_at": received_at if received_at is not None else time.time()
+            },
+        )
+        graph_input: dict[str, Any] = {"messages": [human_message]}
         self.state["current_input"] = message
         self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
         astream_kwargs: dict[str, Any] = {

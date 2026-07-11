@@ -10,6 +10,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -84,6 +85,10 @@ class RuntimeChatService:
         message = str(payload.get("message") or "").strip()
         if not message:
             return _error("message is required", "BAD_REQUEST", 400)
+        # Stamped now, before any queueing delay below, so the timestamp
+        # reflects when the user actually sent the message rather than
+        # whenever the graph gets around to processing it.
+        received_at = time.time()
 
         if not self._can_run_deepagent_direct():
             return _error("DeepAgent graph is not available", "GRAPH_UNAVAILABLE", 503)
@@ -108,7 +113,9 @@ class RuntimeChatService:
             cancel_event = self._cancel_events.setdefault(request_id, asyncio.Event())
             try:
                 async with self._request_lock:
-                    await self._stream_chat(response, message, request_id, metadata, cancel_event)
+                    await self._stream_chat(
+                        response, message, request_id, metadata, cancel_event, received_at
+                    )
             finally:
                 self._cancel_events.pop(request_id, None)
         finally:
@@ -122,6 +129,7 @@ class RuntimeChatService:
         request_id: str,
         metadata: dict[str, Any] | None,
         cancel_event: asyncio.Event,
+        received_at: float,
     ) -> None:
         thread_id = self._thread_id_for_request(metadata)
         async with self._direct_graph_lock():
@@ -138,7 +146,9 @@ class RuntimeChatService:
 
             async def _produce() -> None:
                 try:
-                    async for item in bridge.stream(message, thread_id=thread_id):
+                    async for item in bridge.stream(
+                        message, thread_id=thread_id, received_at=received_at
+                    ):
                         await queue.put(("item", item))
                 except Exception as exc:  # noqa: BLE001 - forwarded to the consumer below
                     await queue.put(("error", exc))

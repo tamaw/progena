@@ -322,3 +322,35 @@ class TestDisplayMetadataNormalization:
         assert detail is not None
         assistant = next(message for message in detail.messages if message.role == "assistant")
         assert assistant.tool_calls[0]["created_at"] == "2026-07-11T02:29:20Z"
+
+    def test_human_message_created_at_reads_from_additional_kwargs(self):
+        """HumanMessages carry no response_metadata (that's LLM-response-only),
+        so the runtime stamps their receipt time onto additional_kwargs
+        instead (see DeepAgentIPCStream.stream / chat_node). Without this
+        fallback the frontend has no real timestamp and falls back to
+        render time for every user message in every chat.
+        """
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_human_ts"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_human_ts",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-11T00:00:00Z",
+                messages=[
+                    {
+                        "id": "u1",
+                        "type": "human",
+                        "content": "hi",
+                        "additional_kwargs": {"created_at": 1783736960.0},
+                    },
+                    {"id": "a1", "type": "ai", "content": "Hello there"},
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_human_ts")
+
+        assert detail is not None
+        user = next(message for message in detail.messages if message.role == "user")
+        assert user.created_at == "2026-07-11T02:29:20Z"

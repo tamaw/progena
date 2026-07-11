@@ -51,7 +51,7 @@ class ScriptedBridge:
         self._script = script
         self.thread_id: str | None = None
 
-    async def stream(self, message: str, *, thread_id: str):
+    async def stream(self, message: str, *, thread_id: str, received_at: float | None = None):
         self.thread_id = thread_id
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
