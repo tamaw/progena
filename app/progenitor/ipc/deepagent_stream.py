@@ -191,6 +191,15 @@ class DeepAgentIPCStream:
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
             self.state.update(node_output)
+
+            if "todos" in node_output:
+                yield {
+                    "type": "stream_event",
+                    "event_type": "todos_update",
+                    "content": "",
+                    "metadata": {"todos": node_output["todos"]},
+                }
+
             display_metadata: dict[str, Any] = {}
             if "messages" in node_output:
                 last_msg = get_last_ai_message(node_output.get("messages"))

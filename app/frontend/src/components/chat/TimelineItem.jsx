@@ -15,10 +15,12 @@ import {
   describeStreamEvent,
   badgeForEvent,
   toolDetailsForEvent,
+  todosDetailsForEvent,
   tokenMetaItemsForEvent,
   tagClassForEventType,
   formatTimestamp,
 } from './messageRenderUtils';
+import TodoListPanel from './TodoListPanel';
 
 export default function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'assistant_message') {
@@ -74,6 +76,7 @@ export default function TimelineItem({ item, itemIndex }) {
     const description = describeStreamEvent(event);
     const badge = badgeForEvent(event.eventType || 'stream_event');
     const tool = toolDetailsForEvent(event, description);
+    const todos = todosDetailsForEvent(event);
     const eventTokenMetaItems = tokenMetaItemsForEvent(event);
     const eventFormattedTime = formatTimestamp(event.timestamp);
 
@@ -118,6 +121,11 @@ export default function TimelineItem({ item, itemIndex }) {
                 </div>
                 {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
                 {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
+              </div>
+            )}
+            {todos && todos.length > 0 && (
+              <div className="entry__content">
+                <TodoListPanel todos={todos} />
               </div>
             )}
           </div>

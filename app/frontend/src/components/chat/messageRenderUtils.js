@@ -240,6 +240,17 @@ export function describeStreamEvent(event) {
     };
   }
 
+  if (eventType === 'todos_update') {
+    const todos = Array.isArray(metadata.todos) ? metadata.todos : [];
+    const completed = todos.filter((todo) => todo?.status === 'completed').length;
+    return {
+      badge: 'Plan',
+      title: 'Plan',
+      metaDetail: todos.length > 0 ? `${completed}/${todos.length} done` : '',
+      bodyDetail: '',
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -285,6 +296,9 @@ export function badgeForEvent(eventType) {
   if (eventType === 'tool_error') {
     return { className: 'entry__badge entry__badge--err', label: '!' };
   }
+  if (eventType === 'todos_update') {
+    return { className: 'entry__badge entry__badge--plan', label: '☰' };
+  }
   if (eventType.includes('tool')) {
     return { className: 'entry__badge entry__badge--tool', label: '⌘' };
   }
@@ -299,10 +313,18 @@ export function badgeForEvent(eventType) {
 
 export function tagClassForEventType(eventType) {
   if (eventType === 'tool_error') return 'entry__tag entry__tag--err';
+  if (eventType === 'todos_update') return 'entry__tag chat-event-tag--plan';
   if (eventType.includes('tool')) return 'entry__tag chat-event-tag--tool';
   if (eventType.includes('reasoning')) return 'entry__tag chat-event-tag--reason';
   if (eventType.includes('node') || eventType.includes('agent')) return 'entry__tag chat-event-tag--step';
   return 'entry__tag chat-event-tag--step';
+}
+
+export function todosDetailsForEvent(event) {
+  const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
+  if (eventType !== 'todos_update') return null;
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  return Array.isArray(metadata.todos) ? metadata.todos : [];
 }
 
 export function toolDetailsForEvent(event, description) {

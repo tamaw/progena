@@ -23,6 +23,7 @@ export function categoryForEventType(eventType) {
   if (eventType === 'reasoning_delta' || eventType === 'reasoning_summary') return 'reasoning';
   if (eventType === 'tool_error') return 'errors';
   if (eventType.startsWith('tool_')) return 'tools';
+  if (eventType === 'todos_update') return 'tools';
   return 'debug';
 }
 
