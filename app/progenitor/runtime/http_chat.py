@@ -127,12 +127,65 @@ class RuntimeChatService:
         async with self._direct_graph_lock():
             bridge = self._create_direct_stream_bridge()
             cancelled = False
+
+            # bridge.stream() can go silent for minutes at a time (a long tool
+            # call or subagent invocation with no interim output), which would
+            # otherwise starve the response body of bytes and trip the
+            # backend's httpx read timeout. Consume it from a background task
+            # so this loop can keep writing SSE keepalive comments while
+            # waiting, the same pattern handle_events() uses.
+            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+            async def _produce() -> None:
+                try:
+                    async for item in bridge.stream(message, thread_id=thread_id):
+                        await queue.put(("item", item))
+                except Exception as exc:  # noqa: BLE001 - forwarded to the consumer below
+                    await queue.put(("error", exc))
+                finally:
+                    await queue.put(("done", None))
+
+            producer = asyncio.create_task(_produce())
             try:
-                async for item in bridge.stream(message, thread_id=thread_id):
+                while True:
                     if cancel_event.is_set():
                         cancelled = True
                         break
 
+                    try:
+                        kind, payload = await asyncio.wait_for(
+                            queue.get(), timeout=EVENTS_KEEPALIVE_SECONDS
+                        )
+                    except TimeoutError:
+                        await response.write(b": keepalive\n\n")
+                        continue
+
+                    if cancel_event.is_set():
+                        cancelled = True
+                        break
+
+                    if kind == "done":
+                        break
+
+                    if kind == "error":
+                        exc = payload
+                        if isinstance(exc, (ConnectionResetError, ConnectionError)):
+                            cancelled = True
+                            break
+                        logger.error("Streaming error for %s: %s", request_id, exc, exc_info=exc)
+                        with contextlib.suppress(ConnectionResetError, ConnectionError):
+                            await self._write_frame(
+                                response,
+                                "error",
+                                {
+                                    "request_id": request_id,
+                                    "error": str(exc),
+                                    "code": "STREAM_ERROR",
+                                },
+                            )
+                        return
+
+                    item = payload
                     item_type = str(item.get("type", "stream_chunk"))
                     if item_type == "stream_event":
                         event_payload: dict[str, Any] = {
@@ -172,6 +225,10 @@ class RuntimeChatService:
                         {"request_id": request_id, "error": str(exc), "code": "STREAM_ERROR"},
                     )
                 return
+            finally:
+                producer.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await producer
 
             if cancelled or cancel_event.is_set():
                 logger.info("Direct DeepAgent stream cancelled for %s", request_id)
