@@ -182,6 +182,13 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 7%, transparent);
 }
 
+.chat-event-entry .entry__badge--plan {
+    color: color-mix(in srgb, var(--color-accent) 82%, white);
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 7%, transparent);
+}
+
 .chat-event-badge--reason {
     color: #fff;
     background: #a78bfa;
@@ -266,6 +273,64 @@
 }
 .pending-cursor__word {
     color: var(--color-text-primary);
+}
+
+/* Todo panel -- live plan checklist rendered as the body of a `todos_update`
+   timeline entry (see TimelineItem.jsx / chat-event-entry). The entry's own
+   badge/tag/header already provide the "Plan" label and "n/total done"
+   count, so this is just the progress bar + checklist content -- no card
+   chrome of its own, it lives inside entry__content. */
+.todo-panel {
+    animation: fadeIn 0.2s ease;
+}
+
+.todo-panel__bar {
+    height: 4px;
+    border-radius: 999px;
+    background-color: color-mix(in srgb, var(--color-text-muted) 20%, transparent);
+    overflow: hidden;
+}
+
+.todo-panel__bar-fill {
+    height: 100%;
+    border-radius: 999px;
+    background-color: var(--color-accent);
+    transition: width 0.2s ease;
+}
+
+.todo-panel__list {
+    list-style: none;
+    margin: var(--spacing-xs) 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.todo-panel__item {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--color-text-secondary);
+}
+
+.todo-panel__glyph {
+    flex: none;
+    color: var(--color-text-muted);
+}
+
+.todo-panel__item--in_progress .todo-panel__glyph {
+    color: var(--color-accent);
+}
+
+.todo-panel__item--completed .todo-panel__glyph {
+    color: var(--color-success);
+}
+
+.todo-panel__item--completed .todo-panel__content {
+    color: var(--color-text-muted);
+    text-decoration: line-through;
 }
 
 /* Chat Input Container */
