@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from ..state.models import A2ATaskRecord, A2ATaskStatus
@@ -161,6 +162,7 @@ async def dispatch_tracked_a2a_task(
     timeout: float,
     blocking: bool,
     notify_on_completion: bool = True,
+    on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
 ) -> tuple[dict[str, Any], A2ATaskRecord | None]:
     """Submit an A2A task and persist the returned task snapshot when available."""
     metadata = dict(request_metadata or {})
@@ -177,6 +179,7 @@ async def dispatch_tracked_a2a_task(
         timeout=timeout,
         blocking=blocking,
         callback_url=callback_url,
+        on_progress=on_progress,
     )
 
     task_record: A2ATaskRecord | None = None

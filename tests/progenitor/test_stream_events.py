@@ -11,6 +11,7 @@ from app.progenitor.agent.middleware import AuditLoggingMiddleware
 from app.progenitor.ipc.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
+    build_a2a_call_progress_event,
     build_reasoning_delta_event,
     build_reasoning_summary_event,
     build_tool_error_event,
@@ -39,6 +40,10 @@ def test_allowed_event_types_cover_async_subagent_lifecycle():
 def test_allowed_event_types_cover_nested_subagent_tool_lifecycle():
     for name in ("subagent_tool_start", "subagent_tool_result", "subagent_tool_error"):
         assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
+def test_allowed_event_types_cover_a2a_call_progress():
+    assert "a2a_call_progress" in ALLOWED_CUSTOM_EVENT_TYPES
 
 
 def test_normalize_custom_event_passes_known_type_unchanged():
@@ -215,6 +220,30 @@ def test_build_tool_error_event_redacts_and_truncates():
     err_text = event["metadata"]["error"]
     assert api_key not in err_text
     assert event["metadata"]["success"] is False
+
+
+def test_build_a2a_call_progress_event_shape():
+    event = build_a2a_call_progress_event(
+        "call_1", "greetings_agent", "working", "Step 1/3: prep..."
+    )
+    assert event["event_type"] == "a2a_call_progress"
+    assert event["content"] == "Step 1/3: prep..."
+    assert event["metadata"] == {
+        "tool_call_id": "call_1",
+        "agent_name": "greetings_agent",
+        "state": "working",
+        "message_text": "Step 1/3: prep...",
+    }
+    assert normalize_custom_event(event)["event_type"] == "a2a_call_progress"
+
+
+def test_build_a2a_call_progress_event_redacts_and_truncates():
+    api_key = "sk-" + "c" * 48
+    big = f"{api_key} " + "x" * (DEFAULT_STREAM_PREVIEW_BYTES * 4)
+    event = build_a2a_call_progress_event("call_1", "greetings_agent", "working", big)
+    assert api_key not in event["content"]
+    assert api_key not in event["metadata"]["message_text"]
+    assert len(event["content"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
 
 
 def test_build_reasoning_delta_event_tracks_text_length():

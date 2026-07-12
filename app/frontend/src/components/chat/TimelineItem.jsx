@@ -5,6 +5,7 @@
  *   - `{ kind: 'assistant_message', ... }` — the agent's text response row
  *   - `{ kind: 'stream_event', event: ... }` — a tool/reasoning/node event row
  *   - `{ kind: 'subagent', ... }` — a nested `task` tool delegation card
+ *   - `{ kind: 'a2a_call', ... }` — a blocking `call_agent` A2A invocation card
  */
 
 import { Fragment } from 'react';
@@ -23,10 +24,15 @@ import {
 } from './messageRenderUtils';
 import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
+import A2ACallCard from './A2ACallCard';
 
 export default function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
+  }
+
+  if (item.kind === 'a2a_call') {
+    return <A2ACallCard item={item} />;
   }
 
   if (item.kind === 'assistant_message') {

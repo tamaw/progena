@@ -24,6 +24,10 @@
     --color-error: #ff7770;
     --color-info: #6f96ff;
     --color-accent-soft: rgba(111, 150, 255, 0.16);
+    /* A2A call card accent (chat-panel.css) -- distinct from --color-success,
+       which subagent cards use, so the two delegation-card families stay
+       visually distinguishable at a glance. */
+    --color-a2a: #14b8a6;
 
     /* User message colors */
     --color-user-bg: #2f6ff6;
