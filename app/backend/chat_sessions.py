@@ -573,6 +573,28 @@ def _messages_from_state(state: dict[str, Any]) -> list[ChatMessage]:
     return messages
 
 
+def _synthetic_pending_tool_call_message(
+    tool_calls: list[dict[str, Any]], index: int
+) -> ChatMessage:
+    """A placeholder ChatMessage for tool calls whose owning turn never produced
+    trailing text -- e.g. the turn was interrupted (Stop / page reload racing
+    the request / dropped connection) right after a tool result landed but
+    before the model's follow-up commentary came back. Without this, such tool
+    calls (a subagent dispatch, an A2A call, any tool) would be silently
+    discarded by `_messages_from_checkpoint` below and the whole turn would
+    vanish from history on reload even though it genuinely ran and, usually,
+    already has a real result attached.
+    """
+    created_at = tool_calls[-1].get("created_at") if tool_calls else None
+    return ChatMessage(
+        id=f"message_{index}_pending_tools",
+        role="assistant",
+        content="",
+        created_at=created_at,
+        tool_calls=tool_calls,
+    )
+
+
 def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list[ChatMessage]:
     if snapshot is None:
         return []
@@ -609,6 +631,14 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
         if role == "tool":
             continue
 
+        if role == "user" and pending_tool_calls:
+            # A new human turn is starting but the previous turn's tool calls
+            # were never claimed by a text-bearing AIMessage. Flush them now,
+            # ahead of the new question, instead of letting the reset just
+            # below silently drop them.
+            messages.append(_synthetic_pending_tool_call_message(pending_tool_calls, index))
+            pending_tool_calls = []
+
         if role == "assistant":
             for tc in _extract_raw_tool_calls(raw):
                 entry = tool_results.get(tc["id"], {})
@@ -623,6 +653,14 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
+
+    if pending_tool_calls:
+        # The checkpoint's tip is itself a dangling tool-call-only AIMessage --
+        # same flush, just past the end of the loop instead of ahead of the
+        # next human turn.
+        messages.append(
+            _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
+        )
 
     return messages
 
