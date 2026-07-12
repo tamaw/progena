@@ -13,7 +13,11 @@ Features:
 - Greets the caller using the same Azure OpenAI environment variables as the rest of the repo
 - `sleep` tool to simulate async work and tracked polling
 - `probe_copilot` tool to spawn GitHub Copilot CLI over ACP and ask it to say hello back
+- `do_step` tool (called once per step) for multi-step tasks, to exercise live per-tool-call
+  progress streaming (e.g. "do a 3-step task: prep, build, verify")
 - Hermetic mock mode with `PROGENITOR_MOCK_LLM=true`
+- Streaming (`message/stream` / `tasks/resubscribe`) is enabled on the agent card; each tool
+  call and step is pushed as its own live `TaskStatusUpdateEvent`
 
 Environment:
 
@@ -80,4 +84,4 @@ Registration example from Progenitor:
 register_a2a_agent(name="greetings_agent", url="http://localhost:8109")
 ```
 
-Note: `blocking=true` still returns the submitted snapshot. That is deliberate: the SDK closes the event queue as soon as `execute()` returns, so this agent treats the task store as the source of truth and finishes work from a background task. Progenitor's normal behavior is to poll `tasks/get` until terminal state anyway.
+Note: `execute()` runs the whole greeting to completion before returning, rather than handing off to a detached background task -- the SDK closes the event queue the instant `execute()` returns, so a detached task's events would be silently dropped. The A2A framework itself keeps a non-blocking `message/send` caller from waiting on that, by continuing to consume events in the background after handing back an early "submitted" response. Progenitor's normal behavior is still to poll `tasks/get` until terminal state, which continues to work; a caller that wants live progress can instead use `message/stream` or `tasks/resubscribe`.

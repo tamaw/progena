@@ -2,25 +2,30 @@
 
 A deliberately tiny, fully isolated A2A server used to exercise Progenitor's
 A2A tooling end-to-end (register, call_agent, heartbeat polling, push
-callbacks). It wraps a deepagents deep agent that replies with a friendly
-greeting and has two tools:
+callbacks, and live progress streaming). It wraps a deepagents deep agent
+that replies with a friendly greeting and has three tools:
 
 - ``sleep`` — pretend work for N seconds, to exercise async tracked invocation.
 - ``probe_copilot`` — spawn the GitHub Copilot CLI over ACP, ask it to say
   hello back, and relay the reply.
+- ``do_step`` — perform one named step of a multi-step task; the agent calls
+  it once per step, giving several distinct, observable tool calls per turn
+  to test live progress streaming against (see "do a 3-step task: a, b, c").
 
 Everything lives in this file and in memory. It imports nothing from
 ``app.progenitor`` or other ``app.agents.*`` packages — only third-party
 libraries. Set ``PROGENITOR_MOCK_LLM=true`` for a deterministic no-LLM mode
 (used by the unit tests): canned greetings, real sleeps for "sleep N", a
-forced error for requests containing "fail".
+forced error for requests containing "fail", and simulated do_step calls for
+"an N-step task".
 
-Note on blocking semantics: the executor returns from ``execute()``
-immediately after emitting ``submitted`` and completes the task from a
-background worker via direct task-store writes, because the a2a-sdk closes
-the event queue as soon as ``execute()`` returns. A ``blocking=true``
-``message/send`` therefore still returns the submitted snapshot; callers are
-expected to poll ``tasks/get`` (Progenitor always does).
+Note on blocking semantics: ``execute()`` runs the whole greeting to
+completion before returning (see GreetingsExecutor's docstring for why --
+the a2a-sdk closes the event queue as soon as ``execute()`` returns, so
+returning early would silently drop every later event). The A2A framework
+itself keeps a non-blocking ``message/send`` caller from waiting on that,
+by continuing to consume events in the background after handing back an
+early "submitted" response.
 
 Run:  python -m uvicorn app.agents.greetings_agent.agent:app --port 8109
 """
@@ -28,13 +33,14 @@ Run:  python -m uvicorn app.agents.greetings_agent.agent:app --port 8109
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import re
 import shutil
 import tempfile
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -101,8 +107,9 @@ logger = logging.getLogger("greetings_agent")
 AGENT_ID = "greetings_agent"
 AGENT_DESCRIPTION = (
     "Minimal A2A test agent: replies with a friendly greeting, can pretend to "
-    "work (sleep) before responding, and can probe the local GitHub Copilot "
-    "CLI over ACP to have it say hello back."
+    "work (sleep) before responding, can probe the local GitHub Copilot "
+    "CLI over ACP to have it say hello back, and can perform a multi-step "
+    "task to exercise live progress streaming."
 )
 AGENT_VERSION = "0.1.0"
 DEFAULT_PORT = 8109
@@ -338,6 +345,19 @@ async def probe_copilot(message: str) -> str:
     return await _probe_copilot(message)
 
 
+@tool
+async def do_step(step_number: int, step_name: str, seconds: float = 1.0) -> str:
+    """Perform one named step of a multi-step task: wait `seconds`, then report completion.
+
+    Call this once per step, in order (step_number starting at 1), when asked to do a
+    multi-step task. Exists purely to give the A2A layer several distinct, observable tool
+    calls per turn to test live progress streaming against.
+    """
+    duration = max(0.0, min(float(seconds), GREETINGS_SLEEP_MAX))
+    await asyncio.sleep(duration)
+    return f"Step {step_number} ({step_name}) done after {duration:.1f}s."
+
+
 _SYSTEM_PROMPT = """\
 You are greetings_agent, a tiny test agent. Your only job is to reply with a short,
 friendly greeting (1-2 sentences).
@@ -348,6 +368,9 @@ friendly greeting (1-2 sentences).
   call the `sleep` tool with that duration first, then greet.
 - If the request mentions Copilot, call the `probe_copilot` tool to ask the local GitHub
   Copilot CLI to say hello back, and include its reply in your response.
+- If the request asks for a multi-step task (e.g. "do a 3-step task" or names several
+  steps), call the `do_step` tool once per step in order (step_number starting at 1, using
+  a short descriptive step_name for each), then summarize all the steps once done.
 - Otherwise just greet the caller warmly. Keep replies brief.
 """
 
@@ -366,7 +389,7 @@ async def _get_deep_agent() -> Any:
 
                 _deep_agent = create_deep_agent(
                     model=_create_model(),
-                    tools=[sleep, probe_copilot],
+                    tools=[sleep, probe_copilot, do_step],
                     system_prompt=_SYSTEM_PROMPT,
                     name=AGENT_ID,
                 )
@@ -417,11 +440,47 @@ def _extract_tool_calls(result: dict[str, Any]) -> list[str]:
 
 
 _SLEEP_RE = re.compile(r"sleep\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
+_STEPS_RE = re.compile(r"(\d+)[\s-]*step", re.IGNORECASE)
+_MAX_MOCK_STEPS = 10
+
+ProgressCallback = Callable[[str], Awaitable[None]] | None
 
 
-async def _mock_response(request_text: str) -> str:
+def _parse_step_names(request_text: str, count: int) -> list[str]:
+    """Pull step names from an optional "...: name, name, name" suffix; pad/truncate to count."""
+    _prefix, _sep, rest = request_text.partition(":")
+    names = [n.strip() for n in rest.split(",") if n.strip()][:count]
+    names += [f"step {i}" for i in range(len(names) + 1, count + 1)]
+    return names
+
+
+_MOCK_STEP_DELAY_SECONDS = 0.4
+
+
+async def _run_mock_steps(
+    names: list[str], progress_callback: ProgressCallback = None
+) -> list[str]:
+    completed: list[str] = []
+    for i, name in enumerate(names, start=1):
+        if progress_callback is not None:
+            await progress_callback(f"Step {i}/{len(names)}: {name}...")
+        # Deliberately slower than the minimum needed for correctness: fast
+        # enough for the test suite, slow enough that live progress in the
+        # chat UI is actually visible to a human watching it stream in.
+        await asyncio.sleep(_MOCK_STEP_DELAY_SECONDS)
+        completed.append(f"{i}. {name} done")
+    return completed
+
+
+async def _mock_response(request_text: str, progress_callback: ProgressCallback = None) -> str:
     """Deterministic handler for PROGENITOR_MOCK_LLM mode (no API key needed)."""
     lowered = request_text.lower()
+    steps_match = _STEPS_RE.search(request_text)
+    if steps_match:
+        count = max(1, min(int(steps_match.group(1)), _MAX_MOCK_STEPS))
+        names = _parse_step_names(request_text, count)
+        completed = await _run_mock_steps(names, progress_callback)
+        return "Hello! Completed a " + str(count) + "-step task:\n" + "\n".join(completed)
     match = _SLEEP_RE.search(request_text)
     if match:
         duration = min(float(match.group(1)), GREETINGS_SLEEP_MAX)
@@ -435,19 +494,74 @@ async def _mock_response(request_text: str) -> str:
     return f"Hello from greetings_agent! You said: {request_text!r}"
 
 
-async def _run_greeting(request_text: str) -> str:
-    if _is_mock():
-        return await _mock_response(request_text)
+async def _report_message_progress(msg: Any, progress_callback: ProgressCallback) -> None:
+    """Best-effort: relay a streamed LangGraph message as a progress update.
+
+    Defensive by design -- this reads duck-typed AIMessage/ToolMessage shapes
+    from agent.astream(..., stream_mode="updates"), which isn't exercised by
+    any test in this repo against a real LLM (only PROGENITOR_MOCK_LLM=true
+    is), so a shape mismatch here must degrade to "no progress event" rather
+    than break the actual greeting response.
+    """
+    if progress_callback is None:
+        return
+    try:
+        tool_calls = getattr(msg, "tool_calls", None) or (
+            msg.get("tool_calls") if isinstance(msg, dict) else None
+        )
+        if isinstance(tool_calls, list) and tool_calls:
+            for call in tool_calls:
+                name = call.get("name") if isinstance(call, dict) else None
+                if name:
+                    await progress_callback(f"Calling {name}...")
+            return
+        if type(msg).__name__ == "ToolMessage":
+            name = getattr(msg, "name", None) or (
+                msg.get("name") if isinstance(msg, dict) else None
+            )
+            if name:
+                await progress_callback(f"{name} finished.")
+    except Exception:
+        logger.warning("Progress callback failed while relaying a streamed message", exc_info=True)
+
+
+async def _run_deep_agent(
+    request_text: str, progress_callback: ProgressCallback = None
+) -> dict[str, Any]:
+    """Run the deep agent via astream (not ainvoke) so each tool call/result along the way
+    can be relayed through progress_callback. stream_mode=["updates", "values"] gets both
+    per-node deltas (to observe tool calls) and the final accumulated state in one pass."""
     agent = await _get_deep_agent()
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": request_text}]})
-    return _extract_text(result)
+    input_state = {"messages": [{"role": "user", "content": request_text}]}
+    final_values: dict[str, Any] = input_state
+    async for mode, payload in agent.astream(input_state, stream_mode=["updates", "values"]):
+        if mode == "values":
+            if isinstance(payload, dict):
+                final_values = payload
+            continue
+        if mode != "updates" or not isinstance(payload, dict):
+            continue
+        for node_output in payload.values():
+            if not isinstance(node_output, dict):
+                continue
+            messages = node_output.get("messages")
+            if not isinstance(messages, list):
+                continue
+            for msg in messages:
+                await _report_message_progress(msg, progress_callback)
+    return final_values
 
 
-async def _run_greeting_payload(request_text: str) -> tuple[str, dict[str, Any]]:
+async def _run_greeting_payload(
+    request_text: str, progress_callback: ProgressCallback = None
+) -> tuple[str, dict[str, Any]]:
     if _is_mock():
-        text = await _mock_response(request_text)
-        tool_calls = []
+        text = await _mock_response(request_text, progress_callback)
         lowered = request_text.lower()
+        tool_calls: list[str] = []
+        steps_match = _STEPS_RE.search(request_text)
+        if steps_match:
+            tool_calls.extend(["do_step"] * max(1, min(int(steps_match.group(1)), _MAX_MOCK_STEPS)))
         if _SLEEP_RE.search(request_text):
             tool_calls.append("sleep")
         if "copilot" in lowered:
@@ -457,8 +571,7 @@ async def _run_greeting_payload(request_text: str) -> tuple[str, dict[str, Any]]
             "display_model_name": _model_name(),
             "display_tool_calls": tool_calls or None,
         }
-    agent = await _get_deep_agent()
-    result = await agent.ainvoke({"messages": [{"role": "user", "content": request_text}]})
+    result = await _run_deep_agent(request_text, progress_callback)
     return _extract_text(result), {
         "display_agent_name": AGENT_ID,
         "display_model_name": _model_name(),
@@ -472,12 +585,25 @@ async def _run_greeting_payload(request_text: str) -> tuple[str, dict[str, Any]]
 
 
 class GreetingsExecutor(AgentExecutor):
-    """Accept a task immediately, then complete it from a background worker.
+    """Runs one greeting per execute() call, awaited to completion.
 
-    The a2a-sdk closes the event queue as soon as ``execute()`` returns, so the
-    worker publishes progress by writing directly to the task store (which
-    ``tasks/get`` polling reads) and pushes notifications manually; the final
-    event on the tapped queue is belt-and-braces only.
+    execute() must not return until the greeting is done: the a2a-sdk closes
+    `event_queue` the instant execute() returns
+    (DefaultRequestHandler._run_event_stream), so a previous design that
+    completed the task from a detached background worker could only publish
+    progress by writing directly to the task store, and treated its own
+    final event push as "belt-and-braces" best-effort, because it knew that
+    push likely wouldn't reach a live listener. The framework already
+    provides "don't make a non-blocking caller wait" on its own
+    (ResultAggregator.consume_and_break_on_interrupt continues consuming in
+    a background task after returning an early response), so execute()
+    running the whole greeting inline is both necessary and sufficient --
+    and is what makes live streaming (AgentCapabilities.streaming) genuinely
+    work rather than silently drop everything past the first event.
+
+    Multiple concurrent greetings are expected and supported (unlike Builder
+    Agent, nothing here is single-flight) -- each execute() call tracks its
+    own worker task purely so cancel() has something to interrupt.
     """
 
     def __init__(
@@ -488,10 +614,27 @@ class GreetingsExecutor(AgentExecutor):
         self._task_store = task_store or TASK_STORE
         self._push_sender = push_sender
         self._workers: dict[str, asyncio.Task[None]] = {}
-        self._cancelled: set[str] = set()
-
-    def _drop_worker(self, task_id: str, _task: asyncio.Task[None]) -> None:
-        self._workers.pop(task_id, None)
+        # The `event_queue` a cancel() call receives is a *fresh* tap
+        # (on_cancel_task does its own `_queue_manager.tap(task.id)`), not
+        # the one execute() was originally given -- pushing only to that
+        # fresh tap satisfies on_cancel_task's own validation (its RPC
+        # response correctly shows `canceled`) but never reaches a caller
+        # who is actively watching the original message/stream connection,
+        # since tapping is a one-way parent-to-child forward, not shared
+        # between sibling taps. Tracking the original queue per task_id lets
+        # cancel() push the terminal event to the connection that's actually
+        # live, not just to its own throwaway one.
+        self._event_queues: dict[str, EventQueue] = {}
+        # execute() and cancel() both end up awaiting the same worker task
+        # once cancel() calls worker.cancel() -- asyncio does not guarantee
+        # which of the two awaiters gets woken first. Without this, execute()
+        # can win the race, return, and let the framework close event_queue
+        # before cancel() has pushed its terminal event to it, silently
+        # dropping it and leaving a live message/stream watcher hanging
+        # forever (confirmed empirically). This event makes the ordering
+        # explicit instead of relying on scheduling luck: execute() waits
+        # for cancel() to finish before it's allowed to return.
+        self._cancel_handled: dict[str, asyncio.Event] = {}
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or str(uuid.uuid4())
@@ -527,90 +670,152 @@ class GreetingsExecutor(AgentExecutor):
         )
 
         worker = asyncio.create_task(
-            self._complete_later(
-                event_queue.tap(),
+            self._run(
+                event_queue,
                 task_id=task_id,
                 context_id=context_id,
                 request_text=request_text,
             )
         )
-        # Keep a strong reference so the worker can't be garbage-collected mid-task.
         self._workers[task_id] = worker
-
-        def _on_done(done_task: asyncio.Task[None]) -> None:
-            self._drop_worker(task_id, done_task)
-
-        worker.add_done_callback(_on_done)
+        self._event_queues[task_id] = event_queue
+        cancel_handled = asyncio.Event()
+        self._cancel_handled[task_id] = cancel_handled
+        try:
+            await worker
+        except asyncio.CancelledError:
+            # cancel() owns pushing the terminal event (see its docstring) --
+            # wait for it to actually finish before returning, so the
+            # framework doesn't close event_queue out from under it (see
+            # _cancel_handled's comment). execute() must still return
+            # normally afterwards -- not propagate this -- since
+            # DefaultRequestHandler._run_event_stream only closes
+            # event_queue after execute() returns; if it raised instead, the
+            # queue would never close and any live message/stream watcher
+            # would hang indefinitely rather than seeing the stream end.
+            await cancel_handled.wait()
+        finally:
+            self._workers.pop(task_id, None)
+            self._event_queues.pop(task_id, None)
+            self._cancel_handled.pop(task_id, None)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
+        """Cancel a running greeting task.
+
+        Pushes the terminal `canceled` event itself, using the queue this
+        call receives (on_cancel_task taps a fresh one specifically for this
+        request) -- deliberately NOT relying on `_run`'s own body to push
+        it: an asyncio.Task cancelled before the event loop has given it its
+        first turn never runs its coroutine body at all (confirmed
+        empirically -- a worker cancelled immediately after dispatch, with
+        no intervening await, never executes a single line), so a caller
+        that cancels right after dispatch would otherwise get nothing.
+        Awaiting the (cancelled) worker here just lets any work it did
+        manage to start unwind cleanly; it does not push its own event.
+
+        Claims the worker with `pop`, not `get`: two genuinely concurrent
+        cancel() calls for the same task_id would otherwise both observe
+        `worker.done() is False` (cancelling a task doesn't mark it done
+        synchronously -- only once the coroutine actually unwinds) and both
+        fall through to push a terminal event to the live queue, delivering
+        it twice. Popping makes the first caller to reach this line the sole
+        owner; a second, losing call sees the entry already gone and takes
+        the "no active task" branch below instead.
+        """
         task_id = context.task_id or ""
-        self._cancelled.add(task_id)
-        worker = self._workers.get(task_id)
-        if worker is not None and not worker.done():
-            worker.cancel()
+        context_id = context.context_id or ""
+        worker = self._workers.pop(task_id, None)
+        if worker is None or worker.done():
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=context_id,
+                    final=True,
+                    status=TaskStatus(
+                        state=TaskState.canceled,
+                        message=_text_message("No active task to cancel."),
+                        timestamp=_utc_now_iso(),
+                    ),
+                )
+            )
+            return
+
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await worker
+
+        terminal = await self._save_state(task_id, context_id, TaskState.canceled, "Cancelled.")
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
-                task_id=task_id,
-                context_id=context.context_id or "",
-                final=True,
-                status=TaskStatus(
-                    state=TaskState.canceled,
-                    message=_text_message("Cancelled."),
-                    timestamp=_utc_now_iso(),
-                ),
+                task_id=task_id, context_id=context_id, final=True, status=terminal.status
             )
         )
+        # Also push to the queue execute() was originally given, if it's a
+        # different object: that's the one an active message/stream watcher
+        # is actually consuming from (see __init__'s comment on
+        # _event_queues for why on_cancel_task's own tap doesn't reach it).
+        live_queue = self._event_queues.get(task_id)
+        if live_queue is not None and live_queue is not event_queue:
+            await live_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id, context_id=context_id, final=True, status=terminal.status
+                )
+            )
+        await self._notify(terminal)
 
-    async def _complete_later(
+        # Release execute(), which is waiting on this (see _cancel_handled's
+        # comment in __init__) so it can't return -- and let the framework
+        # close event_queue -- until every push above has actually happened.
+        cancel_handled = self._cancel_handled.get(task_id)
+        if cancel_handled is not None:
+            cancel_handled.set()
+
+    async def _run(
         self,
-        tapped_queue: EventQueue,
+        event_queue: EventQueue,
         *,
         task_id: str,
         context_id: str,
         request_text: str,
     ) -> None:
-        try:
-            # Let the request handler persist the submitted snapshot first.
-            await asyncio.sleep(0.1)
-            working = await self._save_state(
-                task_id, context_id, TaskState.working, "Working on your greeting..."
-            )
-            await self._notify(working)
-
-            try:
-                text, metadata = await _run_greeting_payload(request_text)
-                state = TaskState.completed
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.exception("Greeting task %s failed", task_id)
-                text = f"Greetings agent failed: {exc}"
-                state = TaskState.failed
-                metadata = {"display_agent_name": AGENT_ID}
-
-            if task_id in self._cancelled:
-                return
-
-            terminal = await self._save_state(task_id, context_id, state, text, metadata=metadata)
-            await tapped_queue.enqueue_event(
+        async def _progress(step_text: str) -> None:
+            step = await self._save_state(task_id, context_id, TaskState.working, step_text)
+            await event_queue.enqueue_event(
                 TaskStatusUpdateEvent(
-                    task_id=task_id,
-                    context_id=context_id,
-                    final=True,
-                    status=terminal.status,
+                    task_id=task_id, context_id=context_id, final=False, status=step.status
                 )
             )
-            await self._notify(terminal)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Greeting worker for task %s crashed", task_id)
-            try:
-                await self._save_state(
-                    task_id, context_id, TaskState.failed, "Greetings agent crashed unexpectedly."
-                )
-            except Exception:
-                logger.exception("Failed to record crash for task %s", task_id)
+
+        working = await self._save_state(
+            task_id, context_id, TaskState.working, "Working on your greeting..."
+        )
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id, context_id=context_id, final=False, status=working.status
+            )
+        )
+        await self._notify(working)
+
+        # No CancelledError handling here: cancel() owns pushing the
+        # terminal event and writing task_store (see its docstring for why),
+        # so on cancellation this just propagates uncaught, same as any
+        # other coroutine that doesn't catch its own cancellation.
+        try:
+            text, metadata = await _run_greeting_payload(request_text, _progress)
+            state = TaskState.completed
+        except Exception as exc:
+            logger.exception("Greeting task %s failed", task_id)
+            text = f"Greetings agent failed: {exc}"
+            state = TaskState.failed
+            metadata = {"display_agent_name": AGENT_ID}
+
+        terminal = await self._save_state(task_id, context_id, state, text, metadata=metadata)
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id, context_id=context_id, final=True, status=terminal.status
+            )
+        )
+        await self._notify(terminal)
 
     async def _save_state(
         self,
@@ -666,7 +871,7 @@ AGENT_CARD = AgentCard(
     url=f"http://{_HOST_LABEL}:{_PORT}",
     capabilities=AgentCapabilities(
         push_notifications=True,
-        streaming=False,
+        streaming=True,
         state_transition_history=True,
     ),
     default_input_modes=["text/plain"],
@@ -696,6 +901,16 @@ AGENT_CARD = AgentCard(
             ),
             tags=["test", "acp", "copilot"],
             examples=["Ask copilot to say hello back"],
+        ),
+        AgentSkill(
+            id="multi_step_task",
+            name="Multi-step task",
+            description=(
+                "Perform a multi-step task, calling the do_step tool once per step -- exercises "
+                "live per-tool-call progress streaming (several observable steps per turn)."
+            ),
+            tags=["test", "progress", "streaming"],
+            examples=["Do a 3-step task: prep, build, verify"],
         ),
     ],
 )

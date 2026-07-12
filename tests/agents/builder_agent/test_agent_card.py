@@ -22,6 +22,15 @@ def test_agent_card_capabilities():
     assert caps is not None
 
 
+def test_agent_card_advertises_streaming():
+    # Required for the A2A client to negotiate the streaming transport at
+    # all (a2a-sdk's base_client.py gates it on client.streaming AND
+    # card.capabilities.streaming both being true) -- BuilderAgentExecutor
+    # now runs each build inline for exactly this reason, so the terminal
+    # and progress events it pushes can actually reach a streaming client.
+    assert AGENT_CARD.capabilities.streaming is True
+
+
 def test_agent_card_input_output_modes():
     assert "text/plain" in AGENT_CARD.default_input_modes
     assert "text/plain" in AGENT_CARD.default_output_modes

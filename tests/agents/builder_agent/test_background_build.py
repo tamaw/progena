@@ -1,8 +1,10 @@
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.agents.builder_agent.runtime.background_build import (
+    BackgroundBuildRunner,
     _assert_expected_output_exists,
     _assert_pr_created_if_required,
     _resolve_repo_path,
@@ -55,7 +57,32 @@ def test_assert_pr_created_if_required_fails_without_publish_result():
 def test_assert_pr_created_if_required_returns_url():
     build_state = {
         "build_settings": {"build_type": "agent"},
-        "build_messages": [{"phase": "publish", "pr_status": "created", "pr_url": "https://github.com/o/r/pull/1"}],
+        "build_messages": [
+            {"phase": "publish", "pr_status": "created", "pr_url": "https://github.com/o/r/pull/1"}
+        ],
     }
 
     assert _assert_pr_created_if_required(build_state) == "https://github.com/o/r/pull/1"
+
+
+def _make_runner() -> BackgroundBuildRunner:
+    return BackgroundBuildRunner(
+        state_manager=MagicMock(),
+        config=MagicMock(),
+        llm_client=MagicMock(),
+        hook_manager=MagicMock(),
+    )
+
+
+def test_set_progress_callback_sets_and_clears():
+    runner = _make_runner()
+    assert runner._progress_callback is None
+
+    async def callback(node_name, state):
+        del node_name, state
+
+    runner.set_progress_callback(callback)
+    assert runner._progress_callback is callback
+
+    runner.set_progress_callback(None)
+    assert runner._progress_callback is None

@@ -58,17 +58,6 @@ class TaskRecord:
     error_message: str | None = None
 
 
-@dataclass
-class _QueuedTask:
-    """Internal task envelope."""
-
-    task_id: str
-    context_id: str
-    request_text: str
-    request_ctx: dict[str, Any]
-    event_queue: Any
-
-
 def _resolve_log_path(log_path: Path | None) -> Path:
     return log_path if log_path is not None else get_task_log_path()
 
@@ -78,6 +67,29 @@ def _task_message(text: str) -> Message:
         message_id=str(datetime.now(UTC).timestamp()),
         role=Role.agent,
         parts=[Part(root=TextPart(text=text))],
+    )
+
+
+def _status_event(
+    task_id: str,
+    context_id: str,
+    state: TaskState,
+    message_text: str,
+    *,
+    final: bool,
+) -> TaskStatusUpdateEvent:
+    """Build one `TaskStatusUpdateEvent` -- every push in `_run_task` differs
+    only in these four values, so this replaces six near-identical inline
+    constructions with one call each."""
+    return TaskStatusUpdateEvent(
+        task_id=task_id,
+        context_id=context_id,
+        final=final,
+        status=TaskStatus(
+            state=state,
+            message=_task_message(message_text),
+            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        ),
     )
 
 
@@ -159,122 +171,120 @@ def _find_record(task_id: str, log_path: Path) -> dict[str, Any] | None:
 
 
 class BuilderTaskQueue:
-    """In-process queue that runs builder requests in background tasks."""
+    """Runs builder requests to completion, awaited directly by the A2A
+    executor's execute() call (see BuilderAgentExecutor's docstring for why:
+    the framework closes the A2A event_queue the instant execute() returns,
+    so a detached background task can never deliver events past that point).
+
+    A semaphore still caps concurrency (matching BackgroundBuildRunner's own
+    single-active-build contract) so a second concurrent request waits its
+    turn -- via a plain `async with` on the semaphore inside the still-live
+    execute() call -- rather than racing BackgroundBuildRunner's own "build
+    already in progress" guard.
+    """
 
     def __init__(
         self,
-        handler: Callable[[str, str, str, dict[str, Any]], Awaitable[BuildResult]],
+        handler: Callable[..., Awaitable[BuildResult]],
         max_concurrent: int = 1,
         log_path: Path | None = None,
     ) -> None:
         self._handler = handler
-        self._queue: asyncio.Queue[_QueuedTask] = asyncio.Queue()
         self._semaphore = asyncio.Semaphore(max_concurrent)
-        self._worker_task: asyncio.Task[None] | None = None
         self._log_path = _resolve_log_path(log_path)
-        self._queued_task_ids: set[str] = set()
-        self._cancelled_task_ids: set[str] = set()
         self._running_tasks: dict[str, asyncio.Task[None]] = {}
 
-    def start(self) -> None:
-        if self._worker_task is None or self._worker_task.done():
-            self._worker_task = asyncio.create_task(self._dequeue_loop())
-            logger.info("BuilderTaskQueue: worker started")
+    async def run(
+        self,
+        task_id: str,
+        context_id: str,
+        request_text: str,
+        request_ctx: dict[str, Any],
+        event_queue: Any,
+    ) -> None:
+        """Run one build to completion, pushing status events as it goes.
 
-    async def stop(self, drain_timeout: float = 5.0) -> None:
-        running_tasks = list(self._running_tasks.values())
-        for task in running_tasks:
+        Must be awaited by the caller (BuilderAgentExecutor.execute), not
+        fire-and-forgotten. Registers an internally-tracked asyncio.Task
+        purely so `cancel()` has something to call .cancel() on -- it is
+        still awaited here, so cancelling it correctly interrupts this call
+        whether the task is waiting on the semaphore or actively running.
+        """
+        inner = asyncio.create_task(
+            self._run_task(task_id, context_id, request_text, request_ctx, event_queue)
+        )
+        self._running_tasks[task_id] = inner
+        try:
+            await inner
+        finally:
+            self._running_tasks.pop(task_id, None)
+
+    def cancel(self, task_id: str) -> bool:
+        task = self._running_tasks.get(task_id)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
+    async def shutdown(self) -> None:
+        """Cancel any in-flight builds. Called on process shutdown."""
+        running = list(self._running_tasks.values())
+        for task in running:
             task.cancel()
-        for task in running_tasks:
+        for task in running:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
-        if self._worker_task is not None and not self._worker_task.done():
-            self._worker_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, TimeoutError):
-                await asyncio.wait_for(asyncio.shield(self._worker_task), timeout=drain_timeout)
-            self._worker_task = None
-            logger.info("BuilderTaskQueue: worker stopped")
+    async def _run_task(
+        self,
+        task_id: str,
+        context_id: str,
+        request_text: str,
+        request_ctx: dict[str, Any],
+        event_queue: Any,
+    ) -> None:
+        record = TaskRecord(
+            task_id=task_id,
+            status="failure",
+            phase_completed="accepted",
+            build_id=None,
+            pr_url=None,
+            timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+        )
 
-    async def enqueue(self, task: _QueuedTask) -> None:
-        self._queued_task_ids.add(task.task_id)
-        await self._queue.put(task)
-        logger.debug("BuilderTaskQueue: enqueued task_id=%s", task.task_id)
-
-    async def cancel(self, task_id: str) -> bool:
-        if task_id in self._queued_task_ids:
-            self._cancelled_task_ids.add(task_id)
-            return True
-
-        running_task = self._running_tasks.get(task_id)
-        if running_task is None or running_task.done():
-            return False
-        running_task.cancel()
-        return True
-
-    async def _dequeue_loop(self) -> None:
-        while True:
-            try:
-                task = await self._queue.get()
-                self._queued_task_ids.discard(task.task_id)
-                if task.task_id in self._cancelled_task_ids:
-                    self._cancelled_task_ids.discard(task.task_id)
-                    self._queue.task_done()
-                    logger.info(
-                        "BuilderTaskQueue: skipped cancelled queued task_id=%s", task.task_id
-                    )
-                    continue
-
-                running_task = asyncio.create_task(self._run_task(task))
-                self._running_tasks[task.task_id] = running_task
-                running_task.add_done_callback(self._make_done_callback(task.task_id))
-                self._queue.task_done()
-            except asyncio.CancelledError:
-                logger.info("BuilderTaskQueue: dequeue loop cancelled")
-                break
-            except Exception:
-                logger.exception("BuilderTaskQueue: unexpected dequeue error")
-
-    def _make_done_callback(self, task_id: str) -> Callable[[asyncio.Task[None]], None]:
-        def _done_callback(_task: asyncio.Task[None]) -> None:
-            self._running_tasks.pop(task_id, None)
-
-        return _done_callback
-
-    async def _run_task(self, task: _QueuedTask) -> None:
-        async with self._semaphore:
-            record = TaskRecord(
-                task_id=task.task_id,
-                status="failure",
-                phase_completed="accepted",
-                build_id=None,
-                pr_url=None,
-                timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            )
-
-            try:
-                await task.event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
-                        task_id=task.task_id,
-                        context_id=task.context_id,
+        # The semaphore acquisition itself lives inside this try (not the
+        # other way around): a task cancelled while still queued behind it
+        # (a second concurrent build waiting its turn, per max_concurrent=1)
+        # raises CancelledError before the queued task's body ever runs. If
+        # the `async with` wrapped this try instead, that cancellation would
+        # propagate straight out of _run_task uncaught -- through run() and
+        # into BuilderAgentExecutor.execute() -- which must not happen (see
+        # that class's docstring): the framework only closes event_queue
+        # once execute() returns normally, so an uncaught exception would
+        # leave a live message/stream watcher hanging indefinitely instead
+        # of seeing the stream end.
+        try:
+            async with self._semaphore:
+                await event_queue.enqueue_event(
+                    _status_event(
+                        task_id,
+                        context_id,
+                        TaskState.working,
+                        "Build task is running.",
                         final=False,
-                        status=TaskStatus(
-                            state=TaskState.working,
-                            message=_task_message("Build task is running."),
-                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        ),
                     )
                 )
                 logger.info(
                     "BuilderTaskQueue: starting task task_id=%s text=%.80r",
-                    task.task_id,
-                    task.request_text,
+                    task_id,
+                    request_text,
                 )
                 result = await self._handler(
-                    task.task_id,
-                    task.context_id,
-                    task.request_text,
-                    task.request_ctx,
+                    task_id,
+                    context_id,
+                    request_text,
+                    request_ctx,
+                    event_queue,
                 )
                 status = getattr(result.status, "value", str(result.status))
                 record.status = "success" if status == "completed" else status
@@ -286,87 +296,64 @@ class BuilderTaskQueue:
                     summary = result.output_summary or "Build completed."
                     if result.pr_url:
                         summary = f"{summary}\nPR: {result.pr_url}"
-                    await task.event_queue.enqueue_event(
-                        TaskStatusUpdateEvent(
-                            task_id=task.task_id,
-                            context_id=task.context_id,
-                            final=True,
-                            status=TaskStatus(
-                                state=TaskState.completed,
-                                message=_task_message(summary),
-                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                            ),
-                        )
+                    await event_queue.enqueue_event(
+                        _status_event(task_id, context_id, TaskState.completed, summary, final=True)
                     )
                 elif status == "cancelled":
-                    await task.event_queue.enqueue_event(
-                        TaskStatusUpdateEvent(
-                            task_id=task.task_id,
-                            context_id=task.context_id,
+                    await event_queue.enqueue_event(
+                        _status_event(
+                            task_id,
+                            context_id,
+                            TaskState.canceled,
+                            "Build task cancelled.",
                             final=True,
-                            status=TaskStatus(
-                                state=TaskState.canceled,
-                                message=_task_message("Build task cancelled."),
-                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                            ),
                         )
                     )
                 else:
                     failure_text = (
                         result.error_message or result.output_summary or "Build task failed."
                     )
-                    await task.event_queue.enqueue_event(
-                        TaskStatusUpdateEvent(
-                            task_id=task.task_id,
-                            context_id=task.context_id,
-                            final=True,
-                            status=TaskStatus(
-                                state=TaskState.failed,
-                                message=_task_message(failure_text),
-                                timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                            ),
+                    await event_queue.enqueue_event(
+                        _status_event(
+                            task_id, context_id, TaskState.failed, failure_text, final=True
                         )
                     )
                 logger.info(
                     "BuilderTaskQueue: task completed task_id=%s status=%s pr_url=%s",
-                    task.task_id,
+                    task_id,
                     record.status,
                     record.pr_url,
                 )
-            except asyncio.CancelledError:
-                record.status = "cancelled"
-                record.phase_completed = "cancelled"
-                record.error_message = "Build task cancelled"
-                await task.event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
-                        task_id=task.task_id,
-                        context_id=task.context_id,
-                        final=True,
-                        status=TaskStatus(
-                            state=TaskState.canceled,
-                            message=_task_message("Build task cancelled."),
-                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        ),
-                    )
+        except asyncio.CancelledError:
+            record.status = "cancelled"
+            record.phase_completed = "cancelled"
+            record.error_message = "Build task cancelled"
+            await event_queue.enqueue_event(
+                _status_event(
+                    task_id, context_id, TaskState.canceled, "Build task cancelled.", final=True
                 )
-                logger.info("BuilderTaskQueue: task cancelled task_id=%s", task.task_id)
-            except Exception as exc:
-                record.status = "failure"
-                record.phase_completed = "failed"
-                record.error_message = str(exc)
-                await task.event_queue.enqueue_event(
-                    TaskStatusUpdateEvent(
-                        task_id=task.task_id,
-                        context_id=task.context_id,
-                        final=True,
-                        status=TaskStatus(
-                            state=TaskState.failed,
-                            message=_task_message(record.error_message or "Build task failed."),
-                            timestamp=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-                        ),
-                    )
+            )
+            logger.info("BuilderTaskQueue: task cancelled task_id=%s", task_id)
+            # Deliberately not re-raised: this coroutine runs inside its
+            # own asyncio.Task (`inner` in run()), and completing
+            # normally here (rather than propagating CancelledError back
+            # through `await inner`) lets execute() finish normally too,
+            # so the framework closes the A2A event_queue cleanly instead
+            # of tearing down the request with an exception.
+        except Exception as exc:
+            record.status = "failure"
+            record.phase_completed = "failed"
+            record.error_message = str(exc)
+            await event_queue.enqueue_event(
+                _status_event(
+                    task_id,
+                    context_id,
+                    TaskState.failed,
+                    record.error_message or "Build task failed.",
+                    final=True,
                 )
-                logger.exception("BuilderTaskQueue: task failed task_id=%s", task.task_id)
-            finally:
-                record.timestamp_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-                append_task_record(record, self._log_path)
+            )
+            logger.exception("BuilderTaskQueue: task failed task_id=%s", task_id)
+        finally:
+            record.timestamp_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
+            append_task_record(record, self._log_path)
