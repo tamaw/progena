@@ -58,12 +58,164 @@ export function applyAssistantMetadata(turn, metadata) {
   return next;
 }
 
+// Subagent execution events (nested `task` tool delegation). Unlike the
+// reasoning/assistant-message rows below (at most one per turn), the agent
+// can delegate to several subagents in parallel within one turn, so these
+// are keyed by the dispatching tool_call_id and each gets its own
+// independently-updatable card -- see applySubagentEvent.
+const SUBAGENT_EVENT_TYPES = new Set([
+  'subagent_start',
+  'subagent_result',
+  'subagent_message_delta',
+  'subagent_tool_start',
+  'subagent_tool_result',
+  'subagent_tool_error',
+]);
+
+function subagentItemId(toolCallId) {
+  return `subagent-${toolCallId}`;
+}
+
+function createSubagentItem(toolCallId, subagentName, startedAt) {
+  return {
+    kind: 'subagent',
+    id: subagentItemId(toolCallId),
+    toolCallId,
+    subagentName: subagentName || '',
+    status: 'running',
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    resultPreview: '',
+    error: null,
+    content: '',
+    children: [],
+  };
+}
+
+// Find-or-create-or-update a nested tool call within a subagent card's
+// children, keyed by the nested tool's own call id (distinct from the
+// subagent card's own toolCallId, which is the *parent* task call).
+function upsertSubagentChild(children, nestedToolCallId, patch) {
+  if (!nestedToolCallId) return children;
+  const index = children.findIndex((child) => child.id === nestedToolCallId);
+  if (index === -1) {
+    return [
+      ...children,
+      {
+        id: nestedToolCallId,
+        toolName: '',
+        status: 'running',
+        argsPreview: null,
+        resultPreview: '',
+        error: null,
+        durationMs: null,
+        ...patch,
+      },
+    ];
+  }
+  return children.map((child, idx) => (idx === index ? { ...child, ...patch } : child));
+}
+
+function applySubagentEventToItem(item, nextEvent) {
+  const metadata = nextEvent.metadata || {};
+  const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
+
+  switch (nextEvent.eventType) {
+    case 'subagent_start':
+      return {
+        ...item,
+        subagentName: metadata.subagent_name || item.subagentName,
+        status: 'running',
+      };
+
+    case 'subagent_message_delta':
+      return { ...item, content: item.content + (nextEvent.content || '') };
+
+    case 'subagent_tool_start':
+      return {
+        ...item,
+        subagentName: metadata.subagent_name || item.subagentName,
+        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+          toolName: metadata.nested_tool_name || '',
+          status: 'running',
+          argsPreview: metadata.args_preview ?? null,
+        }),
+      };
+
+    case 'subagent_tool_result':
+      return {
+        ...item,
+        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+          toolName: metadata.nested_tool_name || '',
+          status: 'success',
+          resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
+          durationMs,
+        }),
+      };
+
+    case 'subagent_tool_error':
+      return {
+        ...item,
+        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+          toolName: metadata.nested_tool_name || '',
+          status: 'error',
+          error: typeof metadata.error === 'string' ? metadata.error : '',
+          durationMs,
+        }),
+      };
+
+    case 'subagent_result':
+      return {
+        ...item,
+        subagentName: metadata.subagent_name || item.subagentName,
+        status: metadata.success === false ? 'error' : 'success',
+        finishedAt: nextEvent.timestamp ?? item.finishedAt,
+        durationMs: durationMs ?? item.durationMs,
+        resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : item.resultPreview,
+        error: metadata.success === false ? (metadata.error || '') : item.error,
+      };
+
+    default:
+      return item;
+  }
+}
+
+/**
+ * Find-or-create-or-update the subagent card for a `subagent_*` stream
+ * event, keyed strictly by the event's own `tool_call_id` so concurrent
+ * subagents' cards never touch each other regardless of arrival
+ * interleaving. Returns `null` (not an unchanged array) when `nextEvent`
+ * isn't a subagent event or carries no `tool_call_id`, so callers can fall
+ * through to their own generic handling.
+ */
+export function applySubagentEvent(timelineItems, nextEvent) {
+  if (!nextEvent || !SUBAGENT_EVENT_TYPES.has(nextEvent.eventType)) return null;
+  const toolCallId = nextEvent.metadata?.tool_call_id;
+  if (!toolCallId) return null;
+
+  const itemId = subagentItemId(toolCallId);
+  const index = timelineItems.findIndex((entry) => entry.kind === 'subagent' && entry.id === itemId);
+
+  if (index === -1) {
+    const seed = createSubagentItem(toolCallId, nextEvent.metadata?.subagent_name, nextEvent.timestamp);
+    return [...timelineItems, applySubagentEventToItem(seed, nextEvent)];
+  }
+
+  return timelineItems.map((entry, idx) => (
+    idx === index ? applySubagentEventToItem(entry, nextEvent) : entry
+  ));
+}
+
 /** Apply a non-visual stream event (control event like node metadata). */
 export function applyAssistantStreamEvent(turn, streamEvent, now) {
   const nextEvent = createStreamEvent(streamEvent);
   if (!nextEvent) return turn;
 
   // assistant_metadata is handled by applyAssistantMetadata, not here.
+  // subagent_message_delta is NOT short-circuited here like message_delta is:
+  // unlike the outer turn's text (redundantly available via message.content
+  // after finalization), nested subagent text has no other persisted home.
   if (nextEvent.eventType === 'assistant_metadata' || nextEvent.eventType === 'message_delta') {
     return turn;
   }
@@ -73,6 +225,12 @@ export function applyAssistantStreamEvent(turn, streamEvent, now) {
   next.reasoningText = appendReasoningText(next.reasoningText, nextEvent);
   const rt = extractReasoningTokenCount(nextEvent);
   if (rt !== null) next.reasoningTokenCount = rt;
+
+  const updatedSubagentItems = applySubagentEvent(next.timelineItems, nextEvent);
+  if (updatedSubagentItems) {
+    next.timelineItems = updatedSubagentItems;
+    return next;
+  }
 
   // Reasoning events (reasoning_delta / reasoning_summary) share a single slot
   // in the timeline: the first delta seeds the row (so live reasoning is
@@ -194,6 +352,27 @@ function collectTodosByToolCallId(streamEvents) {
   return todosByCallId;
 }
 
+// Reconstructs grouped subagent cards from a flat, persisted stream_events
+// array (e.g. backend-loaded history). Rather than a hand-written parallel
+// reconstruction algorithm, this replays applySubagentEvent over the flat
+// events in order, so the live and reload code paths structurally can't
+// drift apart. Keyed by tool_call_id (the same key applySubagentEvent uses).
+function collectSubagentGroups(streamEvents) {
+  let items = [];
+  for (const event of streamEvents) {
+    if (typeof event?.eventType !== 'string' || !event.eventType.startsWith('subagent_')) {
+      continue;
+    }
+    const updated = applySubagentEvent(items, event);
+    if (updated) items = updated;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    groups.set(item.toolCallId, item);
+  }
+  return groups;
+}
+
 /**
  * Build a fallback timeline order for a committed assistant message that has
  * no recorded `timelineItems` (e.g. backend-loaded history).
@@ -211,8 +390,23 @@ export function buildDefaultAssistantTimeline(message) {
   const streamEvents = Array.isArray(message.streamEvents) ? message.streamEvents : [];
 
   const todosByCallId = collectTodosByToolCallId(streamEvents);
+  const subagentGroups = collectSubagentGroups(streamEvents);
+  const insertedSubagentIds = new Set();
   let todosSeq = 0;
   for (const event of streamEvents) {
+    // Grouped subagent cards replace their flat subagent_* events entirely --
+    // spliced in once, at the earliest event's timestamp, rather than once
+    // per underlying event.
+    if (typeof event?.eventType === 'string' && event.eventType.startsWith('subagent_')) {
+      const toolCallId = event.metadata?.tool_call_id;
+      const group = toolCallId ? subagentGroups.get(toolCallId) : undefined;
+      if (group && !insertedSubagentIds.has(group.id)) {
+        insertedSubagentIds.add(group.id);
+        items.push({ ...group, timestamp: event.timestamp });
+      }
+      continue;
+    }
+
     items.push({ kind: 'stream_event', id: event.id, event, timestamp: event.timestamp });
 
     if (event?.eventType !== 'tool_result' || event?.metadata?.tool_name !== 'write_todos') {

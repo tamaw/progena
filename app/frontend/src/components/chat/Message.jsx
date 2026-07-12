@@ -218,6 +218,13 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
       if (item.kind === 'assistant_message') {
         return !hideContent;
       }
+      if (item.kind === 'subagent') {
+        // Subagent cards aren't a single event, so gate on the same
+        // "subagents" category the underlying subagent_* events belong to
+        // (see categoryForEventType in streamFilters.js) rather than a
+        // per-event check.
+        return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
+      }
       return true;
     });
     return (

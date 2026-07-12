@@ -2,6 +2,7 @@ export const STREAM_EVENT_CATEGORIES = [
   { id: 'tools', label: 'Tools', description: 'tool_start / tool_result events', color: 'var(--color-success)' },
   { id: 'plan', label: 'Plan', description: 'write_todos plan updates', color: 'var(--color-accent)' },
   { id: 'reasoning', label: 'Reasoning', description: 'reasoning deltas / summaries', color: '#a78bfa' },
+  { id: 'subagents', label: 'Subagents', description: 'Nested subagent execution (task tool delegation)', color: '#14b8a6' },
   { id: 'user', label: 'User', description: 'user messages', color: '#60a5fa' },
   { id: 'agent', label: 'Agent', description: 'agent responses', color: '#8b5cf6' },
   { id: 'errors', label: 'Errors', description: 'tool errors and failed responses', color: 'var(--color-error)' },
@@ -9,7 +10,7 @@ export const STREAM_EVENT_CATEGORIES = [
   { id: 'debug', label: 'Debug', description: 'graph node steps and misc events', color: 'var(--color-text-muted)' },
 ];
 
-export const PERSISTED_CATEGORIES = new Set(['tools', 'plan', 'reasoning']);
+export const PERSISTED_CATEGORIES = new Set(['tools', 'plan', 'reasoning', 'subagents']);
 
 const DEFAULT_FILTERS = STREAM_EVENT_CATEGORIES.reduce((acc, c) => {
   acc[c.id] = true;
@@ -25,6 +26,7 @@ export function categoryForEventType(eventType) {
   if (eventType === 'tool_error') return 'errors';
   if (eventType.startsWith('tool_')) return 'tools';
   if (eventType === 'todos_update') return 'plan';
+  if (eventType.startsWith('subagent_')) return 'subagents';
   return 'debug';
 }
 

@@ -4,6 +4,7 @@
  * Each item is either:
  *   - `{ kind: 'assistant_message', ... }` — the agent's text response row
  *   - `{ kind: 'stream_event', event: ... }` — a tool/reasoning/node event row
+ *   - `{ kind: 'subagent', ... }` — a nested `task` tool delegation card
  */
 
 import { Fragment } from 'react';
@@ -21,8 +22,13 @@ import {
   formatTimestamp,
 } from './messageRenderUtils';
 import TodoListPanel from './TodoListPanel';
+import SubagentCard from './SubagentCard';
 
 export default function TimelineItem({ item, itemIndex }) {
+  if (item.kind === 'subagent') {
+    return <SubagentCard item={item} />;
+  }
+
   if (item.kind === 'assistant_message') {
     const sanitizedContent = sanitizeHtmlFragment(formatMessage(item.content || ''));
     const formattedContent = item.isStreaming && item.content

@@ -246,7 +246,7 @@ def create_progenitor_agent(
     http_base_url = (
         getattr(runtime_config, "http_public_base_url", None) or f"http://{http_host}:{http_port}"
     )
-    subagents = create_progenitor_subagents(http_base_url)
+    subagents = create_progenitor_subagents(http_base_url, log_sink=log_sink)
     async_subagents = create_progenitor_async_subagents(http_base_url)
 
     # Deep Agents' `memory=` parameter injects runtime memory from the

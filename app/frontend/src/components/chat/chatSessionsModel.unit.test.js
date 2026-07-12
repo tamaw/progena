@@ -115,6 +115,69 @@ describe('normalizeBackendChatMessage', () => {
     }, 1);
     expect(m.streamEvents[0].timestamp).toBeUndefined();
   });
+
+  // Regression: reloaded chats routed `task` calls through the generic
+  // tool_start/tool_result path, which buildDefaultAssistantTimeline's
+  // collectSubagentGroups doesn't recognize -- so subagent cards rendered
+  // live during the session vanished entirely on refresh. task calls must
+  // synthesize subagent_start/subagent_result, mirroring the backend's own
+  // live _expand_task_subagent_events.
+  it('expands a task tool_call into subagent_start + subagent_result, not tool_start/tool_result', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm6',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'researcher', description: 'look into it' },
+        result: 'Here is what I found.',
+      }],
+    }, 1);
+    const types = m.streamEvents.map((e) => e.eventType);
+    expect(types).toEqual(['subagent_start', 'subagent_result']);
+    expect(m.streamEvents[0].metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
+    expect(m.streamEvents[1].metadata).toMatchObject({
+      subagent_name: 'researcher',
+      tool_call_id: 'call_1',
+      success: true,
+      result_preview: 'Here is what I found.',
+    });
+  });
+
+  it('reconstructs a grouped subagent timeline card from the reloaded task call', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm7',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'hello-world' },
+        result: 'hello!',
+      }],
+    }, 1);
+    const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
+    expect(subagentItems).toHaveLength(1);
+    expect(subagentItems[0]).toMatchObject({
+      toolCallId: 'call_1',
+      subagentName: 'hello-world',
+      status: 'success',
+      resultPreview: 'hello!',
+    });
+  });
+
+  it('leaves a task call with no result as a running subagent_start only', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm8',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'task', args: { subagent_type: 'researcher' } }],
+    }, 1);
+    expect(m.streamEvents.map((e) => e.eventType)).toEqual(['subagent_start']);
+    const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
+    expect(subagentItems[0].status).toBe('running');
+  });
 });
 
 describe('buildChatSessionItems', () => {
