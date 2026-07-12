@@ -354,3 +354,128 @@ class TestDisplayMetadataNormalization:
         assert detail is not None
         user = next(message for message in detail.messages if message.role == "user")
         assert user.created_at == "2026-07-11T02:29:20Z"
+
+
+class TestPendingToolCallFlush:
+    """A turn can be interrupted (Stop / page reload racing the request /
+    dropped connection) right after its tool call's ToolMessage lands but
+    before the model's follow-up commentary comes back -- leaving a
+    tool-call-only AIMessage with no later text-bearing AIMessage to absorb
+    its tool_calls. `_messages_from_checkpoint` must still surface that tool
+    call as its own (contentless) assistant message instead of silently
+    dropping the entire turn once the reset for the next message fires.
+    """
+
+    def test_second_turns_dangling_tool_call_is_not_dropped_by_the_next_human_message(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_dangling_mid"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_dangling_mid",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-12T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "spawn a subagent"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783736960.0},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    {
+                        "id": "a1b",
+                        "type": "ai",
+                        "content": "Done!",
+                        "response_metadata": {"created_at": 1783736965.0},
+                    },
+                    {"id": "u2", "type": "human", "content": "do it again"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_2",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783737000.0},
+                    },
+                    {
+                        "id": "t2",
+                        "type": "tool",
+                        "tool_call_id": "call_2",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    # Turn 2 cut short here -- no trailing AIMessage before reload.
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_dangling_mid")
+
+        assert detail is not None
+        roles = [message.role for message in detail.messages]
+        assert roles == ["user", "assistant", "user", "assistant"]
+        second_reply = detail.messages[3]
+        assert second_reply.content == ""
+        assert [tc["name"] for tc in second_reply.tool_calls] == ["task"]
+        assert second_reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
+
+    def test_checkpoint_tip_left_as_a_dangling_tool_call_is_flushed_at_the_end(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_dangling_tip"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_dangling_tip",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-12T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "spawn a subagent"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783736960.0},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    # No trailing AIMessage at all -- checkpoint's tip is the tool result.
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_dangling_tip")
+
+        assert detail is not None
+        roles = [message.role for message in detail.messages]
+        assert roles == ["user", "assistant"]
+        reply = detail.messages[1]
+        assert reply.content == ""
+        assert [tc["name"] for tc in reply.tool_calls] == ["task"]
+        assert reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
