@@ -16,7 +16,6 @@ from app.agents.builder_agent import queue_worker
 from app.agents.builder_agent.queue_worker import (
     BuilderTaskQueue,
     TaskRecord,
-    _QueuedTask,
     append_task_record,
     sync_wait_for_completion,
 )
@@ -74,18 +73,23 @@ def test_append_task_record_and_poll(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_queue_executes_and_logs_completion(tmp_path: Path) -> None:
+async def test_run_executes_and_logs_completion(tmp_path: Path) -> None:
     log_path = tmp_path / "tasks.jsonl"
     event_queue = AsyncMock()
     event_queue.enqueue_event = AsyncMock()
 
     async def handler(
-        task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]
+        task_id: str,
+        context_id: str,
+        request_text: str,
+        request_ctx: dict[str, str],
+        event_queue_arg: object,
     ) -> BuildResult:
         assert task_id == "task-2"
         assert context_id == "ctx-2"
         assert request_text == "Build something"
         assert request_ctx["a2a_task_id"] == "task-2"
+        assert event_queue_arg is event_queue
         return BuildResult(
             build_id="build-2",
             status=BuildStatus.COMPLETED,
@@ -97,58 +101,29 @@ async def test_queue_executes_and_logs_completion(tmp_path: Path) -> None:
         )
 
     queue = BuilderTaskQueue(handler, log_path=log_path)
-    queue.start()
-    try:
-        await queue.enqueue(
-            _QueuedTask(
-                task_id="task-2",
-                context_id="ctx-2",
-                request_text="Build something",
-                request_ctx={"a2a_task_id": "task-2"},
-                event_queue=event_queue,
-            )
-        )
 
-        record = None
-        for _ in range(30):
-            await asyncio.sleep(0.1)
-            record = sync_wait_for_completion("task-2", timeout_seconds=0.0, log_path=log_path)
-            if record is not None:
-                break
+    await queue.run("task-2", "ctx-2", "Build something", {"a2a_task_id": "task-2"}, event_queue)
 
-        assert record is not None
-        assert record["status"] == "success"
-        assert record["phase_completed"] == "pr"
-        assert record["build_id"] == "build-2"
-        assert record["pr_url"] == "https://github.com/org/repo/pull/2"
-        states = [call.args[0].status.state for call in event_queue.enqueue_event.call_args_list]
-        assert states == [TaskState.working, TaskState.completed]
-    finally:
-        await queue.stop()
+    record = sync_wait_for_completion("task-2", timeout_seconds=0.0, log_path=log_path)
+    assert record is not None
+    assert record["status"] == "success"
+    assert record["phase_completed"] == "pr"
+    assert record["build_id"] == "build-2"
+    assert record["pr_url"] == "https://github.com/org/repo/pull/2"
+    states = [call.args[0].status.state for call in event_queue.enqueue_event.call_args_list]
+    assert states == [TaskState.working, TaskState.completed]
+    # run() must not return before the build finishes -- the A2A framework
+    # closes event_queue the instant the caller's execute() returns, so
+    # every push above has to happen before run() itself returns.
+    assert "task-2" not in queue._running_tasks
 
 
 @pytest.mark.asyncio
-async def test_cancel_marks_queued_task_without_running_handler(tmp_path: Path) -> None:
-    log_path = tmp_path / "tasks.jsonl"
+async def test_cancel_before_run_reports_nothing_to_cancel() -> None:
     handler = AsyncMock()
-    queue = BuilderTaskQueue(handler, log_path=log_path)
-    event_queue = AsyncMock()
-    event_queue.enqueue_event = AsyncMock()
+    queue = BuilderTaskQueue(handler)
 
-    await queue.enqueue(
-        _QueuedTask(
-            task_id="queued-task",
-            context_id="ctx-queued",
-            request_text="Build later",
-            request_ctx={},
-            event_queue=event_queue,
-        )
-    )
-
-    cancelled = await queue.cancel("queued-task")
-
-    assert cancelled is True
-    assert "queued-task" in queue._cancelled_task_ids
+    assert queue.cancel("never-started") is False
     handler.assert_not_called()
 
 
@@ -161,9 +136,13 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
     event_queue.enqueue_event = AsyncMock()
 
     async def handler(
-        task_id: str, context_id: str, request_text: str, request_ctx: dict[str, str]
+        task_id: str,
+        context_id: str,
+        request_text: str,
+        request_ctx: dict[str, str],
+        event_queue_arg: object,
     ) -> BuildResult:
-        del task_id, context_id, request_text, request_ctx
+        del task_id, context_id, request_text, request_ctx, event_queue_arg
         started.set()
         await released.wait()
         return BuildResult(
@@ -175,31 +154,21 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
         )
 
     queue = BuilderTaskQueue(handler, log_path=log_path)
-    queue.start()
+    run_task = asyncio.create_task(
+        queue.run("running-task", "ctx-running", "Build now", {}, event_queue)
+    )
     try:
-        await queue.enqueue(
-            _QueuedTask(
-                task_id="running-task",
-                context_id="ctx-running",
-                request_text="Build now",
-                request_ctx={},
-                event_queue=event_queue,
-            )
-        )
         await asyncio.wait_for(started.wait(), timeout=2.0)
 
-        cancelled = await queue.cancel("running-task")
+        cancelled = queue.cancel("running-task")
         assert cancelled is True
 
-        record = None
-        for _ in range(30):
-            await asyncio.sleep(0.1)
-            record = sync_wait_for_completion(
-                "running-task", timeout_seconds=0.0, log_path=log_path
-            )
-            if record is not None:
-                break
+        # run() must complete normally (not raise) once _run_task swallows
+        # its own CancelledError -- otherwise execute() would propagate an
+        # exception out through the framework instead of returning cleanly.
+        await asyncio.wait_for(run_task, timeout=2.0)
 
+        record = sync_wait_for_completion("running-task", timeout_seconds=0.0, log_path=log_path)
         assert record is not None
         assert record["status"] == "cancelled"
         assert record["phase_completed"] == "cancelled"
@@ -207,4 +176,107 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
         assert states[-1] == TaskState.canceled
     finally:
         released.set()
-        await queue.stop()
+        if not run_task.done():
+            await run_task
+
+
+@pytest.mark.asyncio
+async def test_second_concurrent_run_waits_for_the_semaphore(tmp_path: Path) -> None:
+    """max_concurrent=1 (the default, matching BackgroundBuildRunner's own
+    single-active-build contract) must make a second concurrent run() wait
+    its turn rather than running in parallel or failing outright."""
+    log_path = tmp_path / "tasks.jsonl"
+    release_first = asyncio.Event()
+    order: list[str] = []
+
+    async def handler(task_id, context_id, request_text, request_ctx, event_queue_arg):
+        del context_id, request_text, request_ctx, event_queue_arg
+        order.append(f"start:{task_id}")
+        if task_id == "first":
+            await release_first.wait()
+        order.append(f"end:{task_id}")
+        return BuildResult(
+            build_id=f"build-{task_id}",
+            status=BuildStatus.COMPLETED,
+            task_description="build",
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+
+    queue = BuilderTaskQueue(handler, log_path=log_path)
+    event_queue_1 = AsyncMock()
+    event_queue_1.enqueue_event = AsyncMock()
+    event_queue_2 = AsyncMock()
+    event_queue_2.enqueue_event = AsyncMock()
+
+    first = asyncio.create_task(queue.run("first", "ctx", "req", {}, event_queue_1))
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(queue.run("second", "ctx", "req", {}, event_queue_2))
+    await asyncio.sleep(0.05)
+
+    # Second must be registered (cancellable) even while still waiting on
+    # the semaphore, but must not have started its handler yet.
+    assert "second" in queue._running_tasks
+    assert order == ["start:first"]
+
+    release_first.set()
+    await asyncio.wait_for(asyncio.gather(first, second), timeout=2.0)
+
+    assert order == ["start:first", "end:first", "start:second", "end:second"]
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_queued_behind_semaphore_returns_cleanly(tmp_path: Path) -> None:
+    """Regression: a task cancelled while still waiting on the semaphore
+    (never got past `async with self._semaphore:`) used to propagate
+    CancelledError straight out of run() uncaught -- the try/except lived
+    inside the semaphore's `async with`, not wrapping it, so a cancellation
+    during acquisition was never caught there. That would have propagated
+    out of BuilderAgentExecutor.execute() too, which must always return
+    normally (the framework only closes event_queue once execute() does).
+    """
+    log_path = tmp_path / "tasks.jsonl"
+    release_first = asyncio.Event()
+    order: list[str] = []
+
+    async def handler(task_id, context_id, request_text, request_ctx, event_queue_arg):
+        del context_id, request_text, request_ctx, event_queue_arg
+        order.append(f"start:{task_id}")
+        if task_id == "first":
+            await release_first.wait()
+        order.append(f"end:{task_id}")
+        return BuildResult(
+            build_id=f"build-{task_id}",
+            status=BuildStatus.COMPLETED,
+            task_description="build",
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+
+    queue = BuilderTaskQueue(handler, log_path=log_path)
+    event_queue_1 = AsyncMock()
+    event_queue_1.enqueue_event = AsyncMock()
+    event_queue_2 = AsyncMock()
+    event_queue_2.enqueue_event = AsyncMock()
+
+    first = asyncio.create_task(queue.run("first", "ctx", "req", {}, event_queue_1))
+    await asyncio.sleep(0.05)
+    second = asyncio.create_task(queue.run("second", "ctx", "req", {}, event_queue_2))
+    await asyncio.sleep(0.05)
+    assert "second" in queue._running_tasks
+    assert order == ["start:first"]
+
+    assert queue.cancel("second") is True
+
+    # Must complete normally -- not raise -- even though "second" was
+    # cancelled before its handler ever ran (still queued behind the
+    # semaphore the whole time).
+    await asyncio.wait_for(second, timeout=2.0)
+
+    states = [call.args[0].status.state for call in event_queue_2.enqueue_event.call_args_list]
+    assert states == [TaskState.canceled]
+    assert "second" not in queue._running_tasks
+    assert order == ["start:first"]
+
+    release_first.set()
+    await asyncio.wait_for(first, timeout=2.0)
