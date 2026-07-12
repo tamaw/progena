@@ -225,6 +225,13 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
         // per-event check.
         return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
       }
+      if (item.kind === 'a2a_call') {
+        // Same reasoning as 'subagent' above -- gate on the dedicated "a2a"
+        // category (see categoryForEventType in streamFilters.js) rather
+        // than the "tools" category its constituent tool_start/tool_result
+        // events share with every other tool call.
+        return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'a2a_call_progress' });
+      }
       return true;
     });
     return (

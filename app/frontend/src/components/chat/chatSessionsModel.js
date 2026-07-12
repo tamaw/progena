@@ -6,6 +6,7 @@ import {
   toValidTimestamp,
 } from './conversationModel';
 import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
+import { extractCallAgentSummary } from './messageRenderUtils';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -79,7 +80,10 @@ function buildToolStreamEvents(toolCalls, messageId) {
     }
 
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
-    const result = typeof tc.result === 'string' ? tc.result : '';
+    const rawResult = typeof tc.result === 'string' ? tc.result : '';
+    const result = toolName === 'call_agent'
+      ? (extractCallAgentSummary(rawResult) || rawResult)
+      : rawResult;
     // The backend stamps the declaring AIMessage's created_at onto each tool
     // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
     // history reloads can sort tool calls against the answer text by real

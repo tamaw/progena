@@ -20,6 +20,21 @@ describe('categoryForEventType', () => {
     expect(categoryForEventType('something_else')).toBe('debug');
     expect(categoryForEventType(123)).toBe('debug');
   });
+
+  it('buckets call_agent under its own "a2a" category, not "tools"', () => {
+    expect(categoryForEventType('a2a_call_progress')).toBe('a2a');
+    expect(categoryForEventType('tool_start', { tool_name: 'call_agent' })).toBe('a2a');
+    expect(categoryForEventType('tool_result', { tool_name: 'call_agent' })).toBe('a2a');
+    // Takes priority over the generic tool_error -> 'errors' bucket, the
+    // same way subagent_tool_error stays under 'subagents' rather than
+    // 'errors' -- a family with its own category owns its own failures too.
+    expect(categoryForEventType('tool_error', { tool_name: 'call_agent' })).toBe('a2a');
+  });
+
+  it('leaves non-call_agent tool events under "tools"', () => {
+    expect(categoryForEventType('tool_start', { tool_name: 'shell' })).toBe('tools');
+    expect(categoryForEventType('tool_error', { tool_name: 'shell' })).toBe('errors');
+  });
 });
 
 describe('isEventVisible', () => {
@@ -54,9 +69,10 @@ describe('loadStreamFilters', () => {
 });
 
 describe('PERSISTED_CATEGORIES', () => {
-  it('persists only tools and reasoning', () => {
+  it('persists tools, plan, reasoning, subagents and a2a', () => {
     expect(PERSISTED_CATEGORIES.has('tools')).toBe(true);
     expect(PERSISTED_CATEGORIES.has('reasoning')).toBe(true);
+    expect(PERSISTED_CATEGORIES.has('a2a')).toBe(true);
     expect(PERSISTED_CATEGORIES.has('debug')).toBe(false);
   });
 });

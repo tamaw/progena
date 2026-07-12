@@ -172,7 +172,7 @@ function stripEphemeralStreamEvents(message) {
   if (events.length === 0) return message;
   // Keep only persisted categories; also strip base64 images to keep localStorage bounded.
   const persistable = events
-    .filter((event) => PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType)))
+    .filter((event) => PERSISTED_CATEGORIES.has(categoryForEventType(event.eventType, event.metadata)))
     .map((event) => (event.images ? { ...event, images: undefined } : event));
   if (persistable.length === events.length && !events.some((e) => e.images)) {
     return message;
@@ -888,7 +888,7 @@ function ConversationPage() {
       }
       counts.images += collectMessageImages(message).length;
       for (const event of (Array.isArray(message.streamEvents) ? message.streamEvents : [])) {
-        const cat = categoryForEventType(event.eventType);
+        const cat = categoryForEventType(event.eventType, event.metadata);
         if (cat === 'reasoning') continue;
         if (cat && cat in counts) counts[cat]++;
       }

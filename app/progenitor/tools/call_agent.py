@@ -5,13 +5,14 @@ from __future__ import annotations
 import contextlib
 import inspect
 import logging
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 from pydantic import BaseModel, Field
 
-from ..a2a import build_task_response, dispatch_tracked_a2a_task
+from ..a2a import build_task_response, dispatch_tracked_a2a_task, extract_message_text
 from ..acp import build_acp_task_response, dispatch_tracked_acp_task
+from ..ipc.stream_events import build_a2a_call_progress_event, emit_stream_event
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,9 @@ class CallAgentTool(BaseSystemTool):
                 payload["output"] = acp_response["output"]
             return ToolResult.ok(payload)
 
+        progress_callback = (
+            _make_progress_callback(context.tool_call_id, resolved_name) if blocking else None
+        )
         result, tracked_task = await dispatch_tracked_a2a_task(
             state_manager=context.state_manager,
             agent_name=resolved_name,
@@ -181,6 +185,7 @@ class CallAgentTool(BaseSystemTool):
             timeout=timeout_seconds,
             blocking=blocking,
             notify_on_completion=not blocking,
+            on_progress=progress_callback,
         )
         if not result.get("success"):
             return ToolResult.fail(str(result.get("error") or f"Agent call failed: {agent}"))
@@ -198,6 +203,29 @@ class CallAgentTool(BaseSystemTool):
             return ToolResult.fail(f"{agent} did not return a trackable A2A task")
 
         return ToolResult.ok(result if isinstance(result, dict) else {"result": result})
+
+
+def _make_progress_callback(
+    tool_call_id: str,
+    agent_name: str,
+) -> Callable[[dict[str, Any]], Awaitable[None]]:
+    """Build an on_progress callback that live-streams intermediate A2A status
+    updates to the chat UI, keyed by the call_agent tool call's own id so the
+    frontend can correlate them with this call's generic tool_start/tool_result."""
+
+    async def _on_progress(update_payload: dict[str, Any]) -> None:
+        if not tool_call_id:
+            return
+        status = update_payload.get("status") if isinstance(update_payload, dict) else None
+        state = str(status.get("state") or "") if isinstance(status, dict) else ""
+        message_text = (
+            extract_message_text(status.get("message")) if isinstance(status, dict) else ""
+        ) or ""
+        emit_stream_event(
+            build_a2a_call_progress_event(tool_call_id, agent_name, state, message_text)
+        )
+
+    return _on_progress
 
 
 def _agents_from_registry(tool_registry: Any) -> dict[str, dict[str, Any]]:

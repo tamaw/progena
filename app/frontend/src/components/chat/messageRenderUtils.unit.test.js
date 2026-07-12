@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeStreamEvent, toolDetailsForEvent } from './messageRenderUtils';
+import { describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary } from './messageRenderUtils';
 
 function todosEvent(todos) {
   return { eventType: 'todos_update', metadata: { todos } };
@@ -137,5 +137,116 @@ describe('describeStreamEvent (subagent_*)', () => {
       { eventType: 'subagent_tool_start', metadata: { nested_tool_name: 'read_file' } },
       describeStreamEvent({ eventType: 'subagent_tool_start', metadata: { nested_tool_name: 'read_file' } }),
     )).toBeNull();
+  });
+});
+
+// a2a_call_progress only reaches describeStreamEvent via the generic
+// stream_event fallback renderer -- e.g. chats persisted before A2A call
+// grouping shipped, or a progress event that arrives before its tool_start
+// (buildDefaultAssistantTimeline groups them into a single A2ACallCard
+// otherwise -- see liveAssistantTurnModel.js). Same "Agent" mislabel bug as
+// subagent_* would apply here too (badgeForEventType().includes('agent')),
+// so it's handled with an explicit badge: 'A2A' branch the same way.
+describe('describeStreamEvent (a2a_call_progress)', () => {
+  it('never returns the accidental "Agent" badge', () => {
+    const description = describeStreamEvent({
+      eventType: 'a2a_call_progress',
+      metadata: { agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+    });
+    expect(description.badge).toBe('A2A');
+  });
+
+  it('titles the entry with the agent name and surfaces state/message', () => {
+    const description = describeStreamEvent({
+      eventType: 'a2a_call_progress',
+      metadata: { agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+    });
+    expect(description.title).toBe('greetings_agent');
+    expect(description.metaDetail).toBe('working');
+    expect(description.bodyDetail).toBe('Step 1/3: prep...');
+  });
+
+  it('falls back to a generic agent label when agent_name is missing', () => {
+    const description = describeStreamEvent({
+      eventType: 'a2a_call_progress',
+      metadata: { state: 'working', message_text: 'hi' },
+    });
+    expect(description.title).toBe('agent');
+  });
+});
+
+// Regression: a call_agent-tagged tool_start/tool_result/tool_error that
+// falls through to this generic renderer (e.g. buildDefaultAssistantTimeline
+// couldn't form a group for it) used to get the generic 'Tool' badge like
+// every other tool call -- not wrong, but inconsistent with its sibling
+// a2a_call_progress events and the grouped card, which both read 'A2A'.
+describe('describeStreamEvent (call_agent tool_start/tool_result/tool_error)', () => {
+  it('badges a call_agent tool_start as A2A, not Tool', () => {
+    const description = describeStreamEvent({
+      eventType: 'tool_start',
+      metadata: { tool_name: 'call_agent', args_preview: { agent: 'greetings_agent' } },
+    });
+    expect(description.badge).toBe('A2A');
+  });
+
+  it('badges a call_agent tool_result as A2A, not Tool', () => {
+    const description = describeStreamEvent({
+      eventType: 'tool_result',
+      metadata: { tool_name: 'call_agent', result_preview: 'Hello!' },
+    });
+    expect(description.badge).toBe('A2A');
+  });
+
+  it('badges a call_agent tool_error as A2A, not Tool', () => {
+    const description = describeStreamEvent({
+      eventType: 'tool_error',
+      metadata: { tool_name: 'call_agent', error: 'agent unreachable' },
+    });
+    expect(description.badge).toBe('A2A');
+  });
+
+  it('leaves non-call_agent tool events badged Tool', () => {
+    const description = describeStreamEvent({
+      eventType: 'tool_start',
+      metadata: { tool_name: 'shell' },
+    });
+    expect(description.badge).toBe('Tool');
+  });
+});
+
+describe('extractCallAgentSummary', () => {
+  it('returns empty string for falsy input', () => {
+    expect(extractCallAgentSummary('')).toBe('');
+    expect(extractCallAgentSummary(null)).toBe('');
+    expect(extractCallAgentSummary(undefined)).toBe('');
+  });
+
+  it('extracts summary from complete, valid JSON', () => {
+    const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent', summary: 'Hello there.' });
+    expect(extractCallAgentSummary(json)).toBe('Hello there.');
+  });
+
+  it('returns empty string when valid JSON has no summary field', () => {
+    const json = JSON.stringify({ task_id: 't1', agent: 'greetings_agent' });
+    expect(extractCallAgentSummary(json)).toBe('');
+  });
+
+  it('pulls summary via regex when the JSON is truncated after it', () => {
+    const truncated = '{"task_id": "t1", "summary": "Hello there.", "task": {"history": [{"kind": "mess…';
+    expect(extractCallAgentSummary(truncated)).toBe('Hello there.');
+  });
+
+  it('unescapes JSON string escapes (newlines, quotes) in the extracted summary', () => {
+    const truncated = String.raw`{"summary": "Line one\nLine \"two\"", "task": {"h…`;
+    expect(extractCallAgentSummary(truncated)).toBe('Line one\nLine "two"');
+  });
+
+  it('returns empty string when the summary value itself was truncated (no closing quote)', () => {
+    const truncated = '{"task_id": "t1", "summary": "Hello the…';
+    expect(extractCallAgentSummary(truncated)).toBe('');
+  });
+
+  it('returns empty string for non-JSON garbage with no summary key', () => {
+    expect(extractCallAgentSummary('not json at all')).toBe('');
   });
 });

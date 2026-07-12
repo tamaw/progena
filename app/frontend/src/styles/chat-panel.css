@@ -333,17 +333,54 @@
     text-decoration: line-through;
 }
 
+/* Live delegation cards (subagent + A2A) share one fixed-height, always-open
+   scroll pane treatment: growing content (streamed text, tool-call/update
+   list) scrolls within a capped-height body and auto-tails to the latest
+   entry (useStickyScroll.js) instead of a manual collapse/expand toggle --
+   nothing to click, and every concurrent card keeps the same small,
+   predictable footprint on screen regardless of how much it's produced. */
+.subagent-card__body,
+.a2a-call-card__body {
+    max-height: 240px;
+    margin-top: 4px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-color: color-mix(in oklab, var(--color-text-muted) 36%, transparent) transparent;
+    scrollbar-width: thin;
+}
+
+.subagent-card__body::-webkit-scrollbar,
+.a2a-call-card__body::-webkit-scrollbar {
+    width: 8px;
+}
+
+.subagent-card__body::-webkit-scrollbar-track,
+.a2a-call-card__body::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.subagent-card__body::-webkit-scrollbar-thumb,
+.a2a-call-card__body::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-text-muted) 28%, transparent);
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+}
+
 /* Subagent card -- one per `task` tool delegation (nested subagent
    execution), live-updated as its own reply streams and its own tool calls
    start/finish. Multiple can be running concurrently in one turn, each an
    independent card (see SubagentCard.jsx / applySubagentEvent in
    liveAssistantTurnModel.js). Unlike the fully-transparent stream_event
    entries, this gets a subtle status-tinted background since it's a more
-   prominent, card-like element (closer to .tool than to a plain entry row). */
+   prominent, card-like element (closer to .tool than to a plain entry row).
+   Accent reuses --color-success -- the same green already used for the
+   "Tools"/.tool__status--ok accent elsewhere, so "subagent" reads as a
+   member of the same tool-call family rather than a one-off hue. */
 .subagent-card {
     padding: 8px 10px;
     border-radius: var(--border-radius-md);
-    background-color: color-mix(in srgb, #14b8a6 6%, transparent);
+    background-color: color-mix(in srgb, var(--color-success) 6%, transparent);
     animation: fadeIn 0.2s ease;
 }
 
@@ -351,17 +388,23 @@
     background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
-.subagent-card__badge {
-    color: color-mix(in srgb, #14b8a6 82%, white);
-    background: color-mix(in srgb, #14b8a6 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, #14b8a6 34%, var(--color-border-light));
+/* Compounded with the shared .entry__badge/.entry__tag base class (not just
+   the modifier class alone) so these deterministically win the cascade --
+   chrome-frame.css is imported after chat-panel.css and its .entry__badge/
+   .entry__tag base rules set the same properties (color/background/border)
+   at equal specificity, so a bare single-class selector here would silently
+   lose to it by source order regardless of which hue is configured. */
+.entry__badge.subagent-card__badge {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
 .subagent-card__badge--running {
     animation: subagent-pulse 1.4s ease-in-out infinite;
 }
 
-.subagent-card__badge--error {
+.entry__badge.subagent-card__badge--error {
     color: var(--color-error);
     background: color-mix(in oklab, var(--color-error) 14%, transparent);
     border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
@@ -372,19 +415,10 @@
     50% { opacity: 0.45; }
 }
 
-.subagent-card__tag {
-    color: color-mix(in srgb, #14b8a6 82%, white);
-    background: color-mix(in srgb, #14b8a6 16%, var(--color-bg-tertiary));
-    border-color: color-mix(in srgb, #14b8a6 34%, var(--color-border-light));
-}
-
-.subagent-card__toggle {
-    padding: 2px 8px;
-    font-size: 11px;
-}
-
-.subagent-card__body {
-    margin-top: 4px;
+.entry__tag.subagent-card__tag {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
 .subagent-card__error {
@@ -394,6 +428,70 @@
 }
 
 .subagent-card__children {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+/* A2A call card -- one per blocking `call_agent` invocation of a deployed
+   A2A agent, live-updated as intermediate status updates stream in. Same
+   card-like treatment as .subagent-card (see A2ACallCard.jsx /
+   applyA2ACallEvent in liveAssistantTurnModel.js). Accent is --color-a2a
+   (main.css) -- the teal .subagent-card used to own before the green swap
+   above -- still its own hue, distinct from the tool-green family, so the
+   two card families stay visually distinguishable at a glance. */
+.a2a-call-card {
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md);
+    background-color: color-mix(in srgb, var(--color-a2a) 6%, transparent);
+    animation: fadeIn 0.2s ease;
+}
+
+.a2a-call-card--error {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+/* Compounded with .entry__badge/.entry__tag -- see the matching comment on
+   .entry__badge.subagent-card__badge above for why the bare class alone
+   isn't enough. */
+.entry__badge.a2a-call-card__badge {
+    color: color-mix(in srgb, var(--color-a2a) 82%, white);
+    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+}
+
+.a2a-call-card__badge--running {
+    animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.entry__badge.a2a-call-card__badge--error {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
+}
+
+.entry__tag.a2a-call-card__tag {
+    color: color-mix(in srgb, var(--color-a2a) 82%, white);
+    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+}
+
+.a2a-call-card__error {
+    margin-top: 4px;
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+}
+
+.a2a-call-card__result {
+    margin-top: 4px;
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+}
+
+/* Each update renders as a shared .tool block (see A2ACallUpdate in
+   A2ACallCard.jsx) -- same layout rhythm as .subagent-card__children. */
+.a2a-call-card__messages {
     display: flex;
     flex-direction: column;
     gap: 6px;

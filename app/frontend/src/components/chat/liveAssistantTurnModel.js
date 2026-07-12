@@ -207,6 +207,119 @@ export function applySubagentEvent(timelineItems, nextEvent) {
   ));
 }
 
+// A2A call_agent progress cards. Unlike subagents (dedicated subagent_*
+// event types for every phase), call_agent's start/finish reuse the
+// generic tool_start/tool_result/tool_error events every tool already gets
+// (tagged via metadata.tool_name === 'call_agent'); only the intermediate
+// progress is a dedicated type, a2a_call_progress. All four are correlated
+// by the same tool_call_id.
+function a2aCallItemId(toolCallId) {
+  return `a2a-${toolCallId}`;
+}
+
+function createA2ACallItem(toolCallId, agentName, startedAt) {
+  return {
+    kind: 'a2a_call',
+    id: a2aCallItemId(toolCallId),
+    toolCallId,
+    agentName: agentName || '',
+    status: 'running',
+    startedAt,
+    finishedAt: null,
+    durationMs: null,
+    resultPreview: '',
+    error: null,
+    messages: [],
+  };
+}
+
+function applyA2ACallEventToItem(item, nextEvent) {
+  const metadata = nextEvent.metadata || {};
+  const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
+
+  switch (nextEvent.eventType) {
+    case 'tool_start':
+      return { ...item, status: 'running' };
+
+    case 'a2a_call_progress':
+      return {
+        ...item,
+        agentName: metadata.agent_name || item.agentName,
+        messages: [
+          ...item.messages,
+          {
+            id: `${item.toolCallId}-${item.messages.length}`,
+            state: typeof metadata.state === 'string' ? metadata.state : '',
+            text: typeof metadata.message_text === 'string' ? metadata.message_text : (nextEvent.content || ''),
+            timestamp: nextEvent.timestamp,
+          },
+        ],
+      };
+
+    case 'tool_result':
+      return {
+        ...item,
+        status: 'success',
+        finishedAt: nextEvent.timestamp ?? item.finishedAt,
+        durationMs: durationMs ?? item.durationMs,
+        resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : item.resultPreview,
+      };
+
+    case 'tool_error':
+      return {
+        ...item,
+        status: 'error',
+        finishedAt: nextEvent.timestamp ?? item.finishedAt,
+        durationMs: durationMs ?? item.durationMs,
+        error: typeof metadata.error === 'string' ? metadata.error : '',
+      };
+
+    default:
+      return item;
+  }
+}
+
+function isCallAgentToolEvent(event) {
+  return (
+    (event?.eventType === 'tool_start' || event?.eventType === 'tool_result' || event?.eventType === 'tool_error')
+    && event?.metadata?.tool_name === 'call_agent'
+  );
+}
+
+/**
+ * Find-or-create-or-update the A2A call card for a call_agent tool_start/
+ * tool_result/tool_error or a2a_call_progress event, keyed by tool_call_id.
+ * Mirrors applySubagentEvent's null-sentinel contract ("not mine, fall
+ * through" vs. "handled, here's the updated array"). Unlike subagent's
+ * defensive create-on-anything, a2a_call_progress (or tool_result/
+ * tool_error) with no existing card is ignored rather than guessed at --
+ * a call_agent tool_start should always arrive first.
+ */
+export function applyA2ACallEvent(timelineItems, nextEvent) {
+  if (!nextEvent) return null;
+  const isProgressEvent = nextEvent.eventType === 'a2a_call_progress';
+  if (!isCallAgentToolEvent(nextEvent) && !isProgressEvent) return null;
+
+  const toolCallId = nextEvent.metadata?.tool_call_id;
+  if (!toolCallId) return null;
+
+  const itemId = a2aCallItemId(toolCallId);
+  const index = timelineItems.findIndex((entry) => entry.kind === 'a2a_call' && entry.id === itemId);
+
+  if (index === -1) {
+    if (nextEvent.eventType !== 'tool_start') return null;
+    const agentName = typeof nextEvent.metadata?.args_preview?.agent === 'string'
+      ? nextEvent.metadata.args_preview.agent
+      : '';
+    const seed = createA2ACallItem(toolCallId, agentName, nextEvent.timestamp);
+    return [...timelineItems, applyA2ACallEventToItem(seed, nextEvent)];
+  }
+
+  return timelineItems.map((entry, idx) => (
+    idx === index ? applyA2ACallEventToItem(entry, nextEvent) : entry
+  ));
+}
+
 /** Apply a non-visual stream event (control event like node metadata). */
 export function applyAssistantStreamEvent(turn, streamEvent, now) {
   const nextEvent = createStreamEvent(streamEvent);
@@ -229,6 +342,12 @@ export function applyAssistantStreamEvent(turn, streamEvent, now) {
   const updatedSubagentItems = applySubagentEvent(next.timelineItems, nextEvent);
   if (updatedSubagentItems) {
     next.timelineItems = updatedSubagentItems;
+    return next;
+  }
+
+  const updatedA2ACallItems = applyA2ACallEvent(next.timelineItems, nextEvent);
+  if (updatedA2ACallItems) {
+    next.timelineItems = updatedA2ACallItems;
     return next;
   }
 
@@ -373,6 +492,25 @@ function collectSubagentGroups(streamEvents) {
   return groups;
 }
 
+// Reconstructs grouped A2A call cards from a flat, persisted stream_events
+// array -- same rationale and mechanism as collectSubagentGroups (replays
+// applyA2ACallEvent over the flat events in order so live and reload can't
+// drift apart), just matched by metadata.tool_name === 'call_agent' instead
+// of an eventType prefix.
+function collectA2ACallGroups(streamEvents) {
+  let items = [];
+  for (const event of streamEvents) {
+    if (!isCallAgentToolEvent(event) && event?.eventType !== 'a2a_call_progress') continue;
+    const updated = applyA2ACallEvent(items, event);
+    if (updated) items = updated;
+  }
+  const groups = new Map();
+  for (const item of items) {
+    groups.set(item.toolCallId, item);
+  }
+  return groups;
+}
+
 /**
  * Build a fallback timeline order for a committed assistant message that has
  * no recorded `timelineItems` (e.g. backend-loaded history).
@@ -391,20 +529,47 @@ export function buildDefaultAssistantTimeline(message) {
 
   const todosByCallId = collectTodosByToolCallId(streamEvents);
   const subagentGroups = collectSubagentGroups(streamEvents);
+  const a2aCallGroups = collectA2ACallGroups(streamEvents);
   const insertedSubagentIds = new Set();
+  const insertedA2ACallIds = new Set();
   let todosSeq = 0;
   for (const event of streamEvents) {
     // Grouped subagent cards replace their flat subagent_* events entirely --
     // spliced in once, at the earliest event's timestamp, rather than once
-    // per underlying event.
+    // per underlying event. Only skip the flat event when a group was
+    // actually found: a missing/empty tool_call_id (malformed persisted
+    // data) means no group could ever be built for it, and it must fall
+    // through to the generic stream_event push below instead of silently
+    // vanishing -- unconditionally `continue`-ing group-or-not used to drop
+    // it entirely, with no card and no fallback row.
     if (typeof event?.eventType === 'string' && event.eventType.startsWith('subagent_')) {
       const toolCallId = event.metadata?.tool_call_id;
       const group = toolCallId ? subagentGroups.get(toolCallId) : undefined;
-      if (group && !insertedSubagentIds.has(group.id)) {
-        insertedSubagentIds.add(group.id);
-        items.push({ ...group, timestamp: event.timestamp });
+      if (group) {
+        if (!insertedSubagentIds.has(group.id)) {
+          insertedSubagentIds.add(group.id);
+          items.push({ ...group, timestamp: event.timestamp });
+        }
+        continue;
       }
-      continue;
+    }
+
+    // Grouped A2A call cards replace their flat tool_start/tool_result/
+    // tool_error (tagged tool_name: 'call_agent') and a2a_call_progress
+    // events, the same way subagent groups do above -- matched by metadata
+    // rather than an eventType prefix, since call_agent's start/finish
+    // reuse the generic tool_start/tool_result/tool_error types. Same
+    // found-a-group-or-fall-through rule as subagents above.
+    if (isCallAgentToolEvent(event) || event?.eventType === 'a2a_call_progress') {
+      const toolCallId = event.metadata?.tool_call_id;
+      const group = toolCallId ? a2aCallGroups.get(toolCallId) : undefined;
+      if (group) {
+        if (!insertedA2ACallIds.has(group.id)) {
+          insertedA2ACallIds.add(group.id);
+          items.push({ ...group, timestamp: event.timestamp });
+        }
+        continue;
+      }
     }
 
     items.push({ kind: 'stream_event', id: event.id, event, timestamp: event.timestamp });

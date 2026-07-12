@@ -50,6 +50,7 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "async_subagent_update",
         "async_subagent_result",
         "async_subagent_cancel",
+        "a2a_call_progress",
         "debug_event",
     }
 )
@@ -193,6 +194,26 @@ def build_tool_error_event(
             "duration_ms": round(float(duration_ms), 2),
             "success": False,
             "error": _redact_preview(error),
+        },
+    }
+
+
+def build_a2a_call_progress_event(
+    tool_call_id: str,
+    agent_name: str,
+    state: str,
+    message_text: str,
+) -> dict[str, Any]:
+    """Build an ``a2a_call_progress`` event for an intermediate A2A status update."""
+    safe_text = truncate_text(redact_secrets(message_text), DEFAULT_STREAM_PREVIEW_BYTES)
+    return {
+        "event_type": "a2a_call_progress",
+        "content": safe_text,
+        "metadata": {
+            "tool_call_id": tool_call_id,
+            "agent_name": agent_name,
+            "state": state,
+            "message_text": safe_text,
         },
     }
 

@@ -178,6 +178,73 @@ describe('normalizeBackendChatMessage', () => {
     const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
     expect(subagentItems[0].status).toBe('running');
   });
+
+  // Regression: call_agent's own live progress messages (a2a_call_progress)
+  // are never durably stored, so a reloaded chat's A2ACallCard falls back to
+  // an empty message log and this result_preview (see A2ACallCard.jsx and
+  // extractCallAgentSummary in chatSessionsModel.js). The raw result is the
+  // whole call_agent result dict, JSON-stringified -- showing that verbatim
+  // is exactly the "meaningless JSON blob" experience this feature exists
+  // to fix, so just `summary` is pulled out of it when the JSON is intact.
+  it('reconstructs an a2a_call timeline card and uses summary (not raw JSON) as its reload result_preview', () => {
+    const resultJson = JSON.stringify({
+      task_id: 'task-123',
+      agent: 'greetings_agent',
+      status: 'completed',
+      summary: 'Hello! Completed a 3-step task.',
+      task: { history: [{ role: 'agent', parts: [{ text: 'Accepted' }] }] },
+    });
+    const m = normalizeBackendChatMessage({
+      id: 'm9',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(1);
+    expect(a2aItems[0]).toMatchObject({
+      toolCallId: 'call_1',
+      status: 'success',
+      resultPreview: 'Hello! Completed a 3-step task.',
+      messages: [],
+    });
+  });
+
+  it('pulls summary out via regex when the JSON is truncated after it (the realistic case)', () => {
+    // Matches the shape of the backend's actual 400-char preview truncation
+    // (chat_sessions.py) -- cut off well past a short "summary" field, mid
+    // way through a later key, never on a clean closing brace. A naive
+    // JSON.parse-or-nothing approach fails this case entirely even though
+    // summary itself is fully intact.
+    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "status": "completed", '
+      + '"summary": "Hello! Completed a 3-step task:\\n1. prep done", '
+      + '"latest_message": "Hello! Completed a 3-step task:\\n1. prep done", "last_error": null, "no…';
+    const m = normalizeBackendChatMessage({
+      id: 'm10',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].resultPreview).toBe('Hello! Completed a 3-step task:\n1. prep done');
+  });
+
+  it('falls back to the raw result string when even the summary field itself was truncated', () => {
+    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "summary": "Hello! Comp…';
+    const m = normalizeBackendChatMessage({
+      id: 'm11',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].resultPreview).toBe(truncated);
+  });
 });
 
 describe('buildChatSessionItems', () => {

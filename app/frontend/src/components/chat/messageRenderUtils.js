@@ -99,6 +99,62 @@ function prettifyLabel(value) {
     .join(' ');
 }
 
+/**
+ * Best-effort extraction of just the `summary` field out of a call_agent
+ * tool result string. That string is the whole result dict, JSON-
+ * stringified -- rendering it raw as a card's fallback (no progress
+ * messages to tell the story instead, e.g. blocking=false, or a reloaded
+ * chat with no persisted progress history) is exactly the "meaningless
+ * JSON blob" experience live A2A cards exist to fix. A plain JSON.parse
+ * handles the common short-result case, but the backend's own preview
+ * truncation (chat_sessions.py) cuts long results off wherever the 400-char
+ * budget runs out -- almost never on a clean closing brace -- so a regex
+ * fallback pulls `summary` out on its own even when the overall string
+ * isn't valid JSON, as long as summary itself wasn't the part truncated.
+ */
+export function extractCallAgentSummary(resultText) {
+  if (!resultText) return '';
+  try {
+    const parsed = JSON.parse(resultText);
+    if (typeof parsed?.summary === 'string') return parsed.summary;
+  } catch {
+    // fall through to regex extraction below
+  }
+  const match = resultText.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!match) return '';
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * `{ label, tone }` for StatusPill (StatusPill.jsx), shared by every place
+ * that renders the running/success/error vocabulary: SubagentCard's and
+ * A2ACallCard's own card-level status, and SubagentChild's per-nested-call
+ * status (all three use these exact three values -- see
+ * liveAssistantTurnModel.js's item shapes) -- one mapping instead of three
+ * copies of the same ternary chain.
+ */
+export function statusPillProps(status) {
+  if (status === 'error') return { label: 'error', tone: 'err' };
+  if (status === 'success') return { label: 'done', tone: 'ok' };
+  return { label: 'running', tone: 'pending' };
+}
+
+/**
+ * `{ label, tone }` for StatusPill, for A2A's own per-update wire states
+ * (submitted/working/completed/failed, from TaskStatusUpdateEvent.status.
+ * state) -- a different vocabulary from statusPillProps above, so it isn't
+ * reused for this: A2A reports its own state names, not ours.
+ */
+export function a2aStatePillProps(state) {
+  if (state === 'failed') return { label: 'error', tone: 'err' };
+  if (state === 'completed') return { label: 'done', tone: 'ok' };
+  return { label: state || 'pending', tone: 'pending' };
+}
+
 export function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
   if (typeof args === 'string') return args;
@@ -185,11 +241,18 @@ export function describeStreamEvent(event) {
     };
   }
 
+  // call_agent-tagged tool_start/tool_result/tool_error only reach these
+  // three branches via the same fallback paths a2a_call_progress does below
+  // (buildDefaultAssistantTimeline couldn't form a group -- see
+  // liveAssistantTurnModel.js) -- badged 'A2A' rather than the generic
+  // 'Tool' every other tool call gets, so a fallen-through call_agent event
+  // still reads as part of the same family as its sibling a2a_call_progress
+  // events and the grouped card.
   if (eventType === 'tool_start') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
     const args = formatArgsPreview(metadata.args_preview);
     return {
-      badge: 'Tool',
+      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
       metaDetail: args || 'invoking…',
       bodyDetail: '',
@@ -206,7 +269,7 @@ export function describeStreamEvent(event) {
       parts.push(metadata.result_preview);
     }
     return {
-      badge: 'Tool',
+      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
       metaDetail: parts.join(' • ') || 'completed',
       bodyDetail: '',
@@ -223,7 +286,7 @@ export function describeStreamEvent(event) {
       parts.push(metadata.error);
     }
     return {
-      badge: 'Tool',
+      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
       metaDetail: parts.join(' • ') || 'error',
       bodyDetail: '',
@@ -335,6 +398,25 @@ export function describeStreamEvent(event) {
       title: `${subagentName} ✗ ${prettifyLabel(nestedToolName)}`,
       metaDetail: errorParts.join(' • ') || 'error',
       bodyDetail: '',
+    };
+  }
+
+  // Flat a2a_call_progress events only reach this generic renderer via the
+  // reload fallback (buildDefaultAssistantTimeline groups them into a
+  // single A2ACallCard when it can -- see liveAssistantTurnModel.js) or
+  // chats persisted before grouping shipped. Handled explicitly, setting
+  // badge: 'A2A' directly, same rationale as the subagent_* branch above --
+  // otherwise this would fall into badgeForEventType()'s generic fallback,
+  // which mislabels anything containing "agent" as "Agent".
+  if (eventType === 'a2a_call_progress') {
+    const agentName = typeof metadata.agent_name === 'string' && metadata.agent_name
+      ? metadata.agent_name
+      : 'agent';
+    return {
+      badge: 'A2A',
+      title: agentName,
+      metaDetail: typeof metadata.state === 'string' ? metadata.state : '',
+      bodyDetail: typeof metadata.message_text === 'string' ? metadata.message_text : '',
     };
   }
 
