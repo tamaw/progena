@@ -99,7 +99,7 @@ function prettifyLabel(value) {
     .join(' ');
 }
 
-function formatArgsPreview(args) {
+export function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
   if (typeof args === 'string') return args;
   try {
@@ -110,7 +110,7 @@ function formatArgsPreview(args) {
   }
 }
 
-function formatDuration(ms) {
+export function formatDuration(ms) {
   if (!Number.isFinite(ms)) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
@@ -258,6 +258,86 @@ export function describeStreamEvent(event) {
     };
   }
 
+  // Flat subagent_* events only reach this generic renderer via the reload
+  // fallback (buildDefaultAssistantTimeline groups them into a single card
+  // when it can -- see liveAssistantTurnModel.js) or chats persisted before
+  // grouping shipped. Handled explicitly, setting badge: 'Subagent' directly,
+  // rather than falling into badgeForEventType()'s generic fallback below --
+  // "subagent_start" etc. accidentally contain the substring "agent" and
+  // would otherwise be mislabeled "Agent".
+  if (eventType.startsWith('subagent_')) {
+    const subagentName = typeof metadata.subagent_name === 'string' && metadata.subagent_name
+      ? metadata.subagent_name
+      : 'subagent';
+
+    if (eventType === 'subagent_start') {
+      return { badge: 'Subagent', title: `→ ${subagentName}`, metaDetail: 'started', bodyDetail: '' };
+    }
+
+    if (eventType === 'subagent_result') {
+      const isError = metadata.success === false;
+      const parts = [];
+      if (typeof metadata.duration_ms === 'number') parts.push(formatDuration(metadata.duration_ms));
+      if (isError && typeof metadata.error === 'string' && metadata.error) {
+        parts.push(metadata.error);
+      } else if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
+        parts.push(metadata.result_preview);
+      }
+      return {
+        badge: 'Subagent',
+        title: `${isError ? '✗' : '✓'} ${subagentName}`,
+        metaDetail: parts.join(' • ') || (isError ? 'error' : 'completed'),
+        bodyDetail: '',
+      };
+    }
+
+    if (eventType === 'subagent_message_delta') {
+      return {
+        badge: 'Subagent',
+        title: subagentName,
+        bodyHtml: typeof event?.content === 'string' && event.content ? formatMessage(event.content) : '',
+        metaDetail: '',
+        bodyDetail: '',
+      };
+    }
+
+    const nestedToolName = typeof metadata.nested_tool_name === 'string' && metadata.nested_tool_name
+      ? metadata.nested_tool_name
+      : 'tool';
+
+    if (eventType === 'subagent_tool_start') {
+      return {
+        badge: 'Subagent',
+        title: `${subagentName} → ${prettifyLabel(nestedToolName)}`,
+        metaDetail: formatArgsPreview(metadata.args_preview) || 'invoking…',
+        bodyDetail: '',
+      };
+    }
+
+    if (eventType === 'subagent_tool_result') {
+      const parts = [];
+      if (typeof metadata.duration_ms === 'number') parts.push(formatDuration(metadata.duration_ms));
+      if (typeof metadata.result_preview === 'string' && metadata.result_preview) parts.push(metadata.result_preview);
+      return {
+        badge: 'Subagent',
+        title: `${subagentName} ✓ ${prettifyLabel(nestedToolName)}`,
+        metaDetail: parts.join(' • ') || 'completed',
+        bodyDetail: '',
+      };
+    }
+
+    // subagent_tool_error
+    const errorParts = [];
+    if (typeof metadata.duration_ms === 'number') errorParts.push(formatDuration(metadata.duration_ms));
+    if (typeof metadata.error === 'string' && metadata.error) errorParts.push(metadata.error);
+    return {
+      badge: 'Subagent',
+      title: `${subagentName} ✗ ${prettifyLabel(nestedToolName)}`,
+      metaDetail: errorParts.join(' • ') || 'error',
+      bodyDetail: '',
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -336,7 +416,11 @@ export function todosDetailsForEvent(event) {
 
 export function toolDetailsForEvent(event, description) {
   const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
-  if (!eventType.includes('tool')) return null;
+  // subagent_tool_* events use nested_tool_name/nested_tool_call_id, not
+  // tool_name/tool_call_id -- rendering them through this tool_name-keyed box
+  // would silently produce an empty/generic one. describeStreamEvent's own
+  // subagent_* branch already renders a sensible title/metaDetail for them.
+  if (!eventType.includes('tool') || eventType.startsWith('subagent_')) return null;
 
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';

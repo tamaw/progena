@@ -36,6 +36,11 @@ def test_allowed_event_types_cover_async_subagent_lifecycle():
         assert name in ALLOWED_CUSTOM_EVENT_TYPES
 
 
+def test_allowed_event_types_cover_nested_subagent_tool_lifecycle():
+    for name in ("subagent_tool_start", "subagent_tool_result", "subagent_tool_error"):
+        assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
 def test_normalize_custom_event_passes_known_type_unchanged():
     payload = {
         "event_type": "tool_start",
@@ -62,6 +67,18 @@ def test_normalize_custom_event_blocks_reserved_types():
     envelope = normalize_custom_event({"event_type": "node_update"})
     assert envelope is not None
     assert envelope["event_type"] == CUSTOM_EVENT_FALLBACK_TYPE
+
+
+def test_normalize_custom_event_blocks_subagent_message_delta_spoofing():
+    # subagent_message_delta is synthesized directly in deepagent_stream.py from
+    # nested `messages`-mode chunks, never via get_stream_writer -- it must not
+    # be spoofable through the general custom-event channel, same as message_delta.
+    envelope = normalize_custom_event(
+        {"event_type": "subagent_message_delta", "content": "spoofed"}
+    )
+    assert envelope is not None
+    assert envelope["event_type"] == CUSTOM_EVENT_FALLBACK_TYPE
+    assert envelope["metadata"]["original_event_type"] == "subagent_message_delta"
 
 
 def test_normalize_custom_event_handles_non_dict_payload():

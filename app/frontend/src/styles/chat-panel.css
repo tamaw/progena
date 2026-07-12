@@ -333,6 +333,73 @@
     text-decoration: line-through;
 }
 
+/* Subagent card -- one per `task` tool delegation (nested subagent
+   execution), live-updated as its own reply streams and its own tool calls
+   start/finish. Multiple can be running concurrently in one turn, each an
+   independent card (see SubagentCard.jsx / applySubagentEvent in
+   liveAssistantTurnModel.js). Unlike the fully-transparent stream_event
+   entries, this gets a subtle status-tinted background since it's a more
+   prominent, card-like element (closer to .tool than to a plain entry row). */
+.subagent-card {
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md);
+    background-color: color-mix(in srgb, #14b8a6 6%, transparent);
+    animation: fadeIn 0.2s ease;
+}
+
+.subagent-card--error {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.subagent-card__badge {
+    color: color-mix(in srgb, #14b8a6 82%, white);
+    background: color-mix(in srgb, #14b8a6 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, #14b8a6 34%, var(--color-border-light));
+}
+
+.subagent-card__badge--running {
+    animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
+.subagent-card__badge--error {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
+}
+
+@keyframes subagent-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.45; }
+}
+
+.subagent-card__tag {
+    color: color-mix(in srgb, #14b8a6 82%, white);
+    background: color-mix(in srgb, #14b8a6 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, #14b8a6 34%, var(--color-border-light));
+}
+
+.subagent-card__toggle {
+    padding: 2px 8px;
+    font-size: 11px;
+}
+
+.subagent-card__body {
+    margin-top: 4px;
+}
+
+.subagent-card__error {
+    margin-top: 4px;
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+}
+
+.subagent-card__children {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
 /* Chat Input Container */
 .chat-input-container {
     padding: 10px var(--chat-content-gutter) 10px;

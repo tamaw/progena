@@ -20,6 +20,50 @@ export function compareSessionItems(left, right) {
   return String(left.id || '').localeCompare(String(right.id || ''));
 }
 
+// `task` tool calls are subagent dispatches, not plain tool calls -- mirrors
+// _expand_task_subagent_events on the backend's live SSE path (deepagent_stream.py)
+// so a reloaded chat produces the same subagent_start/subagent_result shape
+// applySubagentEvent already knows how to group, instead of falling through to
+// generic tool_start/tool_result rows (which is what made subagent cards vanish
+// on refresh -- the checkpoint has no record of the subagent's own nested tool
+// calls or streamed deltas, only the task call's args and final result, so the
+// reconstructed card carries no `children` and no incremental `content`).
+function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
+  const subagentName = tc.args && typeof tc.args.subagent_type === 'string' ? tc.args.subagent_type : '';
+  const toolCallId = typeof tc.id === 'string' ? tc.id : '';
+  const result = typeof tc.result === 'string' ? tc.result : '';
+
+  const events = [
+    {
+      id: `${messageId}-subagent-start-${index}`,
+      eventType: 'subagent_start',
+      content: subagentName,
+      timestamp,
+      metadata: {
+        subagent_name: subagentName,
+        tool_call_id: toolCallId,
+        source: 'checkpoint',
+      },
+    },
+  ];
+  if (result) {
+    events.push({
+      id: `${messageId}-subagent-result-${index}`,
+      eventType: 'subagent_result',
+      content: subagentName,
+      timestamp,
+      metadata: {
+        subagent_name: subagentName,
+        tool_call_id: toolCallId,
+        success: true,
+        result_preview: result,
+        source: 'checkpoint',
+      },
+    });
+  }
+  return events;
+}
+
 function buildToolStreamEvents(toolCalls, messageId) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
     return [];
@@ -27,6 +71,13 @@ function buildToolStreamEvents(toolCalls, messageId) {
   const events = [];
   toolCalls.forEach((tc, index) => {
     const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
+    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
+
+    if (toolName === 'task') {
+      events.push(...buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp));
+      return;
+    }
+
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
     const result = typeof tc.result === 'string' ? tc.result : '';
     // The backend stamps the declaring AIMessage's created_at onto each tool
@@ -34,7 +85,6 @@ function buildToolStreamEvents(toolCalls, messageId) {
     // history reloads can sort tool calls against the answer text by real
     // time instead of guessing an order. No separate timestamp exists for
     // the result, so it reuses the call's.
-    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
     events.push({
       id: `${messageId}-tool-start-${index}`,
       eventType: 'tool_start',
