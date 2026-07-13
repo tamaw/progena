@@ -1,3 +1,4 @@
+from datetime import datetime
 from unittest.mock import AsyncMock
 
 import pytest
@@ -205,6 +206,66 @@ async def test_call_agent_blocking_collects_intermediate_progress_updates(monkey
     assert result["result"]["status"]["state"] == "completed"
     assert [u["message"] for u in result["progress_updates"]] == ["phase 1", "phase 2", "done"]
     get_task.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_call_agent_blocking_stamps_received_at_onto_each_progress_update(
+    monkeypatch,
+) -> None:
+    """Each progress_updates entry must carry its own real arrival time --
+    extract_progress_log (app/progenitor/a2a/payloads.py) only runs once,
+    after the whole blocking call has completed, so this is the one point
+    where each update's true timing is still available to capture."""
+    client = A2AClient()
+
+    class _FakeTask:
+        def __init__(self, state):
+            self.id = "task-123"
+            self.status = type("S", (), {"state": state})()
+
+        def model_dump(self, **_kwargs):
+            return {"kind": "task", "id": self.id, "status": {"state": str(self.status.state)}}
+
+    class _FakeUpdate:
+        def __init__(self, text):
+            self.text = text
+
+        def model_dump(self, **_kwargs):
+            return {"message": self.text}
+
+    events = [
+        (_FakeTask("working"), _FakeUpdate("phase 1")),
+        (_FakeTask("completed"), _FakeUpdate("done")),
+    ]
+
+    class _FakeContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def send_message(self, message, configuration):
+            del message, configuration
+            for item in events:
+                yield item
+
+    monkeypatch.setattr(client, "_sdk_client", lambda *args, **kwargs: _FakeContext())
+    monkeypatch.setattr(client, "get_task", AsyncMock())
+
+    result = await client.call_agent(
+        {"url": "http://localhost:8109", "transport": "http", "status": "running"},
+        "hello",
+        blocking=True,
+        timeout=5,
+    )
+
+    stamps = [u["_progenitor_received_at"] for u in result["progress_updates"]]
+    assert all(isinstance(stamp, str) and stamp for stamp in stamps)
+    # ISO-parseable, and distinct calls to utcnow() -- not the same instant
+    # reused for every entry.
+    parsed = [datetime.fromisoformat(stamp) for stamp in stamps]
+    assert parsed[0] <= parsed[1]
 
 
 @pytest.mark.asyncio

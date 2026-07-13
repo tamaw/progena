@@ -114,11 +114,18 @@ function buildToolStreamEvents(toolCalls, messageId) {
       tc.progress_log.forEach((entry, progressIndex) => {
         if (!entry || typeof entry !== 'object') return;
         const messageText = typeof entry.message_text === 'string' ? entry.message_text : '';
+        // Each entry carries its own real arrival time (stamped by
+        // A2AClient.call_agent(), see extract_progress_log in
+        // app/progenitor/a2a/payloads.py) -- falls back to the parent tool
+        // call's shared timestamp only for older persisted data from before
+        // that field existed, rather than showing every sub-entry at the
+        // exact same clock time.
+        const entryTimestamp = toValidTimestamp(entry.timestamp) ?? timestamp;
         events.push({
           id: `${messageId}-a2a-progress-${index}-${progressIndex}`,
           eventType: 'a2a_call_progress',
           content: messageText,
-          timestamp,
+          timestamp: entryTimestamp,
           metadata: {
             tool_call_id: toolCallId,
             state: typeof entry.state === 'string' ? entry.state : '',

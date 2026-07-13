@@ -375,7 +375,16 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
   if (updatedA2ACallItems) {
     next.timelineItems = updatedA2ACallItems;
   }
-  if (isCallAgentEvt || nextEvent.eventType === 'a2a_call_progress') {
+  // call_agent's own tool_start/tool_result/tool_error always got their
+  // plain row above regardless of whether applyA2ACallEvent could build a
+  // card for them, so they always short-circuit here. a2a_call_progress has
+  // no such guaranteed row of its own -- only short-circuit for it when a
+  // card was actually found and updated; an orphaned progress event (no
+  // matching prior tool_start, e.g. a dropped frame or missing
+  // tool_call_id) must fall through to the generic stream_event push below
+  // instead of silently vanishing, matching buildDefaultAssistantTimeline's
+  // identical fallback for the reload path.
+  if (isCallAgentEvt || (nextEvent.eventType === 'a2a_call_progress' && updatedA2ACallItems)) {
     return next;
   }
 

@@ -422,6 +422,13 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
     always cuts if off first."""
     if not isinstance(content, str) or not content.strip():
         return []
+    # Every tool result flows through here on every session load, but only
+    # call_agent's ever carries this key -- a cheap substring check skips the
+    # json.loads (and the risk of parsing an arbitrarily large/deeply nested
+    # blob) for every other tool's result instead of paying that cost only to
+    # find no progress_log at the end of it.
+    if '"progress_log"' not in content:
+        return []
     try:
         parsed = json.loads(content)
     except ValueError:
@@ -438,8 +445,16 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
         state = str(item.get("state") or "")
         message_text = str(item.get("message_text") or "")
         agent_name = str(item.get("agent_name") or "")
+        timestamp = str(item.get("timestamp") or "")
         if state or message_text:
-            entries.append({"state": state, "message_text": message_text, "agent_name": agent_name})
+            entries.append(
+                {
+                    "state": state,
+                    "message_text": message_text,
+                    "agent_name": agent_name,
+                    "timestamp": timestamp,
+                }
+            )
     return entries
 
 

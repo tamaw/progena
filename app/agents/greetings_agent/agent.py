@@ -647,14 +647,24 @@ async def _run_greeting_payload(
         text = await _mock_response(request_text, progress_callback)
         lowered = request_text.lower()
         tool_calls: list[str] = []
+        # Mirrors _mock_response's own branch precedence exactly (steps >
+        # sleep > fail > copilot > bare greeting > plain) via elif, not
+        # independent ifs -- _mock_response returns after its first match, so
+        # at most one of these ever actually ran. Independent ifs previously
+        # let a later branch's trigger word (now much easier to hit since the
+        # sleep regex broadened to "wait"/"take your time"/etc, see _SLEEP_RE)
+        # append a phantom tool call for a phase that never executed, e.g. a
+        # steps request that also happens to contain "wait" reporting a
+        # "sleep" call it never made. "fail" needs no branch here: it raises
+        # inside _mock_response above, so execution never reaches this code.
         steps_match = _STEPS_RE.search(request_text)
         if steps_match:
             tool_calls.extend(["do_step"] * max(1, min(int(steps_match.group(1)), _MAX_MOCK_STEPS)))
-        if _SLEEP_RE.search(request_text):
+        elif _SLEEP_RE.search(request_text):
             tool_calls.append("sleep")
-        if "copilot" in lowered:
+        elif "copilot" in lowered:
             tool_calls.append("probe_copilot")
-        if not tool_calls and _BARE_GREETING_RE.match(request_text):
+        elif _BARE_GREETING_RE.match(request_text):
             tool_calls.append("pick_greeting_style")
         return text, {
             "display_agent_name": AGENT_ID,

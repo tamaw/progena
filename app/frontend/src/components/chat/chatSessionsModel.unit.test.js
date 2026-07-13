@@ -261,6 +261,56 @@ describe('normalizeBackendChatMessage', () => {
     ]);
   });
 
+  // Each progress_log entry carries its own real arrival time (stamped by
+  // A2AClient.call_agent(), see extract_progress_log in
+  // app/progenitor/a2a/payloads.py) -- reload must use that per-entry time
+  // rather than reusing the parent tool call's single created_at for every
+  // sub-entry, or a viewer sees every update stamped at the exact same
+  // moment regardless of how long the task actually ran.
+  it('uses each progress_log entry\'s own timestamp, not the parent tool call\'s shared one', () => {
+    const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });
+    const m = normalizeBackendChatMessage({
+      id: 'm9d',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        created_at: '2026-07-11T02:31:00+00:00',
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted', timestamp: '2026-07-11T02:31:02+00:00' },
+          { state: 'working', message_text: 'Working...', timestamp: '2026-07-11T02:31:09+00:00' },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].messages.map((msg) => msg.timestamp)).toEqual([
+      new Date('2026-07-11T02:31:02+00:00').getTime(),
+      new Date('2026-07-11T02:31:09+00:00').getTime(),
+    ]);
+  });
+
+  it('falls back to the parent tool call\'s timestamp for older progress_log entries with no timestamp of their own', () => {
+    const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });
+    const m = normalizeBackendChatMessage({
+      id: 'm9e',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        created_at: '2026-07-11T02:31:00+00:00',
+        progress_log: [{ state: 'submitted', message_text: 'Accepted' }],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].messages[0].timestamp).toBe(new Date('2026-07-11T02:31:00+00:00').getTime());
+  });
+
   // Regression: an auto-routed call never names its target agent in the raw
   // tool-call args (the LLM omits `agent`/`agent_name` entirely and lets
   // call_agent pick one internally, after tool_start has already fired), so

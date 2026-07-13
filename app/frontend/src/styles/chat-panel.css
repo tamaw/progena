@@ -456,13 +456,19 @@
 
 /* Each nested tool call renders as its own mini .entry node (SubagentChild
    in SubagentCard.jsx) chained together, the same "mini card/event" pattern
-   .a2a-call-card__subchain uses below for A2A's own per-update sub-entries
+   A2ACallCard's A2ASubEntry uses below for A2A's own per-update sub-entries
    -- scaled-down 18px gutter/16px badge for the same reason (already
    indented once as a card in the outer chain). Badge color reuses the outer
    card's own .subagent-card__badge--running/--error modifiers directly
    (child.status shares the exact same running/success/error vocabulary as
    the outer card's item.status) rather than a parallel set of child-specific
-   color rules. */
+   color rules.
+
+   The four geometry rules below are shared, via a comma-separated selector,
+   with A2ACallCard's own .a2a-call-card__subchain nested chain -- both are
+   the exact same "mini card/event" scale-down, so a single declaration keeps
+   the two families' nested-chain geometry from drifting apart if one is ever
+   tweaked without the other. */
 .subagent-card__children {
     display: flex;
     flex-direction: column;
@@ -470,22 +476,26 @@
     margin-top: 8px;
 }
 
-.subagent-card__children .entry {
+.subagent-card__children .entry,
+.a2a-call-card__subchain .entry {
     grid-template-columns: 18px minmax(0, 1fr);
     gap: 8px;
 }
 
-.subagent-card__children .entry__gutter::before {
+.subagent-card__children .entry__gutter::before,
+.a2a-call-card__subchain .entry__gutter::before {
     top: 16px;
     bottom: -12px;
 }
 
-.subagent-card__children .entry__badge {
+.subagent-card__children .entry__badge,
+.a2a-call-card__subchain .entry__badge {
     width: 16px;
     height: 16px;
 }
 
-.subagent-card__children .entry__badge svg {
+.subagent-card__children .entry__badge svg,
+.a2a-call-card__subchain .entry__badge svg {
     width: 9px;
     height: 9px;
 }
@@ -547,33 +557,15 @@
    block. Scaled down from the outer chain's 28px gutter/22px badge (18px/
    16px here): this is already indented once as a card in the outer chain,
    so a second full-size gutter would compound into an oddly deep staircase.
-   Every rule below is scoped under this class so it only affects entries
-   nested inside an A2A card, never the outer chain's own .entry sizing. */
+   The shared entry/gutter/badge geometry lives on the comma-separated
+   selectors above (with .subagent-card__children's matching comment) --
+   only this container's own layout and the sub-entry-specific rules below
+   are declared here. */
 .a2a-call-card__subchain {
     display: flex;
     flex-direction: column;
     gap: 4px;
     margin-top: 8px;
-}
-
-.a2a-call-card__subchain .entry {
-    grid-template-columns: 18px minmax(0, 1fr);
-    gap: 8px;
-}
-
-.a2a-call-card__subchain .entry__gutter::before {
-    top: 16px;
-    bottom: -12px;
-}
-
-.a2a-call-card__subchain .entry__badge {
-    width: 16px;
-    height: 16px;
-}
-
-.a2a-call-card__subchain .entry__badge svg {
-    width: 9px;
-    height: 9px;
 }
 
 .a2a-call-card__subchain .entry__head {
