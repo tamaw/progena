@@ -216,6 +216,20 @@ class BuilderTaskQueue:
         self._running_tasks[task_id] = inner
         try:
             await inner
+        except asyncio.CancelledError:
+            # cancel() can race in before `inner` ever gets a first turn on
+            # the event loop -- asyncio then completes it as cancelled
+            # without ever entering _run_task's body, so its own
+            # try/except (and the terminal event it pushes on that path)
+            # never runs. Push the same fallback here so callers still see
+            # a terminal event and this coroutine still returns normally
+            # instead of propagating the cancellation into
+            # BuilderAgentExecutor.execute() (see its docstring).
+            await event_queue.enqueue_event(
+                _status_event(
+                    task_id, context_id, TaskState.canceled, "Build task cancelled.", final=True
+                )
+            )
         finally:
             self._running_tasks.pop(task_id, None)
 

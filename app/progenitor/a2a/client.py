@@ -249,7 +249,9 @@ class A2AClient:
                     aclose = getattr(stream, "aclose", None)
                     if callable(aclose):
                         with contextlib.suppress(Exception):
-                            await aclose()
+                            maybe = aclose()
+                            if inspect.isawaitable(maybe):
+                                await cast(Any, maybe)
         except (TimeoutError, httpx.TimeoutException):
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as exc:
