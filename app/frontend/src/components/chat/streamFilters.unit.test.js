@@ -1,10 +1,16 @@
 import { describe, it, expect } from 'vitest';
 import {
   PERSISTED_CATEGORIES,
+  STREAM_EVENT_CATEGORIES,
   categoryForEventType,
+  countCategorizedEvents,
   isEventVisible,
   loadStreamFilters,
 } from './streamFilters';
+
+function emptyCounts() {
+  return STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
+}
 
 describe('categoryForEventType', () => {
   it('maps event types to categories', () => {
@@ -34,6 +40,120 @@ describe('categoryForEventType', () => {
   it('leaves non-call_agent tool events under "tools"', () => {
     expect(categoryForEventType('tool_start', { tool_name: 'shell' })).toBe('tools');
     expect(categoryForEventType('tool_error', { tool_name: 'shell' })).toBe('errors');
+  });
+});
+
+describe('countCategorizedEvents', () => {
+  it('counts a tool_start/tool_result pair once, not twice', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'tool_start', metadata: { tool_name: 'shell' } },
+        { eventType: 'tool_result', metadata: { tool_name: 'shell' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.tools).toBe(1);
+  });
+
+  it('counts a call_agent start/result pair once under "a2a", not "tools"', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_result', metadata: { tool_name: 'call_agent' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.a2a).toBe(1);
+    expect(counts.tools).toBe(0);
+  });
+
+  it('does not double-count a call_agent invocation that also errors', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'tool_error', metadata: { tool_name: 'call_agent' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.a2a).toBe(1);
+    expect(counts.errors).toBe(0);
+  });
+
+  it('still counts a plain tool error under "errors"', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'tool_start', metadata: { tool_name: 'shell' } },
+        { eventType: 'tool_error', metadata: { tool_name: 'shell' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.tools).toBe(1);
+    expect(counts.errors).toBe(1);
+  });
+
+  it('counts intermediate a2a_call_progress updates as part of the same invocation', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'tool_start', metadata: { tool_name: 'call_agent' } },
+        { eventType: 'a2a_call_progress', metadata: { tool_call_id: 'x' } },
+        { eventType: 'a2a_call_progress', metadata: { tool_call_id: 'x' } },
+        { eventType: 'tool_result', metadata: { tool_name: 'call_agent' } },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.a2a).toBe(1);
+  });
+
+  it('counts a subagent dispatch once, ignoring its nested tool calls and message deltas', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'subagent_start', metadata: {} },
+        { eventType: 'subagent_tool_start', metadata: {} },
+        { eventType: 'subagent_tool_result', metadata: {} },
+        { eventType: 'subagent_message_delta', metadata: {} },
+        { eventType: 'subagent_message_delta', metadata: {} },
+        { eventType: 'subagent_result', metadata: {} },
+      ],
+      emptyCounts(),
+    );
+    expect(counts.subagents).toBe(1);
+  });
+
+  it('reproduces the reported header/filter mismatch: 4 tools + 6 a2a sums to the header\'s 10, not the raw event total', () => {
+    const events = [
+      { eventType: 'tool_start', metadata: { tool_name: 'list_agents' } },
+      { eventType: 'tool_result', metadata: { tool_name: 'list_agents' } },
+      { eventType: 'tool_start', metadata: { tool_name: 'write_todos' } },
+      { eventType: 'tool_result', metadata: { tool_name: 'write_todos' } },
+      { eventType: 'tool_start', metadata: { tool_name: 'write_todos' } },
+      { eventType: 'tool_result', metadata: { tool_name: 'write_todos' } },
+      { eventType: 'tool_start', metadata: { tool_name: 'write_todos' } },
+      { eventType: 'tool_result', metadata: { tool_name: 'write_todos' } },
+    ];
+    for (let i = 0; i < 6; i += 1) {
+      events.push({ eventType: 'tool_start', metadata: { tool_name: 'call_agent' } });
+      events.push({ eventType: 'tool_result', metadata: { tool_name: 'call_agent' } });
+    }
+    const counts = countCategorizedEvents(events, emptyCounts());
+    expect(counts.tools).toBe(4);
+    expect(counts.a2a).toBe(6);
+    expect(counts.tools + counts.a2a).toBe(10);
+  });
+
+  it('ignores reasoning and null-category events', () => {
+    const counts = countCategorizedEvents(
+      [
+        { eventType: 'reasoning_delta', metadata: {} },
+        { eventType: 'message_delta', metadata: {} },
+      ],
+      emptyCounts(),
+    );
+    expect(Object.values(counts).every((v) => v === 0)).toBe(true);
+  });
+
+  it('tolerates a non-array input', () => {
+    const counts = countCategorizedEvents(undefined, emptyCounts());
+    expect(Object.values(counts).every((v) => v === 0)).toBe(true);
   });
 });
 

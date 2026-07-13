@@ -79,6 +79,63 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert "context_id" not in kwargs
 
 
+async def test_dispatch_tracked_a2a_task_stamps_agent_name_onto_progress_log(
+    monkeypatch, state_manager
+) -> None:
+    """progress_log entries must carry the caller's own resolved agent_name --
+    it isn't part of the raw TaskStatusUpdateEvent, so a reload has no other
+    source for it once a task auto-routed (see extract_progress_log's
+    docstring in app/progenitor/a2a/payloads.py)."""
+    fake_client = MagicMock()
+    fake_client.call_agent = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {
+                "kind": "task",
+                "id": "builder_task_2",
+                "contextId": "ctx-2",
+                "status": {
+                    "state": "completed",
+                    "message": {"parts": [{"kind": "text", "text": "Done."}]},
+                },
+            },
+            "progress_updates": [
+                {
+                    "status": {
+                        "state": "submitted",
+                        "message": {"parts": [{"kind": "text", "text": "Accepted."}]},
+                    }
+                },
+                {
+                    "status": {
+                        "state": "working",
+                        "message": {"parts": [{"kind": "text", "text": "Working..."}]},
+                    }
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
+
+    _response, tracked_task = await dispatch_tracked_a2a_task(
+        state_manager=state_manager,
+        agent_name="builder_agent",
+        agent_config={"url": "http://localhost:8107", "transport": "http"},
+        request_text="Build a demo",
+        request_metadata={"caller": "progenitor", "dispatch_mode": "blocking"},
+        source="call_agent",
+        timeout=5.0,
+        blocking=True,
+    )
+
+    assert tracked_task is not None
+    assert [entry["agent_name"] for entry in tracked_task.progress_log] == [
+        "builder_agent",
+        "builder_agent",
+    ]
+    assert [entry["state"] for entry in tracked_task.progress_log] == ["submitted", "working"]
+
+
 async def test_dispatch_tracked_a2a_task_uses_a2a_push_callback_url(
     monkeypatch, state_manager
 ) -> None:

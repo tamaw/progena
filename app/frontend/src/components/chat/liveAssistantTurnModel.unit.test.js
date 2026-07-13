@@ -423,9 +423,13 @@ describe('applyAssistantStreamEvent', () => {
 
   // A2A call_agent invocations get their own grouped card too, but keyed off
   // metadata.tool_name === 'call_agent' on the generic tool_start/tool_result
-  // events rather than a dedicated event-type prefix (call_agent's start/
-  // finish reuse the generic tool events every tool already gets).
-  it('call_agent tool_start creates an a2a_call timeline item, not a stream_event row', () => {
+  // events rather than a dedicated event-type prefix -- Progenitor's own
+  // dispatch/return for that call is an ordinary tool call, handled no
+  // differently than search_web or read_file, and reads as one: it falls
+  // through to the generic stream_event push in addition to updating the
+  // card (unlike subagent, whose dispatch has no such "regular tool call"
+  // meaning of its own).
+  it('call_agent tool_start creates an a2a_call timeline item AND a plain stream_event row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('tool_start', {
       content: 'call_agent',
@@ -433,11 +437,17 @@ describe('applyAssistantStreamEvent', () => {
     });
     const next = applyAssistantStreamEvent(turn, evt, NOW);
 
-    expect(next.timelineItems).toHaveLength(1);
-    expect(next.timelineItems[0].kind).toBe('a2a_call');
-    expect(next.timelineItems[0].id).toBe('a2a-call_1');
-    expect(next.timelineItems[0].agentName).toBe('greetings_agent');
-    expect(next.timelineItems[0].status).toBe('running');
+    expect(next.timelineItems).toHaveLength(2);
+    // The plain dispatch row has to read before the card it explains -- the
+    // call itself comes first, same as any other tool_start.
+    expect(next.timelineItems.map((item) => item.kind)).toEqual(['stream_event', 'a2a_call']);
+    const a2aItem = next.timelineItems.find((item) => item.kind === 'a2a_call');
+    expect(a2aItem.id).toBe('a2a-call_1');
+    expect(a2aItem.agentName).toBe('greetings_agent');
+    expect(a2aItem.status).toBe('running');
+    const streamItem = next.timelineItems.find((item) => item.kind === 'stream_event');
+    expect(streamItem.event.eventType).toBe('tool_start');
+    expect(streamItem.event.metadata.tool_call_id).toBe('call_1');
   });
 
   it('a tool_start for a different tool is unaffected (falls through to generic stream_event)', () => {
@@ -468,13 +478,37 @@ describe('applyAssistantStreamEvent', () => {
       metadata: { tool_name: 'call_agent', tool_call_id: 'call_a', duration_ms: 5, result_preview: 'alpha done' },
     }), NOW);
 
-    expect(next.timelineItems).toHaveLength(2);
-    const alphaItem = next.timelineItems.find((item) => item.toolCallId === 'call_a');
-    const betaItem = next.timelineItems.find((item) => item.toolCallId === 'call_b');
+    // 5 items: an a2a_call card per concurrent call (2), plus a plain
+    // stream_event row for each call_agent tool_start/tool_result (3: two
+    // starts + alpha's result) -- progress events update their card in
+    // place and don't get their own row.
+    expect(next.timelineItems).toHaveLength(5);
+    // Each call's dispatch marker reads before its own card, and cards
+    // update in place (no re-append) as progress/result land -- this is the
+    // exact "invoke it twice concurrently" shape that originally regressed:
+    // start_a, card_a, start_b, card_b, then alpha's result appended last.
+    expect(next.timelineItems.map((item) => (
+      item.kind === 'a2a_call' ? ['a2a_call', item.toolCallId] : [item.event.eventType, item.event.metadata.tool_call_id]
+    ))).toEqual([
+      ['tool_start', 'call_a'],
+      ['a2a_call', 'call_a'],
+      ['tool_start', 'call_b'],
+      ['a2a_call', 'call_b'],
+      ['tool_result', 'call_a'],
+    ]);
+    const alphaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
     expect(alphaItem.status).toBe('success');
     expect(alphaItem.messages.map((m) => m.text)).toEqual(['alpha step 1']);
     expect(betaItem.status).toBe('running');
     expect(betaItem.messages.map((m) => m.text)).toEqual(['beta step 1']);
+
+    const streamRows = next.timelineItems.filter((item) => item.kind === 'stream_event');
+    expect(streamRows.map((item) => [item.event.eventType, item.event.metadata.tool_call_id])).toEqual([
+      ['tool_start', 'call_a'],
+      ['tool_start', 'call_b'],
+      ['tool_result', 'call_a'],
+    ]);
   });
 });
 
@@ -691,6 +725,13 @@ describe('applyA2ACallEvent', () => {
       metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
     }));
     expect(items[0].agentName).toBe('');
+  });
+
+  it('seeds agentName from args_preview.agent_name when the LLM used that alias key', () => {
+    const items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent_name: 'greetings_agent' } },
+    }));
+    expect(items[0].agentName).toBe('greetings_agent');
   });
 
   it('ignores a2a_call_progress with no prior tool_start (unlike subagent, does not defensively create)', () => {
@@ -1091,8 +1132,12 @@ describe('buildDefaultAssistantTimeline', () => {
   // Acceptance: flat persisted call_agent tool_start/a2a_call_progress/
   // tool_result events reconstruct into a single grouped 'a2a_call' card
   // (via collectA2ACallGroups replaying applyA2ACallEvent), spliced in once
-  // at the earliest event's timestamp -- not as three separate flat rows.
-  it('reconstructs flat call_agent tool events into a single grouped a2a_call card', () => {
+  // at the earliest event's timestamp -- while the tool_start/tool_result
+  // ALSO still appear as their own flat stream_event rows (Progenitor's own
+  // dispatch/return is a regular tool call and reads as one -- see the
+  // matching comment in buildDefaultAssistantTimeline). Only the two
+  // a2a_call_progress updates are consumed into the card alone.
+  it('reconstructs flat call_agent tool events into a single grouped a2a_call card plus plain start/result rows', () => {
     const message = {
       role: 'assistant',
       id: 'msg_1',
@@ -1139,10 +1184,18 @@ describe('buildDefaultAssistantTimeline', () => {
     });
     expect(a2aItems[0].messages.map((m) => m.text)).toEqual(['Step 1/3: prep...', 'Step 2/3: build...']);
 
-    // Spliced in once, at the earliest event's timestamp (1000) -- before the
-    // assistant_message row (timestamped 5000), not once per flat event.
-    expect(items.map((item) => item.kind)).toEqual(['a2a_call', 'assistant_message']);
+    // Card spliced in once, right after the tool_start (e1) that seeds it --
+    // not once per flat event, and not ahead of that tool_start either: the
+    // dispatch marker has to read before the progress card it explains. e1/e4
+    // (start/result) each still get their own plain stream_event row; e2/e3
+    // (progress) are fully consumed.
+    expect(items.map((item) => item.kind)).toEqual([
+      'stream_event', 'a2a_call', 'stream_event', 'assistant_message',
+    ]);
     expect(a2aItems[0].timestamp).toBe(1000);
+
+    const flatIds = items.filter((item) => item.kind === 'stream_event').map((item) => item.id);
+    expect(flatIds).toEqual(['e1', 'e4']);
   });
 
   it('keeps two concurrent A2A calls as two separate grouped cards on reload', () => {
@@ -1168,9 +1221,10 @@ describe('buildDefaultAssistantTimeline', () => {
   // Regression: a call_agent-tagged event with no tool_call_id (malformed
   // persisted data) can never form a group -- it must fall through to the
   // generic stream_event row instead of being silently dropped. The
-  // grouping block used to `continue` unconditionally, group-found-or-not,
-  // which vanished the event entirely: no card, no fallback row.
-  it('falls through to a flat stream_event row for a call_agent tool_start with no tool_call_id, instead of dropping it', () => {
+  // grouping block used to `continue` unconditionally for a2a_call_progress,
+  // group-found-or-not, which would have vanished a malformed progress
+  // event entirely: no card, no fallback row.
+  it('falls through to a flat stream_event row for call_agent events with no tool_call_id, instead of dropping them', () => {
     const message = {
       role: 'assistant',
       id: 'msg_1',
@@ -1178,12 +1232,13 @@ describe('buildDefaultAssistantTimeline', () => {
       timestamp: 5000,
       streamEvents: [
         { id: 'e1', eventType: 'tool_start', timestamp: 1000, metadata: { tool_name: 'call_agent', args_preview: { agent: 'greetings_agent' } } },
+        { id: 'e2', eventType: 'a2a_call_progress', timestamp: 1010, metadata: { state: 'working', message_text: 'orphaned' } },
       ],
     };
     const items = buildDefaultAssistantTimeline(message);
     expect(items.filter((item) => item.kind === 'a2a_call')).toHaveLength(0);
-    const flatItem = items.find((item) => item.kind === 'stream_event' && item.id === 'e1');
-    expect(flatItem).toBeDefined();
+    expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e1')).toBeDefined();
+    expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e2')).toBeDefined();
   });
 
   // Same regression for the subagent grouping block (identical pre-existing

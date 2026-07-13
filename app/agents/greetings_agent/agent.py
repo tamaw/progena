@@ -11,13 +11,17 @@ that replies with a friendly greeting and has three tools:
 - ``do_step`` — perform one named step of a multi-step task; the agent calls
   it once per step, giving several distinct, observable tool calls per turn
   to test live progress streaming against (see "do a 3-step task: a, b, c").
+- ``pick_greeting_style`` — randomly pick a cultural greeting style (American,
+  Mexican, Australian, ...) to greet the caller back with; called for plain
+  greetings like "hi" or "hello".
 
 Everything lives in this file and in memory. It imports nothing from
 ``app.progenitor`` or other ``app.agents.*`` packages — only third-party
 libraries. Set ``PROGENITOR_MOCK_LLM=true`` for a deterministic no-LLM mode
 (used by the unit tests): canned greetings, real sleeps for "sleep N", a
-forced error for requests containing "fail", and simulated do_step calls for
-"an N-step task".
+forced error for requests containing "fail", simulated do_step calls for
+"an N-step task", and a simulated pick_greeting_style call for a bare
+greeting.
 
 Note on blocking semantics: ``execute()`` runs the whole greeting to
 completion before returning (see GreetingsExecutor's docstring for why --
@@ -36,6 +40,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -106,10 +111,10 @@ logger = logging.getLogger("greetings_agent")
 
 AGENT_ID = "greetings_agent"
 AGENT_DESCRIPTION = (
-    "Minimal A2A test agent: replies with a friendly greeting, can pretend to "
-    "work (sleep) before responding, can probe the local GitHub Copilot "
-    "CLI over ACP to have it say hello back, and can perform a multi-step "
-    "task to exercise live progress streaming."
+    "Minimal A2A test agent: replies with a friendly greeting in a random cultural "
+    "style, can pretend to work (sleep) before responding, can probe the local "
+    "GitHub Copilot CLI over ACP to have it say hello back, and can perform a "
+    "multi-step task to exercise live progress streaming."
 )
 AGENT_VERSION = "0.1.0"
 DEFAULT_PORT = 8109
@@ -358,6 +363,37 @@ async def do_step(step_number: int, step_name: str, seconds: float = 1.0) -> str
     return f"Step {step_number} ({step_name}) done after {duration:.1f}s."
 
 
+# (style name, example phrase in that style) -- deliberately a plain module-level
+# constant, not an enum/class, so the mock path and tests can pick from it directly.
+_GREETING_STYLES: tuple[tuple[str, str], ...] = (
+    ("American", "Hey there, what's up?"),
+    ("British", "Alright? How do you do?"),
+    ("Australian", "G'day, mate!"),
+    ("Mexican", "¡Hola, amigo! ¿Qué tal?"),
+    ("French", "Bonjour! Comment ça va?"),
+    ("Japanese", "Konnichiwa!"),
+    ("Irish", "Top o' the mornin' to ya!"),
+    ("Italian", "Ciao! Come stai?"),
+    ("Indian", "Namaste!"),
+    ("Brazilian", "Oi, tudo bem?"),
+)
+
+
+def _pick_greeting_style() -> tuple[str, str]:
+    """Separated from the `@tool`-wrapped function below so mock mode and tests can
+    call (and monkeypatch) it directly, the same way `_probe_copilot` is."""
+    return random.choice(_GREETING_STYLES)
+
+
+@tool
+def pick_greeting_style() -> str:
+    """Randomly pick a cultural greeting style (e.g. American, Mexican, Australian) to
+    greet the caller back with. Returns the style name and an example phrase in that
+    style -- call this once, then use it to shape your own reply."""
+    style, phrase = _pick_greeting_style()
+    return f"{style}: {phrase}"
+
+
 _SYSTEM_PROMPT = """\
 You are greetings_agent, a tiny test agent. Your only job is to reply with a short,
 friendly greeting (1-2 sentences).
@@ -371,8 +407,12 @@ friendly greeting (1-2 sentences).
 - If the request asks for a multi-step task (e.g. "do a 3-step task" or names several
   steps), call the `do_step` tool once per step in order (step_number starting at 1, using
   a short descriptive step_name for each), then summarize all the steps once done.
+- If the message is just a greeting (e.g. "hi", "hello", "hey", "good morning"), call the
+  `pick_greeting_style` tool first, then greet the caller back using that cultural style.
 - Otherwise just greet the caller warmly. Keep replies brief.
 """
+
+_TOOLS = (sleep, probe_copilot, do_step, pick_greeting_style)
 
 _deep_agent: Any | None = None
 _deep_agent_lock = asyncio.Lock()
@@ -389,7 +429,7 @@ async def _get_deep_agent() -> Any:
 
                 _deep_agent = create_deep_agent(
                     model=_create_model(),
-                    tools=[sleep, probe_copilot, do_step],
+                    tools=list(_TOOLS),
                     system_prompt=_SYSTEM_PROMPT,
                     name=AGENT_ID,
                 )
@@ -439,9 +479,29 @@ def _extract_tool_calls(result: dict[str, Any]) -> list[str]:
     return tool_calls
 
 
-_SLEEP_RE = re.compile(r"sleep\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
+# Trigger words mirror the system prompt's own promise ("sleep, wait, or take
+# your time for some number of seconds") -- the original `sleep\s+(\d+)`
+# required the literal word "sleep" immediately followed by whitespace and a
+# digit, so it silently missed every other phrasing the prompt itself
+# advertises (e.g. "please wait 10 seconds"), and even missed "sleepy ...":
+# the \s+ right after "sleep" never matches the "y" in "sleepy". The
+# non-digit gap is now a bounded, non-greedy \D{0,24}? so the trigger word
+# and the number don't have to be adjacent ("sleep for 10 seconds", "take
+# your time, wait about 15 seconds").
+_SLEEP_RE = re.compile(
+    r"(?:sleep|wait|take your time|pretend to work|hold on)\D{0,24}?(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
 _STEPS_RE = re.compile(r"(\d+)[\s-]*step", re.IGNORECASE)
-_MAX_MOCK_STEPS = 10
+_BARE_GREETING_RE = re.compile(
+    r"^\s*(hi|hello|hey|howdy|greetings|yo|good\s+(morning|afternoon|evening))\b",
+    re.IGNORECASE,
+)
+# High enough to comfortably overflow the chat UI's fixed-height A2A card
+# body (a manual "how does it behave with way more updates than fit on
+# screen" stress test), while still bounded so a mistyped huge number in a
+# request can't hang a mock-mode run for minutes.
+_MAX_MOCK_STEPS = 50
 
 ProgressCallback = Callable[[str], Awaitable[None]] | None
 
@@ -472,6 +532,28 @@ async def _run_mock_steps(
     return completed
 
 
+_SLEEP_CHUNK_SECONDS = 2.0
+
+
+async def _run_mock_sleep(duration: float, progress_callback: ProgressCallback = None) -> None:
+    """Chunk a mocked sleep into periodic "still working" pings instead of one
+    silent await, so a sleep-based request produces the same kind of chained
+    multi-"working"-update progress a multi-step request does (see
+    _run_mock_steps) -- a second, duration-driven way to generate live
+    progress events, alongside the step-count-driven one."""
+    remaining = duration
+    elapsed = 0.0
+    while remaining > 0:
+        chunk = min(_SLEEP_CHUNK_SECONDS, remaining)
+        await asyncio.sleep(chunk)
+        elapsed += chunk
+        remaining -= chunk
+        if progress_callback is not None:
+            await progress_callback(
+                f"Still working... {elapsed:.0f}s elapsed of {duration:.0f}s total."
+            )
+
+
 async def _mock_response(request_text: str, progress_callback: ProgressCallback = None) -> str:
     """Deterministic handler for PROGENITOR_MOCK_LLM mode (no API key needed)."""
     lowered = request_text.lower()
@@ -484,13 +566,19 @@ async def _mock_response(request_text: str, progress_callback: ProgressCallback 
     match = _SLEEP_RE.search(request_text)
     if match:
         duration = min(float(match.group(1)), GREETINGS_SLEEP_MAX)
-        await asyncio.sleep(duration)
+        await _run_mock_sleep(duration, progress_callback)
         return f"Hello! I pretended to work for {duration:g} seconds."
     if "fail" in lowered:
         raise RuntimeError("Intentional failure requested by mock input")
     if "copilot" in lowered:
         reply = await _probe_copilot("Say hello back in one short sentence.")
         return f"Copilot says: {reply}"
+    if _BARE_GREETING_RE.match(request_text):
+        style, phrase = _pick_greeting_style()
+        return (
+            f"Hello from greetings_agent! You said: {request_text!r}. "
+            f"{style}-style right back at you: {phrase}"
+        )
     return f"Hello from greetings_agent! You said: {request_text!r}"
 
 
@@ -566,6 +654,8 @@ async def _run_greeting_payload(
             tool_calls.append("sleep")
         if "copilot" in lowered:
             tool_calls.append("probe_copilot")
+        if not tool_calls and _BARE_GREETING_RE.match(request_text):
+            tool_calls.append("pick_greeting_style")
         return text, {
             "display_agent_name": AGENT_ID,
             "display_model_name": _model_name(),
@@ -911,6 +1001,16 @@ AGENT_CARD = AgentCard(
             ),
             tags=["test", "progress", "streaming"],
             examples=["Do a 3-step task: prep, build, verify"],
+        ),
+        AgentSkill(
+            id="cultural_greeting",
+            name="Cultural greeting",
+            description=(
+                "Pick a random cultural greeting style (American, Mexican, Australian, ...) "
+                "and greet the caller back using it."
+            ),
+            tags=["test", "greeting", "random"],
+            examples=["Hi", "Hello there"],
         ),
     ],
 )

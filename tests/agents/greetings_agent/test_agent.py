@@ -83,6 +83,7 @@ async def test_agent_card_matches_contract() -> None:
         "sleepy_greeting",
         "copilot_probe",
         "multi_step_task",
+        "cultural_greeting",
     ]
 
 
@@ -172,6 +173,46 @@ async def test_copilot_probe_monkeypatched(monkeypatch: pytest.MonkeyPatch) -> N
     assert "Hello back from Copilot!" in terminal.status.message.parts[0].root.text
     assert "probe_copilot" in terminal.status.message.metadata["display_tool_calls"]
     probe.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_bare_greeting_calls_pick_greeting_style(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    monkeypatch.setattr(
+        agent_module, "_pick_greeting_style", lambda: ("Irish", "Top o' the mornin'!")
+    )
+    handler, _store = _build_handler()
+
+    result = await handler.on_message_send(
+        MessageSendParams(
+            message=_make_text_message("Hi"),
+            configuration=MessageSendConfiguration(blocking=False),
+        )
+    )
+
+    terminal = await _poll_terminal(handler, result.id)
+    assert terminal.status.state == TaskState.completed
+    text = terminal.status.message.parts[0].root.text
+    assert "Irish-style right back at you: Top o' the mornin'!" in text
+    assert terminal.status.message.metadata["display_tool_calls"] == ["pick_greeting_style"]
+
+
+def test_greeting_styles_are_well_formed() -> None:
+    names = [style for style, _phrase in agent_module._GREETING_STYLES]
+    assert len(names) >= 5
+    assert len(names) == len(set(names)), "duplicate greeting style names"
+    for style, phrase in agent_module._GREETING_STYLES:
+        assert style.strip() == style and style
+        assert phrase.strip() == phrase and phrase
+
+
+def test_pick_greeting_style_returns_one_of_the_known_styles() -> None:
+    for _ in range(20):
+        assert agent_module._pick_greeting_style() in agent_module._GREETING_STYLES
+
+
+def test_pick_greeting_style_tool_is_registered() -> None:
+    assert agent_module.pick_greeting_style in agent_module._TOOLS
 
 
 @pytest.mark.asyncio
@@ -429,8 +470,8 @@ async def test_mock_response_parse_table(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(agent_module, "_probe_copilot", AsyncMock(return_value="hi from copilot"))
 
     assert (
-        await agent_module._mock_response("hello there")
-        == "Hello from greetings_agent! You said: 'hello there'"
+        await agent_module._mock_response("tell me something")
+        == "Hello from greetings_agent! You said: 'tell me something'"
     )
     assert (
         await agent_module._mock_response("sleep 0 seconds")
@@ -442,6 +483,115 @@ async def test_mock_response_parse_table(monkeypatch: pytest.MonkeyPatch) -> Non
 
     with pytest.raises(RuntimeError, match="Intentional failure"):
         await agent_module._mock_response("please fail now")
+
+
+@pytest.mark.asyncio
+async def test_mock_response_recognizes_sleep_trigger_word_variants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The system prompt promises "sleep, wait, or take your time for some number
+    of seconds" as interchangeable trigger phrases -- each must actually reach
+    the sleep branch in mock mode. Regression: the original regex required the
+    literal word "sleep" immediately followed by whitespace and a digit, so it
+    silently missed every other phrasing the prompt itself advertises, and even
+    missed "sleepy" (the skill's own name) since the "y" isn't whitespace."""
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    phrases = [
+        "sleep 0 seconds",
+        "sleep for 0 seconds",
+        "please wait 0 seconds then greet",
+        "take your time, about 0 seconds",
+        "pretend to work for 0 seconds",
+        "test the sleepy reply for 0 seconds",
+    ]
+    for phrase in phrases:
+        text = await agent_module._mock_response(phrase)
+        assert text == "Hello! I pretended to work for 0 seconds.", phrase
+
+
+@pytest.mark.asyncio
+async def test_run_mock_sleep_reports_progress_once_per_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A duration-driven request chains multiple "working" pings, the same way
+    a multi-step request chains one per named step (see _run_mock_steps) --
+    a second, duration-driven way to generate live progress events, alongside
+    the step-count-driven one. asyncio.sleep is stubbed so this runs instantly
+    instead of actually waiting out the chunked duration."""
+    real_sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        real_sleeps.append(seconds)
+
+    monkeypatch.setattr(agent_module.asyncio, "sleep", fake_sleep)
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._run_mock_sleep(6.0, progress_callback)
+
+    assert real_sleeps == [2.0, 2.0, 2.0]
+    assert calls == [
+        "Still working... 2s elapsed of 6s total.",
+        "Still working... 4s elapsed of 6s total.",
+        "Still working... 6s elapsed of 6s total.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_mock_sleep_with_duration_shorter_than_one_chunk(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        real_sleeps.append(seconds)
+
+    monkeypatch.setattr(agent_module.asyncio, "sleep", fake_sleep)
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._run_mock_sleep(1.0, progress_callback)
+
+    assert real_sleeps == [1.0]
+    assert calls == ["Still working... 1s elapsed of 1s total."]
+
+
+@pytest.mark.asyncio
+async def test_run_mock_sleep_with_zero_duration_reports_no_progress() -> None:
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._run_mock_sleep(0.0, progress_callback)
+
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_mock_response_bare_greeting_uses_a_random_style(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    monkeypatch.setattr(
+        agent_module, "_pick_greeting_style", lambda: ("Australian", "G'day, mate!")
+    )
+
+    for greeting in ("hi", "Hello there", "hey!", "Good morning", "howdy"):
+        assert await agent_module._mock_response(greeting) == (
+            f"Hello from greetings_agent! You said: {greeting!r}. "
+            "Australian-style right back at you: G'day, mate!"
+        )
+
+    # Not anchored to the start of the message -> not treated as a bare greeting,
+    # same precedence the sleep/copilot/steps checks above it already get.
+    assert await agent_module._mock_response("thing hi") == (
+        "Hello from greetings_agent! You said: 'thing hi'"
+    )
 
 
 def test_normalize_base_url_cases() -> None:

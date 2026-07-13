@@ -9,7 +9,16 @@
  * The body is a fixed-height pane (`.subagent-card__body`, chat-panel.css)
  * that scrolls and auto-tails its latest content (useStickyScroll) instead
  * of a manual collapse/expand toggle -- always visible, no click required,
- * and every concurrent card keeps the same small footprint on screen.
+ * and every concurrent card keeps the same small footprint on screen. The
+ * header stays bare chrome, styled like any other top-level entry (see
+ * A2ACallCard.jsx's matching comment history) -- the tinted "card" look
+ * lives on the body.
+ *
+ * Each nested tool call (`item.children`) renders as its own mini `.entry`
+ * node chained together (SubagentChild below) -- the same "mini card/event"
+ * treatment A2ACallCard gives its own per-update sub-entries, reusing the
+ * existing .tool block for content and the outer card's own running/error
+ * badge modifiers for status color, rather than inventing a parallel set.
  */
 
 import {
@@ -23,6 +32,7 @@ import {
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
 import StatusPill from './StatusPill';
+import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
 
 // Distinguishes the subagent card's badge from A2ACallCard's at a glance --
 // a branch spinning off the main line, standing in for "delegated sub-work".
@@ -37,7 +47,33 @@ function SubagentGlyph() {
   );
 }
 
-function SubagentChild({ child }) {
+const CHILD_STATUS_GLYPHS = {
+  running: WorkingGlyph,
+  success: CompletedGlyph,
+  error: FailedGlyph,
+};
+
+// Called directly as a plain function, not rendered as `<X />` -- see the
+// matching comment on A2ACallCard.jsx's glyphForA2AState for why (these are
+// pure markup with no hooks, but react-hooks/static-components can't verify
+// a dynamically-selected component's stability statically).
+function glyphForChildStatus(status) {
+  const Glyph = CHILD_STATUS_GLYPHS[status] || WorkingGlyph;
+  return Glyph();
+}
+
+// One nested tool call = one mini entry in the chain, the same "mini card/
+// event" treatment A2ACallCard's A2ASubEntry gives each status update:
+// its own badge (glyph + color keyed off child.status, reusing the exact
+// same subagent-card__badge--running/--error modifiers the outer card's own
+// badge already uses -- one status vocabulary, not a second one invented for
+// children), its own connecting line down to the next call (`isLast` drops
+// the trailing line for the chain's last item, same entry--chain-end vs
+// entry--chain-item convention as everywhere else). The content itself is
+// the existing .tool block, unchanged -- reused wholesale rather than
+// inventing a new args/result layout, it just moves from a bare flex column
+// (.subagent-card__children) into this gutter/badge shell.
+function SubagentChild({ child, isLast }) {
   const args = formatArgsPreview(child.argsPreview);
   const body = [
     Number.isFinite(child.durationMs) ? formatDuration(child.durationMs) : '',
@@ -45,13 +81,21 @@ function SubagentChild({ child }) {
   ].filter(Boolean).join('\n');
 
   return (
-    <div className="tool">
-      <div className="tool__head">
-        <span className="tool__kind">{child.toolName || 'tool'}</span>
-        <span className="tool__desc">{args}</span>
-        <StatusPill {...statusPillProps(child.status)} />
+    <div className={`entry subagent-child ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge subagent-card__badge subagent-card__badge--${child.status}`}>
+          {glyphForChildStatus(child.status)}
+        </span>
       </div>
-      {body && <pre className="tool__body">{body}</pre>}
+      <div className="entry__main">
+        <div className="tool">
+          <div className="tool__head">
+            <span className="tool__kind">{child.toolName || 'tool'}</span>
+            <span className="tool__desc">{args}</span>
+          </div>
+          {body && <pre className="tool__body">{body}</pre>}
+        </div>
+      </div>
     </div>
   );
 }
@@ -102,8 +146,8 @@ export default function SubagentCard({ item }) {
           )}
           {childCount > 0 && (
             <div className="subagent-card__children">
-              {item.children.map((child) => (
-                <SubagentChild key={child.id} child={child} />
+              {item.children.map((child, index) => (
+                <SubagentChild key={child.id} child={child} isLast={index === childCount - 1} />
               ))}
             </div>
           )}

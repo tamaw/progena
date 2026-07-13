@@ -179,13 +179,17 @@ describe('normalizeBackendChatMessage', () => {
     expect(subagentItems[0].status).toBe('running');
   });
 
-  // Regression: call_agent's own live progress messages (a2a_call_progress)
-  // are never durably stored, so a reloaded chat's A2ACallCard falls back to
-  // an empty message log and this result_preview (see A2ACallCard.jsx and
-  // extractCallAgentSummary in chatSessionsModel.js). The raw result is the
-  // whole call_agent result dict, JSON-stringified -- showing that verbatim
-  // is exactly the "meaningless JSON blob" experience this feature exists
-  // to fix, so just `summary` is pulled out of it when the JSON is intact.
+  // Covers the fallback for a persisted tool_calls entry with no
+  // progress_log (older data predating that field, or a call that never
+  // streamed intermediate updates) -- the reconstructed card has an empty
+  // message log and falls back to this result_preview instead (see
+  // A2ACallCard.jsx and extractCallAgentSummary in chatSessionsModel.js).
+  // The raw result is the whole call_agent result dict, JSON-stringified --
+  // showing that verbatim is exactly the "meaningless JSON blob" experience
+  // this feature exists to fix, so just `summary` is pulled out of it when
+  // the JSON is intact. See 'reconstructs the a2a_call sub-chain from a
+  // persisted progress_log' below for the case where progress_log *is*
+  // present.
   it('reconstructs an a2a_call timeline card and uses summary (not raw JSON) as its reload result_preview', () => {
     const resultJson = JSON.stringify({
       task_id: 'task-123',
@@ -213,6 +217,73 @@ describe('normalizeBackendChatMessage', () => {
       resultPreview: 'Hello! Completed a 3-step task.',
       messages: [],
     });
+  });
+
+  // The fix for the above: build_task_response persists a compact
+  // {state, message_text} log per intermediate status update (see
+  // extract_progress_log in app/progenitor/a2a/payloads.py); the backend
+  // extracts it onto tool_calls[].progress_log ahead of the 400-char result
+  // truncation (chat_sessions.py). Reload should now replay it as
+  // a2a_call_progress events, the same shape a live viewer saw, and end up
+  // with the same chained sub-entries instead of an empty message log.
+  it('reconstructs the a2a_call sub-chain from a persisted progress_log', () => {
+    const resultJson = JSON.stringify({
+      task_id: 'task-123',
+      agent: 'greetings_agent',
+      status: 'completed',
+      summary: "Hello! Irish-style right back at you: Top o' the mornin'!",
+    });
+    const m = normalizeBackendChatMessage({
+      id: 'm9b',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted: hi' },
+          { state: 'working', message_text: 'Working on your greeting...' },
+          { state: 'completed', message_text: "Hello! Irish-style right back at you: Top o' the mornin'!" },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(1);
+    expect(a2aItems[0].status).toBe('success');
+    expect(a2aItems[0].toolCallId).toBe('call_1');
+    expect(a2aItems[0].messages.map((msg) => msg.state)).toEqual(['submitted', 'working', 'completed']);
+    expect(a2aItems[0].messages.map((msg) => msg.text)).toEqual([
+      'Accepted: hi',
+      'Working on your greeting...',
+      "Hello! Irish-style right back at you: Top o' the mornin'!",
+    ]);
+  });
+
+  // Regression: an auto-routed call never names its target agent in the raw
+  // tool-call args (the LLM omits `agent`/`agent_name` entirely and lets
+  // call_agent pick one internally, after tool_start has already fired), so
+  // reload has no seed to fall back on -- progress_log's own agent_name (see
+  // extract_progress_log) must be the one source of truth here, not args.
+  it('recovers agentName from progress_log entries when args never named an agent (auto-route case)', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm9c',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { request: 'hi' },
+        result: JSON.stringify({ task_id: 'task-123', agent: 'greetings_agent', status: 'completed' }),
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted: hi', agent_name: 'greetings_agent' },
+          { state: 'completed', message_text: 'Hello!', agent_name: 'greetings_agent' },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].agentName).toBe('greetings_agent');
   });
 
   it('pulls summary out via regex when the JSON is truncated after it (the realistic case)', () => {

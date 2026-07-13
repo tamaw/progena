@@ -1,10 +1,10 @@
 /**
- * Small `.tool__status`-styled label (chrome-frame.css), shared by every
- * delegation card's status indicator -- the card-level header status
- * (SubagentCard / A2ACallCard) and each item's own per-call/per-update row
- * (SubagentChild / A2ACallUpdate) all render through this, paired with
- * `statusPillProps`/`a2aStatePillProps` (messageRenderUtils.js), instead of
- * four near-identical inline spans each computing their own label/class.
+ * Small `.tool__status`-styled label (chrome-frame.css), shared by
+ * SubagentCard's own header status indicator and each of its per-nested-call
+ * rows (SubagentChild), paired with `statusPillProps` (messageRenderUtils.js),
+ * instead of near-identical inline spans each computing their own label/
+ * class. A2ACallCard doesn't use this at all, at either level -- see
+ * statusPillProps' and A2ASubEntry's doc comments for why.
  */
 export default function StatusPill({ label, tone }) {
   const toneClass = tone === 'ok'

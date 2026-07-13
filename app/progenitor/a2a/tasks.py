@@ -12,6 +12,7 @@ from .client import A2AClient
 from .payloads import (
     build_completion_message,
     extract_message_text,
+    extract_progress_log,
     is_task_payload,
     normalize_a2a_task_status,
     notification_level,
@@ -88,8 +89,16 @@ async def upsert_tracked_task_from_payload(
     request_text: str,
     request_metadata: dict[str, Any] | None = None,
     notify_on_completion: bool = True,
+    progress_log: list[dict[str, str]] | None = None,
 ) -> A2ATaskRecord:
-    """Create or update the persisted record for a serialized A2A task payload."""
+    """Create or update the persisted record for a serialized A2A task payload.
+
+    `progress_log` is only ever available from the live `call_agent` dispatch
+    path below (extracted from that call's own SSE stream) -- other callers
+    (push-notification callbacks, heartbeat polling refreshes) have no
+    equivalent data and pass nothing, which leaves the record's existing log
+    untouched rather than blanking it out.
+    """
     metadata = dict(request_metadata or {})
     task_id = str(task_payload.get("id") or metadata.get("a2a_task_id") or "").strip()
     if not task_id:
@@ -123,6 +132,8 @@ async def upsert_tracked_task_from_payload(
     record.source = source
     record.notify_on_completion = notify_on_completion
     record.latest_task = task_payload
+    if progress_log:
+        record.progress_log = progress_log
     record.status = normalize_a2a_task_status(
         task_payload.get("status", {}).get("state")
         if isinstance(task_payload.get("status"), dict)
@@ -200,6 +211,9 @@ async def dispatch_tracked_a2a_task(
             request_text=request_text,
             request_metadata=tracked_metadata,
             notify_on_completion=notify_on_completion,
+            progress_log=extract_progress_log(
+                response.get("progress_updates"), agent_name=agent_name
+            ),
         )
 
     return response, task_record
