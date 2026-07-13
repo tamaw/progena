@@ -1,11 +1,38 @@
-import { Fragment, memo, useCallback, useEffect, useMemo, useState } from 'react';
-import { renderMarkdownToHtml } from '../../lib/markdown';
+import { Fragment, memo, useMemo } from 'react';
 import { collectMessageImages } from './conversationModel';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
+import TimelineItem from './TimelineItem';
+import MessageImageStrip from './MessageImageStrip';
+import {
+  describeStreamEvent,
+  badgeForEvent,
+  toolDetailsForEvent,
+  tokenMetaItemsForEvent,
+  tagClassForEventType,
+  formatMessage,
+  sanitizeHtmlFragment,
+  appendStreamingCursor,
+} from './messageRenderUtils';
 
 function isTimelineStreamEvent(event) {
   return event?.eventType !== 'message_delta';
+}
+
+function buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId) {
+  const trimmed = reasoningText.trim();
+  return {
+    id: `${messageId}-reasoning`,
+    eventType: 'reasoning_summary',
+    content: reasoningText,
+    metadata: {
+      source: 'message_reasoning',
+      text_length: trimmed.length,
+      ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
+        ? { reasoning_tokens: reasoningTokenCount }
+        : {}),
+    },
+  };
 }
 
 function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCount, messageId) {
@@ -19,20 +46,31 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
     return timelineEvents;
   }
 
+  return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId), ...timelineEvents];
+}
+
+// Backend-loaded (non-live) assistant messages carry reasoningText as a plain
+// field rather than a reasoning stream_event in their timelineItems -- see
+// chatSessionsModel.js's buildDefaultAssistantTimeline, which never synthesizes
+// one. Inject a synthetic reasoning row here, ahead of the assistant_message
+// row, so history reloads don't silently lose the reasoning trace that live
+// streaming shows via liveAssistantTurnModel.js.
+function withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId) {
+  const hasReasoningEntry = timelineItems.some((item) =>
+    item.kind === 'stream_event' && isReasoningEvent(item.event) && hasReasoningContent(item.event)
+  );
+  const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
+  if (hasReasoningEntry || !fallbackReasoningText) {
+    return timelineItems;
+  }
+  const event = buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId);
+  const reasoningItem = { kind: 'stream_event', id: event.id, event };
+  const assistantIndex = timelineItems.findIndex((item) => item.kind === 'assistant_message');
+  if (assistantIndex < 0) return [reasoningItem, ...timelineItems];
   return [
-    {
-      id: `${messageId}-reasoning`,
-      eventType: 'reasoning_summary',
-      content: reasoningText,
-      metadata: {
-        source: 'message_reasoning',
-        text_length: fallbackReasoningText.length,
-        ...(Number.isFinite(reasoningTokenCount) && reasoningTokenCount > 0
-          ? { reasoning_tokens: reasoningTokenCount }
-          : {}),
-      },
-    },
-    ...timelineEvents,
+    ...timelineItems.slice(0, assistantIndex),
+    reasoningItem,
+    ...timelineItems.slice(assistantIndex),
   ];
 }
 
@@ -53,6 +91,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     displayAgentName = '',
     displayModelName = '',
     displayToolCalls = [],
+    timelineItems,
   } = message;
 
   const visibleStreamEvents = useMemo(() => {
@@ -68,8 +107,9 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
-    return sanitizeHtmlFragment(formatMessage(content));
-  }, [content]);
+    const sanitized = sanitizeHtmlFragment(formatMessage(content));
+    return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
+  }, [content, isStreaming]);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
@@ -168,6 +208,34 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     </article>
   );
 
+  // If the message has explicit timelineItems, render them in array order.
+  if (role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0) {
+    const fullTimelineItems = withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId);
+    const visibleTimelineItems = fullTimelineItems.filter((item) => {
+      if (item.kind === 'stream_event') {
+        return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);
+      }
+      if (item.kind === 'assistant_message') {
+        return !hideContent;
+      }
+      return true;
+    });
+    return (
+      <div className="chat-entry-chain chat-entry-chain--connected">
+        {visibleTimelineItems.map((item, idx) => (
+          <TimelineItem key={item.id || `tl-${idx}`} item={item} itemIndex={idx} />
+        ))}
+        {showImages && messageImages.length > 0 && (
+          <div className="chat-entry-chain__images">
+            <MessageImageStrip images={messageImages} />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Fallback: no timelineItems — used by SSE-injected scheduled messages that
+  // are pushed directly to the messages array without going through a normalizer.
   if (role === 'assistant') {
     return (
       <div className={`chat-entry-chain ${hasConnectedEvents ? 'chat-entry-chain--connected' : 'chat-entry-chain--single'}`}>
@@ -180,63 +248,6 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   return (
     <>
       {messageEntry}
-    </>
-  );
-}
-
-function ImageModal({ src, alt, onClose }) {
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
-  return (
-    <div className="img-modal-overlay" onClick={onClose} role="dialog" aria-modal="true">
-      <div className="img-modal-inner" onClick={(e) => e.stopPropagation()}>
-        <button className="img-modal-close" onClick={onClose} aria-label="Close">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <path d="M1 1l12 12M13 1L1 13" />
-          </svg>
-        </button>
-        <img className="img-modal-img" src={src} alt={alt || 'Full size'} />
-      </div>
-    </div>
-  );
-}
-
-// Renders both tool-result images and markdown images from the message
-// text (see collectMessageImages() in MessageView, above) as one strip of
-// fixed-size, click-to-expand thumbnails -- callers pass already-normalized
-// { id, src, alt } entries.
-function MessageImageStrip({ images }) {
-  const [lightboxImage, setLightboxImage] = useState(null);
-  const openLightbox = useCallback((image) => setLightboxImage(image), []);
-  const closeLightbox = useCallback(() => setLightboxImage(null), []);
-
-  return (
-    <>
-      {lightboxImage && (
-        <ImageModal src={lightboxImage.src} alt={lightboxImage.alt} onClose={closeLightbox} />
-      )}
-      <div className="img-strip msg-img-strip">
-        {images.map((image, index) => (
-          <div
-            key={image.id || index}
-            className="img-thumb img-thumb--photo"
-            data-label={`image_${index + 1}`}
-            onClick={() => openLightbox(image)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => e.key === 'Enter' && openLightbox(image)}
-            aria-label={`View image ${index + 1} full size`}
-          >
-            <div className="img-thumb__inner img-thumb__inner--photo">
-              <img src={image.src} alt={image.alt} />
-            </div>
-          </div>
-        ))}
-      </div>
     </>
   );
 }
@@ -327,313 +338,6 @@ function MessageActions({ role, content }) {
       )}
     </span>
   );
-}
-
-function describeStreamEvent(event) {
-  const eventType = typeof event?.eventType === 'string' ? event.eventType : 'stream_event';
-  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-
-  if (eventType === 'node_update') {
-    const nodeName = typeof metadata.node_name === 'string' ? metadata.node_name : 'unknown';
-    const modelName = typeof metadata.model_name === 'string' ? metadata.model_name : null;
-    const detailParts = [];
-
-    if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
-      detailParts.push(`outputs: ${metadata.output_keys.join(', ')}`);
-    }
-    if (metadata.contains_messages) {
-      detailParts.push('messages updated');
-    }
-    if (metadata.contains_pending_response) {
-      detailParts.push('draft updated');
-    }
-
-    return {
-      badge: 'Step',
-      title: prettifyLabel(nodeName),
-      metaDetail: modelName || summarizeNodeKind(nodeName),
-      bodyDetail: detailParts.join(' • '),
-    };
-  }
-
-  if (eventType === 'tool_start') {
-    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const args = formatArgsPreview(metadata.args_preview);
-    return {
-      badge: 'Tool',
-      title: `→ ${prettifyLabel(toolName)}`,
-      metaDetail: args || 'invoking…',
-      bodyDetail: '',
-    };
-  }
-
-  if (eventType === 'tool_result') {
-    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
-      parts.push(metadata.result_preview);
-    }
-    return {
-      badge: 'Tool',
-      title: `✓ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'completed',
-      bodyDetail: '',
-    };
-  }
-
-  if (eventType === 'tool_error') {
-    const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.error === 'string' && metadata.error) {
-      parts.push(metadata.error);
-    }
-    return {
-      badge: 'Tool',
-      title: `✗ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'error',
-      bodyDetail: '',
-    };
-  }
-
-  if (isReasoningEvent(event)) {
-    return {
-      badge: 'Reasoning',
-      title: 'Reasoning',
-      bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
-      metaDetail: '',
-      bodyDetail: '',
-    };
-  }
-
-  const explicitName = [
-    metadata.tool_name,
-    metadata.name,
-    metadata.agent_name,
-    metadata.node_name,
-  ].find((value) => typeof value === 'string' && value.trim().length > 0);
-
-  const contentDetail = typeof event?.content === 'string' ? event.content.trim() : '';
-  const metadataSummary = summarizeMetadata(metadata);
-
-  return {
-    badge: badgeForEventType(eventType),
-    title: explicitName ? prettifyLabel(explicitName) : prettifyLabel(eventType),
-    metaDetail: metadataSummary,
-    bodyDetail: contentDetail && !detailsMatch(contentDetail, metadataSummary) ? contentDetail : '',
-  };
-}
-
-function detailsMatch(left, right) {
-  return normalizeDetailText(left) === normalizeDetailText(right);
-}
-
-function normalizeDetailText(value) {
-  return typeof value === 'string'
-    ? value.replace(/\s+/g, ' ').trim().toLowerCase()
-    : '';
-}
-
-function formatArgsPreview(args) {
-  if (args === null || args === undefined) return '';
-  if (typeof args === 'string') return args;
-  try {
-    const json = JSON.stringify(args);
-    return json.length > 240 ? `${json.slice(0, 237)}…` : json;
-  } catch {
-    return String(args);
-  }
-}
-
-function formatDuration(ms) {
-  if (!Number.isFinite(ms)) return '';
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  return `${(ms / 1000).toFixed(2)}s`;
-}
-
-function summarizeMetadata(metadata) {
-  const summaryParts = [];
-
-  if (Array.isArray(metadata.output_keys) && metadata.output_keys.length > 0) {
-    summaryParts.push(`outputs: ${metadata.output_keys.join(', ')}`);
-  }
-  if (typeof metadata.text_length === 'number' && metadata.text_length > 0) {
-    summaryParts.push(`${metadata.text_length} chars`);
-  }
-  if (typeof metadata.stream_metadata?.langgraph_node === 'string') {
-    summaryParts.push(`node: ${metadata.stream_metadata.langgraph_node}`);
-  }
-
-  return summaryParts.join(' • ');
-}
-
-function tokenMetaItemsForEvent(event) {
-  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-  const items = [];
-
-  if (isReasoningEvent(event)) {
-    if (typeof metadata.reasoning_tokens === 'number' && metadata.reasoning_tokens > 0) {
-      const count = new Intl.NumberFormat().format(metadata.reasoning_tokens);
-      items.push(`${count} reasoning token${metadata.reasoning_tokens === 1 ? '' : 's'}`);
-    } else {
-      const contentLen = typeof event?.content === 'string' ? event.content.trim().length : 0;
-      const textLen = contentLen > 0
-        ? contentLen
-        : (typeof metadata.text_length === 'number' ? metadata.text_length : 0);
-      if (textLen > 0) {
-        const estimated = Math.round(textLen / 4);
-        items.push(`~${new Intl.NumberFormat().format(estimated)} tokens`);
-      }
-    }
-  }
-
-  return items;
-}
-
-function badgeForEventType(eventType) {
-  if (eventType.includes('tool')) {
-    return 'Tool';
-  }
-  if (eventType.includes('agent')) {
-    return 'Agent';
-  }
-  if (eventType.includes('node')) {
-    return 'Step';
-  }
-  if (eventType.includes('reasoning')) {
-    return 'Reasoning';
-  }
-  return 'Event';
-}
-
-function badgeForEvent(eventType) {
-  if (eventType === 'tool_error') {
-    return { className: 'entry__badge entry__badge--err', label: '!' };
-  }
-  if (eventType.includes('tool')) {
-    return { className: 'entry__badge entry__badge--tool', label: '⌘' };
-  }
-  if (eventType.includes('reasoning')) {
-    return { className: 'entry__badge chat-event-badge--reason', label: '?' };
-  }
-  if (eventType.includes('node') || eventType.includes('agent')) {
-    return { className: 'entry__badge chat-event-badge--step', label: '◇' };
-  }
-  return { className: 'entry__badge entry__badge--tool', label: '•' };
-}
-
-function tagClassForEventType(eventType) {
-  if (eventType === 'tool_error') {
-    return 'entry__tag entry__tag--err';
-  }
-  if (eventType.includes('tool')) {
-    return 'entry__tag chat-event-tag--tool';
-  }
-  if (eventType.includes('reasoning')) {
-    return 'entry__tag chat-event-tag--reason';
-  }
-  if (eventType.includes('node') || eventType.includes('agent')) {
-    return 'entry__tag chat-event-tag--step';
-  }
-  return 'entry__tag chat-event-tag--step';
-}
-
-function toolDetailsForEvent(event, description) {
-  const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
-  if (!eventType.includes('tool')) return null;
-
-  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
-  const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-  const args = formatArgsPreview(metadata.args_preview);
-  const isError = eventType === 'tool_error';
-  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview : '';
-  const error = typeof metadata.error === 'string' ? metadata.error : '';
-  const duration = typeof metadata.duration_ms === 'number' ? formatDuration(metadata.duration_ms) : '';
-
-  return {
-    kind: toolName,
-    desc: description.title.replace(/^[→✓✗]\s*/, ''),
-    status: isError ? 'error' : eventType === 'tool_result' ? 'complete' : 'running',
-    statusTone: isError ? 'err' : 'ok',
-    command: args,
-    body: [duration, error || result].filter(Boolean).join('\n'),
-  };
-}
-
-function prettifyLabel(value) {
-  return value
-    .split(/[_-]/g)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-function summarizeNodeKind(nodeName) {
-  const normalized = typeof nodeName === 'string' ? nodeName.trim().toLowerCase() : '';
-  if (normalized.includes('tool')) {
-    return 'Tool';
-  }
-  if (normalized.includes('model') || normalized.includes('llm')) {
-    return 'Model';
-  }
-  return 'Step';
-}
-
-function formatMessage(content) {
-  return renderMarkdownToHtml(content);
-}
-
-const ALLOWED_TAGS = new Set([
-  'p', 'br', 'b', 'i', 'em', 'strong', 'code', 'pre', 'blockquote',
-  'ul', 'ol', 'li', 'a', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-  'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'span', 'div',
-  'del', 'ins', 'sup', 'sub',
-]);
-const ALLOWED_ATTRS = new Set(['href', 'title', 'class', 'id', 'target', 'rel']);
-
-function sanitizeHtmlFragment(html) {
-  if (!html) return '';
-  const template = document.createElement('template');
-  template.innerHTML = html;
-  sanitizeNode(template.content);
-  const div = document.createElement('div');
-  div.appendChild(template.content.cloneNode(true));
-  return div.innerHTML;
-}
-
-function isSafeHref(rawValue) {
-  const colonIdx = rawValue.trim().indexOf(':');
-  if (colonIdx === -1) return true; // relative URL, no scheme
-  // Validate scheme portion strictly — any non-alpha char (including control chars
-  // browsers normalize away) makes this an unrecognised / potentially obfuscated scheme.
-  const schemePart = rawValue.trim().slice(0, colonIdx);
-  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*$/.test(schemePart)) return false;
-  const scheme = schemePart.toLowerCase();
-  return scheme === 'http' || scheme === 'https' || scheme === 'mailto';
-}
-
-function sanitizeNode(node) {
-  for (const child of Array.from(node.childNodes)) {
-    if (child.nodeType === Node.ELEMENT_NODE) {
-      const tag = child.tagName.toLowerCase();
-      if (!ALLOWED_TAGS.has(tag)) {
-        child.replaceWith(document.createTextNode(child.textContent || ''));
-        continue;
-      }
-      for (const attr of Array.from(child.attributes)) {
-        const name = attr.name.toLowerCase();
-        if (!ALLOWED_ATTRS.has(name) || (name === 'href' && !isSafeHref(attr.value))) {
-          child.removeAttribute(attr.name);
-        }
-      }
-      sanitizeNode(child);
-    }
-  }
 }
 
 // Memoized so a streamed token only re-renders the streaming message, not the

@@ -45,8 +45,9 @@ function App() {
         <BrowserRouter>
                 <Routes>
                   <Route element={<AppRuntimeShell />}>
-                    <Route path="/" element={<ConversationPage />} />
-                    <Route path="/inbox" element={<InboxPage />} />
+                    <Route path="/" element={<Navigate to="/chat" replace />} />
+                    <Route path="/chat/:threadId?/:titleSlug?" element={<ConversationPage />} />
+                    <Route path="/inbox/:messageId?/:titleSlug?" element={<InboxPage />} />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/models" element={<ModelsPage />} />
                     <Route path="/channels" element={<ChannelsPage />} />
@@ -66,8 +67,8 @@ function App() {
                         </Suspense>
                       )}
                     />
-                    <Route path="/tools" element={<ToolsPage />} />
-                    <Route path="/tasks" element={<TasksPage />} />
+                    <Route path="/tools/:serverId?/:titleSlug?" element={<ToolsPage />} />
+                    <Route path="/tasks/:cardId?/:titleSlug?" element={<TasksPage />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />
                     <Route path="/kanban" element={<KanbanPage />} />
                     <Route path="/solutions/:solutionId/projects/:projectId" element={<ProjectPage />} />
@@ -75,9 +76,9 @@ function App() {
                     <Route path="/skills" element={<SkillsPage />} />
                     <Route path="/prompts" element={<PromptsPage />} />
                     <Route path="/sessions" element={<SessionsPage />} />
-                    <Route path="/schedules" element={<SchedulesPage />} />
+                    <Route path="/schedules/:scheduleId?/:titleSlug?" element={<SchedulesPage />} />
                     <Route path="/repositories" element={<RepositoriesPage />} />
-                    <Route path="/knowledge" element={<KnowledgePage />} />
+                    <Route path="/knowledge/:baseId?/:titleSlug?" element={<KnowledgePage />} />
                     <Route
                       path="/workflows"
                       element={(
@@ -87,7 +88,7 @@ function App() {
                       )}
                     />
                   </Route>
-                  <Route path="*" element={<Navigate to="/" replace />} />
+                  <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>
               </BrowserRouter>
         </NotificationProvider>

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import time
 from collections.abc import AsyncIterator
 from typing import Any, cast
 from urllib.parse import urlsplit, urlunsplit
@@ -14,6 +15,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from ..runtime.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
+    extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
@@ -54,16 +56,24 @@ class DeepAgentIPCStream:
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
+        self._last_emitted_assistant_metadata: dict[str, Any] | None = None
 
     async def stream(
         self,
         message: str,
         *,
         thread_id: str,
+        received_at: float | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield IPC stream items from ``graph.astream``."""
 
-        graph_input: dict[str, Any] = {"messages": [HumanMessage(content=message)]}
+        human_message = HumanMessage(
+            content=message,
+            additional_kwargs={
+                "created_at": received_at if received_at is not None else time.time()
+            },
+        )
+        graph_input: dict[str, Any] = {"messages": [human_message]}
         self.state["current_input"] = message
         self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
         astream_kwargs: dict[str, Any] = {
@@ -189,16 +199,35 @@ class DeepAgentIPCStream:
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
             self.state.update(node_output)
-            model_name: str | None = None
+
+            if "todos" in node_output:
+                yield {
+                    "type": "stream_event",
+                    "event_type": "todos_update",
+                    "content": "",
+                    "metadata": {"todos": node_output["todos"]},
+                }
+
+            display_metadata: dict[str, Any] = {}
             if "messages" in node_output:
                 last_msg = get_last_ai_message(node_output.get("messages"))
                 if last_msg is not None:
-                    rm = getattr(last_msg, "response_metadata", None) or {}
-                    model_name = (
-                        (rm.get("model_name") or rm.get("model") or rm.get("model_id"))
-                        if isinstance(rm, dict)
-                        else None
-                    )
+                    display_metadata = extract_display_metadata(last_msg)
+
+            # Emit assistant_metadata once per changed payload, before the
+            # node_update event so the frontend can label the assistant row
+            # before any text chunk or tool/debug event arrives. Some direct
+            # A2A replies do not carry a stable AI message id, so payload
+            # change — not message identity — is the safe dedupe key here.
+            if display_metadata and display_metadata != self._last_emitted_assistant_metadata:
+                self._last_emitted_assistant_metadata = dict(display_metadata)
+                yield {
+                    "type": "stream_event",
+                    "event_type": "assistant_metadata",
+                    "content": "",
+                    "metadata": dict(display_metadata),
+                }
+
             yield {
                 "type": "stream_event",
                 "event_type": "node_update",
@@ -208,7 +237,6 @@ class DeepAgentIPCStream:
                     "output_keys": output_info,
                     "contains_messages": "messages" in node_output,
                     "contains_pending_response": "pending_response" in node_output,
-                    **({"model_name": str(model_name)} if model_name else {}),
                 },
             }
 
@@ -223,10 +251,19 @@ class DeepAgentIPCStream:
 
     async def _finalize_stream(self) -> AsyncIterator[dict[str, Any]]:
         last_ai_msg = get_last_ai_message(self.state.get("messages"))
+        display_metadata = extract_display_metadata(last_ai_msg) if last_ai_msg is not None else {}
         response_text = self.last_response
         if response_text is None:
             response_text = extract_message_text(last_ai_msg)
             if response_text:
+                if display_metadata and display_metadata != self._last_emitted_assistant_metadata:
+                    self._last_emitted_assistant_metadata = dict(display_metadata)
+                    yield {
+                        "type": "stream_event",
+                        "event_type": "assistant_metadata",
+                        "content": "",
+                        "metadata": dict(display_metadata),
+                    }
                 async for item in self._ensure_response_streamed(response_text):
                     yield item
                 self.last_response = response_text

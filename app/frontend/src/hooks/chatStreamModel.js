@@ -7,11 +7,11 @@
  * caused messages to go missing when the user navigated away mid-stream.
  */
 
-// Whether leaving the chat that owns `activeAssistantId` (switching chats,
+// Whether leaving the chat that owns `activeStreamId` (switching chats,
 // starting a new chat, or unmounting the page entirely) should preserve its
 // stream as a background one, rather than silently cancelling/orphaning it.
-export function shouldPreserveStreamInBackground({ streamingOriginId, activeAssistantId }) {
-  return Boolean(streamingOriginId) && activeAssistantId !== null;
+export function shouldPreserveStreamInBackground({ streamingOriginId, activeStreamId }) {
+  return Boolean(streamingOriginId) && activeStreamId !== null;
 }
 
 // Decide what a completed/cancelled/errored stream should do once its origin

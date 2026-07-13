@@ -111,11 +111,16 @@ export function buildExtraReducers(builder) {
       state.agents.error = null;
       state.agents.requestId = action.meta.requestId;
     })
+    .addCase(fetchAgentProfiles.fulfilled, (state) => {
+      state.agents.loading = false;
+      state.agents.loaded = true;
+    })
     .addCase(fetchAgentProfiles.rejected, (state, action) => {
       if (state.agents.requestId !== action.meta.requestId) {
         return;
       }
       state.agents.loading = false;
+      state.agents.loaded = true;
       state.agents.error = action.error?.message || 'Failed to load agents';
       state.agents.requestId = null;
     })
