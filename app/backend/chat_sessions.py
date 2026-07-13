@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
+    extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
     extract_reasoning_trace,
@@ -433,6 +434,7 @@ def _raw_message_created_at(raw: Any) -> str | None:
     if isinstance(raw, dict):
         created_at = raw.get("created_at") or raw.get("timestamp") or raw.get("time")
         metadata = raw.get("response_metadata")
+        extra_kwargs = raw.get("additional_kwargs")
     else:
         created_at = (
             getattr(raw, "created_at", None)
@@ -440,8 +442,14 @@ def _raw_message_created_at(raw: Any) -> str | None:
             or getattr(raw, "time", None)
         )
         metadata = getattr(raw, "response_metadata", None)
+        extra_kwargs = getattr(raw, "additional_kwargs", None)
     if created_at is None and isinstance(metadata, dict):
         created_at = metadata.get("created_at")
+    # HumanMessages carry no response_metadata (that's LLM-response-only) --
+    # the runtime stamps their receipt time onto additional_kwargs instead
+    # (see DeepAgentIPCStream.stream / chat_node).
+    if created_at is None and isinstance(extra_kwargs, dict):
+        created_at = extra_kwargs.get("created_at")
     if isinstance(created_at, int | float):
         return datetime.fromtimestamp(float(created_at), UTC).isoformat().replace("+00:00", "Z")
     return str(created_at) if created_at else None
@@ -479,32 +487,26 @@ def _raw_message_payload(raw: Any) -> dict[str, Any]:
 
 
 def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
-    metadata = (
-        raw.get("response_metadata")
-        if isinstance(raw, dict)
-        else getattr(raw, "response_metadata", None)
-    )
-    if not isinstance(metadata, dict):
-        return {}
-    result: dict[str, Any] = {}
-    for key in ("display_agent_name", "display_model_name"):
-        value = metadata.get(key)
-        if isinstance(value, str) and value:
-            result[key] = value
-    tool_calls = metadata.get("display_tool_calls")
-    if isinstance(tool_calls, list):
-        result["display_tool_calls"] = tool_calls
-    return result
+    return extract_display_metadata(raw)
 
 
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
-    """Return tool_calls list from an AIMessage (normalized LangChain format)."""
+    """Return tool_calls list from an AIMessage (normalized LangChain format).
+
+    Tool-call-only AIMessages (no visible content) are discarded before they
+    ever become a ChatMessage -- see _chat_message_from_raw's `if not content
+    and role == "assistant": return None` -- so their created_at would
+    otherwise be lost. Stamping it onto each extracted tool call here is what
+    lets the frontend reconstruct true chronological order (tool calls vs. the
+    answer text they get bundled with) on reload instead of guessing.
+    """
     if isinstance(raw, dict):
         tool_calls = raw.get("tool_calls")
     else:
         tool_calls = getattr(raw, "tool_calls", None)
     if not isinstance(tool_calls, list):
         return []
+    created_at = _raw_message_created_at(raw)
     result: list[dict[str, Any]] = []
     for tc in tool_calls:
         if not isinstance(tc, dict):
@@ -517,6 +519,7 @@ def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
                 "id": str(tc.get("id") or ""),
                 "name": name,
                 "args": tc.get("args") if isinstance(tc.get("args"), dict) else {},
+                "created_at": created_at,
             }
         )
     return result

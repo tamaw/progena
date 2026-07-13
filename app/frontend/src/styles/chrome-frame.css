@@ -3896,6 +3896,12 @@ body,
   border-color: color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
 }
 
+.chat-event-tag--plan {
+  color: color-mix(in srgb, var(--color-accent) 82%, white);
+  background: color-mix(in srgb, var(--color-accent) 16%, var(--color-bg-tertiary));
+  border-color: color-mix(in srgb, var(--color-accent) 34%, var(--color-border-light));
+}
+
 .chat-event-tag--reason {
   color: #7c5bd6;
   background: color-mix(in srgb, #a78bfa 12%, var(--color-bg-tertiary));

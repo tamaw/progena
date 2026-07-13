@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -68,9 +69,13 @@ import {
 import {
   appendStreamEvent,
   countReasoningTimelineEntries,
-  finalizeSupersededAssistant,
   normalizeStreamEvent,
 } from '../components/chat/streamEventsModel';
+import {
+  buildDefaultAssistantTimeline,
+  toCommittedAssistantMessage,
+} from '../components/chat/liveAssistantTurnModel';
+import PendingAssistantCursor from '../components/chat/PendingAssistantCursor';
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
   CUSTOM_CHAT_TITLE_KEY,
@@ -80,6 +85,7 @@ import {
   persistPinnedSessionIds,
   persistSharedSessionIds,
 } from '../components/chat/chatStorage';
+import { useEntityUrlSync } from '../lib/routes';
 
 const WEEKDAY_WELCOME_MESSAGES = [
   'Sunday reset 🌿',
@@ -116,7 +122,7 @@ function normalizeStoredMessage(message, index) {
     }
   }
 
-  return {
+  const base = {
     ...message,
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
@@ -138,25 +144,19 @@ function normalizeStoredMessage(message, index) {
       : [],
     timestamp,
   };
+
+  // Preserve existing timelineItems from stored history. For old history
+  // entries with no timelineItems, build a fallback order so the frontend
+  // does not reintroduce "tool rows above agent row" on reload.
+  if (Array.isArray(message.timelineItems)) {
+    base.timelineItems = message.timelineItems;
+  } else if (role === 'assistant') {
+    base.timelineItems = buildDefaultAssistantTimeline(base);
+  }
+
+  return base;
 }
 
-// Stable per-nick colours, the way IRC clients hash a nick to a palette entry.
-const NICK_COLORS = [
-  '#e06c75',
-  '#e5c07b',
-  '#98c379',
-  '#56b6c2',
-  '#61afef',
-  '#c678dd',
-  '#d19a66',
-  '#7fdbb6',
-  '#f0a0c0',
-  '#b0a0ff',
-];
-
-// Your own nick gets a fixed warm signature colour (IRC clients highlight your
-// own nick); everyone else hashes to a palette entry.
-const OWN_NICK_COLOR = '#f5b942';
 // Sort modes for the chat sidebar dropdown (mirrors the Agents/Tasks dropdown).
 // "Recent" keeps the recency-bucketed grouping; "Name" is a flat A→Z list.
 const SIDEBAR_SORT_MODES = ['Recent', 'Name'];
@@ -166,42 +166,6 @@ const CHAT_FILTERS = [
   { value: 'shared', label: 'Shared' },
   { value: 'archived', label: 'Archived' },
 ];
-
-function nickColor(name) {
-  if (name === 'You') {
-    return OWN_NICK_COLOR;
-  }
-  let hash = 0;
-  for (let i = 0; i < name.length; i += 1) {
-    hash = (hash * 31 + name.charCodeAt(i)) | 0;
-  }
-  return NICK_COLORS[Math.abs(hash) % NICK_COLORS.length];
-}
-
-function formatIrcTime(timestamp) {
-  if (!Number.isFinite(timestamp)) {
-    return '';
-  }
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
-
-// Plain-text (IRC-style) transcript rows: one line per message, no images.
-function buildTranscriptRows(messages) {
-  return messages.map((message) => {
-    const nick = message.role === 'assistant' ? CHAT_AGENT_NAME : 'You';
-    return {
-      id: message.id,
-      time: formatIrcTime(message.timestamp),
-      nick,
-      color: nickColor(nick),
-      content: typeof message.content === 'string' ? message.content : '',
-    };
-  });
-}
 
 function stripEphemeralStreamEvents(message) {
   const events = Array.isArray(message?.streamEvents) ? message.streamEvents : [];
@@ -218,6 +182,10 @@ function stripEphemeralStreamEvents(message) {
 
 function ConversationPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
+  // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
+  // session selection is driven entirely by the id, never by the slug.
+  const { threadId: urlThreadId } = useParams();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
   const { connectionState, sendMessageStream, cancelStream, getSession, createSession } = useChatApi();
@@ -270,12 +238,12 @@ function ConversationPage() {
   const [streamFilters, setStreamFilters] = useState(() =>
     loadStreamFilters(config.storage.streamFilters),
   );
+  const [showEventFilters, setShowEventFilters] = useState(false);
   const [customChatTitle, setCustomChatTitle] = useState(() => initialStoredCustomTitle.title);
   const [customChatTitleThreadId, setCustomChatTitleThreadId] = useState(() => initialStoredCustomTitle.threadId);
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
-  const [activeDetailTab, setActiveDetailTab] = useState('Chat');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -332,7 +300,9 @@ function ConversationPage() {
     unreadChatIds,
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
-    activeAssistantIdRef,
+    activeStreamIdRef,
+    liveAssistantTurn,
+    setLiveAssistantTurn,
     preserveStreamInBackground,
     handleSend,
     handleStop,
@@ -355,7 +325,7 @@ function ConversationPage() {
     if (!threadId) {
       return;
     }
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
     setSelectedBackendChatId(threadId);
@@ -369,7 +339,7 @@ function ConversationPage() {
       threadId,
       requestId,
     })).unwrap();
-  }, [activeAssistantIdRef, dispatch, getApiUrl, setIsGenerating]);
+  }, [activeStreamIdRef, dispatch, getApiUrl, setIsGenerating]);
 
   const materializeCurrentChatCard = useCallback(async (title) => {
     if (!threadId) {
@@ -529,9 +499,10 @@ function ConversationPage() {
         return;
       }
 
-      activeAssistantIdRef.current = null;
+      activeStreamIdRef.current = null;
       setMessages(normalizedMessages);
       setIsGenerating(false);
+      setLiveAssistantTurn(null);
       setIsEditingTitle(false);
       setTitleDraft('');
       if (typeof event.detail?.threadId === 'string') {
@@ -544,7 +515,7 @@ function ConversationPage() {
     return () => {
       window.removeEventListener('progenitor:load-chat-history', handlePromotedQuickChat);
     };
-  }, [activeAssistantIdRef, config.storage.quickChatHandoff, setIsGenerating]);
+  }, [activeStreamIdRef, config.storage.quickChatHandoff, setIsGenerating, setLiveAssistantTurn]);
 
   // Save chat history to localStorage only for locally-owned sessions.
   // Backend chat messages must not leak into localStorage — they are the server's
@@ -578,10 +549,15 @@ function ConversationPage() {
       activeBackendChat.thread_id
       || null;
 
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages(backendMessages);
     setIsGenerating(false);
+    // The chat being displayed just changed identity -- a live turn still
+    // sitting in state belongs to whatever chat was previously on screen
+    // (its background bookkeeping lives in activeStreamIdRef/originChatId,
+    // not here), so drop it rather than let it render under the new chat.
+    setLiveAssistantTurn(null);
     setIsClearingSession(false);
     setCustomChatTitle(activeBackendChat.title || '');
     setCustomChatTitleThreadId(nextSessionId);
@@ -592,12 +568,14 @@ function ConversationPage() {
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeAssistantIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating]);
+  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new messages, and keep following along as the live
+  // assistant turn streams in (liveAssistantTurn only lands in `messages`
+  // once the turn finishes, so without it here we'd only scroll at the end).
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [messages, isGenerating]);
+  }, [messages, isGenerating, liveAssistantTurn]);
 
   // Handle chat events (from /chat SSE stream)
   const handleChatEvent = useCallback((event) => {
@@ -701,10 +679,11 @@ function ConversationPage() {
   }, []);
 
   const dismissCurrentSession = useCallback(() => {
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages([]);
     setIsGenerating(false);
+    setLiveAssistantTurn(null);
     setIsClearingSession(false);
     clearBackendSelection();
     setCustomChatTitle('');
@@ -712,10 +691,9 @@ function ConversationPage() {
     setTitleDraft('');
     setIsEditingTitle(false);
     setThreadId(null);
-    setActiveDetailTab('Chat');
     localStorage.removeItem(config.storage.chatHistory);
     localStorage.removeItem(CUSTOM_CHAT_TITLE_KEY);
-  }, [activeAssistantIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating]);
+  }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
     if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
@@ -731,7 +709,6 @@ function ConversationPage() {
       draftThreadId = session.conversation_id || null;
     }
 
-    setActiveDetailTab('Chat');
     setIsEditingTitle(false);
     const draftChat = await dispatch(ensureDraftChatSession({
       chatsUrl: getApiUrl('chats'),
@@ -752,13 +729,11 @@ function ConversationPage() {
 
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {
-      setActiveDetailTab('Chat');
       setIsEditingTitle(false);
       focusComposer();
       return;
     }
 
-    const previousAssistantId = activeAssistantIdRef.current;
     const previousThreadId = threadId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);
@@ -767,7 +742,7 @@ function ConversationPage() {
     // of cancelling it — starting a new chat shouldn't discard another chat's
     // in-flight response.
     preserveStreamInBackground();
-    activeAssistantIdRef.current = null;
+    activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
 
     try {
@@ -817,15 +792,6 @@ function ConversationPage() {
         show('error', 'Archive failed', archiveError.message);
       }
     } catch (error) {
-      if (previousAssistantId) {
-        setMessages((prev) => prev
-          .map((message) => (
-            message.id === previousAssistantId
-              ? finalizeSupersededAssistant(message)
-              : message
-          ))
-          .filter(Boolean));
-      }
       setIsGenerating(false);
       setIsEditingTitle(false);
       show('error', 'New chat failed', error.message);
@@ -833,7 +799,7 @@ function ConversationPage() {
       setIsClearingSession(false);
     }
   }, [
-    activeAssistantIdRef,
+    activeStreamIdRef,
     chatTitle,
     focusComposer,
     materializeCurrentChatCard,
@@ -903,7 +869,6 @@ function ConversationPage() {
     await startNewChatSession();
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
-  const transcriptRows = useMemo(() => buildTranscriptRows(messages), [messages]);
   const totalTokenCount = useMemo(
     () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
     [messages],
@@ -1034,18 +999,37 @@ function ConversationPage() {
     errorTitle: 'Shared chats sync failed',
   });
 
-  // Auto-select the top card when sessions load (or are already loaded on remount).
-  // Fires once per component lifetime; if there are no backend sessions, the new-chat
-  // pane is shown naturally since selectedBackendChatId stays null.
+  // On mount, a URL that already names a thread (bookmark, reload, shared
+  // link) opens that chat directly instead of auto-selecting the top card.
+  // Otherwise, auto-select the top card once sessions load (or are already
+  // loaded on remount). Fires once per component lifetime; if there are no
+  // backend sessions, the new-chat pane is shown naturally since
+  // selectedBackendChatId stays null.
   useEffect(() => {
     if (hasAutoSelectedOnMountRef.current) return;
+    if (urlThreadId) {
+      hasAutoSelectedOnMountRef.current = true;
+      openBackendChat(urlThreadId).catch(() => {
+        // The linked thread doesn't exist (deleted, or never a real backend
+        // chat) - fall back to auto-selecting the top card once loaded.
+        hasAutoSelectedOnMountRef.current = false;
+        navigate('/chat', { replace: true });
+      });
+      return;
+    }
     if (!backendChatSessionsState.loaded) return;
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
       selectSessionItem(topItem);
     }
-  }, [backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem]);
+  }, [urlThreadId, backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem, openBackendChat, navigate]);
+
+  // Keep the URL in sync with whichever session is actually selected (either
+  // a backend chat, or a local draft that already has messages). The title
+  // slug is cosmetic; only the id segment is ever read back.
+  const activeRouteThreadId = selectedBackendChatId || (messages.length > 0 ? threadId : null);
+  useEntityUrlSync('/chat', activeRouteThreadId, chatTitle);
 
   const archiveSession = useCallback(async (sessionItem) => {
     if (sessionItem?.source === 'backend' && sessionItem.threadId) {
@@ -1132,6 +1116,20 @@ function ConversationPage() {
   const isPinned = currentSessionItem?.pinned === true;
   const isShared = currentSessionItem?.shared === true;
   const chatActions = [
+    {
+      key: 'filters',
+      label: showEventFilters ? 'Hide filters' : 'Show filters',
+      role: 'menuitemcheckbox',
+      checked: showEventFilters,
+      active: showEventFilters,
+      disabled: isContentLoading || isEmptyConversationPane,
+      onClick: () => setShowEventFilters((value) => !value),
+      icon: (
+        <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path d="M2.5 3.5h11l-4 5v4l-3 1.5v-5.5z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      ),
+    },
     {
       key: 'pin',
       label: isPinned ? 'Unpin' : 'Pin',
@@ -1367,12 +1365,8 @@ function ConversationPage() {
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
-          tabs={isContentLoading || isEmptyConversationPane ? [] : ['Chat', 'Text']}
-          activeTab={activeDetailTab}
-          onTabChange={setActiveDetailTab}
-          tabLabel="Conversation detail tabs"
         />
-        {!isContentLoading && !isEmptyConversationPane && activeDetailTab === 'Chat' && (
+        {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
           <StreamFilterMenu
             storageKey={config.storage.streamFilters}
             filters={streamFilters}
@@ -1395,18 +1389,6 @@ function ConversationPage() {
                 <h2>{welcomeMessage}</h2>
                 <QuickActions onAction={handleQuickAction} />
               </div>
-            ) : activeDetailTab === 'Text' ? (
-              <div className="chat-text-export" role="log" aria-label="Conversation transcript">
-                {transcriptRows.map((row) => (
-                  <div className="irc-line" key={row.id}>
-                    <span className="irc-line__time">{row.time}</span>
-                    <span className="irc-line__nick" style={{ color: row.color }}>
-                      {`<${row.nick}>`}
-                    </span>
-                    <span className="irc-line__text">{row.content}</span>
-                  </div>
-                ))}
-              </div>
             ) : (
               <>
                 {messages.map((msg) => {
@@ -1421,6 +1403,17 @@ function ConversationPage() {
                     />
                   );
                 })}
+                {liveAssistantTurn && (
+                  liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0
+                    ? <PendingAssistantCursor />
+                    : <Message
+                        key={liveAssistantTurn.streamId}
+                        message={toCommittedAssistantMessage(liveAssistantTurn)}
+                        streamEventFilter={streamEventFilter}
+                        hideContent={streamFilters.agent === false}
+                        showImages={streamFilters.images !== false}
+                      />
+                )}
               </>
             )}
             <div ref={messagesEndRef} />

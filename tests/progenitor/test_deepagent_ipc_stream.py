@@ -139,6 +139,61 @@ async def test_stream_items_include_reasoning_and_custom_events():
 
 
 @pytest.mark.asyncio
+async def test_todos_in_node_output_stream_as_todos_update_event():
+    todos = [
+        {"content": "Investigate the bug", "status": "completed"},
+        {"content": "Write the fix", "status": "in_progress"},
+        {"content": "Add a regression test", "status": "pending"},
+    ]
+    graph = _FakeGraph(
+        [
+            (
+                "updates",
+                {
+                    "tools": {
+                        "todos": todos,
+                        "messages": [AIMessage(content="")],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert {
+        "type": "stream_event",
+        "event_type": "todos_update",
+        "content": "",
+        "metadata": {"todos": todos},
+    } in items
+    assert bridge.state["todos"] == todos
+
+
+@pytest.mark.asyncio
+async def test_node_output_without_todos_emits_no_todos_update_event():
+    graph = _FakeGraph(
+        [
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Hello",
+                        "messages": [AIMessage(content="Hello")],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert not any(item.get("event_type") == "todos_update" for item in items)
+
+
+@pytest.mark.asyncio
 async def test_task_tool_events_expand_into_subagent_events():
     graph = _FakeGraph(
         [
