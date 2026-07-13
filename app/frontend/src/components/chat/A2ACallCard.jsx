@@ -66,8 +66,16 @@ const A2A_STATE_GLYPHS = {
 // stable, module-level map is safe, but JSX-element-style invocation of a
 // dynamically-selected component trips react-hooks/static-components, which
 // can't verify that stability statically.
+//
+// `state` comes straight off the wire (a remote A2A agent's own self-reported
+// TaskStatusUpdateEvent.status.state, see applyA2ACallEvent in
+// liveAssistantTurnModel.js) -- Object.hasOwn guards the lookup so a state
+// name that collides with an inherited Object.prototype member (e.g.
+// "constructor", "toString") can't resolve to that inherited value instead
+// of falling through to the A2AGlyph default, which isn't callable as one of
+// these components and would otherwise crash the render.
 function glyphForA2AState(state) {
-  const Glyph = A2A_STATE_GLYPHS[state] || A2AGlyph;
+  const Glyph = Object.hasOwn(A2A_STATE_GLYPHS, state) ? A2A_STATE_GLYPHS[state] : A2AGlyph;
   return Glyph();
 }
 

@@ -60,14 +60,30 @@ def extract_message_text(message_payload: Any) -> str | None:
     return None
 
 
+# A long-running real agent can emit one status update every couple of
+# seconds for many minutes -- without a bound, that log is re-embedded into
+# every subsequent ToolMessage the model sees on this thread (build_task_
+# response), re-persisted on every refresh, and re-parsed on every session
+# load (chat_sessions.py), growing without limit for the life of the task.
+# Keeping the most recent entries preserves what a viewer actually cares
+# about (what's happening now) over what's least likely to still matter
+# (the earliest updates from a long-since-passed phase).
+_MAX_PROGRESS_LOG_ENTRIES = 50
+_MAX_PROGRESS_MESSAGE_TEXT_LENGTH = 500
+
+
 def extract_progress_log(progress_updates: Any, agent_name: str = "") -> list[dict[str, str]]:
     """Compact A2AClient.call_agent()'s raw `progress_updates` (full
     TaskStatusUpdateEvent payloads) down to the {state, message_text,
-    agent_name} triples a reloaded chat needs to rebuild the same progress
-    chain a live viewer saw -- callers persist this instead of the raw
-    envelopes (task/context ids, kind markers, ...), which add nothing for
-    that purpose and would only get truncated away anyway (see
-    chat_sessions.py's 400-char result preview).
+    agent_name, timestamp} entries a reloaded chat needs to rebuild the same
+    progress chain a live viewer saw -- callers persist this instead of the
+    raw envelopes (task/context ids, kind markers, ...), which add nothing
+    for that purpose and would only get truncated away anyway (see
+    chat_sessions.py's 400-char result preview). Bounded to the most recent
+    `_MAX_PROGRESS_LOG_ENTRIES`, each with `message_text` capped to
+    `_MAX_PROGRESS_MESSAGE_TEXT_LENGTH`, so a long-running task's log can't
+    grow the persisted ToolMessage (and every future turn's context) without
+    limit.
 
     `agent_name` isn't part of the raw TaskStatusUpdateEvent -- it's the
     caller's own resolved agent name (see dispatch_tracked_a2a_task), stamped
@@ -75,7 +91,13 @@ def extract_progress_log(progress_updates: Any, agent_name: str = "") -> list[di
     the live `a2a_call_progress` stream event does (see
     build_a2a_call_progress_event); without it, a reload has no source for
     the name at all once the task auto-routed (the LLM's raw tool-call args
-    never named an agent) and falls back to a generic placeholder."""
+    never named an agent) and falls back to a generic placeholder.
+
+    `timestamp` comes from `_progenitor_received_at`, stamped by
+    A2AClient.call_agent() at the moment each update actually arrived (see
+    client.py) -- extraction itself only runs once, after the whole blocking
+    call has completed, so there's no other way to recover each entry's real
+    time instead of collapsing them all onto one post-hoc "now"."""
     if not isinstance(progress_updates, list):
         return []
     entries: list[dict[str, str]] = []
@@ -87,8 +109,20 @@ def extract_progress_log(progress_updates: Any, agent_name: str = "") -> list[di
         message_text = (
             extract_message_text(status.get("message")) if isinstance(status, dict) else ""
         ) or ""
+        if len(message_text) > _MAX_PROGRESS_MESSAGE_TEXT_LENGTH:
+            message_text = message_text[:_MAX_PROGRESS_MESSAGE_TEXT_LENGTH] + "…"
+        timestamp = str(update.get("_progenitor_received_at") or "")
         if state or message_text:
-            entries.append({"state": state, "message_text": message_text, "agent_name": agent_name})
+            entries.append(
+                {
+                    "state": state,
+                    "message_text": message_text,
+                    "agent_name": agent_name,
+                    "timestamp": timestamp,
+                }
+            )
+    if len(entries) > _MAX_PROGRESS_LOG_ENTRIES:
+        entries = entries[-_MAX_PROGRESS_LOG_ENTRIES:]
     return entries
 
 

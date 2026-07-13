@@ -510,6 +510,30 @@ describe('applyAssistantStreamEvent', () => {
       ['tool_result', 'call_a'],
     ]);
   });
+
+  // Regression: an a2a_call_progress with no matching card (tool_start frame
+  // lost, or a malformed event with no tool_call_id) used to vanish
+  // entirely -- applyA2ACallEvent returns null (see 'ignores a2a_call_progress
+  // with no prior tool_start' below), but applyAssistantStreamEvent
+  // unconditionally short-circuited on eventType === 'a2a_call_progress'
+  // regardless of whether anything actually consumed it, skipping the
+  // generic stream_event push that every other unhandled event type falls
+  // through to. Must match buildDefaultAssistantTimeline's identical
+  // fallback for the reload path (see 'falls through to a flat stream_event
+  // row for call_agent events with no tool_call_id' below).
+  it('falls through to a flat stream_event row for an orphaned a2a_call_progress with no matching card', () => {
+    const turn = baseTurn();
+    const next = applyAssistantStreamEvent(turn, rawStreamEvent('a2a_call_progress', {
+      content: 'late',
+      metadata: { tool_call_id: 'call_missing', state: 'working', message_text: 'late' },
+    }), NOW);
+
+    expect(next.timelineItems.filter((item) => item.kind === 'a2a_call')).toHaveLength(0);
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('stream_event');
+    expect(next.timelineItems[0].event.eventType).toBe('a2a_call_progress');
+    expect(next.timelineItems[0].event.metadata.tool_call_id).toBe('call_missing');
+  });
 });
 
 // ─── applySubagentEvent ──────────────────────────────────────────────────

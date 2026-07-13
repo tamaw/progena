@@ -234,7 +234,7 @@ class DeepAgentIPCStream:
             if isinstance(images, list) and images:
                 item["images"] = images
 
-        expanded = self._expand_task_subagent_events(envelope)
+        expanded = self._expand_task_subagent_events(envelope, images=item.get("images"))
         if expanded:
             # This is the top-level `task` tool's own generic tool_start/
             # tool_result/tool_error -- fully superseded by its richer
@@ -458,7 +458,9 @@ class DeepAgentIPCStream:
                     summaries.append(text.strip())
         return "\n\n".join(summaries) if summaries else None
 
-    def _expand_task_subagent_events(self, envelope: dict[str, Any]) -> list[dict[str, Any]]:
+    def _expand_task_subagent_events(
+        self, envelope: dict[str, Any], images: list[Any] | None = None
+    ) -> list[dict[str, Any]]:
         metadata = envelope.get("metadata")
         if not isinstance(metadata, dict):
             return []
@@ -498,20 +500,27 @@ class DeepAgentIPCStream:
             return []
 
         if event_type == "tool_result":
-            return [
-                {
-                    "type": "stream_event",
-                    "event_type": "subagent_result",
-                    "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                        "success": bool(metadata.get("success", True)),
-                        "duration_ms": metadata.get("duration_ms"),
-                        "result_preview": metadata.get("result_preview"),
-                    },
-                }
-            ]
+            result_item: dict[str, Any] = {
+                "type": "stream_event",
+                "event_type": "subagent_result",
+                "content": subagent_name,
+                "metadata": {
+                    "subagent_name": subagent_name,
+                    "tool_call_id": tool_call_id,
+                    "success": bool(metadata.get("success", True)),
+                    "duration_ms": metadata.get("duration_ms"),
+                    "result_preview": metadata.get("result_preview"),
+                },
+            }
+            # The raw tool_result's own top-level images (see
+            # _handle_custom_stream_event) would otherwise be lost entirely --
+            # this subagent_result dict fully replaces that raw event rather
+            # than supplementing it (see the caller's comment), and it's the
+            # only field the raw item carried that this metadata dict doesn't
+            # already have room for.
+            if images:
+                result_item["images"] = images
+            return [result_item]
 
         if event_type == "tool_error":
             return [

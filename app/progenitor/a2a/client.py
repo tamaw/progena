@@ -25,6 +25,8 @@ from a2a.types import (
     TextPart,
 )
 
+from ..utils import utcnow_isoformat
+
 logger = logging.getLogger(__name__)
 _TERMINAL_TASK_STATES = {"completed", "failed", "canceled", "cancelled"}
 
@@ -208,6 +210,16 @@ class A2AClient:
                                 self._serialize_model(item[1]) if item[1] is not None else None
                             )
                             if isinstance(task_payload, dict) and update_payload is not None:
+                                if isinstance(update_payload, dict):
+                                    # Stamped at the moment this update actually
+                                    # arrived -- not part of the A2A wire spec,
+                                    # purely internal bookkeeping so a later,
+                                    # batch extraction (extract_progress_log,
+                                    # called only after the whole call
+                                    # completes) can still recover each entry's
+                                    # real time instead of collapsing them all
+                                    # onto one post-hoc "now".
+                                    update_payload["_progenitor_received_at"] = utcnow_isoformat()
                                 task_payload["latestUpdate"] = update_payload
                                 if blocking:
                                     # Non-blocking dispatch breaks after the

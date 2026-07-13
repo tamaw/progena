@@ -319,6 +319,34 @@ async def test_multi_step_task_calls_do_step_per_step(monkeypatch: pytest.Monkey
 
 
 @pytest.mark.asyncio
+async def test_steps_request_that_also_contains_a_sleep_trigger_word_reports_only_do_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: _mock_response only ever runs one branch (steps takes
+    precedence over sleep, see its own if/return chain), but the display
+    metadata used to derive tool_calls via independent ifs rather than
+    mirroring that precedence -- a steps request whose text also happened to
+    contain a sleep trigger word (much easier to hit now that _SLEEP_RE
+    matches "wait"/"take your time"/etc, not just the literal word "sleep")
+    reported a phantom "sleep" call for a phase that never actually ran."""
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    handler, _store = _build_handler()
+
+    result = await handler.on_message_send(
+        MessageSendParams(
+            message=_make_text_message(
+                "do a 2-step task: prep, verify -- take your time, about 0 seconds"
+            ),
+            configuration=MessageSendConfiguration(blocking=False),
+        )
+    )
+
+    terminal = await _poll_terminal(handler, result.id)
+    assert terminal.status.state == TaskState.completed
+    assert terminal.status.message.metadata["display_tool_calls"] == ["do_step", "do_step"]
+
+
+@pytest.mark.asyncio
 async def test_multi_step_task_defaults_step_names_when_unnamed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

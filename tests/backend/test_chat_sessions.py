@@ -510,8 +510,18 @@ class TestExtractProgressLogFromContent:
             }
         )
         assert _extract_progress_log_from_content(content) == [
-            {"state": "submitted", "message_text": "Accepted: hi", "agent_name": "greetings_agent"},
-            {"state": "working", "message_text": "Working...", "agent_name": "greetings_agent"},
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "greetings_agent",
+                "timestamp": "",
+            },
+            {
+                "state": "working",
+                "message_text": "Working...",
+                "agent_name": "greetings_agent",
+                "timestamp": "",
+            },
         ]
 
     def test_defaults_agent_name_to_empty_string_when_absent(self):
@@ -522,5 +532,49 @@ class TestExtractProgressLogFromContent:
             }
         )
         assert _extract_progress_log_from_content(content) == [
-            {"state": "submitted", "message_text": "Accepted: hi", "agent_name": ""},
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "",
+                "timestamp": "",
+            },
         ]
+
+    def test_preserves_timestamp_alongside_state_and_message_text(self):
+        """timestamp must survive this extraction too -- it's what lets a
+        reloaded chat show each A2A sub-entry's own real time instead of the
+        parent tool call's single shared timestamp (see extract_progress_log
+        in app/progenitor/a2a/payloads.py)."""
+        content = json.dumps(
+            {
+                "progress_log": [
+                    {
+                        "state": "submitted",
+                        "message_text": "Accepted: hi",
+                        "agent_name": "greetings_agent",
+                        "timestamp": "2026-07-11T02:31:02+00:00",
+                    },
+                ],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "greetings_agent",
+                "timestamp": "2026-07-11T02:31:02+00:00",
+            },
+        ]
+
+    def test_skips_json_parse_for_content_with_no_progress_log_key(self, monkeypatch):
+        """A cheap substring pre-filter must reject non-call_agent tool
+        results (the overwhelming majority) before paying for json.loads --
+        regression coverage against that pre-filter being too eager and
+        skipping content that actually has a progress_log."""
+        import app.backend.chat_sessions as chat_sessions_module
+
+        def _fail_if_called(*_args, **_kwargs):
+            raise AssertionError("json.loads should not run when 'progress_log' key is absent")
+
+        monkeypatch.setattr(chat_sessions_module.json, "loads", _fail_if_called)
+        assert _extract_progress_log_from_content('{"result": "no progress log here"}') == []

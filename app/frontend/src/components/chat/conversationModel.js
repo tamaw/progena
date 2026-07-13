@@ -120,7 +120,16 @@ export function collectMessageImages(message) {
 
   const toolImages = role === 'assistant'
     ? streamEvents
-      .filter((event) => event?.eventType === 'tool_result' && Array.isArray(event.images) && event.images.length > 0)
+      // subagent_result carries a `task` tool delegation's own images the
+      // same way tool_result does for a plain tool call (see
+      // _expand_task_subagent_events in deepagent_stream.py, which fully
+      // replaces the raw tool_result event with this one) -- both must be
+      // recognized here or a subagent's images silently vanish from both
+      // the strip and the Images filter count.
+      .filter((event) => (
+        (event?.eventType === 'tool_result' || event?.eventType === 'subagent_result')
+        && Array.isArray(event.images) && event.images.length > 0
+      ))
       .flatMap((event) => event.images)
       .map((image, index) => ({
         id: image.id || `tool-${index}`,
