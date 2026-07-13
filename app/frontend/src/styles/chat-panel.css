@@ -367,7 +367,7 @@
 }
 
 .a2a-call-card__body {
-    background-color: color-mix(in srgb, var(--color-a2a) 6%, transparent);
+    background-color: color-mix(in srgb, var(--color-accent-secondary) 6%, transparent);
 }
 
 .a2a-call-card--error .a2a-call-card__body {
@@ -503,10 +503,11 @@
 /* A2A call card -- one per blocking `call_agent` invocation of a deployed
    A2A agent, live-updated as intermediate status updates stream in. Same
    card-like treatment as .subagent-card (see A2ACallCard.jsx /
-   applyA2ACallEvent in liveAssistantTurnModel.js). Accent is --color-a2a
-   (main.css) -- the teal .subagent-card used to own before the green swap
-   above -- still its own hue, distinct from the tool-green family, so the
-   two card families stay visually distinguishable at a glance. */
+   applyA2ACallEvent in liveAssistantTurnModel.js). Accent is
+   --color-accent-secondary (main.css) -- the teal .subagent-card used to
+   own before the green swap above -- still its own hue, distinct from the
+   tool-green family, so the two card families stay visually distinguishable
+   at a glance. */
 /* See the matching comment on .subagent-card above -- same bare-header
    rationale, applied to the A2A card. */
 .a2a-call-card {
@@ -517,9 +518,9 @@
    .entry__badge.subagent-card__badge above for why the bare class alone
    isn't enough. */
 .entry__badge.a2a-call-card__badge {
-    color: color-mix(in srgb, var(--color-a2a) 82%, white);
-    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .a2a-call-card__badge--running {
@@ -533,9 +534,9 @@
 }
 
 .entry__tag.a2a-call-card__tag {
-    color: color-mix(in srgb, var(--color-a2a) 82%, white);
-    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
-    border-color: color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border-color: color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .a2a-call-card__error {
@@ -603,9 +604,9 @@
    it just read as an off, disconnected hue rather than a deliberate choice;
    the arrow-vs-ring glyph shape alone already distinguishes it from working. */
 .entry__badge.a2a-sub-entry__badge--working {
-    color: color-mix(in srgb, var(--color-a2a) 82%, white);
-    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
-    border: 1px solid color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+    color: color-mix(in srgb, var(--color-accent-secondary) 82%, white);
+    background: color-mix(in srgb, var(--color-accent-secondary) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-accent-secondary) 34%, var(--color-border-light));
 }
 
 .entry__badge.a2a-sub-entry__badge--completed {
