@@ -43,7 +43,7 @@ The frontend runs as a standalone application:
 - **Development**: Vite dev server at port 5173 with HMR
 - **Production**: Vite preview server at port 4173 (or deploy static files)
 
-All `/api`, `/v1`, and `/metrics` requests are proxied to the backend.
+All `/api`, `/v1`, `/metrics`, and the Docker-only `/healthz` liveness request are proxied to the backend. `/healthz` returns an empty `200 OK` and carries no application data; browser application data remains on `/api/ui/stream`.
 
 ### Data flow
 
@@ -98,7 +98,7 @@ src/
 Browser generation uses `/api/ui/responses`. The backend-to-runtime `/v1/chat`
 and `/v1/events` protocols are internal and are not frontend APIs.
 
-`/ready`, `/live`, `/health/detailed`, legacy session/attachment/conversation endpoints, response-body data routes, and `/api/ui/events` or `/api/ui/status` streams are not frontend APIs.
+`/healthz` is a Docker-only Nginx-to-backend liveness probe returning an empty `200 OK`; it is not a browser application API. `/ready`, `/live`, `/health`, `/health/detailed`, legacy session/attachment/conversation endpoints, response-body data routes, and `/api/ui/events` or `/api/ui/status` streams are not frontend APIs.
 
 ## VS Code Tasks
 

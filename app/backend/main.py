@@ -830,6 +830,17 @@ app.include_router(knowledge_router)
 # The frontend proxies /api and /v1 requests to this backend.
 logger.info("Backend running in API-only mode (no static file serving)")
 
+
+# Explicit architecture exception: Docker and container supervisors need a
+# dependency-free liveness probe. This route is not a browser API surface and
+# intentionally returns no application data; all browser application data still
+# travels through /api/ui/stream.
+@app.get("/healthz", include_in_schema=False)
+async def docker_healthz() -> Response:
+    """Return 200 when the backend process is accepting HTTP requests."""
+    return Response(status_code=200)
+
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,

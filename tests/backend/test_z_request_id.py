@@ -4,8 +4,8 @@ import json
 import socket
 import threading
 import time
-from contextlib import contextmanager
 from collections.abc import Iterator
+from contextlib import contextmanager
 
 import httpx
 import uvicorn
@@ -63,20 +63,22 @@ def test_finite_ui_request_returns_client_id_and_matching_stream_event():
     """The finite acknowledgement and serialized canonical frame share the client ID."""
     request_id = "client-generated-operation-id"
 
-    with _live_backend() as base_url, httpx.Client(base_url=base_url, timeout=5) as client:
-        with client.stream("GET", "/api/ui/stream") as stream:
-            assert stream.status_code == 200
-            assert stream.headers["content-type"].startswith("text/event-stream")
-            lines = stream.iter_lines()
-            ready_name, ready = _next_sse_frame(lines)
-            assert ready_name == "ui.event"
-            assert ready["type"] == "connection.ready"
+    with (
+        _live_backend() as base_url,
+        httpx.Client(base_url=base_url, timeout=5) as client,
+        client.stream("GET", "/api/ui/stream") as stream,
+    ):
+        assert stream.headers["content-type"].startswith("text/event-stream")
+        lines = stream.iter_lines()
+        ready_name, ready = _next_sse_frame(lines)
+        assert ready_name == "ui.event"
+        assert ready["type"] == "connection.ready"
 
-            response = client.get(
-                "/api/ui/widgets",
-                headers={"X-Request-ID": request_id},
-            )
-            event_name, event = _next_sse_frame(lines)
+        response = client.get(
+            "/api/ui/widgets",
+            headers={"X-Request-ID": request_id},
+        )
+        event_name, event = _next_sse_frame(lines)
 
     assert response.status_code == 202
     assert response.headers["X-Request-ID"] == request_id

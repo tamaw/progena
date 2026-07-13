@@ -21,12 +21,12 @@ backend/
 └── client.py            # Legacy subprocess client
 ```
 
-### Key Endpoints
 - `POST /api/ui/responses` - Browser generation acknowledgement endpoint
 - `GET /api/ui/stream` - Canonical browser event stream
-- `GET /health` - Health check endpoint
-- `GET /ready` - Readiness endpoint
-- `GET /live` - Liveness endpoint
+- `GET /healthz` - Docker-only liveness probe (explicit event-stream exception; empty 200 response)
+- `GET /health` - Legacy application health route (absent)
+- `GET /ready` - Legacy readiness route (absent)
+- `GET /live` - Legacy liveness route (absent)
 
 ### Development
 ```bash
@@ -53,7 +53,7 @@ pytest tests/backend/ -v
 - Async/await throughout
 - Pydantic models for validation
 - Streaming responses via SSE
-- Health checks return JSON status
+- `/healthz` is an explicit Docker/container liveness exception to the event-stream-only rule; it returns an empty 200 and no application data
 
 ### React UI Event Stream
 
