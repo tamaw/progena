@@ -280,3 +280,43 @@ async def test_cancel_while_queued_behind_semaphore_returns_cleanly(tmp_path: Pa
 
     release_first.set()
     await asyncio.wait_for(first, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_inner_task_ever_starts_still_returns_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: if `inner` (the asyncio.Task run() creates) is cancelled
+    before the event loop ever gives it a first turn, asyncio completes it
+    as cancelled without executing _run_task's body at all -- so _run_task's
+    own try/except CancelledError (and the terminal event it pushes on that
+    path) never runs. run() must catch that itself and push the same
+    fallback event, so it still returns normally instead of propagating the
+    cancellation into BuilderAgentExecutor.execute().
+
+    Reproduced deterministically by cancelling `inner` the instant it is
+    created, before run() reaches `await inner` -- matching real asyncio
+    semantics where a task cancelled before its first step never runs its
+    coroutine body.
+    """
+    event_queue = AsyncMock()
+    event_queue.enqueue_event = AsyncMock()
+    handler = AsyncMock()  # must never be called: cancelled before it can start
+
+    queue = BuilderTaskQueue(handler)
+
+    real_create_task = asyncio.create_task
+
+    def create_task_and_cancel_immediately(coro, *args, **kwargs):
+        task = real_create_task(coro, *args, **kwargs)
+        task.cancel()
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", create_task_and_cancel_immediately)
+
+    await queue.run("raced-task", "ctx-raced", "req", {}, event_queue)
+
+    handler.assert_not_called()
+    states = [call.args[0].status.state for call in event_queue.enqueue_event.call_args_list]
+    assert states == [TaskState.canceled]
+    assert "raced-task" not in queue._running_tasks
