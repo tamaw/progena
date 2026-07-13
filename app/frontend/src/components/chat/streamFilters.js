@@ -3,7 +3,7 @@ export const STREAM_EVENT_CATEGORIES = [
   { id: 'plan', label: 'Plan', description: 'write_todos plan updates', color: 'var(--color-accent)' },
   { id: 'reasoning', label: 'Reasoning', description: 'reasoning deltas / summaries', color: '#a78bfa' },
   { id: 'subagents', label: 'Subagents', description: 'Nested subagent execution (task tool delegation)', color: 'var(--color-success)' },
-  { id: 'a2a', label: 'A2A', description: 'call_agent invocations of deployed A2A agents', color: 'var(--color-a2a)' },
+  { id: 'a2a', label: 'A2A', description: 'call_agent invocations of deployed A2A agents', color: 'var(--color-accent-secondary)' },
   { id: 'user', label: 'User', description: 'user messages', color: '#60a5fa' },
   { id: 'agent', label: 'Agent', description: 'agent responses', color: '#8b5cf6' },
   { id: 'errors', label: 'Errors', description: 'tool errors and failed responses', color: 'var(--color-error)' },
