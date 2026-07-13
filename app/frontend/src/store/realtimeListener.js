@@ -121,42 +121,33 @@ realtimeListenerMiddleware.startListening({
   },
 });
 // Register at thunk dispatch, before its fetch begins. A backend publishes the
-// causal event before responding 202, so waiting for fulfilled would lose the
-// race. The reducer reconciles any event that still arrives first.
+// causal event before responding 202, so waiting for fulfilled would lose the race.
+// Rejected operations fail immediately; fulfilled acknowledgements register the
+// event types that are allowed to resolve the pending request.
 realtimeListenerMiddleware.startListening({
-  matcher: (action) => isPending(action) && isUiDataThunkLifecycle(action),
+  matcher: (action) => isUiDataThunkLifecycle(action)
+    && (isPending(action) || isRejected(action) || isFulfilled(action)),
   effect: (action, listenerApi) => {
     const requestId = requestIdFor(action);
-    if (requestId) {
-      listenerApi.dispatch(registerPendingOp({ requestId }));
+    if (isPending(action)) {
+      if (requestId) {
+        listenerApi.dispatch(registerPendingOp({ requestId }));
+      }
+      return;
     }
-  },
-});
-
-realtimeListenerMiddleware.startListening({
-  matcher: (action) => isRejected(action) && isUiDataThunkLifecycle(action),
-  effect: (action, listenerApi) => {
-    const requestId = requestIdFor(action);
-    if (requestId) {
-      listenerApi.dispatch(failPendingOp({ requestId, error: action.error?.message }));
+    if (isRejected(action)) {
+      if (requestId) {
+        listenerApi.dispatch(failPendingOp({ requestId, error: action.error?.message }));
+      }
+      return;
     }
-  },
-});
 
-
-// Reconcile the acknowledgement's declared causal event types. Local thunk
-// metadata may live alongside the acknowledgement or under `ack`; neither is
-// domain data and neither hydrates Redux.
-realtimeListenerMiddleware.startListening({
-  matcher: (action) => isFulfilled(action) && isUiDataThunkLifecycle(action),
-  effect: (action, listenerApi) => {
     const acknowledgement = acknowledgementFor(action);
     if (!acknowledgement) {
       return;
     }
-    const provisionalRequestId = requestIdFor(action);
-    if (provisionalRequestId && provisionalRequestId !== acknowledgement.request_id) {
-      listenerApi.dispatch(resolvePendingOp({ requestId: provisionalRequestId }));
+    if (requestId && requestId !== acknowledgement.request_id) {
+      listenerApi.dispatch(resolvePendingOp({ requestId }));
     }
     listenerApi.dispatch(registerPendingOp({
       requestId: acknowledgement.request_id,

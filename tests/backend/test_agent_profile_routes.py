@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from ack_helpers import assert_acknowledged
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
@@ -127,20 +128,6 @@ def harness(monkeypatch):
     return TestClient(app), events
 
 
-def _assert_acknowledged(
-    response, event_types: list[str], request_id: str | None = None
-) -> dict[str, Any]:
-    assert response.status_code == 202
-    body = response.json()
-    assert set(body) == {"request_id", "event_types"}
-    assert isinstance(body["request_id"], str) and body["request_id"]
-    if request_id is not None:
-        assert body["request_id"] == request_id
-    assert body["event_types"] == event_types
-    assert body["event_types"]
-    return body
-
-
 def test_list_publishes_request_correlated_snapshot(harness):
     """The accepted client ID resolves on the canonical agents snapshot."""
     client, events = harness
@@ -151,7 +138,7 @@ def test_list_publishes_request_correlated_snapshot(harness):
         headers={"X-Request-ID": request_id},
     )
 
-    _assert_acknowledged(response, ["agents.snapshot"], request_id)
+    assert_acknowledged(response, ["agents.snapshot"], request_id)
     snapshot_events = [
         (payload, kwargs)
         for event_type, payload, kwargs in events
@@ -167,7 +154,7 @@ def test_list_publishes_request_correlated_snapshot(harness):
 def test_list_includes_skills(harness):
     client, events = harness
     response = client.get("/api/ui/agent-profiles")
-    _assert_acknowledged(response, ["agents.snapshot"])
+    assert_acknowledged(response, ["agents.snapshot"])
     snapshot_events = [(t, p) for t, p, _ in events if t == "agents.snapshot"]
     assert len(snapshot_events) == 1
     alpha = next(a for a in snapshot_events[0][1]["agents"] if a["id"] == "alpha")
@@ -180,7 +167,7 @@ def test_detail_publishes_upsert_and_selected(harness):
         "/api/ui/agent-profiles/alpha",
         headers={"X-Request-ID": "req-1"},
     )
-    _assert_acknowledged(response, ["agent.upserted", "agent.selected"], "req-1")
+    assert_acknowledged(response, ["agent.upserted", "agent.selected"], "req-1")
     types = [e[0] for e in events]
     assert "agent.upserted" in types
     selected = next(kwargs for t, p, kwargs in events if t == "agent.selected")
@@ -206,14 +193,14 @@ def test_graph_update_persists_and_broadcasts(harness):
         "status": "Designed",
     }
     response = client.patch("/api/ui/agent-profiles/alpha/graph", json=payload)
-    _assert_acknowledged(response, ["agent.graph.updated"])
+    assert_acknowledged(response, ["agent.graph.updated"])
     assert events[-1][0] == "agent.graph.updated"
     # Broadcast payload contains updated graph data
     graph_payload = events[-1][1]
     assert graph_payload["graph"]["status"] == "Designed"
     # Persisted: subsequent detail broadcasts the new graph data
     detail_resp = client.get("/api/ui/agent-profiles/alpha")
-    _assert_acknowledged(detail_resp, ["agent.upserted", "agent.selected"])
+    assert_acknowledged(detail_resp, ["agent.upserted", "agent.selected"])
     detail_upserted = next(p for t, p, _ in events if t == "agent.upserted")
     assert detail_upserted["agent"]["graph"]["status"] == "Designed"
 
@@ -256,7 +243,7 @@ def test_list_merges_subagents_and_read_through_a2a(harness, monkeypatch):
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles")
-    _assert_acknowledged(response, ["agents.snapshot"])
+    assert_acknowledged(response, ["agents.snapshot"])
     snapshot_events = [(t, p) for t, p, _ in events if t == "agents.snapshot"]
     assert len(snapshot_events) == 1
     snapshot = snapshot_events[0][1]
@@ -273,10 +260,8 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles/a2a-observe?request_id=r2")
-    _assert_acknowledged(
-        response,
-        ["agent.upserted", "agent.selected"],
-        "test-middleware-request-id",
+    assert_acknowledged(
+        response, ["agent.upserted", "agent.selected"], "test-middleware-request-id"
     )
     # Agent data is broadcast, not in the response
     upserted_event = next(p for t, p, _ in events if t == "agent.upserted")

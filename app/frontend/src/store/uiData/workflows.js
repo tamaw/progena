@@ -3,8 +3,9 @@
  * kept live by `workflows.snapshot`, `workflow.updated`, `workflow.deleted`,
  * and `workflow.run.*` events on /api/ui/stream.
  */
-import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged, withQuery } from '../http';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { withQuery } from '../http';
 
 function workflowPathForId(workflowId) {
   return workflowId ? `/state/workflows/${workflowId}.json` : '';
@@ -112,26 +113,26 @@ function upsertWorkflowRun(state, run) {
   sortRuns(state.workflows.runs);
 }
 
-export const fetchWorkflows = createAsyncThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => {
+export const fetchWorkflows = createAcknowledgedThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => {
   return requestAcknowledged(workflowsUrl, { requestId });
-}, { idGenerator: createOperationRequestId });
+});
 
-export const fetchWorkflowContent = createAsyncThunk('uiData/fetchWorkflowContent', async ({ workflowsUrl, path }, { requestId }) => {
+export const fetchWorkflowContent = createAcknowledgedThunk('uiData/fetchWorkflowContent', async ({ workflowsUrl, path }, { requestId }) => {
   return requestAcknowledged(
     withQuery(`${workflowsUrl}/content`, { path }),
     { requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
-export const saveWorkflow = createAsyncThunk('uiData/saveWorkflow', async ({ workflowsUrl, path, workflow }, { requestId }) => {
+export const saveWorkflow = createAcknowledgedThunk('uiData/saveWorkflow', async ({ workflowsUrl, path, workflow }, { requestId }) => {
   return requestAcknowledged(`${workflowsUrl}/content`, {
     method: 'PUT',
     body: { path, workflow },
     requestId,
   });
-}, { idGenerator: createOperationRequestId });
+});
 
-export const createWorkflow = createAsyncThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, eventType }, { requestId }) => {
+export const createWorkflow = createAcknowledgedThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, eventType }, { requestId }) => {
   return requestAcknowledged(workflowsUrl, {
     method: 'POST',
     body: {
@@ -141,30 +142,30 @@ export const createWorkflow = createAsyncThunk('uiData/createWorkflow', async ({
     },
     requestId,
   });
-}, { idGenerator: createOperationRequestId });
+});
 
-export const deleteWorkflow = createAsyncThunk('uiData/deleteWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+export const deleteWorkflow = createAcknowledgedThunk('uiData/deleteWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
   return requestAcknowledged(
     `${workflowsUrl}/${encodeURIComponent(workflowId)}`,
     { method: 'DELETE', requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
-export const pauseWorkflow = createAsyncThunk('uiData/pauseWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+export const pauseWorkflow = createAcknowledgedThunk('uiData/pauseWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
   return requestAcknowledged(
     `${workflowsUrl}/${encodeURIComponent(workflowId)}/pause`,
     { method: 'POST', requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
-export const resumeWorkflow = createAsyncThunk('uiData/resumeWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+export const resumeWorkflow = createAcknowledgedThunk('uiData/resumeWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
   return requestAcknowledged(
     `${workflowsUrl}/${encodeURIComponent(workflowId)}/resume`,
     { method: 'POST', requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
-export const triggerWorkflow = createAsyncThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, eventType, payload }, { requestId }) => {
+export const triggerWorkflow = createAcknowledgedThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, eventType, payload }, { requestId }) => {
   return requestAcknowledged(
     `${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`,
     {
@@ -176,11 +177,11 @@ export const triggerWorkflow = createAsyncThunk('uiData/triggerWorkflow', async 
       requestId,
     },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
-export const fetchWorkflowRuns = createAsyncThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => {
+export const fetchWorkflowRuns = createAcknowledgedThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => {
   return requestAcknowledged(workflowRunsUrl, { requestId });
-}, { idGenerator: createOperationRequestId });
+});
 
 export const eventHandlers = {
   'workflows.snapshot': (state, payload) => {
@@ -210,33 +211,17 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchWorkflows.pending, (state, action) => {
-      state.workflows.loading = true;
-      state.workflows.error = null;
-      state.workflows.requestId = action.meta.requestId;
-    })
-    .addCase(fetchWorkflows.rejected, (state, action) => {
-      if (state.workflows.requestId !== action.meta.requestId) {
-        return;
-      }
-      state.workflows.loading = false;
-      state.workflows.error = action.error?.message || 'Failed to load workflows';
-      state.workflows.requestId = null;
-    })
-    .addCase(fetchWorkflowRuns.pending, (state, action) => {
-      state.workflows.runsLoading = true;
-      state.workflows.runsError = null;
-      state.workflows.runsRequestId = action.meta.requestId;
-    })
-    .addCase(fetchWorkflowRuns.rejected, (state, action) => {
-      if (state.workflows.runsRequestId !== action.meta.requestId) {
-        return;
-      }
-      state.workflows.runsLoading = false;
-      state.workflows.runsError = action.error?.message || 'Failed to load workflow runs';
-      state.workflows.runsRequestId = null;
-    });
+  addRequestLifecycle(builder, fetchWorkflows, {
+    select: (state) => state.workflows,
+    errorMessage: 'Failed to load workflows',
+  });
+  return addRequestLifecycle(builder, fetchWorkflowRuns, {
+    select: (state) => state.workflows,
+    loadingKey: 'runsLoading',
+    errorKey: 'runsError',
+    requestIdKey: 'runsRequestId',
+    errorMessage: 'Failed to load workflow runs',
+  });
 }
 
 export const selectWorkflows = (state) => state.uiData.workflows.items;

@@ -4,8 +4,8 @@
  * `inbox.message.deleted` events on /api/ui/stream. Snapshots carry full
  * markdown bodies (messages are small), so there is no detail request dance.
  */
-import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged } from '../http';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged } from './async';
 
 
 export const initialState = {
@@ -44,31 +44,19 @@ function applyInboxSnapshot(inbox, payload) {
   }
 }
 
-export const fetchInbox = createAsyncThunk(
-  'uiData/fetchInbox',
-  ({ inboxUrl }, { requestId }) => requestAcknowledged(
-    inboxUrl,
-    { requestId },
-  ),
-  { idGenerator: createOperationRequestId },
-);
+export const fetchInbox = createAcknowledgedThunk('uiData/fetchInbox', ({ inboxUrl }, { requestId }) => requestAcknowledged(
+  inboxUrl,
+  { requestId },
+));
 
-export const markInboxMessageRead = createAsyncThunk(
-  'uiData/markInboxMessageRead',
-  ({ inboxUrl, messageId, read = true }, { requestId }) => requestAcknowledged(
-    `${inboxUrl}/${encodeURIComponent(messageId)}/read`,
-    { method: 'POST', body: { read }, requestId },
-  ),
-  { idGenerator: createOperationRequestId },
-);
-export const deleteInboxMessage = createAsyncThunk(
-  'uiData/deleteInboxMessage',
-  ({ inboxUrl, messageId }, { requestId }) => requestAcknowledged(
-    `${inboxUrl}/${encodeURIComponent(messageId)}`,
-    { method: 'DELETE', requestId },
-  ),
-  { idGenerator: createOperationRequestId },
-);
+export const markInboxMessageRead = createAcknowledgedThunk('uiData/markInboxMessageRead', ({ inboxUrl, messageId, read = true }, { requestId }) => requestAcknowledged(
+  `${inboxUrl}/${encodeURIComponent(messageId)}/read`,
+  { method: 'POST', body: { read }, requestId },
+));
+export const deleteInboxMessage = createAcknowledgedThunk('uiData/deleteInboxMessage', ({ inboxUrl, messageId }, { requestId }) => requestAcknowledged(
+  `${inboxUrl}/${encodeURIComponent(messageId)}`,
+  { method: 'DELETE', requestId },
+));
 
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {

@@ -14,6 +14,7 @@ import {
   setActiveNavRoute,
 } from '../../store/uiDataSlice';
 import { selectUiEventQueue } from '../../store/realtimeSlice';
+import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
@@ -775,33 +776,32 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   // A draft acknowledgement carries no session data. Resolve it only from the
   // causal stream event with the same request ID, using that event's thread ID.
   useEffect(() => {
-    for (const { sequence, event } of uiEventQueue) {
-      if (sequence <= eventSequenceRef.current) {
-        continue;
-      }
-      eventSequenceRef.current = sequence;
+    eventSequenceRef.current = consumeUiEventQueue(
+      uiEventQueue,
+      eventSequenceRef.current,
+      ({ event }) => {
+        const pendingDraft = pendingDraftRef.current;
+        const session = event?.payload?.session;
+        const threadId = session?.thread_id;
+        if (
+          !pendingDraft
+          || event?.payload?.request_id !== pendingDraft.requestId
+          || !['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
+          || typeof threadId !== 'string'
+          || !threadId
+        ) {
+          return undefined;
+        }
 
-      const pendingDraft = pendingDraftRef.current;
-      const session = event?.payload?.session;
-      const threadId = session?.thread_id;
-      if (
-        !pendingDraft
-        || event?.payload?.request_id !== pendingDraft.requestId
-        || !['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
-        || typeof threadId !== 'string'
-        || !threadId
-      ) {
-        continue;
-      }
-
-      pendingDraftRef.current = null;
-      sessionPromiseRef.current = Promise.resolve(threadId);
-      if (isQuickChatMountedRef.current) {
-        setScratchThreadId(threadId);
-      }
-      pendingDraft.resolve(threadId);
-      break;
-    }
+        pendingDraftRef.current = null;
+        sessionPromiseRef.current = Promise.resolve(threadId);
+        if (isQuickChatMountedRef.current) {
+          setScratchThreadId(threadId);
+        }
+        pendingDraft.resolve(threadId);
+        return false;
+      },
+    );
   }, [uiEventQueue]);
 
   const startFreshQuickThread = useCallback(async () => {

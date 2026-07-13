@@ -5,8 +5,9 @@
  * /api/ui/stream; the runtime indicators are also set imperatively by the chat
  * stream hook so route changes do not clear them.
  */
-import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged, withQuery } from '../http';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged } from './async';
+import { withQuery } from '../http';
 
 
 const emptyActive = () => ({
@@ -121,72 +122,48 @@ function removeChatRuntimeId(ids, threadId) {
   return ids.filter((id) => id !== threadId);
 }
 
-export const fetchChatSessions = createAsyncThunk(
-  'uiData/fetchChatSessions',
-  async ({ chatsUrl, includeArchived = true }, { requestId }) => {
-    return requestAcknowledged(
-      withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
-      { requestId },
-    );
-  },
-  { idGenerator: createOperationRequestId },
-);
-export const requestChatSessionDetail = createAsyncThunk(
-  'uiData/requestChatSessionDetail',
-  async ({ chatsUrl, threadId }, { requestId }) => {
-    const acknowledgement = await requestAcknowledged(
-      withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
-      { requestId },
-    );
-    return { ...acknowledgement, threadId };
-  },
-  { idGenerator: createOperationRequestId },
-);
-export const createChatSession = createAsyncThunk(
-  'uiData/createChatSession',
-  async ({ chatsUrl, title, threadId }, { requestId }) => {
-    const acknowledgement = await requestAcknowledged(chatsUrl, {
-      method: 'POST',
-      body: { title, thread_id: threadId },
-      requestId,
-    });
-    return { ...acknowledgement, threadId };
-  },
-  { idGenerator: createOperationRequestId },
-);
-export const ensureDraftChatSession = createAsyncThunk(
-  'uiData/ensureDraftChatSession',
-  async ({ chatsUrl, threadId }, { requestId }) => {
-    const acknowledgement = await requestAcknowledged(
-      `${chatsUrl.replace(/\/$/, '')}/draft`,
-      { method: 'POST', body: { thread_id: threadId }, requestId },
-    );
-    return { ...acknowledgement, threadId };
-  },
-  { idGenerator: createOperationRequestId },
-);
-export const updateChatSessionMetadata = createAsyncThunk(
-  'uiData/updateChatSessionMetadata',
-  async ({ chatsUrl, threadId, patch }, { requestId }) => {
-    const acknowledgement = await requestAcknowledged(
-      `${chatsUrl}/${encodeURIComponent(threadId)}`,
-      { method: 'PATCH', body: patch, requestId },
-    );
-    return { ...acknowledgement, threadId };
-  },
-  { idGenerator: createOperationRequestId },
-);
-export const deleteChatSession = createAsyncThunk(
-  'uiData/deleteChatSession',
-  async ({ chatsUrl, threadId }, { requestId }) => {
-    const acknowledgement = await requestAcknowledged(
-      `${chatsUrl}/${encodeURIComponent(threadId)}`,
-      { method: 'DELETE', requestId },
-    );
-    return { ...acknowledgement, threadId };
-  },
-  { idGenerator: createOperationRequestId },
-);
+export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
+  return requestAcknowledged(
+    withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
+    { requestId },
+  );
+});
+export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    { requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const createChatSession = createAcknowledgedThunk('uiData/createChatSession', async ({ chatsUrl, title, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(chatsUrl, {
+    method: 'POST',
+    body: { title, thread_id: threadId },
+    requestId,
+  });
+  return { ...acknowledgement, threadId };
+});
+export const ensureDraftChatSession = createAcknowledgedThunk('uiData/ensureDraftChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${chatsUrl.replace(/\/$/, '')}/draft`,
+    { method: 'POST', body: { thread_id: threadId }, requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    { method: 'PATCH', body: patch, requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const deleteChatSession = createAcknowledgedThunk('uiData/deleteChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE', requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
 
 export const reducers = {
   setUnreadChatIds(state, action) {

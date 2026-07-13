@@ -7,6 +7,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { selectUiEventQueue } from '../store/realtimeSlice';
+import { consumeUiEventQueue } from '../store/uiData/eventQueue';
 import {
   clearChatErrored,
   clearChatGenerating,
@@ -664,25 +665,25 @@ function ConversationPage() {
   }, [show]);
 
   useEffect(() => {
-    for (const { sequence, event } of uiEventQueue) {
-      if (sequence <= lastProcessedUiEventSequenceRef.current) {
-        continue;
-      }
-      lastProcessedUiEventSequenceRef.current = sequence;
-      const payload = event?.payload;
-      if (
-        (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
-        && typeof payload?.request_id === 'string'
-        && typeof payload?.session?.thread_id === 'string'
-      ) {
-        const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
-        if (resolveSession) {
-          pendingDraftSessionsRef.current.delete(payload.request_id);
-          resolveSession(payload.session);
+    lastProcessedUiEventSequenceRef.current = consumeUiEventQueue(
+      uiEventQueue,
+      lastProcessedUiEventSequenceRef.current,
+      ({ event }) => {
+        const payload = event?.payload;
+        if (
+          (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
+          && typeof payload?.request_id === 'string'
+          && typeof payload?.session?.thread_id === 'string'
+        ) {
+          const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
+          if (resolveSession) {
+            pendingDraftSessionsRef.current.delete(payload.request_id);
+            resolveSession(payload.session);
+          }
         }
-      }
-      handleChatEvent({ type: event?.type, data: payload });
-    }
+        handleChatEvent({ type: event?.type, data: payload });
+      },
+    );
   }, [handleChatEvent, uiEventQueue]);
 
   const handleQuickAction = useCallback((message) => {

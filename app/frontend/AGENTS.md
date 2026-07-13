@@ -72,11 +72,10 @@ styles/                 # global stylesheets imported by App.jsx (+ workspace/no
 
 ## Core conventions (follow these)
 
-### API hooks — `hooks/api/`
-One core client + per-domain hooks. `useApiClient.js` owns fetch/headers/errors;
-domain hooks (`useChatApi`, `useWidgetsApi`, `useWorkspaceApi`, `useSchedulesApi`,
-`usePromptsApi`, `useSkillsApi`, `useTasksApi`, `useLogsApi`, `useAlertsApi`) build on
-it. Add new endpoints to the matching domain hook — do **not** reintroduce a god hook.
+### API requests — `store/`
+`store/http.js` owns acknowledged finite requests and request-ID helpers. Domain
+operations live in the Redux thunks under `store/uiData/`; pages consume their
+selectors and do not add direct JSON API hooks.
 
 ### State & realtime — `store/`
 - `store.js` wires the Redux store; `uiDataSlice.js` is split into per-domain modules

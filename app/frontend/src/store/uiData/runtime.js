@@ -3,8 +3,7 @@
  * schedule list. These are kept live by `status.updated` / `alerts.updated` /
  * `widgets.updated` / `schedule.snapshot` frames on the realtime stream.
  */
-import { createAsyncThunk } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged } from '../http';
+import { createAcknowledgedThunk, requestAcknowledged } from './async';
 
 export const initialState = {
   status: null,
@@ -14,23 +13,20 @@ export const initialState = {
   // and seeded once via REST when the Schedules page mounts.
   schedule: [],
 };
-function alertsFrom(payload) {
+function arrayPayload(payload, keys = []) {
   if (Array.isArray(payload)) {
     return payload;
   }
-  return Array.isArray(payload?.alerts) ? payload.alerts : null;
+  for (const key of keys) {
+    if (Array.isArray(payload?.[key])) {
+      return payload[key];
+    }
+  }
+  return null;
 }
 
-function widgetsFrom(payload) {
-  if (Array.isArray(payload)) {
-    return payload;
-  }
-  if (Array.isArray(payload?.items)) {
-    return payload.items;
-  }
-  return Array.isArray(payload?.widgets) ? payload.widgets : null;
-}
-
+const alertsFrom = (payload) => arrayPayload(payload, ['alerts']);
+const widgetsFrom = (payload) => arrayPayload(payload, ['items', 'widgets']);
 function upsertAlert(alerts, alert) {
   if (!alert?.id) {
     return alerts;
@@ -47,25 +43,21 @@ function upsertAlert(alerts, alert) {
 
 // Acknowledge a widget-list request; the snapshot arrives on the realtime
 // stream as `widgets.updated` (the GET just triggers the broadcast).
-export const fetchWidgets = createAsyncThunk('uiData/fetchWidgets', async ({ widgetsUrl }, { requestId }) => {
+export const fetchWidgets = createAcknowledgedThunk('uiData/fetchWidgets', async ({ widgetsUrl }, { requestId }) => {
   return requestAcknowledged(widgetsUrl, { requestId });
-}, { idGenerator: createOperationRequestId });
+});
 
 // Alert read acknowledgements deliberately carry no alert data. The correlated
 // `alerts.updated` stream frame below is the sole owner of the alert list and
 // its unread/viewed state.
-export const markAlertsViewed = createAsyncThunk(
-  'uiData/markAlertsViewed',
-  ({ alertsUrl, alertIds }, { requestId }) => requestAcknowledged(
-    `${alertsUrl.replace(/\/$/, '')}/viewed`,
-    {
-      method: 'POST',
-      body: Array.isArray(alertIds) && alertIds.length > 0 ? { alert_ids: alertIds } : {},
-      requestId,
-    },
-  ),
-  { idGenerator: createOperationRequestId }
-);
+export const markAlertsViewed = createAcknowledgedThunk('uiData/markAlertsViewed', ({ alertsUrl, alertIds }, { requestId }) => requestAcknowledged(
+  `${alertsUrl.replace(/\/$/, '')}/viewed`,
+  {
+    method: 'POST',
+    body: Array.isArray(alertIds) && alertIds.length > 0 ? { alert_ids: alertIds } : {},
+    requestId,
+  },
+));
 
 export const reducers = {
   scheduleSnapshotReceived(state, action) {

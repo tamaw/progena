@@ -74,6 +74,7 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .prompt_service import PromptService
+from .request_utils import request_correlation_id as _request_correlation_id
 from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
@@ -91,15 +92,6 @@ from .workflow_service import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Return the single middleware-generated correlation ID for a finite request."""
-    request_id = header_request_id or getattr(request.state, "request_id", None)
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError("Request correlation ID middleware is not configured")
-    return request_id
-
 
 router = APIRouter(prefix="/api/ui", tags=["ui"])
 
@@ -3798,7 +3790,7 @@ async def export_logs(
 
     broadcast_ui_event(
         "logs.export.completed",
-        {"format": format, "total": len(entries), "request_id": request_id},
+        {"format": format, "total": len(entries)},
         request_id=request_id,
     )
 

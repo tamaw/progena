@@ -3,8 +3,7 @@
  * kept live by `kanban.snapshot` / `task.content.updated` / `task.activity.updated`
  * events on /api/ui/stream.
  */
-import { createAsyncThunk } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged } from '../http';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 
 
 export const initialState = {
@@ -23,17 +22,17 @@ function cardIdOf(payload) {
   return typeof payload?.card_id === 'string' ? payload.card_id : null;
 }
 
-export const fetchKanbanBoard = createAsyncThunk('uiData/fetchKanbanBoard', async ({ kanbanUrl }, { requestId }) => {
+export const fetchKanbanBoard = createAcknowledgedThunk('uiData/fetchKanbanBoard', async ({ kanbanUrl }, { requestId }) => {
   return requestAcknowledged(kanbanUrl, { requestId });
-}, { idGenerator: createOperationRequestId });
+});
 
 
-export const fetchTaskActivity = createAsyncThunk('uiData/fetchTaskActivity', async ({ taskActivityUrl, cardId }, { requestId }) => {
+export const fetchTaskActivity = createAcknowledgedThunk('uiData/fetchTaskActivity', async ({ taskActivityUrl, cardId }, { requestId }) => {
   return requestAcknowledged(
     `${taskActivityUrl}/${encodeURIComponent(cardId)}/activity`,
     { requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
 export const reducers = {
   kanbanSnapshotReceived(state, action) {
@@ -81,20 +80,10 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchKanbanBoard.pending, (state, action) => {
-      state.tasks.loading = true;
-      state.tasks.error = null;
-      state.tasks.requestId = action.meta.requestId;
-    })
-    .addCase(fetchKanbanBoard.rejected, (state, action) => {
-      if (state.tasks.requestId !== action.meta.requestId) {
-        return;
-      }
-      state.tasks.loading = false;
-      state.tasks.error = action.error?.message || 'Failed to load tasks';
-      state.tasks.requestId = null;
-    });
+  return addRequestLifecycle(builder, fetchKanbanBoard, {
+    select: (state) => state.tasks,
+    errorMessage: 'Failed to load tasks',
+  });
 }
 
 export const selectKanbanBoard = (state) => state.uiData.tasks.board;

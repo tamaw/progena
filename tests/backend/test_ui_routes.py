@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
 from app.backend.alerts import clear_alerts, create_alert
@@ -102,24 +103,6 @@ def document_store():
     set_default_document_store(InMemoryDocumentStore())
 
 
-def _assert_acknowledged(response, request_id: str, event_types: list[str]) -> None:
-    """Assert the complete, data-free finite-request acknowledgement."""
-    assert response.status_code == 202
-    assert response.headers["X-Request-ID"] == request_id
-    assert response.json() == {
-        "request_id": request_id,
-        "event_types": event_types,
-    }
-    assert event_types
-
-
-def _assert_acknowledgement(body: dict) -> None:
-    assert set(body) == {"request_id", "event_types"}
-    assert isinstance(body["request_id"], str) and body["request_id"]
-    assert isinstance(body["event_types"], list) and body["event_types"]
-    assert all(isinstance(event_type, str) and event_type for event_type in body["event_types"])
-
-
 class TestUIRoutes:
     """Tests for /api/ui endpoints."""
 
@@ -138,7 +121,9 @@ class TestUIRoutes:
         request_id = "widgets-request"
         response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
 
-        _assert_acknowledged(response, request_id, ["widgets.updated"])
+        assert_acknowledged(
+            response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
+        )
 
     def test_process_metrics_excludes_db_fields(self):
         """The periodic tick carries only process metrics, never DB-derived state.
@@ -165,7 +150,9 @@ class TestUIRoutes:
         event_start = len(ui_routes._ui_event_replay)
         response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
 
-        _assert_acknowledged(response, request_id, ["widgets.updated"])
+        assert_acknowledged(
+            response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
+        )
         envelope = next(
             event
             for event in ui_routes._ui_event_replay[event_start:]
@@ -182,7 +169,9 @@ class TestUIRoutes:
         event_start = len(ui_routes._ui_event_replay)
         response = client.get("/api/ui/mcp", headers={"X-Request-ID": request_id})
 
-        _assert_acknowledged(response, request_id, ["mcp.snapshot"])
+        assert_acknowledged(
+            response, ["mcp.snapshot"], request_id=request_id, check_request_id_header=True
+        )
         envelope = next(
             event
             for event in ui_routes._ui_event_replay[event_start:]
@@ -199,10 +188,11 @@ class TestUIRoutes:
             headers={"X-Request-ID": create_request_id},
         )
 
-        _assert_acknowledged(
+        assert_acknowledged(
             create_response,
-            create_request_id,
             ["chat.session.created", "chat.sessions.snapshot"],
+            request_id=create_request_id,
+            check_request_id_header=True,
         )
         thread_id = "thread-1"
         stored = document_store.get_document("backend.chat.sessions", thread_id)
@@ -216,10 +206,11 @@ class TestUIRoutes:
             json={"pinned": True, "shared": True, "archived": True},
             headers={"X-Request-ID": patch_request_id},
         )
-        _assert_acknowledged(
+        assert_acknowledged(
             patch_response,
-            patch_request_id,
             ["chat.session.metadata.updated", "chat.sessions.snapshot"],
+            request_id=patch_request_id,
+            check_request_id_header=True,
         )
 
         list_request_id = "chat-list-request"
@@ -227,7 +218,12 @@ class TestUIRoutes:
             "/api/ui/chats?include_archived=true",
             headers={"X-Request-ID": list_request_id},
         )
-        _assert_acknowledged(list_response, list_request_id, ["chat.sessions.snapshot"])
+        assert_acknowledged(
+            list_response,
+            ["chat.sessions.snapshot"],
+            request_id=list_request_id,
+            check_request_id_header=True,
+        )
         from app.backend import ui_routes
 
         replay = ui_routes._ui_event_replay[-1]
@@ -252,10 +248,11 @@ class TestUIRoutes:
             headers={"X-Request-ID": request_id},
         )
 
-        _assert_acknowledged(
+        assert_acknowledged(
             detail_response,
-            request_id,
             ["chat.session.upserted", "chat.session.selected"],
+            request_id=request_id,
+            check_request_id_header=True,
         )
         upserted = ui_routes._ui_event_replay[-2]
         selected = ui_routes._ui_event_replay[-1]
@@ -582,7 +579,7 @@ class TestUIRoutes:
         response = client.get("/api/ui/prompts")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         from app.backend import ui_routes
 
         replay = ui_routes._ui_event_replay[-1]
@@ -658,7 +655,7 @@ class TestUIRoutes:
         response = client.get("/api/ui/kanban")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         from app.backend import ui_routes
 
         replay = ui_routes._ui_event_replay[-1]
@@ -716,7 +713,12 @@ class TestUIRoutes:
         try:
             response = client.get(f"/api/ui/tasks/{card_id}/activity")
             request_id = response.headers["X-Request-ID"]
-            _assert_acknowledged(response, request_id, ["task.activity.updated"])
+            assert_acknowledged(
+                response,
+                ["task.activity.updated"],
+                request_id=request_id,
+                check_request_id_header=True,
+            )
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
             ui_routes._ui_stream_subscribers.discard(queue)
@@ -740,7 +742,7 @@ class TestUIRoutes:
 
         assert create_response.status_code == 202
         data = create_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
@@ -768,7 +770,7 @@ class TestUIRoutes:
 
         assert patch_response.status_code == 202
         data = patch_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
 
         stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
@@ -795,7 +797,7 @@ class TestUIRoutes:
         )
         assert create_response.status_code == 202
         data = create_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "kanban.snapshot" in data["event_types"]
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
@@ -812,7 +814,7 @@ class TestUIRoutes:
         )
         assert patch_response.status_code == 202
         data = patch_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         stored_card = tasks_state_reader.document_store.get_document(
             PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
@@ -823,7 +825,7 @@ class TestUIRoutes:
             json={"project_id": ""},
         )
         assert cleared.status_code == 202
-        _assert_acknowledgement(cleared.json())
+        assert_acknowledgement_body(cleared.json())
         stored_card = tasks_state_reader.document_store.get_document(
             PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
@@ -856,7 +858,7 @@ class TestUIRoutes:
 
         assert patch_response.status_code == 202
         data = patch_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card.payload["metadata"]["subtasks"][0]["title"] == "First subtask"
         assert stored_card.payload["metadata"]["subtasks"][1]["done"] is True
@@ -889,7 +891,7 @@ class TestUIRoutes:
 
         assert patch_response.status_code == 202
         data = patch_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         stored_card_updated = store.get_document(
             PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
@@ -916,7 +918,7 @@ class TestUIRoutes:
 
         assert reorder_response.status_code == 202
         data = reorder_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         assert board.payload["card_order"][0] == first_id
         assert board.payload["card_order"][1] == third_id
@@ -928,7 +930,7 @@ class TestUIRoutes:
 
         assert move_response.status_code == 202
         data = move_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert True
         assert True
 
@@ -997,7 +999,7 @@ class TestUIRoutes:
         create_response = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"})
         assert create_response.status_code == 202
         data = create_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         store = tasks_state_reader.document_store
         board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         card_id = board.payload["card_order"][-1]
@@ -1033,7 +1035,7 @@ class TestUIRoutes:
 
         assert create_response.status_code == 202
         data = create_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         schedule_path = kanban_state_reader.config_dir / "schedule.json"
         before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
         schedule_id = list(before_delete.keys())[0]
@@ -1045,7 +1047,7 @@ class TestUIRoutes:
 
         assert delete_response.status_code == 202
         data = delete_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
         assert after_delete == {}
         from app.backend import ui_routes
@@ -1059,13 +1061,13 @@ class TestUIRoutes:
 
         assert repeated_delete.status_code == 202
         data = repeated_delete.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         from app.backend import ui_routes
 
         replay = ui_routes._ui_event_replay[-1]
@@ -1076,7 +1078,7 @@ class TestUIRoutes:
         response = client.get("/api/ui/alerts")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
     def test_mark_alerts_viewed_endpoint(self, client):
         first = create_alert(type="warning", title="Build", message="Build failed")
@@ -1086,7 +1088,7 @@ class TestUIRoutes:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
         from app.backend import ui_routes
 
@@ -1103,7 +1105,7 @@ class TestUIRoutes:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
         from app.backend import ui_routes
 
@@ -1122,7 +1124,7 @@ class TestUIRoutes:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
         from app.backend import ui_routes
 
@@ -1167,7 +1169,7 @@ class TestLogsEndpoint:
         response = client.get("/api/ui/logs")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "request_id" in data
         assert "event_types" in data
 
@@ -1176,7 +1178,7 @@ class TestLogsEndpoint:
         response = client.get("/api/ui/logs?format=json")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "request_id" in data
         assert "event_types" in data
 
@@ -1217,7 +1219,7 @@ class TestLogsEndpoint:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "request_id" in data
         assert "event_types" in data
 
@@ -1256,7 +1258,7 @@ class TestLogsEndpoint:
         )
         assert full_response.status_code == 202
         data = full_response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
     def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader):
         """Test inclusive start/end date filtering."""
@@ -1269,7 +1271,7 @@ class TestLogsEndpoint:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
     def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
         """Test export endpoint returns accepted response."""
@@ -1283,7 +1285,7 @@ class TestLogsEndpoint:
         response = client.get("/api/ui/logs/export?format=jsonl")
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "request_id" in data
         assert "event_types" in data
 
@@ -1321,10 +1323,11 @@ class TestLogsEndpoint:
                 "/api/ui/logs/export?format=jsonl",
                 headers={"X-Request-ID": request_id},
             )
-            _assert_acknowledged(
+            assert_acknowledged(
                 response,
-                request_id,
                 ["logs.export.started", "logs.export.chunk", "logs.export.completed"],
+                request_id=request_id,
+                check_request_id_header=True,
             )
             emitted = []
             while not queue.empty():
@@ -1419,10 +1422,11 @@ class TestLogsEndpoint:
                 "/api/ui/logs/export",
                 headers={"X-Request-ID": request_id},
             )
-            _assert_acknowledged(
+            assert_acknowledged(
                 response,
-                request_id,
                 ["logs.export.started", "logs.export.completed"],
+                request_id=request_id,
+                check_request_id_header=True,
             )
             emitted = []
             while not queue.empty():
@@ -1449,7 +1453,7 @@ class TestLogsEndpoint:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "request_id" in data
         assert "event_types" in data
 
@@ -1476,7 +1480,7 @@ class TestScheduleEndpoint:
         )
         assert created.status_code == 202
         data = created.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert doc is not None
         schedule_ids = list(doc.payload.keys())
@@ -1491,7 +1495,7 @@ class TestScheduleEndpoint:
         )
         assert patched.status_code == 202
         patched_data = patched.json()
-        _assert_acknowledgement(patched_data)
+        assert_acknowledgement_body(patched_data)
         entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is True
         assert entry["enabled"] is False
@@ -1557,7 +1561,9 @@ class TestLogsPage:
             headers={"X-Request-ID": request_id},
         )
 
-        _assert_acknowledged(response, request_id, ["logs.page.loaded"])
+        assert_acknowledged(
+            response, ["logs.page.loaded"], request_id=request_id, check_request_id_header=True
+        )
         emitted = ui_routes._ui_event_replay[event_start:]
         event = next(
             envelope
@@ -1803,7 +1809,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
         document = store.get_document(PROGENITOR_STATE_PREFIX, "mcp", {})
         assert document is not None
@@ -1885,7 +1891,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         from app.backend import ui_routes
 
         # The refresh broadcasts a widgets.updated event (inspection data is ephemeral)
@@ -1951,7 +1957,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
@@ -1985,7 +1991,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
         schedule_ids = list(document.payload.keys())
@@ -2010,7 +2016,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
 
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         stored = json.loads(event_path.read_text(encoding="utf-8"))
@@ -2059,7 +2065,7 @@ class TestWorkspaceBridgeActions:
 
         assert response.status_code == 202
         data = response.json()
-        _assert_acknowledgement(data)
+        assert_acknowledgement_body(data)
         assert "widgets.updated" in data["event_types"]
 
         stored = json.loads(event_path.read_text(encoding="utf-8"))
@@ -2230,9 +2236,9 @@ class TestWorkspaceBridgeActions:
             assert run_response.status_code == 202
             assert generate_response.status_code == 202
             data = run_response.json()
-            _assert_acknowledgement(data)
+            assert_acknowledgement_body(data)
             data = generate_response.json()
-            _assert_acknowledgement(data)
+            assert_acknowledgement_body(data)
             assert mock_client.send_message.await_count == 2
             sent_messages = [call.args[0] for call in mock_client.send_message.await_args_list]
             assert sent_messages == [
@@ -2311,8 +2317,8 @@ class TestWorkspaceBridgeActions:
 
             assert run_response.status_code == 202
             assert generate_response.status_code == 202
-            _assert_acknowledgement(run_response.json())
-            _assert_acknowledgement(generate_response.json())
+            assert_acknowledgement_body(run_response.json())
+            assert_acknowledgement_body(generate_response.json())
 
             metadata_values = [
                 call.kwargs["metadata"]["thread_id"]
