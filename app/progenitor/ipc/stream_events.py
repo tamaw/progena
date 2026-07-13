@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Reserved event_type values already used by the loop / service.
 _RESERVED_EVENT_TYPES = frozenset(
-    {"message_delta", "node_update", "reasoning_delta", "reasoning_summary"}
+    {"message_delta", "node_update", "reasoning_delta", "reasoning_summary", "todos_update"}
 )
 
 # Event types middleware/subagents may emit via get_stream_writer.

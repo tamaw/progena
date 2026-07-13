@@ -19,6 +19,7 @@ export function normalizeStreamEvent(event, index) {
     metadata: event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
       ? event.metadata
       : {},
+    timestamp: Number.isFinite(event.timestamp) ? event.timestamp : undefined,
   };
 }
 
@@ -100,6 +101,7 @@ export function createStreamEvent(streamEvent) {
       && !Array.isArray(streamEvent.metadata)
         ? streamEvent.metadata
         : {},
+    timestamp: Date.now(),
   };
 
   if (Array.isArray(streamEvent.images) && streamEvent.images.length > 0) {

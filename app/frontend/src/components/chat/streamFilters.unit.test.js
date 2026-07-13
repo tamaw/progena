@@ -9,12 +9,14 @@ import {
 describe('categoryForEventType', () => {
   it('maps event types to categories', () => {
     expect(categoryForEventType('message_delta')).toBeNull();
+    expect(categoryForEventType('assistant_metadata')).toBeNull();
     expect(categoryForEventType('node_update')).toBe('debug');
     expect(categoryForEventType('reasoning_delta')).toBe('reasoning');
     expect(categoryForEventType('reasoning_summary')).toBe('reasoning');
     expect(categoryForEventType('tool_error')).toBe('errors');
     expect(categoryForEventType('tool_start')).toBe('tools');
     expect(categoryForEventType('tool_result')).toBe('tools');
+    expect(categoryForEventType('todos_update')).toBe('plan');
     expect(categoryForEventType('something_else')).toBe('debug');
     expect(categoryForEventType(123)).toBe('debug');
   });

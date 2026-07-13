@@ -91,6 +91,30 @@ describe('normalizeBackendChatMessage', () => {
     expect(types).toEqual(['tool_start', 'tool_result']);
     expect(m.streamEvents[0].metadata.tool_name).toBe('search');
   });
+
+  it('carries the tool call created_at onto both synthesized events as a real timestamp', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm4',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [
+        { id: 't1', name: 'search', args: {}, result: 'res', created_at: '2026-07-11T02:31:08+00:00' },
+      ],
+    }, 1);
+    const expected = new Date('2026-07-11T02:31:08+00:00').getTime();
+    expect(m.streamEvents[0].timestamp).toBe(expected);
+    expect(m.streamEvents[1].timestamp).toBe(expected);
+  });
+
+  it('leaves timestamp undefined when the tool call has no created_at', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm5',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 't1', name: 'search', args: {}, result: 'res' }],
+    }, 1);
+    expect(m.streamEvents[0].timestamp).toBeUndefined();
+  });
 });
 
 describe('buildChatSessionItems', () => {

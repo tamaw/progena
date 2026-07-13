@@ -300,6 +300,34 @@ def extract_reasoning_token_count(msg: Any) -> int | None:
     return None
 
 
+def extract_display_metadata(msg: Any) -> dict[str, Any]:
+    """Extract display metadata fields from an AI message's response_metadata.
+
+    Returns a dict with the existing keys ``display_agent_name``,
+    ``display_model_name``, and ``display_tool_calls`` when present.
+    Used by both checkpoint loading (chat_sessions) and live streaming
+    (deepagent_stream) so they share one metadata contract.
+    """
+    if msg is None:
+        return {}
+    metadata = (
+        msg.get("response_metadata")
+        if isinstance(msg, dict)
+        else getattr(msg, "response_metadata", None)
+    )
+    if not isinstance(metadata, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in ("display_agent_name", "display_model_name"):
+        value = metadata.get(key)
+        if isinstance(value, str) and value:
+            result[key] = value
+    tool_calls = metadata.get("display_tool_calls")
+    if isinstance(tool_calls, list):
+        result["display_tool_calls"] = tool_calls
+    return result
+
+
 def _coerce_reasoning_summary_text(value: Any) -> str | None:
     if value is None:
         return None
@@ -358,6 +386,7 @@ def _extract_reasoning_token_count_from_container(container: dict[str, Any]) -> 
 __all__ = [
     "attach_reasoning_trace",
     "coerce_messages_list",
+    "extract_display_metadata",
     "extract_message_text",
     "extract_reasoning_trace",
     "extract_reasoning_token_count",

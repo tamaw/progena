@@ -51,7 +51,7 @@ class ScriptedBridge:
         self._script = script
         self.thread_id: str | None = None
 
-    async def stream(self, message: str, *, thread_id: str):
+    async def stream(self, message: str, *, thread_id: str, received_at: float | None = None):
         self.thread_id = thread_id
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
@@ -314,6 +314,50 @@ async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
     assert frames == [("done", {"request_id": "req-cancel", "status": "cancelled"})]
     assert loop_runner.state_manager.saved_checkpoints == []
     assert not loop_runner.queues.cycle_complete_event.is_set()
+
+
+async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeypatch) -> None:
+    """A long silent gap in bridge.stream() must not starve the response body.
+
+    Regression test: bridge.stream() can go quiet for minutes (a long tool
+    call or subagent invocation with no interim output). Without periodic
+    keepalive bytes, the backend's httpx client eventually hits its read
+    timeout and surfaces a spurious "Streaming error" to the user even though
+    the turn was still in progress.
+    """
+    monkeypatch.setattr("app.progenitor.runtime.http_chat.EVENTS_KEEPALIVE_SECONDS", 0.05)
+
+    loop_runner = FakeLoopRunner()
+    gate = asyncio.Event()
+    script = [
+        _Wait(gate),
+        {"type": "stream_chunk", "content": "hello", "is_final": True},
+    ]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+    try:
+        async with (
+            _client() as client,
+            client.stream(
+                "POST",
+                f"{server.base_url}/v1/chat",
+                json={"message": "hi", "request_id": "req-keepalive"},
+            ) as response,
+        ):
+            assert response.status_code == 200
+            raw = b""
+            gate_released = False
+            async for chunk in response.aiter_bytes():
+                raw += chunk
+                if not gate_released and raw.count(b": keepalive\n\n") >= 2:
+                    gate_released = True
+                    gate.set()
+                if b"event: done\n" in raw:
+                    break
+    finally:
+        gate.set()
+        await _stop_chat_server(server)
+
+    assert raw.count(b": keepalive\n\n") >= 2
 
 
 async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> None:

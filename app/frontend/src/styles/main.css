@@ -419,8 +419,4 @@ kbd {
     .sidebar.open {
         transform: translateX(0);
     }
-
-    .input-hints {
-        display: none;
-    }
 }

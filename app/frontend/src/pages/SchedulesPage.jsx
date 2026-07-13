@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
+import { useParams } from 'react-router-dom';
+import { useEntityUrlSync } from '../lib/routes';
 import {
   PaneList,
   PaneListFilters,
@@ -274,6 +276,7 @@ function SchedulesPage() {
   const { retriggerSchedule } = useSchedulesApi();
   const { getApiUrl } = useConfig();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
+  const { scheduleId: urlScheduleId } = useParams();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once via REST on mount; every change after that arrives as an event.
@@ -292,7 +295,7 @@ function SchedulesPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [selectedScheduleId, setSelectedScheduleId] = useState(null);
+  const [selectedScheduleId, setSelectedScheduleId] = useState(() => urlScheduleId || null);
   const [mutating, setMutating] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -395,6 +398,13 @@ function SchedulesPage() {
 
   const selectedSchedule =
     schedules.find((schedule) => schedule.id === selectedScheduleId) || visibleSchedules[0] || null;
+
+  // Keep the URL in sync with whichever schedule is actually selected -- a
+  // deep-linked or stale id falls back to the top visible schedule the same
+  // way `selectedSchedule` already does above. The title slug is cosmetic;
+  // only the id segment is ever read back.
+  useEntityUrlSync('/schedules', selectedSchedule?.id, selectedSchedule?.name);
+
   const activeCount = schedules.filter((schedule) => !schedule.paused).length;
   const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;
   const completedCount = schedules.filter((schedule) => statusOf(schedule) === 'completed').length;

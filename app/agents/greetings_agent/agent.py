@@ -37,6 +37,7 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -82,10 +83,14 @@ from acp.schema import (
     WaitForTerminalExitResponse,
     WriteTextFileResponse,
 )
+from dotenv import load_dotenv
 from fastapi.responses import JSONResponse
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
+
+# Load this agent's own .env (not the repo-root one) to keep it self-contained.
+load_dotenv(Path(__file__).with_name(".env"))
 
 logger = logging.getLogger("greetings_agent")
 
@@ -337,6 +342,8 @@ _SYSTEM_PROMPT = """\
 You are greetings_agent, a tiny test agent. Your only job is to reply with a short,
 friendly greeting (1-2 sentences).
 
+- If asked your name or who/what you are, say you are "greetings_agent".
+- Repeat back what the caller said as part of your greeting, so it's clear you read it.
 - If the request asks you to sleep, wait, or take your time for some number of seconds,
   call the `sleep` tool with that duration first, then greet.
 - If the request mentions Copilot, call the `probe_copilot` tool to ask the local GitHub
