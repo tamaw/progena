@@ -138,7 +138,6 @@ export function useChatStream({
     setIsGenerating(true);
 
     const streamId = `stream_${Date.now()}`;
-    const previousStreamId = activeStreamIdRef.current;
     activeStreamIdRef.current = streamId;
 
     // Start the live turn — no assistant message created yet.
@@ -287,7 +286,7 @@ export function useChatStream({
             return;
           }
 
-          updateLiveTurn((prev) => applyAssistantStreamEvent(prev, streamEvent, Date.now()));
+          updateLiveTurn((prev) => applyAssistantStreamEvent(prev, streamEvent));
         },
         threadMetadata,
         streamKey,

@@ -59,7 +59,7 @@ export function applyAssistantMetadata(turn, metadata) {
 }
 
 /** Apply a non-visual stream event (control event like node metadata). */
-export function applyAssistantStreamEvent(turn, streamEvent, now) {
+export function applyAssistantStreamEvent(turn, streamEvent) {
   const nextEvent = createStreamEvent(streamEvent);
   if (!nextEvent) return turn;
 

@@ -734,7 +734,6 @@ function ConversationPage() {
       return;
     }
 
-    const previousAssistantId = activeStreamIdRef.current;
     const previousThreadId = threadId;
     const archivedMessages = messages.map((message) => stripEphemeralStreamEvents(message));
     setIsClearingSession(true);

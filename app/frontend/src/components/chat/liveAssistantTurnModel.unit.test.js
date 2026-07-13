@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -9,10 +9,6 @@ import {
   toCommittedAssistantMessage,
 } from './liveAssistantTurnModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
-import {
-  createStreamEvent,
-  appendStreamEvent,
-} from './streamEventsModel';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
