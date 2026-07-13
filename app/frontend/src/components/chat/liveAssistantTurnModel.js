@@ -200,10 +200,13 @@ function collectTodosByToolCallId(streamEvents) {
  *
  * The backend attaches a turn's tool calls to whichever message carries the
  * final answer text, so the live interleave itself isn't recorded -- but
- * every item here carries a real timestamp (an AIMessage's
+ * most items here carry a real timestamp (an AIMessage's
  * response_metadata.created_at: stamped onto each tool call by
  * _extract_raw_tool_calls on the backend, and onto the assistant row via
- * ChatMessage.created_at), so a plain sort on that reproduces true order.
+ * ChatMessage.created_at), so sorting on that reproduces true order. Older
+ * persisted tool calls predating that stamping fall back to the assistant
+ * row's own timestamp instead (see the sort below) rather than corrupting
+ * the order with NaN.
  */
 export function buildDefaultAssistantTimeline(message) {
   if (!message || message.role !== 'assistant') return undefined;
@@ -252,7 +255,18 @@ export function buildDefaultAssistantTimeline(message) {
     reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
   });
 
-  return items.sort((a, b) => a.timestamp - b.timestamp);
+  // Stream events reconstructed from pre-timestamp checkpoint data (or any
+  // malformed persisted event) can carry an undefined timestamp -- subtracting
+  // undefined produces NaN, which Array.sort's comparator contract treats as
+  // "equal" inconsistently across engines. Fall back to the message's own
+  // timestamp (always valid, see normalizeBackendChatMessage) so those items
+  // sort next to the turn they belong to instead of corrupting the order.
+  const fallbackTimestamp = Number.isFinite(message.timestamp) ? message.timestamp : 0;
+  return items.sort((a, b) => {
+    const at = Number.isFinite(a.timestamp) ? a.timestamp : fallbackTimestamp;
+    const bt = Number.isFinite(b.timestamp) ? b.timestamp : fallbackTimestamp;
+    return at - bt;
+  });
 }
 
 /**

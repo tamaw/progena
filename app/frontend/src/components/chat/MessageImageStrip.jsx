@@ -44,7 +44,11 @@ export default function MessageImageStrip({ images }) {
             onClick={() => openLightbox(image)}
             role="button"
             tabIndex={0}
-            onKeyDown={(e) => e.key === 'Enter' && openLightbox(image)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Enter' && e.key !== ' ') return;
+              e.preventDefault();
+              openLightbox(image);
+            }}
             aria-label={`View image ${index + 1} full size`}
           >
             <div className="img-thumb__inner img-thumb__inner--photo">
