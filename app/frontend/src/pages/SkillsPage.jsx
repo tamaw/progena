@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
+import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
 import {
   fetchSkills,
@@ -107,6 +108,7 @@ export default function SkillsPage() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const skillsUrl = getApiUrl('skills');
+  const realtime = useSelector(selectRealtime);
   const skills = useSelector(selectSkills);
   const skillsState = useSelector(selectSkillsState);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('skills-sidebar prompts-sidebar sess-list');
@@ -114,7 +116,9 @@ export default function SkillsPage() {
   const [selectedPath, setSelectedPath] = useState('');
   const [draftContent, setDraftContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pendingSave, setPendingSave] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [pendingCreatedSkill, setPendingCreatedSkill] = useState(null);
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [activeGroup, setActiveGroup] = useState('All');
@@ -125,36 +129,55 @@ export default function SkillsPage() {
   const requestedPath = searchParams.get('path') || '';
   const loading = skillsState.loading && !skillsState.loaded;
 
-  // Load the catalogue into the store; the list arrives via the fetch response
-  // and stays live through `skills.snapshot` events on /api/ui/stream. The
-  // `isActive` guard avoids a setError after the page unmounts mid-request.
-  const loadSkills = useCallback(
-    (isActive = () => true) => dispatch(fetchSkills({ skillsUrl }))
-      .unwrap()
-      .catch((loadError) => {
-        if (isActive()) {
-          setError(loadError);
-        }
-      }),
-    [dispatch, skillsUrl],
-  );
+  // Request the catalogue only after the canonical stream is ready; the matching
+  // `skills.snapshot` event is the sole source of skill data.
+  const loadSkills = useCallback(async () => {
+    setError(null);
+    await dispatch(fetchSkills({ skillsUrl })).unwrap();
+  }, [dispatch, skillsUrl]);
 
   useEffect(() => {
-    let active = true;
-    loadSkills(() => active);
-    return () => {
-      active = false;
-    };
-  }, [loadSkills]);
+    if (!realtime.connected) {
+      return;
+    }
+    // The acknowledgement failure is reflected in local view state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadSkills().catch(setError);
+  }, [loadSkills, realtime.connected]);
+  // Creation is durable only once its own canonical snapshot is applied.
+  useEffect(() => {
+    if (
+      !pendingCreatedSkill?.acknowledged
+      || skillsState.snapshotRequestId !== pendingCreatedSkill.requestId
+    ) {
+      return;
+    }
+    const createdSkill = skills.find((skill) => (
+      skill.agent === pendingCreatedSkill.agent && skill.name === pendingCreatedSkill.name
+    ));
+    if (!createdSkill) {
+      return;
+    }
+    // Canonical event application is the intentional source of this local UI transition.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedPath(createdSkill.path);
+    setDraftContent(createdSkill.content || '');
+    setCreating(false);
+    setSaving(false);
+    setPendingCreatedSkill(null);
+    setStatusMessage(`Created ${createdSkill.path}.`);
+  }, [pendingCreatedSkill, skills, skillsState.snapshotRequestId]);
 
   // Seed (or re-seed) the selection from the store list whenever it changes via
   // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
   // current selection. Runs on `skills`/`requestedPath` changes only (not on
   // user clicks), so selecting a row never gets clobbered.
   useEffect(() => {
-    if (creating || skills.length === 0) {
+    if (creating || pendingCreatedSkill || skills.length === 0) {
       return;
     }
+    // Snapshot-driven selection intentionally synchronizes route-local view state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedPath((current) => {
       const next = skills.find((skill) => skill.path === requestedPath)?.path
         || skills.find((skill) => skill.path === current)?.path
@@ -165,7 +188,7 @@ export default function SkillsPage() {
       }
       return next;
     });
-  }, [skills, requestedPath, creating]);
+  }, [skills, requestedPath, creating, pendingCreatedSkill]);
 
   useEffect(() => {
     const currentPath = searchParams.get('path') || '';
@@ -207,11 +230,34 @@ export default function SkillsPage() {
   );
   const hasUnsavedChanges = selectedSkill ? draftContent !== (selectedSkill.content || '') : false;
   const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
+
+  useEffect(() => {
+    if (
+      !pendingSave?.acknowledged
+      || skillsState.snapshotRequestId !== pendingSave.requestId
+    ) {
+      return;
+    }
+    const updatedSkill = skills.find((skill) => skill.path === pendingSave.path);
+    if (!updatedSkill) {
+      return;
+    }
+    // Canonical event application is the intentional source of this local UI transition.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraftContent(updatedSkill.content || '');
+    setSaving(false);
+    setPendingSave(null);
+    setStatusMessage(`Saved ${updatedSkill.path}.`);
+  }, [pendingSave, skills, skillsState.snapshotRequestId]);
   const normalizedNewAgent = normalizeSkillSegment(newAgent);
   const normalizedNewSkillName = normalizeSkillSegment(newSkillName);
   const canCreateSkill = SKILL_NAME_PATTERN.test(normalizedNewAgent) && SKILL_NAME_PATTERN.test(normalizedNewSkillName);
 
   const handleSelectSkill = (skill) => {
+    if (saving) {
+      return;
+    }
+    setPendingCreatedSkill(null);
     setCreating(false);
     setError(null);
     setSelectedPath(skill.path);
@@ -220,10 +266,14 @@ export default function SkillsPage() {
   };
 
   const handleStartCreate = () => {
+    if (saving) {
+      return;
+    }
     const defaultAgent = activeGroup !== 'All' ? activeGroup : 'progenitor';
     const agent = normalizeSkillSegment(defaultAgent) || 'progenitor';
     const skillName = 'new-skill';
     setCreating(true);
+    setPendingCreatedSkill(null);
     setSelectedPath('');
     setNewAgent(agent);
     setNewSkillName(skillName);
@@ -244,22 +294,25 @@ export default function SkillsPage() {
   };
 
   const handleSave = async () => {
-    if (!selectedSkill || !hasUnsavedChanges) {
+    if (!selectedSkill || !hasUnsavedChanges || saving) {
       return;
     }
+    const requestId = crypto.randomUUID();
     setSaving(true);
+    setPendingSave({ requestId, path: selectedSkill.path, acknowledged: false });
     setError(null);
     setStatusMessage('');
     try {
-      const updatedSkill = await dispatch(
-        saveSkill({ skillsUrl, path: selectedSkill.path, content: draftContent }),
+      await dispatch(
+        saveSkill({ skillsUrl, path: selectedSkill.path, content: draftContent, requestId }),
       ).unwrap();
-      setDraftContent(updatedSkill.content || '');
-      setStatusMessage(`Saved ${updatedSkill.path}.`);
+      setPendingSave((current) => (
+        current?.requestId === requestId ? { ...current, acknowledged: true } : current
+      ));
     } catch (saveError) {
-      setError(saveError);
-    } finally {
+      setPendingSave(null);
       setSaving(false);
+      setError(saveError);
     }
   };
 
@@ -268,35 +321,49 @@ export default function SkillsPage() {
       setError(new Error('Use lowercase letters, numbers, hyphens, or underscores for agent and skill names.'));
       return;
     }
+    if (saving) {
+      return;
+    }
+    const requestId = crypto.randomUUID();
     setSaving(true);
+    setPendingCreatedSkill({
+      requestId,
+      agent: normalizedNewAgent,
+      name: normalizedNewSkillName,
+      acknowledged: false,
+    });
     setError(null);
     setStatusMessage('');
     try {
-      const createdSkill = await dispatch(
+      await dispatch(
         createSkill({
           skillsUrl,
           agent: normalizedNewAgent,
           name: normalizedNewSkillName,
           content: draftContent,
+          requestId,
         }),
       ).unwrap();
-      setCreating(false);
-      setSelectedPath(createdSkill.path);
-      setDraftContent(createdSkill.content || '');
-      setStatusMessage(`Created ${createdSkill.path}.`);
-      const nextParams = new URLSearchParams();
-      nextParams.set('path', createdSkill.path);
-      setSearchParams(nextParams, { replace: true });
+      setPendingCreatedSkill((current) => (
+        current?.requestId === requestId ? { ...current, acknowledged: true } : current
+      ));
     } catch (createError) {
-      setError(createError);
-    } finally {
+      setPendingCreatedSkill(null);
       setSaving(false);
+      setError(createError);
     }
   };
 
   const handleRefreshList = async () => {
+    if (saving) {
+      return;
+    }
     setCreating(false);
-    await loadSkills();
+    try {
+      await loadSkills();
+    } catch (loadError) {
+      setError(loadError);
+    }
   };
 
   return (
@@ -323,7 +390,7 @@ export default function SkillsPage() {
 
         <PaneListScroll className="prompts-sidebar-body">
           {loading && <div className="prompts-empty-state">Loading skills...</div>}
-          {error && !loading && skills.length === 0 && <div className="prompts-empty-state">Failed to load skills.</div>}
+          {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">Failed to load skills.</div>}
           {!loading && skills.length === 0 && (
             <div className="prompts-empty-state">No skills found. Create one to share reusable behavior with agents.</div>
           )}
@@ -361,8 +428,8 @@ export default function SkillsPage() {
             <DetailHeader
               title={creating ? 'New skill' : (selectedSkill.title || selectedSkill.name)}
               meta={[
-                <DetailStatus key="status" tone={creating ? 'muted' : (hasUnsavedChanges ? 'info' : 'ok')}>
-                  {creating ? 'Draft skill' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}
+                <DetailStatus key="status" tone={creating ? 'muted' : (saving || hasUnsavedChanges ? 'info' : 'ok')}>
+                  {creating ? (saving ? 'Saving...' : 'Draft skill') : (saving ? 'Saving...' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved'))}
                 </DetailStatus>,
                 creating ? null : <span key="agent" className="taskid">{selectedSkill.agent}</span>,
                 creating ? null : <span key="name" className="taskid">{selectedSkill.name}</span>,
@@ -453,12 +520,13 @@ export default function SkillsPage() {
                   value={draftContent}
                   onChange={(event) => setDraftContent(event.target.value)}
                   spellCheck={false}
+                  disabled={saving}
                 />
               )}
             </div>
 
             <div className="prompts-editor-footer">
-              <span>{creating ? 'Draft skill' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}</span>
+              <span>{creating ? (saving ? 'Saving...' : 'Draft skill') : (saving ? 'Saving...' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved'))}</span>
               <span>{statusMessage || error?.message || ''}</span>
             </div>
           </>

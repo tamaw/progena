@@ -4,7 +4,7 @@
  * and `workflow.run.*` events on /api/ui/stream.
  */
 import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { requestJson, withQuery } from '../http';
+import { createOperationRequestId, requestAcknowledged, withQuery } from '../http';
 
 function workflowPathForId(workflowId) {
   return workflowId ? `/state/workflows/${workflowId}.json` : '';
@@ -16,19 +16,24 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    requestId: null,
     detailByPath: {},
     runs: [],
     runsLoaded: false,
     runsLoading: false,
     runsError: null,
+    runsRequestId: null,
   },
 };
 
-function applyWorkflowItems(state, items) {
-  state.workflows.items = Array.isArray(items) ? items : [];
+function applyWorkflowItems(state, payload) {
+  state.workflows.items = Array.isArray(payload.items) ? payload.items : [];
   state.workflows.loaded = true;
-  state.workflows.loading = false;
-  state.workflows.error = null;
+  if (!state.workflows.loading || payload.request_id === state.workflows.requestId) {
+    state.workflows.loading = false;
+    state.workflows.error = null;
+    state.workflows.requestId = null;
+  }
 }
 
 function upsertWorkflowListItem(state, workflow) {
@@ -83,12 +88,15 @@ function sortRuns(runs) {
   });
 }
 
-function applyWorkflowRuns(state, items) {
-  state.workflows.runs = Array.isArray(items) ? [...items] : [];
+function applyWorkflowRuns(state, payload) {
+  state.workflows.runs = Array.isArray(payload.items) ? [...payload.items] : [];
   sortRuns(state.workflows.runs);
   state.workflows.runsLoaded = true;
-  state.workflows.runsLoading = false;
-  state.workflows.runsError = null;
+  if (!state.workflows.runsLoading || payload.request_id === state.workflows.runsRequestId) {
+    state.workflows.runsLoading = false;
+    state.workflows.runsError = null;
+    state.workflows.runsRequestId = null;
+  }
 }
 
 function upsertWorkflowRun(state, run) {
@@ -104,88 +112,79 @@ function upsertWorkflowRun(state, run) {
   sortRuns(state.workflows.runs);
 }
 
-export const fetchWorkflows = createAsyncThunk(
-  'uiData/fetchWorkflows',
-  ({ workflowsUrl }) => requestJson(workflowsUrl, { errorLabel: 'Failed to load workflows' }),
-);
+export const fetchWorkflows = createAsyncThunk('uiData/fetchWorkflows', async ({ workflowsUrl }, { requestId }) => {
+  return requestAcknowledged(workflowsUrl, { requestId });
+}, { idGenerator: createOperationRequestId });
 
-export const fetchWorkflowContent = createAsyncThunk(
-  'uiData/fetchWorkflowContent',
-  ({ workflowsUrl, path }) => requestJson(
+export const fetchWorkflowContent = createAsyncThunk('uiData/fetchWorkflowContent', async ({ workflowsUrl, path }, { requestId }) => {
+  return requestAcknowledged(
     withQuery(`${workflowsUrl}/content`, { path }),
-    { errorLabel: 'Failed to load workflow' },
-  ),
-);
+    { requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
-export const saveWorkflow = createAsyncThunk(
-  'uiData/saveWorkflow',
-  ({ workflowsUrl, path, workflow }) => requestJson(`${workflowsUrl}/content`, {
+export const saveWorkflow = createAsyncThunk('uiData/saveWorkflow', async ({ workflowsUrl, path, workflow }, { requestId }) => {
+  return requestAcknowledged(`${workflowsUrl}/content`, {
     method: 'PUT',
     body: { path, workflow },
-    errorLabel: 'Failed to save workflow',
-  }),
-);
+    requestId,
+  });
+}, { idGenerator: createOperationRequestId });
 
-export const createWorkflow = createAsyncThunk(
-  'uiData/createWorkflow',
-  ({ workflowsUrl, title, description, eventType }) => requestJson(workflowsUrl, {
+export const createWorkflow = createAsyncThunk('uiData/createWorkflow', async ({ workflowsUrl, title, description, eventType }, { requestId }) => {
+  return requestAcknowledged(workflowsUrl, {
     method: 'POST',
     body: {
       title,
       description,
       event_type: eventType,
     },
-    errorLabel: 'Failed to create workflow',
-  }),
-);
+    requestId,
+  });
+}, { idGenerator: createOperationRequestId });
 
-export const deleteWorkflow = createAsyncThunk(
-  'uiData/deleteWorkflow',
-  async ({ workflowsUrl, workflowId }) => {
-    await requestJson(`${workflowsUrl}/${encodeURIComponent(workflowId)}`, {
-      method: 'DELETE',
-      errorLabel: 'Failed to delete workflow',
-    });
-    return { workflowId };
-  },
-);
+export const deleteWorkflow = createAsyncThunk('uiData/deleteWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+  return requestAcknowledged(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}`,
+    { method: 'DELETE', requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
-export const pauseWorkflow = createAsyncThunk(
-  'uiData/pauseWorkflow',
-  ({ workflowsUrl, workflowId }) => requestJson(`${workflowsUrl}/${encodeURIComponent(workflowId)}/pause`, {
-    method: 'POST',
-    errorLabel: 'Failed to pause workflow',
-  }),
-);
+export const pauseWorkflow = createAsyncThunk('uiData/pauseWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+  return requestAcknowledged(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}/pause`,
+    { method: 'POST', requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
-export const resumeWorkflow = createAsyncThunk(
-  'uiData/resumeWorkflow',
-  ({ workflowsUrl, workflowId }) => requestJson(`${workflowsUrl}/${encodeURIComponent(workflowId)}/resume`, {
-    method: 'POST',
-    errorLabel: 'Failed to resume workflow',
-  }),
-);
+export const resumeWorkflow = createAsyncThunk('uiData/resumeWorkflow', async ({ workflowsUrl, workflowId }, { requestId }) => {
+  return requestAcknowledged(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}/resume`,
+    { method: 'POST', requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
-export const triggerWorkflow = createAsyncThunk(
-  'uiData/triggerWorkflow',
-  ({ workflowsUrl, workflowId, eventType, payload }) => requestJson(`${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`, {
-    method: 'POST',
-    body: {
-      ...(eventType ? { event_type: eventType } : {}),
-      ...(payload ? { payload } : {}),
+export const triggerWorkflow = createAsyncThunk('uiData/triggerWorkflow', async ({ workflowsUrl, workflowId, eventType, payload }, { requestId }) => {
+  return requestAcknowledged(
+    `${workflowsUrl}/${encodeURIComponent(workflowId)}/trigger`,
+    {
+      method: 'POST',
+      body: {
+        ...(eventType ? { event_type: eventType } : {}),
+        ...(payload ? { payload } : {}),
+      },
+      requestId,
     },
-    errorLabel: 'Failed to trigger workflow',
-  }),
-);
+  );
+}, { idGenerator: createOperationRequestId });
 
-export const fetchWorkflowRuns = createAsyncThunk(
-  'uiData/fetchWorkflowRuns',
-  ({ workflowRunsUrl }) => requestJson(workflowRunsUrl, { errorLabel: 'Failed to load workflow runs' }),
-);
+export const fetchWorkflowRuns = createAsyncThunk('uiData/fetchWorkflowRuns', async ({ workflowRunsUrl }, { requestId }) => {
+  return requestAcknowledged(workflowRunsUrl, { requestId });
+}, { idGenerator: createOperationRequestId });
 
 export const eventHandlers = {
   'workflows.snapshot': (state, payload) => {
-    applyWorkflowItems(state, payload.items);
+    applyWorkflowItems(state, payload);
   },
   'workflow.updated': (state, payload) => {
     upsertWorkflowDetail(state, payload);
@@ -194,7 +193,7 @@ export const eventHandlers = {
     removeWorkflow(state, payload.workflow_id);
   },
   'workflow.runs.snapshot': (state, payload) => {
-    applyWorkflowRuns(state, payload.items);
+    applyWorkflowRuns(state, payload);
   },
   'workflow.run.started': (state, payload) => {
     upsertWorkflowRun(state, payload);
@@ -212,50 +211,31 @@ export const eventHandlers = {
 
 export function buildExtraReducers(builder) {
   builder
-    .addCase(fetchWorkflows.pending, (state) => {
+    .addCase(fetchWorkflows.pending, (state, action) => {
       state.workflows.loading = true;
       state.workflows.error = null;
-    })
-    .addCase(fetchWorkflows.fulfilled, (state, action) => {
-      applyWorkflowItems(state, action.payload?.items);
+      state.workflows.requestId = action.meta.requestId;
     })
     .addCase(fetchWorkflows.rejected, (state, action) => {
+      if (state.workflows.requestId !== action.meta.requestId) {
+        return;
+      }
       state.workflows.loading = false;
       state.workflows.error = action.error?.message || 'Failed to load workflows';
+      state.workflows.requestId = null;
     })
-    .addCase(fetchWorkflowContent.fulfilled, (state, action) => {
-      upsertWorkflowDetail(state, action.payload);
-    })
-    .addCase(saveWorkflow.fulfilled, (state, action) => {
-      upsertWorkflowDetail(state, action.payload);
-    })
-    .addCase(createWorkflow.fulfilled, (state, action) => {
-      upsertWorkflowDetail(state, action.payload);
-    })
-    .addCase(deleteWorkflow.fulfilled, (state, action) => {
-      removeWorkflow(state, action.payload?.workflowId);
-    })
-    .addCase(pauseWorkflow.fulfilled, (state, action) => {
-      upsertWorkflowDetail(state, action.payload);
-    })
-    .addCase(resumeWorkflow.fulfilled, (state, action) => {
-      upsertWorkflowDetail(state, action.payload);
-    })
-    .addCase(triggerWorkflow.fulfilled, (state, action) => {
-      if (action.payload?.run) {
-        upsertWorkflowRun(state, action.payload.run);
-      }
-    })
-    .addCase(fetchWorkflowRuns.pending, (state) => {
+    .addCase(fetchWorkflowRuns.pending, (state, action) => {
       state.workflows.runsLoading = true;
       state.workflows.runsError = null;
-    })
-    .addCase(fetchWorkflowRuns.fulfilled, (state, action) => {
-      applyWorkflowRuns(state, action.payload?.items);
+      state.workflows.runsRequestId = action.meta.requestId;
     })
     .addCase(fetchWorkflowRuns.rejected, (state, action) => {
+      if (state.workflows.runsRequestId !== action.meta.requestId) {
+        return;
+      }
       state.workflows.runsLoading = false;
       state.workflows.runsError = action.error?.message || 'Failed to load workflow runs';
+      state.workflows.runsRequestId = null;
     });
 }
 

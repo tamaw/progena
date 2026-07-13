@@ -80,22 +80,6 @@ class ResponsePayload(BaseModel):
     usage: Usage = Field(default_factory=Usage)
 
 
-class ModelInfo(BaseModel):
-    """Model information for /v1/models endpoint."""
-
-    id: str
-    object: Literal["model"] = "model"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "progenitor"
-
-
-class ModelsResponse(BaseModel):
-    """Response for /v1/models endpoint."""
-
-    object: Literal["list"] = "list"
-    data: list[ModelInfo]
-
-
 class ErrorDetail(BaseModel):
     """Error detail."""
 
@@ -106,16 +90,9 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Error response."""
+    """Standard API error response wrapper."""
 
     error: ErrorDetail
-
-
-class SimpleChatRequest(BaseModel):
-    """Simple chat request for /chat endpoint."""
-
-    message: str = Field(..., min_length=1, max_length=100000)
-    stream: bool = False
 
 
 class StreamingResponseRequest(ResponseRequest):

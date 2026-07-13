@@ -3,10 +3,10 @@ import https from 'node:https'
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const backendBaseUrl = new URL('http://127.0.0.1:8000')
+const backendBaseUrl = new URL(process.env.VITE_BACKEND_BASE_URL || 'http://127.0.0.1:8000')
 
 function shouldProxy(pathname) {
-  return pathname === '/health' || pathname.startsWith('/api/') || pathname.startsWith('/v1/')
+  return pathname.startsWith('/api/') || pathname.startsWith('/v1/')
 }
 
 function createBackendProxyMiddleware() {

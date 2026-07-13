@@ -1,5 +1,8 @@
-import { useCallback, useRef } from 'react';
-import { useApiClient } from './useApiClient';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
+import { useConfig } from '../../context/ConfigContext';
+import { selectUiEventQueue } from '../../store/realtimeSlice';
+import { requestAcknowledged } from '../../store/http';
 
 function normalizeInputContent(content) {
   if (typeof content === 'string') {
@@ -28,183 +31,188 @@ function buildResponsesInput(history, message) {
     .filter((entry) => entry.content);
 }
 
-function parseSSEEventBlock(block) {
-  if (!block) {
-    return null;
-  }
-
-  let eventType = 'message';
-  const dataLines = [];
-
-  for (const line of block.split('\n')) {
-    if (line.startsWith('event:')) {
-      eventType = line.slice(6).trim() || 'message';
-      continue;
-    }
-    if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-
-  if (dataLines.length === 0) {
-    return null;
-  }
-
-  return {
-    eventType,
-    data: dataLines.join('\n'),
-  };
-}
-
 /**
- * Chat session + streaming responses (Conversation page, runtime shell).
- *
- * This is the genuinely imperative slice of the old `useApi` god hook: it owns
- * the foreground stream lifecycle (abort/cancel) and exposes the shared
- * connection-state indicator.
+ * Foreground Responses API lifecycle shared by the conversation page and
+ * runtime shell. Dispatch receives a 202 acknowledgement; authoritative
+ * generation data and terminal state arrive through the Redux UI event stream.
  */
 export function useChatApi() {
-  const { config, getApiUrl, isHealthy, connectionState, setConnectionState, request } =
-    useApiClient();
-  const abortControllerRef = useRef(null);
+  const { config, getApiUrl } = useConfig();
+  const uiEventQueue = useSelector(selectUiEventQueue);
+  const [connectionState, setConnectionState] = useState('disconnected');
   const activeStreamRequestIdRef = useRef(null);
-  // Identifies which chat the foreground stream belongs to, so a new send only
-  // supersedes (aborts) a stream for the SAME chat — a different chat's stream
-  // is left running to finish in the background.
-  const activeStreamKeyRef = useRef(null);
+  const activeAcknowledgementRef = useRef(null);
+  const pendingStreamsRef = useRef(new Map());
+  const lastConsumedEventSequenceRef = useRef(uiEventQueue.at(-1)?.sequence ?? 0);
+  const consumeStreamEvent = useCallback((event) => {
+    const type = event?.type;
+    const payload = event?.payload || event?.data;
+    if (typeof type !== 'string' || !type.startsWith('chat.response.') || !payload) {
+      return;
+    }
 
-  const getSession = useCallback(() => request('session'), [request]);
+    const requestId = payload.request_id;
+    const pending = requestId ? pendingStreamsRef.current.get(requestId) : null;
+    if (!pending) {
+      return;
+    }
 
-  const createSession = useCallback(() => request('session', { method: 'POST' }), [request]);
+    if (type === 'chat.response.started') {
+      if (!pending.cancelRequested) {
+        setConnectionState('connected');
+      }
+      return;
+    }
+
+    if (type === 'chat.response.delta') {
+      const delta = typeof payload.delta === 'string' ? payload.delta : '';
+      if (delta && !pending.cancelRequested) {
+        pending.onChunk?.(delta);
+      }
+      return;
+    }
+
+    if (type === 'chat.response.event') {
+      if (!pending.cancelRequested) {
+        pending.onStreamEvent?.(payload);
+      }
+      return;
+    }
+
+    if (!['chat.response.completed', 'chat.response.cancelled', 'chat.response.failed'].includes(type)) {
+      return;
+    }
+
+    pendingStreamsRef.current.delete(requestId);
+    if (activeAcknowledgementRef.current?.requestId === requestId) {
+      activeAcknowledgementRef.current = null;
+    }
+    if (activeStreamRequestIdRef.current === requestId) {
+      activeStreamRequestIdRef.current = null;
+    }
+
+    if (type === 'chat.response.failed') {
+      const message = typeof payload.error === 'string' && payload.error
+        ? payload.error
+        : 'Response generation failed';
+      pending.onError?.(new Error(message));
+      setConnectionState('error');
+    } else {
+      pending.onComplete?.(type === 'chat.response.cancelled' ? 'cancelled' : '');
+      setConnectionState('disconnected');
+    }
+    pending.resolve();
+  }, []);
+
+  useEffect(() => {
+    for (const { sequence, event } of uiEventQueue) {
+      if (sequence <= lastConsumedEventSequenceRef.current) {
+        continue;
+      }
+      lastConsumedEventSequenceRef.current = sequence;
+      // The canonical Redux queue is an external event source; consuming its
+      // frame deliberately updates the foreground stream state synchronously.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      consumeStreamEvent(event);
+    }
+  }, [consumeStreamEvent, uiEventQueue]);
 
   const sendMessageStream = useCallback(
-    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null, streamKey = null) => {
-      // Only abort an in-flight stream that belongs to the same chat. Sending in
-      // a different chat leaves the previous chat's stream running so it can
-      // finish in the background rather than being silently discarded.
-      if (abortControllerRef.current && activeStreamKeyRef.current === streamKey) {
-        abortControllerRef.current.abort();
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-      activeStreamKeyRef.current = streamKey;
-      const requestId = `req-${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`}`;
-      activeStreamRequestIdRef.current = requestId;
+    async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
+      const requestId = crypto.randomUUID();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
+      let resolveTerminal;
+      const terminal = new Promise((resolve) => {
+        resolveTerminal = resolve;
+      });
+      const acknowledgementController = new AbortController();
+      const pending = {
+        onChunk,
+        onComplete,
+        onError,
+        onStreamEvent,
+        resolve: resolveTerminal,
+        cancelRequested: false,
+      };
+
+      // Register before dispatch: the backend can broadcast `started` before
+      // the 202 acknowledgement reaches the browser.
+      pendingStreamsRef.current.set(requestId, pending);
+      activeStreamRequestIdRef.current = requestId;
+      activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
+      setConnectionState('connecting');
+
+      const body = { model: config.chat.defaultModel, input, stream: true };
+      if (metadata && typeof metadata === 'object') {
+        body.metadata = metadata;
+      }
 
       try {
-        setConnectionState((current) => (isHealthy ? current : 'connecting'));
-        const body = { model: config.chat.defaultModel, input, stream: true };
-        if (metadata && typeof metadata === 'object') {
-          body.metadata = metadata;
-        }
-        const response = await fetch(url, {
+        await requestAcknowledged(url, {
           method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-Request-ID': requestId,
-          },
-          credentials: 'include',
-          body: JSON.stringify(body),
-          signal: controller.signal,
+          body,
+          requestId,
+          errorLabel: 'sendMessage failed',
+          signal: acknowledgementController.signal,
         });
-
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
-          throw new Error(error.error?.message || `HTTP ${response.status}`);
+        if (activeAcknowledgementRef.current?.requestId === requestId) {
+          activeAcknowledgementRef.current = null;
         }
-
-        setConnectionState('connected');
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
-          const blocks = buffer.split('\n\n');
-          buffer = blocks.pop() || '';
-
-          for (const block of blocks) {
-            const parsedEvent = parseSSEEventBlock(block.trim());
-            if (!parsedEvent) {
-              continue;
-            }
-
-            try {
-              const parsed = JSON.parse(parsedEvent.data);
-              if (parsedEvent.eventType === 'error' || parsed.error) {
-                const errorMessage = parsed.error?.message || parsed.error || 'Streaming error';
-                onError?.(new Error(errorMessage));
-                return;
-              }
-
-              if (parsed.object === 'response.stream_event') {
-                onStreamEvent?.(parsed);
-                continue;
-              }
-
-              const text = parsed.delta?.text || parsed.output?.[0]?.content?.[0]?.text;
-              if (text) {
-                onChunk?.(text);
-              }
-              if (parsed.object === 'response.completed') {
-                onComplete?.();
-                return;
-              }
-            } catch {
-              // Ignore parse errors
-            }
-          }
+        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested) {
+          setConnectionState('connected');
         }
-        onComplete?.();
       } catch (error) {
-        if (error.name === 'AbortError') {
-          onComplete?.('cancelled');
-        } else {
+        if (activeAcknowledgementRef.current?.requestId === requestId) {
+          activeAcknowledgementRef.current = null;
+        }
+        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested) {
+          pendingStreamsRef.current.delete(requestId);
+          if (activeStreamRequestIdRef.current === requestId) {
+            activeStreamRequestIdRef.current = null;
+          }
           setConnectionState('error');
           onError?.(error);
-        }
-      } finally {
-        if (abortControllerRef.current === controller) {
-          abortControllerRef.current = null;
-          activeStreamKeyRef.current = null;
-        }
-        if (activeStreamRequestIdRef.current === requestId) {
-          activeStreamRequestIdRef.current = null;
+          resolveTerminal();
         }
       }
+
+      // Acknowledgement only confirms dispatch. Foreground lifecycle remains
+      // pending until this request's terminal event arrives on /api/ui/stream.
+      return terminal;
     },
-    [config, getApiUrl, isHealthy, setConnectionState],
+    [config.chat.defaultModel, getApiUrl],
   );
 
   const cancelStream = useCallback(async () => {
     const requestId = activeStreamRequestIdRef.current;
-    let cancelPromise = Promise.resolve();
-    if (requestId) {
-      const responsesUrl = getApiUrl('responses').replace(/\/$/, '');
-      cancelPromise = fetch(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
-        method: 'PUT',
-        credentials: 'include',
-      })
-        .catch((error) => {
-          console.warn('Failed to cancel backend response stream', error);
-        });
+    if (!requestId) {
+      return;
     }
 
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-      abortControllerRef.current = null;
+    const pending = pendingStreamsRef.current.get(requestId);
+    if (pending) {
+      // Stop must win the acknowledgement race: abort the request before
+      // sending cancellation, and ignore any late start/delta frames.
+      pending.cancelRequested = true;
+      setConnectionState('cancelling');
     }
-    activeStreamRequestIdRef.current = null;
-    activeStreamKeyRef.current = null;
-    await cancelPromise;
+    const acknowledgement = activeAcknowledgementRef.current;
+    if (acknowledgement?.requestId === requestId) {
+      acknowledgement.controller.abort();
+      activeAcknowledgementRef.current = null;
+    }
+
+    const responsesUrl = getApiUrl('responses').replace(/\/$/, '');
+    await requestAcknowledged(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
+      method: 'PUT',
+      requestId: crypto.randomUUID(),
+      errorLabel: 'cancelStream failed',
+    }).catch((error) => {
+      console.warn('Failed to cancel backend response stream', error);
+    });
+    // The matching `chat.response.cancelled` event owns terminal cleanup.
   }, [getApiUrl]);
 
-  return { connectionState, getSession, createSession, sendMessageStream, cancelStream };
+  return { connectionState, sendMessageStream, cancelStream };
 }

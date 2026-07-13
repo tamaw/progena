@@ -13,13 +13,22 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .chat_routes import BroadcastUiEvent
+from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 
 INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
+
+
+def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
+    """Return the single middleware-generated correlation ID for a finite request."""
+    request_id = header_request_id or getattr(request.state, "request_id", None)
+    if not isinstance(request_id, str) or not request_id:
+        raise RuntimeError("Request correlation ID middleware is not configured")
+    return request_id
 
 
 class InboxMessage(BaseModel):
@@ -85,9 +94,10 @@ def broadcast_inbox_snapshot(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
+    request_id: str | None = None,
 ) -> InboxSnapshotResponse:
     response = inbox_snapshot_response(get_document_store=get_document_store)
-    broadcast_ui_event("inbox.snapshot", response.model_dump())
+    broadcast_ui_event("inbox.snapshot", response.model_dump(), request_id=request_id)
     return response
 
 
@@ -98,10 +108,11 @@ def create_inbox_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    def broadcast_snapshot() -> InboxSnapshotResponse:
+    def broadcast_snapshot(request_id: str | None = None) -> InboxSnapshotResponse:
         return broadcast_inbox_snapshot(
             get_document_store=get_document_store,
             broadcast_ui_event=broadcast_ui_event,
+            request_id=request_id,
         )
 
     def load_message(store: BackendDocumentStore, message_id: str) -> dict[str, Any]:
@@ -110,14 +121,27 @@ def create_inbox_router(
             raise HTTPException(status_code=404, detail="Inbox message not found")
         return document.payload
 
-    @router.get("/inbox", response_model=InboxSnapshotResponse)
-    async def get_inbox():
+    @router.get("/inbox", status_code=202, response_model=UiRequestAcknowledgement)
+    async def get_inbox(
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Acknowledge inbox list requests and publish the snapshot on the UI stream."""
-        return broadcast_snapshot()
+        request_id = _request_correlation_id(request, x_request_id)
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["inbox.snapshot"])
 
-    @router.post("/inbox/{message_id}/read", response_model=InboxMessage)
-    async def mark_inbox_message_read(message_id: str, request: InboxMarkReadRequest | None = None):
+    @router.post(
+        "/inbox/{message_id}/read", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def mark_inbox_message_read(
+        http_request: Request,
+        message_id: str,
+        request: InboxMarkReadRequest | None = None,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Set one message's read state (read/unread toggle from the UI)."""
+        request_id = _request_correlation_id(http_request, x_request_id)
         read = request.read if request is not None else True
         store = get_document_store()
         payload = load_message(store, message_id)
@@ -129,18 +153,31 @@ def create_inbox_router(
             # message_id, so normalization only fails here on data corruption.
             raise HTTPException(status_code=500, detail="Inbox message could not be loaded")
         store.save_document(PROGENITOR_STATE_PREFIX, _message_key(message_id), payload)
-        broadcast_ui_event("inbox.message.upserted", {"message": message.model_dump()})
-        broadcast_snapshot()
-        return message
+        broadcast_ui_event(
+            "inbox.message.upserted",
+            {"message": message.model_dump(), "request_id": request_id},
+            request_id=request_id,
+        )
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["inbox.snapshot"])
 
-    @router.delete("/inbox/{message_id}", status_code=204)
-    async def delete_inbox_message(message_id: str):
+    @router.delete("/inbox/{message_id}", status_code=202, response_model=UiRequestAcknowledgement)
+    async def delete_inbox_message(
+        message_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Delete one inbox message."""
+        request_id = _request_correlation_id(request, x_request_id)
         store = get_document_store()
         load_message(store, message_id)
         store.delete_document(PROGENITOR_STATE_PREFIX, _message_key(message_id))
-        broadcast_ui_event("inbox.message.deleted", {"message_id": message_id})
-        broadcast_snapshot()
-        return None
+        broadcast_ui_event(
+            "inbox.message.deleted",
+            {"message_id": message_id, "request_id": request_id},
+            request_id=request_id,
+        )
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["inbox.snapshot"])
 
     return router

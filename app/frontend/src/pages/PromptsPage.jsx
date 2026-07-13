@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
+import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
 import {
   fetchPrompts,
@@ -140,6 +141,7 @@ export default function PromptsPage() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const promptsUrl = getApiUrl('prompts');
+  const realtime = useSelector(selectRealtime);
   const prompts = useSelector(selectPrompts);
   const promptsState = useSelector(selectPromptsState);
   const { collapsed, setCollapsed, paneClassName } = usePaneCollapse('prompts-sidebar sess-list');
@@ -147,6 +149,7 @@ export default function PromptsPage() {
   const [selectedPath, setSelectedPath] = useState('');
   const [draftContent, setDraftContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const [pendingSave, setPendingSave] = useState(null);
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [expandedNodes, setExpandedNodes] = useState({});
@@ -156,28 +159,21 @@ export default function PromptsPage() {
   const requestedPath = searchParams.get('path') || '';
   const loading = promptsState.loading && !promptsState.loaded;
 
-  // Load the catalogue into the store; the list arrives via the fetch response
-  // and stays live through `prompts.snapshot` events on /api/ui/stream. The
-  // `isActive` guard avoids a setError after the page unmounts mid-request.
-  const loadPrompts = useCallback(
-    (isActive = () => true) => dispatch(fetchPrompts({ promptsUrl }))
-      .unwrap()
-      .catch((loadError) => {
-        if (isActive()) {
-          setError(loadError);
-        }
-      }),
-    [dispatch, promptsUrl],
-  );
+  // Request the catalogue only after the canonical stream is ready; the matching
+  // `prompts.snapshot` event is the sole source of prompt data.
+  const loadPrompts = useCallback(async () => {
+    setError(null);
+    await dispatch(fetchPrompts({ promptsUrl })).unwrap();
+  }, [dispatch, promptsUrl]);
 
   useEffect(() => {
-    let active = true;
-    loadPrompts(() => active);
-    return () => {
-      active = false;
-    };
-  }, [loadPrompts]);
-
+    if (!realtime.connected) {
+      return;
+    }
+    // The acknowledgement failure is reflected in local view state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void loadPrompts().catch(setError);
+  }, [loadPrompts, realtime.connected]);
   // Seed (or re-seed) the selection from the store list whenever it changes via
   // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
   // current selection. Runs on `prompts`/`requestedPath` changes only (not on
@@ -186,6 +182,8 @@ export default function PromptsPage() {
     if (prompts.length === 0) {
       return;
     }
+    // Snapshot-driven selection intentionally synchronizes route-local view state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedPath((current) => {
       const next = prompts.find((prompt) => prompt.path === requestedPath)?.path
         || prompts.find((prompt) => prompt.path === current)?.path
@@ -241,6 +239,25 @@ export default function PromptsPage() {
   const hasUnsavedChanges = selectedPrompt ? draftContent !== (selectedPrompt.content || '') : false;
   const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
 
+  useEffect(() => {
+    if (
+      !pendingSave?.acknowledged
+      || promptsState.snapshotRequestId !== pendingSave.requestId
+    ) {
+      return;
+    }
+    const updatedPrompt = prompts.find((prompt) => prompt.path === pendingSave.path);
+    if (!updatedPrompt) {
+      return;
+    }
+    // Canonical event application is the intentional source of this local UI transition.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setDraftContent(updatedPrompt.content || '');
+    setSaving(false);
+    setPendingSave(null);
+    setStatusMessage(`Saved ${updatedPrompt.path}.`);
+  }, [pendingSave, prompts, promptsState.snapshotRequestId]);
+
   const toggleBranch = (branchKey) => {
     setExpandedNodes((current) => ({
       ...current,
@@ -249,6 +266,9 @@ export default function PromptsPage() {
   };
 
   const handleSelectPrompt = (prompt) => {
+    if (saving) {
+      return;
+    }
     setError(null);
     setSelectedPath(prompt.path);
     setDraftContent(prompt.content || '');
@@ -265,27 +285,39 @@ export default function PromptsPage() {
   };
 
   const handleSave = async () => {
-    if (!selectedPrompt || !hasUnsavedChanges) {
+    if (!selectedPrompt || !hasUnsavedChanges || saving) {
       return;
     }
+    const requestId = crypto.randomUUID();
+    const pending = {
+      requestId,
+      path: selectedPrompt.path,
+      acknowledged: false,
+    };
     setSaving(true);
+    setPendingSave(pending);
     setError(null);
     setStatusMessage('');
     try {
-      const updatedPrompt = await dispatch(
-        savePrompt({ promptsUrl, path: selectedPrompt.path, content: draftContent }),
+      await dispatch(
+        savePrompt({ promptsUrl, path: selectedPrompt.path, content: draftContent, requestId }),
       ).unwrap();
-      setDraftContent(updatedPrompt.content || '');
-      setStatusMessage(`Saved ${updatedPrompt.path}.`);
+      setPendingSave((current) => (
+        current?.requestId === requestId ? { ...current, acknowledged: true } : current
+      ));
     } catch (saveError) {
-      setError(saveError);
-    } finally {
+      setPendingSave(null);
       setSaving(false);
+      setError(saveError);
     }
   };
 
   const handleRefreshList = async () => {
-    await loadPrompts();
+    try {
+      await loadPrompts();
+    } catch (loadError) {
+      setError(loadError);
+    }
   };
 
   return (
@@ -312,7 +344,7 @@ export default function PromptsPage() {
 
         <PaneListScroll className="prompts-sidebar-body">
           {loading && <div className="prompts-empty-state">Loading prompts...</div>}
-          {error && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
+          {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
           {!loading && prompts.length === 0 && (
             <div className="prompts-empty-state">No prompts found.</div>
           )}
@@ -396,11 +428,12 @@ export default function PromptsPage() {
                 value={draftContent}
                 onChange={(event) => setDraftContent(event.target.value)}
                 spellCheck={false}
+                disabled={saving}
               />
             )}
 
             <div className="prompts-editor-footer">
-              <span>{hasUnsavedChanges ? 'Unsaved changes' : 'Saved'}</span>
+              <span>{saving ? 'Saving...' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}</span>
               <span>{statusMessage || error?.message || ''}</span>
             </div>
           </>

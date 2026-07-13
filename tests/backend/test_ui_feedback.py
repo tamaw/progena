@@ -59,213 +59,6 @@ class TestSSEEventStream:
         pass
 
 
-class TestUIStatusEndpoint:
-    """Tests for the UI status endpoint that feeds the dashboard."""
-
-    def test_status_returns_all_required_fields(self, client):
-        """Test /api/ui/status returns all fields needed by UI."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Core fields
-        assert "connected" in data
-        assert "server_status" in data
-        assert "progenitor_running" in data
-        assert "progenitor_status" in data
-        assert "uptime_seconds" in data
-        assert "version" in data
-
-        # State data
-        assert "cycle_count" in data
-        assert "thread_id" in data
-        assert "messages_count" in data
-
-        # Lists for UI
-        assert "loops" in data
-        assert "agents" in data
-        assert "backlog" in data
-        assert "schedule" in data
-
-        # Build status
-        assert "build" in data
-        assert "alerts" in data
-
-    def test_status_loops_structure(self, client):
-        """Test that loops have the correct structure for UI rendering."""
-        response = client.get("/api/ui/status/snapshot")
-        data = response.json()
-
-        # Loops should be a list
-        assert isinstance(data["loops"], list)
-
-        # If loops exist, verify structure
-        for loop in data["loops"]:
-            assert "name" in loop
-            assert "status" in loop
-            # Optional field
-            assert "current_task" in loop or loop.get("current_task") is None
-
-    def test_status_agents_structure(self, client):
-        """Test that agents have the correct structure for UI rendering."""
-        response = client.get("/api/ui/status/snapshot")
-        data = response.json()
-
-        # Agents should be a list
-        assert isinstance(data["agents"], list)
-
-        # If agents exist, verify structure
-        for agent in data["agents"]:
-            assert "name" in agent
-            assert "status" in agent
-            assert "kind" in agent
-
-    def test_status_build_structure(self, client):
-        """Test that build info has correct structure."""
-        response = client.get("/api/ui/status/snapshot")
-        data = response.json()
-
-        build = data.get("build")
-        if build:
-            assert "in_progress" in build
-            # Optional fields when build is in progress
-            if build.get("in_progress"):
-                assert "phase" in build
-                assert "iteration" in build
-
-
-class TestAgentStatusFeedback:
-    """Tests for agent status updates shown in UI."""
-
-    def test_agents_endpoint_returns_list(self, client):
-        """Test /api/ui/agents returns agent list."""
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "agents" in data
-        assert "total" in data
-        assert isinstance(data["agents"], list)
-        assert data["total"] >= 0
-
-    def test_agent_detail_not_found(self, client):
-        """Test requesting details for non-existent agent."""
-        response = client.get("/api/ui/agents/nonexistent-agent")
-        assert response.status_code == 404
-
-    def test_agent_status_values(self, client):
-        """Test that agent statuses use expected values."""
-        response = client.get("/api/ui/agents")
-        data = response.json()
-
-        valid_statuses = {"ready", "busy", "offline", "stopped", "error", "starting"}
-
-        for agent in data["agents"]:
-            # Status should be one of the expected values
-            assert agent["status"] in valid_statuses or agent["status"] is not None
-
-
-class TestBuildPhaseFeedback:
-    """Tests for build phase tracking shown in UI."""
-
-    def test_backlog_endpoint(self, client):
-        """Test /api/ui/backlog returns work items."""
-        response = client.get("/api/ui/backlog")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "items" in data
-        assert "total" in data
-        assert isinstance(data["items"], list)
-
-    def test_backlog_item_structure(self, client):
-        """Test backlog items have required fields."""
-        response = client.get("/api/ui/backlog")
-        data = response.json()
-
-        for item in data["items"]:
-            assert "id" in item
-            assert "type" in item
-            assert "status" in item
-            assert "description" in item
-
-    def test_valid_build_phases(self):
-        """Test that build phases match expected values used in UI."""
-        # These phases are displayed in the UI with icons
-        valid_phases = {"observe", "think", "plan", "build", "execute", "verify", "learn"}
-
-        # Verify BuildInfo can handle all phases
-        for phase in valid_phases:
-            build = BuildInfo(
-                in_progress=True,
-                phase=phase,
-                iteration=1,
-                score=0.5,
-            )
-            assert build.phase == phase
-
-
-class TestLoopStatusFeedback:
-    """Tests for Planner/Executor loop status in UI."""
-
-    def test_loops_endpoint(self, client):
-        """Test /api/ui/loops returns loop status."""
-        response = client.get("/api/ui/loops")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "loops" in data
-        assert isinstance(data["loops"], list)
-
-    def test_loop_status_values(self, client):
-        """Test that loop statuses use expected values."""
-        response = client.get("/api/ui/loops")
-        data = response.json()
-
-        valid_statuses = {"active", "idle", "error"}
-
-        for loop in data["loops"]:
-            assert loop["status"] in valid_statuses or loop["status"] is not None
-
-    def test_loop_names(self, client):
-        """Test expected loop names appear."""
-        response = client.get("/api/ui/loops")
-        data = response.json()
-
-        # May be empty if progenitor not running
-        loop_names = {loop["name"] for loop in data["loops"]}
-
-        # If running, should have Planner and Executor
-        if loop_names:
-            expected_loops = {"Planner", "Executor"}
-            assert loop_names.issubset(expected_loops) or expected_loops.issubset(loop_names)
-
-
-class TestScheduleFeedback:
-    """Tests for scheduled tasks shown in UI."""
-
-    def test_schedule_endpoint(self, client):
-        """Test /api/ui/schedule returns scheduled tasks."""
-        response = client.get("/api/ui/schedule")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "items" in data
-        assert "total" in data
-        assert isinstance(data["items"], list)
-
-    def test_schedule_item_structure(self, client):
-        """Test schedule items have required fields."""
-        response = client.get("/api/ui/schedule")
-        data = response.json()
-
-        for item in data["items"]:
-            assert "id" in item
-            assert "name" in item
-            assert "schedule" in item
-            assert "enabled" in item
-
-
 class TestErrorFeedback:
     """Tests for error handling and feedback to UI."""
 
@@ -275,13 +68,14 @@ class TestErrorFeedback:
         assert response.status_code == 404
 
     def test_alerts_endpoint(self, client):
-        """Test /api/ui/alerts returns alerts list."""
-        response = client.get("/api/ui/alerts")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "alerts" in data
-        assert "total" in data
+        """Test /api/ui/alerts returns the finite UI acknowledgement contract."""
+        request_id = "ui-feedback-alerts"
+        response = client.get("/api/ui/alerts", headers={"X-Request-ID": request_id})
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["alerts.updated"],
+        }
 
     def test_dismiss_nonexistent_alert(self, client):
         """Test dismissing non-existent alert returns 404."""
@@ -653,16 +447,27 @@ class TestLogsEndpoint:
     """Tests for logs endpoint used by logs page."""
 
     def test_logs_endpoint(self, client):
-        """Test /api/ui/logs returns logs."""
-        response = client.get("/api/ui/logs")
-        assert response.status_code == 200
-        # Response can be JSON or raw text
-        assert response.text is not None
+        """Test /api/ui/logs returns the finite UI acknowledgement contract."""
+        request_id = "ui-feedback-logs"
+        response = client.get("/api/ui/logs", headers={"X-Request-ID": request_id})
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["logs.page.loaded"],
+        }
 
     def test_logs_with_level_filter(self, client):
-        """Test logs endpoint filters by level."""
-        response = client.get("/api/ui/logs?level=ERROR")
-        assert response.status_code == 200
+        """Test logs endpoint filters by level without changing its acknowledgement."""
+        request_id = "ui-feedback-error-logs"
+        response = client.get(
+            "/api/ui/logs?level=ERROR",
+            headers={"X-Request-ID": request_id},
+        )
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["logs.page.loaded"],
+        }
         # Should not error even if no ERROR logs exist
 
 
@@ -694,30 +499,6 @@ class TestUIPages:
         """Test logs page no longer served (API-only backend)."""
         response = client.get("/ui/logs")
         assert response.status_code == 404
-
-
-class TestUINavigation:
-    """Tests for UI API routes (navigation is now client-side)."""
-
-    def test_api_ui_status_works(self, client):
-        """Test /api/ui/status endpoint works."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-
-    def test_api_ui_agents_works(self, client):
-        """Test /api/ui/agents endpoint works."""
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 200
-
-    def test_chat_has_dashboard_link(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant as static files aren't served
-        pass
-
-    def test_dashboard_has_chat_link(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant as static files aren't served
-        pass
 
 
 class TestUIAccessibility:

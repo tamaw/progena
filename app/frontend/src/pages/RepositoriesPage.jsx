@@ -19,7 +19,6 @@ import DetailHeader, {
   OpenActionIcon,
   PullActionIcon,
 } from '../components/layout/DetailHeader';
-import { useChromeRuntime } from '../context/ChromeRuntimeContext';
 
 const SOURCE_FILTERS = ['All sources', 'GitHub', 'Local', 'Warnings'];
 
@@ -276,7 +275,6 @@ function groupRepositories(repositories) {
 }
 
 export default function RepositoriesPage() {
-  const { emitActivity } = useChromeRuntime();
   const [repositories, setRepositories] = useState(INITIAL_REPOSITORIES);
   const [activeFilter, setActiveFilter] = useState(SOURCE_FILTERS[0]);
   const [query, setQuery] = useState('');
@@ -320,20 +318,8 @@ export default function RepositoriesPage() {
 
     setRepositories((current) => [nextRepository, ...current]);
     setSelectedId(nextRepository.id);
-    emitActivity?.({
-      kind: 'repository',
-      title: `Connected ${nextRepository.name}`,
-      detail: `${nextRepository.source} · ${nextRepository.branch}`,
-    });
   };
 
-  const emitRepositoryAction = (title) => {
-    emitActivity?.({
-      kind: 'repository',
-      title,
-      detail: `${selectedRepository.name} · ${selectedRepository.branch}`,
-    });
-  };
 
   return (
     <PageShell className="repositories-page">
@@ -387,14 +373,12 @@ export default function RepositoriesPage() {
                 label="Clone"
                 tooltip={`Clone ${selectedRepository.name}`}
                 ariaLabel={`Clone ${selectedRepository.name}`}
-                onClick={() => emitRepositoryAction(`Clone ${selectedRepository.name}`)}
               />
               <DetailHeaderAction
                 icon={<OpenActionIcon />}
                 label="Open in editor"
                 tooltip={`Open ${selectedRepository.name} in editor`}
                 ariaLabel={`Open ${selectedRepository.name} in editor`}
-                onClick={() => emitRepositoryAction(`Open ${selectedRepository.name} in editor`)}
               />
               <DetailHeaderAction
                 icon={<PullActionIcon />}
@@ -402,7 +386,6 @@ export default function RepositoriesPage() {
                 tooltip={`Pull ${selectedRepository.branch}`}
                 ariaLabel={`Pull ${selectedRepository.branch}`}
                 variant="primary"
-                onClick={() => emitRepositoryAction(`Pull ${selectedRepository.branch}`)}
               />
             </DetailHeaderActions>
           )}
@@ -456,7 +439,7 @@ export default function RepositoriesPage() {
           <section className="repo-section">
             <h2 className="repo-section__title">
               Branches <span className="muted">{selectedDetail.branches}</span>
-              <span className="repo-section__tools"><button type="button" className="repo-btn repo-btn--ghost" onClick={() => emitRepositoryAction('Create branch')}>+ New branch</button></span>
+              <span className="repo-section__tools"><button type="button" className="repo-btn repo-btn--ghost">+ New branch</button></span>
             </h2>
             <div className="repo-list">
               {selectedDetail.branchList.map(([branchName, branchMeta, ahead, author]) => (

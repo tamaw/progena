@@ -152,15 +152,11 @@ export default function ToolsPage() {
   const [togglingTool, setTogglingTool] = useState(null);
 
   const mcpUrl = getApiUrl('mcp');
-  // Request the MCP list; the snapshot comes back on the realtime stream as
-  // `mcp.snapshot`, and live MCP changes arrive the same way (Postgres
-  // NOTIFY -> SSE). The GET just acknowledges and triggers the broadcast.
-  const refreshMcp = useCallback(
-    () => dispatch(fetchMcp({ mcpUrl }))
-      .unwrap()
-      .catch((err) => setError(err.message || 'Failed to load servers.')),
-    [dispatch, mcpUrl],
-  );
+  // The catalogue is hydrated only by `mcp.snapshot` on the canonical stream.
+  const refreshMcp = useCallback(async () => {
+    setError(null);
+    await dispatch(fetchMcp({ mcpUrl })).unwrap();
+  }, [dispatch, mcpUrl]);
 
   // The server's rich fields (enabled/transport/url/kind) live under `data`;
   // flatten so the page can read them directly. The store slice already holds
@@ -201,11 +197,11 @@ export default function ToolsPage() {
     errors: servers.filter((server) => statusOf(server) === 'error').length,
   }), [servers]);
 
-  // Request the MCP list once the realtime stream is connected, so the
-  // `mcp.snapshot` it triggers isn't missed before the EventSource is listening.
+  // Request the MCP list after the stream is listening, and retry whenever a
+  // reconnect exposes a newly ready stream.
   useEffect(() => {
     if (!realtime.connected) return;
-    refreshMcp();
+    void refreshMcp().catch((loadError) => setError(loadError.message || 'Failed to load MCP servers.'));
   }, [realtime.connected, refreshMcp]);
 
   // Leave edit mode whenever the selected server changes so a stale draft never

@@ -24,45 +24,28 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
-from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse
 
 from .agent_routes import router as agent_router
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
-from .attachments import (
-    AttachmentConfig,
-    AttachmentManager,
-    create_attachment_from_upload,
-)
+from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
-from .conversation import (
-    ConversationHistory,
-)
 from .document_store import configure_default_document_store
 from .knowledge_routes import router as knowledge_router
 from .models import (
     ErrorDetail,
     ErrorResponse,
-    ModelInfo,
-    ModelsResponse,
-    ResponseOutputMessage,
-    ResponseOutputReasoning,
-    ResponseOutputText,
-    ResponsePayload,
-    ResponseReasoningSummaryText,
     ResponseRequest,
-    SimpleChatRequest,
     StreamingResponseRequest,
-    Usage,
 )
 from .session import (
     SessionConfig,
     SessionManager,
     SessionState,
-    SettingsManager,
     get_session_from_request,
     set_session_cookie,
 )
@@ -81,6 +64,7 @@ from .telegram_client import (
     stop_telegram_client,
 )
 from .ui_routes import (
+    broadcast_ui_event,
     close_all_sse_connections,
     has_active_ui_stream_subscribers,
     start_state_status_watcher,
@@ -112,12 +96,6 @@ session_manager: SessionManager = SessionManager(
         persist_dir=None,
     )
 )
-attachment_manager: AttachmentManager = AttachmentManager(
-    AttachmentConfig(
-        cache_dir=None,
-    )
-)
-conversation_history: ConversationHistory = ConversationHistory()
 graceful_shutdown: GracefulShutdownManager = GracefulShutdownManager(
     drain_timeout=30.0,
     total_timeout=60.0,
@@ -653,17 +631,6 @@ async def lifespan(app: FastAPI):
         timeout=5.0,
     )
 
-    async def _clear_attachment_cache():
-        """Async wrapper for sync clear_cache."""
-        attachment_manager.clear_cache()
-
-    graceful_shutdown.register_callback(
-        "clear_attachment_cache",
-        _clear_attachment_cache,
-        priority=60,
-        timeout=2.0,
-    )
-
     # Initialize Telegram client if enabled
     telegram_client = await init_telegram_client(config)
     if telegram_client:
@@ -860,7 +827,7 @@ app.include_router(ui_router)
 app.include_router(knowledge_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
-# The frontend proxies /api, /v1, /health requests to this backend.
+# The frontend proxies /api and /v1 requests to this backend.
 logger.info("Backend running in API-only mode (no static file serving)")
 
 # CORS middleware
@@ -876,9 +843,6 @@ app.add_middleware(
 @app.middleware("http")
 async def request_tracking_middleware(request: Request, call_next):
     """Track active requests for graceful shutdown (OPS-002)."""
-    # Skip tracking for health/liveness probes
-    if request.url.path in ("/health", "/ready", "/live"):
-        return await call_next(request)
 
     # Check if we're accepting new requests
     if not await shutdown_manager.start_request():
@@ -931,15 +895,15 @@ async def request_id_middleware(request: Request, call_next):
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     """Apply rate limiting to API endpoints."""
-    # Skip rate limiting for health checks, UI endpoints, and if disabled
-    # Health endpoints should never be rate-limited to allow monitoring
-    # UI endpoints are for the frontend and don't hit the LLM
-    health_paths = ("/health", "/ready", "/live", "/docs", "/openapi.json")
+    # Skip rate limiting for documentation endpoints and UI event-only routes.
+    documentation_paths = ("/docs", "/openapi.json")
     if not config.rate_limit_enabled:
         return await call_next(request)
-    if request.url.path in health_paths:
+    if request.url.path in documentation_paths:
         return await call_next(request)
-    if request.url.path.startswith("/api/ui/"):
+    if request.url.path.startswith("/api/ui/") and not (
+        request.url.path == "/api/ui/responses" or request.url.path.startswith("/api/ui/responses/")
+    ):
         return await call_next(request)
     if request.url.path.startswith("/ui"):
         return await call_next(request)
@@ -989,8 +953,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     )
 
 
-# Track server start time for uptime calculation
-_server_start_time = time.time()
 _last_activity_time = time.time()
 
 
@@ -1000,249 +962,95 @@ def _update_activity():
     _last_activity_time = time.time()
 
 
-@app.get("/health")
-async def health_check():
+def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
+    """Return the middleware-correlated request ID for a finite request."""
+    return header_request_id or getattr(request.state, "request_id", None) or str(uuid.uuid4())
+
+
+@app.post("/api/ui/responses", status_code=202, response_model=UiRequestAcknowledgement)
+async def responses(
+    request: Request,
+    response: Response,
+    body: ResponseRequest,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Dispatch a browser generation and acknowledge it with HTTP 202.
+
+    Generation events are broadcast on the canonical UI event stream.
     """
-    Simple health check endpoint for probes and operators.
+    request_id = _request_correlation_id(request, x_request_id)
 
-    Returns exactly status, name, version, and uptime_seconds.
-    Use /health/detailed for the full operator payload.
-    """
-    is_draining = shutdown_manager.is_shutting_down
-    payload = {
-        "status": "draining" if is_draining else "ok",
-        "name": "progenitor",
-        "version": config.api_version,
-        "uptime_seconds": round(time.time() - _server_start_time, 1),
-    }
-    return JSONResponse(content=payload, status_code=503 if is_draining else 200)
-
-
-@app.get("/health/detailed")
-async def health_check_detailed_endpoint():
-    """HTTP wrapper for the detailed health payload used by the frontend."""
-    return await health_check_detailed()
-
-
-async def health_check_detailed():
-    """
-    Internal detailed health check for use by other modules.
-
-    Returns comprehensive information about:
-    - Server status and configuration
-    - Progenitor client status
-    - Rate limiter statistics
-    - Shutdown status
-    - Memory usage (if available)
-    """
-    import sys
-
-    now = time.time()
-
-    # Basic health info
-    health_info = {
-        "status": "healthy" if not shutdown_manager.is_shutting_down else "draining",
-        "version": config.api_version,
-        "uptime_seconds": round(now - _server_start_time, 1),
-        "last_activity_seconds_ago": round(now - _last_activity_time, 1),
-    }
-
-    # Progenitor client status
-    progenitor_status = {
-        "running": client.is_running if client else False,
-        "client_type": type(client).__name__ if client else None,
-    }
-
-    # Try to get more detailed Progenitor info
-    if client and hasattr(client, "get_status"):
-        try:
-            details = client.get_status()
-            if inspect.isawaitable(details):
-                details = await details
-            try:
-                progenitor_status["details"] = json.loads(json.dumps(details, default=str))
-            except (TypeError, ValueError):
-                progenitor_status["details"] = str(details)
-        except Exception as e:
-            logger.debug("Failed to get progenitor status details: %s", e)
-
-    health_info["progenitor"] = progenitor_status
-
-    # Rate limiter stats
-    if config.rate_limit_enabled:
-        health_info["rate_limiter"] = rate_limiter.get_stats()
-    else:
-        health_info["rate_limiter"] = {"enabled": False}
-
-    # Shutdown status
-    health_info["shutdown"] = shutdown_manager.get_status()
-
-    # Memory usage (if psutil available)
     try:
-        import psutil
-
-        process = psutil.Process()
-        memory_info = process.memory_info()
-        health_info["memory"] = {
-            "rss_mb": round(memory_info.rss / 1024 / 1024, 2),
-            "vms_mb": round(memory_info.vms / 1024 / 1024, 2),
-            "percent": round(process.memory_percent(), 2),
-        }
-    except ImportError:
-        health_info["memory"] = {"available": False}
-    except Exception as e:
-        health_info["memory"] = {"error": str(e)}
-
-    # Python info
-    health_info["python"] = {
-        "version": sys.version,
-        "platform": sys.platform,
-    }
-
-    # Configuration summary (non-sensitive)
-    health_info["config"] = {
-        "model_name": config.model_name,
-        "host": config.host,
-        "port": config.port,
-        "rate_limit_enabled": config.rate_limit_enabled,
-        "rate_limit_per_minute": config.rate_limit_per_minute,
-        "rate_limit_per_hour": config.rate_limit_per_hour,
-    }
-
-    return health_info
-
-
-@app.get("/ready")
-async def readiness_check():
-    """
-    Kubernetes-style readiness probe.
-
-    Returns 200 if the server is ready to accept requests.
-    Returns 503 if the server is shutting down or not ready.
-    """
-    if shutdown_manager.is_shutting_down:
-        raise HTTPException(status_code=503, detail="Server is shutting down")
+        if body.stream:
+            StreamingResponseRequest.validate_for_streaming(body)
+        last_user_msg, _ = _extract_response_input(body)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     if not client:
         raise HTTPException(status_code=503, detail="Client not initialized")
 
-    return {"status": "ready"}
-
-
-@app.get("/live")
-async def liveness_check():
-    """
-    Kubernetes-style liveness probe.
-
-    Returns 200 if the server process is alive.
-    Always returns success unless the process is completely broken.
-    """
-    return {"status": "alive"}
-
-
-@app.get("/v1/models", response_model=ModelsResponse)
-async def list_models():
-    """List available models (OpenAI-compatible)."""
-    return ModelsResponse(
-        data=[
-            ModelInfo(
-                id=config.model_name,
-                created=int(time.time()),
-                owned_by="progenitor",
-            )
-        ]
-    )
-
-
-@app.post("/v1/responses", response_model=ResponsePayload)
-async def responses(request: Request, response: Response, body: ResponseRequest):
-    """Unified Responses API (preferred).
-
-    Accepts Responses `input` payloads only.
-    """
-    try:
-        last_user_msg, all_inputs = _extract_response_input(body)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    if not client:
-        raise HTTPException(status_code=503, detail="Client not initialized")
-
-    # Get request ID for correlation
-    request_id = getattr(request.state, "request_id", None)
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
-
     await session_manager.record_chat_activity(
         session.session_id,
         message_increment=1,
     )
 
-    try:
-        if body.stream:
-            # CR-002: Validate request for streaming
-            try:
-                StreamingResponseRequest.validate_for_streaming(body)
-            except ValueError as e:
-                raise HTTPException(status_code=400, detail=str(e))
+    response_id = f"resp-{uuid.uuid4().hex[:8]}"
+    _active_response_streams[request_id] = asyncio.Event()
 
-            return _attach_session_cookie(
-                request,
-                session,
-                StreamingResponse(
-                    stream_response_unified(
-                        last_user_msg,
-                        body.model,
-                        request_id,
-                        metadata=request_metadata,
-                    ),
-                    media_type="text/event-stream",
-                ),
-            )
-
-        response_details = await client.send_message(
-            last_user_msg,
+    # Task creation is the generation dispatch. Enqueue the causal started
+    # event only after that dispatch and before acknowledging it.
+    asyncio.create_task(
+        _run_response_event_stream(
+            message=last_user_msg,
+            model=body.model,
             request_id=request_id,
+            response_id=response_id,
+            thread_id=thread_id,
             metadata=request_metadata,
+            stream=body.stream,
             include_reasoning=body.include_reasoning,
         )
-        _attach_session_cookie(request, session, response)
-        response_id = f"resp-{uuid.uuid4().hex[:8]}"
-        response_text = response_details.response
-        reasoning_text = (response_details.reasoning or "").strip()
-        output_content: list[ResponseOutputReasoning | ResponseOutputText] = []
-        if reasoning_text:
-            output_content.append(
-                ResponseOutputReasoning(summary=[ResponseReasoningSummaryText(text=reasoning_text)])
-            )
-        output_content.append(ResponseOutputText(text=response_text))
+    )
+    broadcast_ui_event(
+        "chat.response.started",
+        {
+            "id": response_id,
+            "model": body.model,
+            "thread_id": thread_id,
+            "stream": body.stream,
+        },
+        scope="chat",
+        session_id=thread_id,
+        request_id=request_id,
+    )
 
-        return ResponsePayload(
-            id=response_id,
-            model=body.model,
-            output=[ResponseOutputMessage(content=output_content)],
-            usage=Usage(
-                prompt_tokens=len(" ".join(all_inputs).split()),
-                completion_tokens=len(response_text.split()),
-                total_tokens=len(" ".join(all_inputs).split()) + len(response_text.split()),
-            ),
-        )
+    _attach_session_cookie(request, session, response)
 
-    except TimeoutError as e:
-        raise HTTPException(status_code=504, detail=str(e))
-    except Exception as e:
-        logger.error(f"Responses API error: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+    # Only started is guaranteed synchronously for every accepted generation.
+    # Terminal and chunk event types depend on the generation outcome.
+    return acknowledgement_response(request_id, ["chat.response.started"])
 
 
-@app.put("/v1/responses/{request_id}/cancel")
-async def cancel_response(request_id: str):
-    """Cancel an active streaming Responses API request."""
-    request_id = request_id.strip()
-    if not request_id:
-        raise HTTPException(status_code=400, detail="request_id is required")
+@app.put(
+    "/api/ui/responses/{generation_id}/cancel",
+    status_code=202,
+    response_model=UiRequestAcknowledgement,
+)
+async def cancel_response(
+    generation_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Cancel a generation without conflating its ID with this cancellation request."""
+    request_id = _request_correlation_id(request, x_request_id)
+    target_request_id = generation_id.strip()
+    if not target_request_id:
+        raise HTTPException(status_code=400, detail="generation_id is required")
 
-    cancel_event = _active_response_streams.get(request_id)
+    cancel_event = _active_response_streams.get(target_request_id)
     if cancel_event is not None:
         cancel_event.set()
 
@@ -1250,19 +1058,43 @@ async def cancel_response(request_id: str):
     if client is not None:
         cancel_request = getattr(client, "cancel_request", None)
         if callable(cancel_request):
-            result = cancel_request(request_id)
+            result = cancel_request(target_request_id)
             progenitor_cancelled = (
                 bool(await result) if inspect.isawaitable(result) else bool(result)
             )
 
     if cancel_event is None and not progenitor_cancelled:
-        raise HTTPException(status_code=404, detail="No active response stream for request_id")
+        raise HTTPException(
+            status_code=404, detail="No active response stream for target_request_id"
+        )
 
-    return {
-        "request_id": request_id,
-        "cancelled": cancel_event is not None,
-        "progenitor_cancelled": progenitor_cancelled,
-    }
+    # This event resolves the cancellation operation. The generation runner
+    # separately emits its terminal event with the target request ID.
+    broadcast_ui_event(
+        "chat.response.cancelled",
+        {
+            "target_request_id": target_request_id,
+            "cancel_request_id": request_id,
+            "cancelled": True,
+        },
+        scope="chat",
+        request_id=request_id,
+    )
+    if cancel_event is None:
+        # A generation accepted by another backend instance has no local runner
+        # to emit the target terminal event after a successful remote cancel.
+        broadcast_ui_event(
+            "chat.response.cancelled",
+            {
+                "target_request_id": target_request_id,
+                "cancel_request_id": request_id,
+                "cancelled": True,
+            },
+            scope="chat",
+            request_id=target_request_id,
+        )
+
+    return acknowledgement_response(request_id, ["chat.response.cancelled"])
 
 
 def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
@@ -1319,75 +1151,167 @@ def _attach_session_cookie(
     return response
 
 
-async def stream_response_unified(
+async def _run_response_event_stream(
     message: str,
     model: str,
-    request_id: str | None = None,
+    request_id: str,
+    response_id: str,
+    thread_id: str,
     metadata: dict[str, Any] | None = None,
-) -> AsyncIterator[str]:
-    """Stream SSE events using the Responses API shape."""
+    *,
+    stream: bool = True,
+    include_reasoning: bool | None = None,
+) -> None:
+    """Run one dispatched generation and publish all result data on ui.event."""
     assert client is not None, "Client must be initialized"
-    response_id = f"resp-{uuid.uuid4().hex[:8]}"
-    effective_request_id = request_id or f"req-{uuid.uuid4().hex[:12]}"
-    cancel_event = asyncio.Event()
-    _active_response_streams[effective_request_id] = cancel_event
+    cancel_event = _active_response_streams.get(request_id)
+    if cancel_event is None:
+        cancel_event = asyncio.Event()
+        _active_response_streams[request_id] = cancel_event
+
+    def emit_cancelled() -> None:
+        broadcast_ui_event(
+            "chat.response.cancelled",
+            {
+                "id": response_id,
+                "model": model,
+                "thread_id": thread_id,
+                "cancelled": True,
+            },
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+        )
 
     try:
-        async for item in client.send_message_stream_events(
-            message,
-            request_id=effective_request_id,
-            metadata=metadata,
-        ):
+        if cancel_event.is_set():
+            emit_cancelled()
+            return
+
+        if stream:
+            async for item in client.send_message_stream_events(
+                message,
+                request_id=request_id,
+                metadata=metadata,
+            ):
+                if cancel_event.is_set():
+                    logger.info("Response stream cancelled for %s", request_id)
+                    emit_cancelled()
+                    return
+
+                item_type = str(item.get("type", ""))
+                if item_type == "stream_chunk":
+                    chunk = str(item.get("content", ""))
+                    if not chunk:
+                        continue
+                    broadcast_ui_event(
+                        "chat.response.delta",
+                        {
+                            "id": response_id,
+                            "model": model,
+                            "thread_id": thread_id,
+                            "delta": chunk,
+                        },
+                        scope="chat",
+                        session_id=thread_id,
+                        request_id=request_id,
+                    )
+                elif item_type == "stream_event":
+                    # Structured events may carry rich image blocks. Keep them
+                    # intact rather than reducing them to response text.
+                    payload: dict[str, Any] = {
+                        "id": response_id,
+                        "model": model,
+                        "thread_id": thread_id,
+                        "event_type": item.get("event_type", "unknown"),
+                        "content": item.get("content", ""),
+                        "metadata": item.get("metadata", {}),
+                    }
+                    if isinstance(item.get("images"), list):
+                        payload["images"] = item["images"]
+                    broadcast_ui_event(
+                        "chat.response.event",
+                        payload,
+                        scope="chat",
+                        session_id=thread_id,
+                        request_id=request_id,
+                    )
+        else:
+            response_details = await client.send_message(
+                message,
+                request_id=request_id,
+                metadata=metadata,
+                include_reasoning=include_reasoning,
+            )
             if cancel_event.is_set():
-                logger.info("Response stream cancelled for %s", effective_request_id)
-                break
+                emit_cancelled()
+                return
 
-            item_type = str(item.get("type", ""))
-            if item_type == "stream_chunk":
-                chunk = str(item.get("content", ""))
-                if not chunk:
-                    continue
-                delta_event = {
+            reasoning_text = (response_details.reasoning or "").strip()
+            broadcast_ui_event(
+                "chat.response.delta",
+                {
                     "id": response_id,
-                    "object": "response.output_text.delta",
                     "model": model,
-                    "output_index": 0,
-                    "delta": {
-                        "type": "output_text.delta",
-                        "text": chunk,
-                    },
-                }
-                yield "event: response.output_text.delta\n" + f"data: {json.dumps(delta_event)}\n\n"
-                continue
+                    "thread_id": thread_id,
+                    "delta": response_details.response,
+                    "reasoning": reasoning_text or None,
+                    "reasoning_tokens": response_details.reasoning_tokens,
+                },
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id,
+            )
 
-            if item_type == "stream_event":
-                structured_event = {
+        broadcast_ui_event(
+            "chat.response.completed",
+            {
+                "id": response_id,
+                "model": model,
+                "thread_id": thread_id,
+                "completed": True,
+            },
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+        )
+    except TimeoutError as error:
+        logger.error("Responses API timeout: %s", error, exc_info=True)
+        if cancel_event.is_set():
+            emit_cancelled()
+        else:
+            broadcast_ui_event(
+                "chat.response.failed",
+                {
                     "id": response_id,
-                    "object": "response.stream_event",
                     "model": model,
-                    "event_type": item.get("event_type", "unknown"),
-                    "content": item.get("content", ""),
-                    "metadata": item.get("metadata", {}),
-                    "request_id": item.get("request_id") or effective_request_id,
-                }
-                images = item.get("images")
-                if isinstance(images, list) and images:
-                    structured_event["images"] = images
-                yield "event: response.stream_event\n" + f"data: {json.dumps(structured_event)}\n\n"
-
-        completed_event = {
-            "id": response_id,
-            "object": "response.completed",
-            "model": model,
-        }
-        yield "event: response.completed\n" + f"data: {json.dumps(completed_event)}\n\n"
-
-    except Exception as e:
-        logger.error(f"Streaming error: {e}", exc_info=True)
-        error_event = {"error": str(e)}
-        yield "event: error\n" + f"data: {json.dumps(error_event)}\n\n"
+                    "thread_id": thread_id,
+                    "error": "Response generation timed out",
+                },
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id,
+            )
+    except Exception as error:
+        logger.error("Response generation error: %s", error, exc_info=True)
+        if cancel_event.is_set():
+            emit_cancelled()
+        else:
+            broadcast_ui_event(
+                "chat.response.failed",
+                {
+                    "id": response_id,
+                    "model": model,
+                    "thread_id": thread_id,
+                    "error": str(error),
+                },
+                scope="chat",
+                session_id=thread_id,
+                request_id=request_id,
+            )
     finally:
-        _active_response_streams.pop(effective_request_id, None)
+        if _active_response_streams.get(request_id) is cancel_event:
+            _active_response_streams.pop(request_id, None)
 
 
 async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:
@@ -1398,250 +1322,3 @@ async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIte
         chunk_text = str(item.get("content", ""))
         if chunk_text:
             yield chunk_text
-
-
-# Simple chat endpoint (non-OpenAI format)
-@app.post("/chat")
-async def simple_chat(request: Request, response: Response, body: SimpleChatRequest):
-    """Simple chat endpoint for quick testing (CR-002: now with Pydantic validation).
-
-    Request: {"message": "your message here"}
-    Response: {"response": "progenitor's response"}
-    """
-    if not client:
-        raise HTTPException(status_code=503, detail="Client not initialized")
-
-    try:
-        session = await get_session_from_request(request, session_manager)
-        thread_id, request_metadata = _build_chat_request_metadata(session)
-        await session_manager.record_chat_activity(
-            session.session_id,
-            message_increment=1,
-        )
-        response_details = await client.send_message(
-            body.message,
-            metadata=request_metadata,
-        )
-        _attach_session_cookie(request, session, response)
-        return {"response": response_details.response}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ============================================================================
-# Attachment Endpoints
-# ============================================================================
-
-
-@app.post("/v1/attachments")
-async def upload_attachment(
-    request: Request,
-    file: UploadFile = File(...),
-):
-    """
-    Upload a file attachment for use in conversations.
-
-    Returns attachment metadata including extracted text content.
-    """
-    content = await file.read()
-
-    result = await create_attachment_from_upload(
-        file_content=content,
-        filename=file.filename or "uploaded_file",
-        content_type=file.content_type or "application/octet-stream",
-        manager=attachment_manager,
-    )
-
-    if result.error:
-        raise HTTPException(status_code=400, detail=result.error)
-
-    # Store in session if available
-    session_id = request.cookies.get("progenitor_session")
-    if session_id:
-        session = await session_manager.get_session(session_id)
-        if session:
-            session.pending_attachments.append(result.id)
-
-    return {
-        "id": result.id,
-        "name": result.name,
-        "filename": result.original_filename,
-        "mime_type": result.mime_type,
-        "size_bytes": result.size_bytes,
-        "content_truncated": result.content_truncated,
-        "content_preview": result.content[:500] + "..."
-        if len(result.content) > 500
-        else result.content,
-    }
-
-
-@app.get("/v1/attachments/{attachment_id}")
-async def get_attachment(attachment_id: str):
-    """Get attachment metadata and content by ID."""
-    # Search in cache by ID
-    for result in attachment_manager._cache.values():
-        if result.id == attachment_id:
-            return {
-                "id": result.id,
-                "name": result.name,
-                "filename": result.original_filename,
-                "mime_type": result.mime_type,
-                "size_bytes": result.size_bytes,
-                "content": result.content,
-                "content_truncated": result.content_truncated,
-                "metadata": result.metadata,
-            }
-
-    raise HTTPException(status_code=404, detail="Attachment not found")
-
-
-# ============================================================================
-# Session Endpoints
-# ============================================================================
-
-
-@app.get("/v1/session")
-async def get_session(request: Request, response: Response):
-    """Get current session state."""
-    session = await get_session_from_request(request, session_manager)
-    _attach_session_cookie(request, session, response)
-    return {
-        "session_id": session.session_id,
-        "created_at": session.created_at.isoformat(),
-        "last_activity": session.last_activity.isoformat(),
-        "is_authenticated": session.is_authenticated,
-        "preferences": session.preferences.model_dump(),
-        "conversation_id": _default_conversation_id(session),
-        "message_count": session.message_count,
-        "pending_attachments": session.pending_attachments,
-    }
-
-
-@app.post("/v1/session")
-async def create_new_session(request: Request, response: Response):
-    """Create a new session."""
-    session = await session_manager.create_session()
-    set_session_cookie(response, session)
-    return {
-        "session_id": session.session_id,
-        "created_at": session.created_at.isoformat(),
-        "conversation_id": _default_conversation_id(session),
-    }
-
-
-@app.patch("/v1/session/preferences")
-async def update_session_preferences(request: Request, body: dict):
-    """Update session preferences."""
-    session_id = request.cookies.get("progenitor_session")
-    if not session_id:
-        raise HTTPException(status_code=400, detail="No session found")
-
-    session = await session_manager.update_preferences(session_id, **body)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    return {"preferences": session.preferences.model_dump()}
-
-
-@app.get("/v1/session/settings/export")
-async def export_settings(request: Request):
-    """Export session settings as YAML."""
-    session = await get_session_from_request(request, session_manager)
-    yaml_content = SettingsManager.export_settings(
-        session.preferences,
-        session.extension_states,
-    )
-    return Response(
-        content=yaml_content,
-        media_type="application/x-yaml",
-        headers={"Content-Disposition": "attachment; filename=settings.yaml"},
-    )
-
-
-@app.post("/v1/session/settings/import")
-async def import_settings(request: Request, response: Response):
-    """Import settings from YAML."""
-    body = await request.body()
-    yaml_content = body.decode("utf-8")
-
-    try:
-        preferences, extension_states = SettingsManager.import_settings(yaml_content)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid YAML: {e}")
-
-    session = await get_session_from_request(request, session_manager)
-    session.preferences = preferences
-    session.extension_states = extension_states
-    set_session_cookie(response, session)
-
-    return {"preferences": preferences.model_dump()}
-
-
-# ============================================================================
-# Conversation History Endpoints
-# ============================================================================
-
-
-@app.get("/v1/conversation")
-async def get_conversation():
-    """Get current conversation history."""
-    return {
-        "message_count": len(conversation_history),
-        "messages": [
-            {
-                "id": msg.id,
-                "role": msg.role,
-                "content": msg.content[:500] + "..." if len(msg.content) > 500 else msg.content,
-                "timestamp": msg.timestamp.isoformat(),
-                "has_attachments": len(msg.metadata.attachments) > 0,
-                "has_tool_calls": len(msg.metadata.tool_calls) > 0,
-            }
-            for msg in conversation_history.internal
-        ],
-    }
-
-
-@app.get("/v1/conversation/{message_id}")
-async def get_conversation_message(message_id: str):
-    """Get a specific message with full metadata."""
-    msg = conversation_history.get_message(message_id)
-    if not msg:
-        raise HTTPException(status_code=404, detail="Message not found")
-
-    return {
-        "id": msg.id,
-        "role": msg.role,
-        "content": msg.content,
-        "visible_content": msg.visible_content,
-        "timestamp": msg.timestamp.isoformat(),
-        "metadata": msg.metadata.model_dump(),
-    }
-
-
-@app.delete("/v1/conversation")
-async def clear_conversation():
-    """Clear conversation history."""
-    conversation_history.clear()
-    return {"status": "cleared"}
-
-
-# ============================================================================
-# Enhanced Health Endpoints
-# ============================================================================
-
-
-@app.get("/health/features")
-async def health_features():
-    """Get status of enhanced features."""
-    return {
-        "streaming": {
-            "enabled": True,
-            "stop_flag": False,
-        },
-        "session_manager": session_manager.get_stats(),
-        "attachment_manager": attachment_manager.get_cache_stats(),
-        "conversation": {
-            "message_count": len(conversation_history),
-        },
-        "graceful_shutdown": graceful_shutdown.get_status(),
-    }

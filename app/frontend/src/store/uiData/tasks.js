@@ -4,7 +4,8 @@
  * events on /api/ui/stream.
  */
 import { createAsyncThunk } from '@reduxjs/toolkit';
-import { requestJson } from '../http';
+import { createOperationRequestId, requestAcknowledged } from '../http';
+
 
 export const initialState = {
   tasks: {
@@ -12,6 +13,7 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    requestId: null,
     contentById: {},
     activityById: {},
   },
@@ -21,26 +23,17 @@ function cardIdOf(payload) {
   return typeof payload?.card_id === 'string' ? payload.card_id : null;
 }
 
-export const fetchKanbanBoard = createAsyncThunk(
-  'uiData/fetchKanbanBoard',
-  ({ kanbanUrl }) => requestJson(kanbanUrl, { errorLabel: 'Failed to load tasks' }),
-);
+export const fetchKanbanBoard = createAsyncThunk('uiData/fetchKanbanBoard', async ({ kanbanUrl }, { requestId }) => {
+  return requestAcknowledged(kanbanUrl, { requestId });
+}, { idGenerator: createOperationRequestId });
 
-export const fetchTaskContent = createAsyncThunk(
-  'uiData/fetchTaskContent',
-  ({ taskContentUrl, cardId }) => requestJson(
-    `${taskContentUrl}/${encodeURIComponent(cardId)}/content`,
-    { errorLabel: 'Failed to load task brief' },
-  ),
-);
 
-export const fetchTaskActivity = createAsyncThunk(
-  'uiData/fetchTaskActivity',
-  ({ taskActivityUrl, cardId }) => requestJson(
+export const fetchTaskActivity = createAsyncThunk('uiData/fetchTaskActivity', async ({ taskActivityUrl, cardId }, { requestId }) => {
+  return requestAcknowledged(
     `${taskActivityUrl}/${encodeURIComponent(cardId)}/activity`,
-    { errorLabel: 'Failed to load task activity' },
-  ),
-);
+    { requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
 export const reducers = {
   kanbanSnapshotReceived(state, action) {
@@ -67,8 +60,11 @@ export const eventHandlers = {
   'kanban.snapshot': (state, payload) => {
     state.tasks.board = payload || null;
     state.tasks.loaded = true;
-    state.tasks.loading = false;
-    state.tasks.error = null;
+    if (!state.tasks.loading || payload.request_id === state.tasks.requestId) {
+      state.tasks.loading = false;
+      state.tasks.error = null;
+      state.tasks.requestId = null;
+    }
   },
   'task.content.updated': (state, payload) => {
     const cardId = cardIdOf(payload);
@@ -86,31 +82,18 @@ export const eventHandlers = {
 
 export function buildExtraReducers(builder) {
   builder
-    .addCase(fetchKanbanBoard.pending, (state) => {
+    .addCase(fetchKanbanBoard.pending, (state, action) => {
       state.tasks.loading = true;
       state.tasks.error = null;
-    })
-    .addCase(fetchKanbanBoard.fulfilled, (state, action) => {
-      state.tasks.board = action.payload || null;
-      state.tasks.loading = false;
-      state.tasks.loaded = true;
-      state.tasks.error = null;
+      state.tasks.requestId = action.meta.requestId;
     })
     .addCase(fetchKanbanBoard.rejected, (state, action) => {
+      if (state.tasks.requestId !== action.meta.requestId) {
+        return;
+      }
       state.tasks.loading = false;
       state.tasks.error = action.error?.message || 'Failed to load tasks';
-    })
-    .addCase(fetchTaskContent.fulfilled, (state, action) => {
-      const cardId = cardIdOf(action.payload);
-      if (cardId) {
-        state.tasks.contentById[cardId] = action.payload;
-      }
-    })
-    .addCase(fetchTaskActivity.fulfilled, (state, action) => {
-      const cardId = cardIdOf(action.payload);
-      if (cardId) {
-        state.tasks.activityById[cardId] = action.payload;
-      }
+      state.tasks.requestId = null;
     });
 }
 

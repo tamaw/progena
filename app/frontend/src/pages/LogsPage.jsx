@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { useConfig } from '../context/ConfigContext';
 import { useLogsApi } from '../hooks/api/useLogsApi';
-import { useStatusSSE } from '../hooks/useSSE';
+import { selectLogsExport, selectLogsPage, selectLogsState } from '../store/uiDataSlice';
+import { requestAcknowledged, withQuery } from '../store/http';
+import { selectRealtime } from '../store/realtimeSlice';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -167,6 +170,17 @@ function mergeEntries(currentEntries, incomingEntries) {
   return freshEntries.length > 0 ? [...freshEntries, ...currentEntries] : currentEntries;
 }
 
+function exportEntriesToCsv(entries) {
+  const fields = ['timestamp', 'level', 'source', 'relative_path', 'message', 'data'];
+  const quote = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+  return [
+    fields.join(','),
+    ...entries.map((entry) => fields.map((field) => (
+      field === 'data' ? quote(JSON.stringify(entry[field] ?? null)) : quote(entry[field])
+    )).join(',')),
+  ].join('\n');
+}
+
 function findVisibleRange(items, scrollTop, viewportHeight) {
   if (!items.length) {
     return [0, -1];
@@ -192,10 +206,12 @@ function findVisibleRange(items, scrollTop, viewportHeight) {
 function LogsPage() {
   const { getLogs } = useLogsApi();
   const { getApiUrl } = useConfig();
+  const logsPage = useSelector(selectLogsPage);
+  const logsState = useSelector(selectLogsState);
   const [searchParams, setSearchParams] = useSearchParams();
   const defaultRange = useMemo(() => defaultDateRange(), []);
   const [entries, setEntries] = useState([]);
-  const [sourceGroups, setSourceGroups] = useState([]);
+  const sourceGroups = logsState.sourceGroups;
   const [selectedGroup, setSelectedGroup] = useState(searchParams.get('group') || '');
   const [selectedFile, setSelectedFile] = useState(searchParams.get('file') || '');
   const [search, setSearch] = useState(searchParams.get('search') || '');
@@ -204,6 +220,8 @@ function LogsPage() {
   const [endDate, setEndDate] = useState(searchParams.get('end') || '');
   const [loadingEntries, setLoadingEntries] = useState(true);
   const [error, setError] = useState('');
+  const [pendingLogRequest, setPendingLogRequest] = useState(null);
+  const [pendingExportRequestId, setPendingExportRequestId] = useState(null);
   const [expandedIds, setExpandedIds] = useState(() => new Set());
   const [newestCursor, setNewestCursor] = useState('');
   const [hiddenNewCount, setHiddenNewCount] = useState(0);
@@ -443,47 +461,61 @@ function LogsPage() {
 
     try {
       setError('');
-      const response = await getLogs(buildQueryParams(requestFilters, {
+      const acknowledgement = await getLogs(buildQueryParams(requestFilters, {
         format: 'json',
         after: incremental ? newestCursorRef.current || undefined : undefined,
         limit: incremental ? INCREMENTAL_LIMIT : 0,
       }));
+      if (requestVersion === requestVersionRef.current) {
+        setPendingLogRequest({
+          requestId: acknowledgement.request_id,
+          incremental,
+          requestVersion,
+        });
+      }
+    } catch (loadError) {
+      if (requestVersion === requestVersionRef.current) {
+        setError(loadError.message || 'Failed to load logs.');
+        if (!incremental) {
+          setLoadingEntries(false);
+        }
+      }
+    }
+  }, [getLogs, requestFilters]);
 
-      if (requestVersion !== requestVersionRef.current) {
+  useEffect(() => {
+    if (!pendingLogRequest || logsState.requestId !== pendingLogRequest.requestId || !logsPage) {
+      return;
+    }
+    if (pendingLogRequest.requestVersion !== requestVersionRef.current) {
+      setPendingLogRequest(null);
+      return;
+    }
+    const page = logsPage;
+    if (!pendingLogRequest.incremental && page.date_range) {
+      setStartDate((current) => current || page.date_range.start || defaultRange.start);
+      setEndDate((current) => current || page.date_range.end || defaultRange.end);
+    }
+
+    if (!pendingLogRequest.incremental && !defaultSelectionAppliedRef.current && !selectedGroup && !selectedFile) {
+      const activeSelection = page.active_selection || {};
+      if (activeSelection.group) {
+        setSelectedGroup(activeSelection.group);
+      }
+      if (activeSelection.file) {
+        setSelectedFile(activeSelection.file);
+      }
+      defaultSelectionAppliedRef.current = true;
+    }
+
+    if (pendingLogRequest.incremental) {
+      if (!page.cursor_found) {
+        setPendingLogRequest(null);
+        void loadLogs({ incremental: false });
         return;
       }
-
-      setSourceGroups(response.source_groups || []);
-      if (!incremental && response.date_range) {
-        setStartDate((current) => current || response.date_range.start || defaultRange.start);
-        setEndDate((current) => current || response.date_range.end || defaultRange.end);
-      }
-
-      if (!incremental && !defaultSelectionAppliedRef.current && !selectedGroup && !selectedFile) {
-        const activeSelection = response.active_selection || {};
-        if (activeSelection.group) {
-          setSelectedGroup(activeSelection.group);
-        }
-        if (activeSelection.file) {
-          setSelectedFile(activeSelection.file);
-        }
-        defaultSelectionAppliedRef.current = true;
-      }
-
-      if (incremental) {
-        if (!response.cursor_found) {
-          void loadLogs({ incremental: false });
-          return;
-        }
-
-        const incomingEntries = response.entries || [];
-        if (incomingEntries.length === 0) {
-          if (response.newest_cursor) {
-            setNewestCursor(response.newest_cursor);
-          }
-          return;
-        }
-
+      const incomingEntries = Array.isArray(page.entries) ? page.entries : [];
+      if (incomingEntries.length > 0) {
         if (tailPinnedRef.current || (scrollAreaRef.current?.scrollTop || 0) <= 4) {
           pendingScrollAdjustmentRef.current = { mode: 'top' };
           setHiddenNewCount(0);
@@ -495,34 +527,26 @@ function LogsPage() {
           };
           setHiddenNewCount((current) => current + incomingEntries.length);
         }
-
         setEntries((currentEntries) => mergeEntries(currentEntries, incomingEntries));
-        setNewestCursor(response.newest_cursor || newestCursorRef.current);
-        return;
       }
-
-      setEntries(response.entries || []);
-      setNewestCursor(response.newest_cursor || '');
-      setExpandedIds(new Set());
-    } catch (loadError) {
-      console.error('[LogsPage] Failed to load logs:', loadError);
-      setError(loadError.message);
-    } finally {
-      if (!incremental && requestVersion === requestVersionRef.current) {
-        setLoadingEntries(false);
-      }
+      setNewestCursor(page.newest_cursor || newestCursorRef.current);
+      setPendingLogRequest(null);
+      return;
     }
-  }, [defaultRange.end, defaultRange.start, getLogs, requestFilters, selectedFile, selectedGroup]);
 
-  useEffect(() => {
-    void loadLogs({ incremental: false });
-  }, [loadLogs]);
+    setEntries(Array.isArray(page.entries) ? page.entries : []);
+    setNewestCursor(page.newest_cursor || '');
+    setExpandedIds(new Set());
+    setLoadingEntries(false);
+    setPendingLogRequest(null);
+  }, [defaultRange.end, defaultRange.start, loadLogs, logsPage, logsState.requestId, pendingLogRequest, selectedFile, selectedGroup]);
 
   useEffect(() => () => {
     if (refreshTimeoutRef.current) {
       window.clearTimeout(refreshTimeoutRef.current);
     }
   }, []);
+
 
   const queueIncrementalRefresh = useCallback(() => {
     if (refreshTimeoutRef.current) {
@@ -535,23 +559,18 @@ function LogsPage() {
     }, 250);
   }, [loadLogs]);
 
-  const handleStatusEvent = useCallback((event) => {
-    if (event?.type === 'connected') {
-      if (newestCursorRef.current) {
-        queueIncrementalRefresh();
-      } else {
-        void loadLogs({ incremental: false });
-      }
+  const realtimeConnected = useSelector(selectRealtime).connected;
+
+  useEffect(() => {
+    if (!realtimeConnected) {
       return;
     }
-
-    if (['status', 'heartbeat', 'widgets', 'shutdown', 'message'].includes(event?.type)) {
+    if (newestCursorRef.current) {
       queueIncrementalRefresh();
+    } else {
+      void loadLogs({ incremental: false });
     }
-  }, [loadLogs, queueIncrementalRefresh]);
-
-  useStatusSSE(handleStatusEvent);
-
+  }, [realtimeConnected, loadLogs, queueIncrementalRefresh]);
   const handleScroll = useCallback((event) => {
     const nextScrollTop = event.currentTarget.scrollTop;
     setScrollTop(nextScrollTop);
@@ -591,16 +610,35 @@ function LogsPage() {
     });
   }, []);
 
-  const handleExport = useCallback(() => {
-    const exportUrl = new URL(getApiUrl('/api/ui/logs/export'), window.location.origin);
+  const handleExport = useCallback(async () => {
+    const requestId = crypto.randomUUID();
     const params = buildQueryParams(requestFilters, { format: 'csv', ...(level ? { level } : {}) });
-    Object.entries(params).forEach(([key, value]) => {
-      if (value !== undefined && value !== null && value !== '') {
-        exportUrl.searchParams.set(key, String(value));
-      }
-    });
-    window.open(exportUrl.toString(), '_blank', 'noopener,noreferrer');
+    try {
+      const acknowledgement = await requestAcknowledged(
+        withQuery(getApiUrl('/api/ui/logs/export'), params),
+        { requestId, errorLabel: 'Log export failed' },
+      );
+      setPendingExportRequestId(acknowledgement.request_id);
+    } catch (exportError) {
+      setError(exportError.message || 'Failed to export logs.');
+    }
   }, [getApiUrl, level, requestFilters]);
+
+  const exportState = useSelector((state) => selectLogsExport(state, pendingExportRequestId));
+  useEffect(() => {
+    if (!pendingExportRequestId || !exportState?.completed) {
+      return;
+    }
+    const exportedEntries = exportState.chunks.flatMap((chunk) => chunk || []);
+    const blob = new Blob([exportEntriesToCsv(exportedEntries)], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'progenitor-logs.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+    setPendingExportRequestId(null);
+  }, [exportState, pendingExportRequestId]);
 
   const activeStartDate = parseDateInput(draftRange.start || startDate || defaultRange.start);
   const activeEndDate = parseDateInput(draftRange.end || endDate || defaultRange.end);
