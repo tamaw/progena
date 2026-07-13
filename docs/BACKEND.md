@@ -18,7 +18,7 @@ result, status snapshot, generated text, attachment, download, or a second SSE
 stream. The browser obtains those results from canonical stream events and
 hydrates Redux from those events.
 
-Direct `/health`, `/ready`, `/live`, and `/health/detailed` routes are absent.
+Direct `/health`, `/ready`, `/live`, and `/health/detailed` routes are absent. `/healthz` is the sole explicit Docker/container liveness exception: it returns an empty `200 OK`, carries no application data, and is not a browser API route.
 
 ## Canonical SSE frames
 

@@ -1,3 +1,4 @@
+/* eslint-disable react-hooks/set-state-in-effect -- this page synchronizes URL, stream, and scroll state. */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
@@ -392,15 +393,15 @@ function LogsPage() {
   }, [entries, level]);
 
   const rowLayout = useMemo(() => {
+    const items = [];
     let totalHeight = 0;
-    const items = filteredEntries.map((entry) => {
+    for (const entry of filteredEntries) {
       const id = getEntryId(entry);
       const expanded = expandedIds.has(id);
       const height = expanded ? EXPANDED_ROW_HEIGHT : COLLAPSED_ROW_HEIGHT;
-      const row = { entry, id, top: totalHeight, height, expanded };
+      items.push({ entry, id, top: totalHeight, height, expanded });
       totalHeight += height;
-      return row;
-    });
+    }
     return { items, totalHeight };
   }, [expandedIds, filteredEntries]);
 

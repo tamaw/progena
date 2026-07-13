@@ -804,6 +804,13 @@ class TestRequestTracking:
                 "event_types": event_types,
             }
 
+    def test_docker_healthz_is_empty_liveness_response(self, client):
+        """Docker-only liveness is separate from browser API routes and carries no data."""
+        response = client.get("/healthz")
+
+        assert response.status_code == 200
+        assert response.content == b""
+
     def test_health_routes_are_deleted(self, client):
         """The plan deletes response-only health routes."""
         for path in ("/health", "/health/detailed"):

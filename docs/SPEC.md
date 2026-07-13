@@ -110,8 +110,7 @@ canonical UI stream after the write succeeds; details are in
 
 - **Browser application transport:** `GET /api/ui/stream` only.
 - **Finite browser routes:** retained `/api/ui/*` routes return only HTTP `202`
-  acknowledgements; their results arrive in correlated stream events.
-- **Operational probes:** no direct backend health route is part of this service's browser or backend API surface.
+- **Operational probes:** `GET /healthz` is the sole explicit Docker/container liveness exception to the event-stream-only API rule. It returns an empty `200 OK`, carries no application data, and is not part of the browser API surface.
 - **Internal runtime transport:** backend-to-runtime HTTP/SSE is internal and
   distinct from the browser UI stream.
 

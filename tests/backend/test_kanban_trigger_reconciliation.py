@@ -125,38 +125,37 @@ async def _wait_for_completed_run(
 
 async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_client):
     store, state_reader = workflow_env
-    with TestClient(app) as client:
-        workflow_id = "workflow_agent_move"
-        save_workflow_definition(
-            store,
-            default_workflow_definition(
-                workflow_id=workflow_id,
-                title="Agent move workflow",
-                event_type="kanban.card.moved",
-            ),
-        )
+    workflow_id = "workflow_agent_move"
+    save_workflow_definition(
+        store,
+        default_workflow_definition(
+            workflow_id=workflow_id,
+            title="Agent move workflow",
+            event_type="kanban.card.moved",
+        ),
+    )
 
-        # Directly import the reconciler and seed the cache
-        # to avoid async task scheduling issues inside TestClient.
-        from app.backend import ui_routes as _ui_routes
-        from app.backend.ui_routes import _reconcile_kanban_card_triggers
+    # Directly import the reconciler and seed the cache
+    # to avoid async task scheduling issues inside TestClient.
+    from app.backend import ui_routes as _ui_routes
+    from app.backend.ui_routes import _reconcile_kanban_card_triggers
 
-        _write_agent_card(store, "card_agent_1", column_id="backlog")
-        await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
-        assert _ui_routes._kanban_card_cache_seeded is True
-        assert list_workflow_runs(store, workflow_id=workflow_id) == []
+    _write_agent_card(store, "card_agent_1", column_id="backlog")
+    await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
+    assert _ui_routes._kanban_card_cache_seeded is True
+    assert list_workflow_runs(store, workflow_id=workflow_id) == []
 
-        # Second write: the agent moves the card to done, still via a direct
-        # store write -- this is the case that used to never fire triggers.
-        _write_agent_card(store, "card_agent_1", column_id="done")
-        await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
+    # Second write: the agent moves the card to done, still via a direct
+    # store write -- this is the case that used to never fire triggers.
+    _write_agent_card(store, "card_agent_1", column_id="done")
+    await _reconcile_kanban_card_triggers("kanban_card:card_agent_1")
 
-        run = await _wait_for_completed_run(store, workflow_id)
-        assert run["status"] == "completed"
-        assert run["trigger_event"]["event_type"] == "kanban.card.moved"
-        payload = run["trigger_event"]["payload"]
-        assert payload["from"]["column_id"] == "backlog"
-        assert payload["to"]["column_id"] == "done"
+    run = await _wait_for_completed_run(store, workflow_id)
+    assert run["status"] == "completed"
+    assert run["trigger_event"]["event_type"] == "kanban.card.moved"
+    payload = run["trigger_event"]["payload"]
+    assert payload["from"]["column_id"] == "backlog"
+    assert payload["to"]["column_id"] == "done"
 
 
 async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(

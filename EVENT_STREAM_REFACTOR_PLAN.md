@@ -8,6 +8,14 @@ After this refactor, the browser receives application data only through the cano
 
 There are no compatibility routes, response-body fallbacks, aliases, migrations, or deprecated client paths.
 
+### Explicit operational exception
+
+`GET /healthz` is the sole exception to the event-stream-only API rule. Docker
+and container supervisors use it only as a dependency-free process liveness
+probe. It returns an empty `200 OK`, carries no application data, and is not a
+browser API route. Every browser application-data request remains governed by
+the canonical `/api/ui/stream` contract.
+
 ## Target contract
 
 ### One transport for application data
