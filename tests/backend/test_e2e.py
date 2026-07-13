@@ -48,15 +48,6 @@ def test_backend_with_mock_progenitor():
 
     client = TestClient(app)
 
-    # Test 1: Health check
-    print("TEST 1: Health Check")
-    print("-" * 70)
-    response = client.get("/health")
-    print(f"Status: {response.status_code}")
-    print(f"Response: {response.json()}")
-    assert response.status_code == 200
-    print("✓ PASSED\n")
-
     # Test 2: Models endpoint
     print("TEST 2: List Models")
     print("-" * 70)
@@ -114,25 +105,25 @@ def test_backend_with_mock_progenitor():
         print(f"✗ FAILED: {e}")
         raise
 
-    # Test 4: Verify Responses API endpoint structure
-    print("TEST 4: Responses API Endpoint Structure")
+    # Test 4: Verify canonical browser response endpoint structure
+    print("TEST 4: Canonical Browser Response Endpoint Structure")
     print("-" * 70)
-    print("Verifying Responses API endpoint exists and handles requests")
+    print("Verifying /api/ui/responses exists and handles requests")
 
     # Test with TestClient directly (avoid async loop issues)
     response = client.post(
-        "/v1/responses",
+        "/api/ui/responses",
         json={
             "model": "progenitor-v1",
             "input": "test",
         },
     )
 
-    # Will fail with 503 because mock client is from different event loop
-    # But confirms the endpoint exists and is reachable
+    # May fail with 503 because mock client is from a different event loop,
+    # but a live dispatch acknowledges with 202 rather than returning output.
     print(f"Status: {response.status_code}")
-    print(f"Endpoint reachable: {response.status_code in (500, 503, 200)}")
-    assert response.status_code in (500, 503, 200)
+    print(f"Endpoint reachable: {response.status_code in (500, 503, 202)}")
+    assert response.status_code in (500, 503, 202)
     print("✓ Endpoint exists and handles requests\n")
 
     print("=" * 70)

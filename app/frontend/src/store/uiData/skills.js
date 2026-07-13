@@ -4,7 +4,7 @@
  * Each skill is the raw API shape so edits PUT the file content straight back.
  */
 import { createAsyncThunk } from '@reduxjs/toolkit';
-import { requestJson, withQuery } from '../http';
+import { createOperationRequestId, requestAcknowledged, withQuery } from '../http';
 
 export const initialState = {
   skills: {
@@ -12,85 +12,74 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    snapshotRequestId: null,
+    requestId: null,
   },
 };
 
-function applySkills(state, items) {
+function applySkills(state, items, requestId = null) {
   state.skills.items = Array.isArray(items) ? items : [];
   state.skills.loaded = true;
-  state.skills.loading = false;
-  state.skills.error = null;
-}
-
-function upsertSkill(state, skill) {
-  if (!skill?.path) {
-    return;
-  }
-  const index = state.skills.items.findIndex((item) => item.path === skill.path);
-  if (index >= 0) {
-    state.skills.items[index] = skill;
-  } else {
-    state.skills.items.push(skill);
+  state.skills.snapshotRequestId = requestId;
+  if (!state.skills.loading || requestId === state.skills.requestId) {
+    state.skills.loading = false;
+    state.skills.error = null;
+    state.skills.requestId = null;
   }
 }
 
-// Load the skill catalogue. The response carries the list (so the page renders
-// immediately) and the GET also triggers a `skills.snapshot` broadcast that
-// keeps other open tabs in sync.
-export const fetchSkills = createAsyncThunk(
-  'uiData/fetchSkills',
-  ({ skillsUrl, agent } = {}) => requestJson(
+
+// Load the skill catalogue. The GET triggers a `skills.snapshot` broadcast
+// that hydrates state from the realtime stream.
+export const fetchSkills = createAsyncThunk('uiData/fetchSkills', async ({ skillsUrl, agent } = {}, { requestId }) => {
+  return requestAcknowledged(
     agent ? withQuery(skillsUrl, { agent }) : skillsUrl,
-    { errorLabel: 'Failed to load skills' },
-  ),
-);
+    { requestId },
+  );
+}, { idGenerator: createOperationRequestId });
 
 // Persist edits to one skill file. The backend saves it and broadcasts
-// `skills.snapshot`; the response carries the saved record so we upsert it
-// immediately (the snapshot then reconciles).
-export const saveSkill = createAsyncThunk(
-  'uiData/saveSkill',
-  ({ skillsUrl, path, content }) => requestJson(`${skillsUrl}/content`, {
+// `skills.snapshot`; the acknowledgement triggers the snapshot event
+// which reconciles state.
+export const saveSkill = createAsyncThunk('uiData/saveSkill', async ({ skillsUrl, path, content }, { requestId }) => {
+  return requestAcknowledged(`${skillsUrl}/content`, {
     method: 'PUT',
     body: { path, content },
-    errorLabel: 'Failed to save skill:',
-  }),
-);
+    requestId,
+  });
+}, { idGenerator: createOperationRequestId });
 
-// Create a new skill file under <agent>/<name>/SKILL.md.
-export const createSkill = createAsyncThunk(
-  'uiData/createSkill',
-  ({ skillsUrl, agent, name, content }) => requestJson(skillsUrl, {
+// Create a new skill file under <agent>/<name>/SKILL.md. The backend broadcasts
+// `skills.snapshot`; the acknowledgement triggers the snapshot event
+// which reconciles state.
+export const createSkill = createAsyncThunk('uiData/createSkill', async ({ skillsUrl, agent, name, content }, { requestId }) => {
+  return requestAcknowledged(skillsUrl, {
     method: 'POST',
     body: { agent, name, content },
-    errorLabel: 'Failed to create skill:',
-  }),
-);
+    requestId,
+  });
+}, { idGenerator: createOperationRequestId });
 
 export const eventHandlers = {
   'skills.snapshot': (state, payload) => {
-    applySkills(state, payload.skills);
+    applySkills(state, payload.skills, payload.request_id || null);
   },
 };
 
 export function buildExtraReducers(builder) {
   builder
-    .addCase(fetchSkills.pending, (state) => {
+    .addCase(fetchSkills.pending, (state, action) => {
       state.skills.loading = true;
       state.skills.error = null;
-    })
-    .addCase(fetchSkills.fulfilled, (state, action) => {
-      applySkills(state, action.payload?.skills);
+      state.skills.requestId = action.meta.requestId;
     })
     .addCase(fetchSkills.rejected, (state, action) => {
+      if (state.skills.requestId !== action.meta.requestId) {
+        return;
+      }
       state.skills.loading = false;
       state.skills.error = action.error?.message || 'Failed to load skills';
-    })
-    .addCase(saveSkill.fulfilled, (state, action) => {
-      upsertSkill(state, action.payload);
-    })
-    .addCase(createSkill.fulfilled, (state, action) => {
-      upsertSkill(state, action.payload);
+      state.skills.requestId = null;
     });
 }
 

@@ -260,42 +260,28 @@ class TestChatServerAPI:
 
         return TestClient(app)
 
-    def test_health_check(self, test_client):
-        """Test health check endpoint."""
-        response = test_client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] in ("ok", "draining")
-        assert "name" in data
-        assert "version" in data
-        assert "uptime_seconds" in data
-
     def test_list_models(self, test_client):
-        """Test models listing endpoint."""
+        """Test models listing endpoint (deleted - should return 404)."""
         response = test_client.get("/v1/models")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["object"] == "list"
-        assert len(data["data"]) >= 1
+        assert response.status_code == 404
 
-    def test_responses_no_input(self, test_client):
-        """Test responses endpoint with empty input."""
+    def test_legacy_responses_route_is_absent(self, test_client):
+        """The retired browser generation route must not be routable."""
         response = test_client.post(
             "/v1/responses",
             json={"model": "test", "input": ""},
         )
-        assert response.status_code == 400
+        assert response.status_code in (404, 405)
 
-    def test_responses_endpoint(self, test_client):
-        """Test unified responses endpoint (preferred)."""
+    def test_ui_responses_no_input(self, test_client):
+        """Canonical browser generation rejects an empty prompt."""
         response = test_client.post(
-            "/v1/responses",
+            "/api/ui/responses",
             json={"model": "test", "input": ""},
         )
         assert response.status_code == 400
 
     def test_simple_chat_no_message(self, test_client):
-        """Test simple chat with no message."""
+        """Test simple chat with no message (deleted - should return 404)."""
         response = test_client.post("/chat", json={})
-        # Returns 503 if client not initialized, 400 if no message, or 422 for Pydantic validation
-        assert response.status_code in (400, 422, 503)
+        assert response.status_code == 404

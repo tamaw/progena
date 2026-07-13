@@ -34,7 +34,7 @@ npm run test:e2e       # playwright (needs the full stack running)
 ## Backend wiring
 
 The frontend never talks to the runtime directly. `vite.config.js` has a custom
-proxy plugin that forwards `/health`, `/api/*`, and `/v1/*` to the backend at
+proxy plugin that forwards `/api/*` and `/v1/*` to the backend at
 `http://127.0.0.1:8000` (dev **and** preview). Everything else is served by Vite.
 
 ## Directory map (`src/`)

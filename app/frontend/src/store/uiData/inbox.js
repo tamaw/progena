@@ -5,7 +5,8 @@
  * markdown bodies (messages are small), so there is no detail request dance.
  */
 import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { requestJson } from '../http';
+import { createOperationRequestId, requestAcknowledged } from '../http';
+
 
 export const initialState = {
   inbox: {
@@ -14,6 +15,7 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    requestId: null,
   },
 };
 
@@ -30,43 +32,42 @@ function replaceMessageList(inbox, items) {
   }
 }
 
-// Shared by the SSE event handler and the GET thunk's own fulfilled case, so
-// a page renders directly from the HTTP response instead of only becoming
-// "loaded" once the backend's echoed inbox.snapshot event happens to arrive
-// (which would otherwise never resolve if the realtime stream is down).
+// Used by the inbox.snapshot event handler to fully replace the inbox state.
+// No thunk fulfilled case sets domain data — the events drive hydration.
 function applyInboxSnapshot(inbox, payload) {
   replaceMessageList(inbox, payload?.messages);
   inbox.loaded = true;
-  inbox.loading = false;
-  inbox.error = null;
+  if (!inbox.loading || payload?.request_id === inbox.requestId) {
+    inbox.loading = false;
+    inbox.error = null;
+    inbox.requestId = null;
+  }
 }
 
 export const fetchInbox = createAsyncThunk(
   'uiData/fetchInbox',
-  ({ inboxUrl }) => requestJson(inboxUrl, { errorLabel: 'Failed to load inbox' }),
+  ({ inboxUrl }, { requestId }) => requestAcknowledged(
+    inboxUrl,
+    { requestId },
+  ),
+  { idGenerator: createOperationRequestId },
 );
 
 export const markInboxMessageRead = createAsyncThunk(
   'uiData/markInboxMessageRead',
-  ({ inboxUrl, messageId, read = true }) => requestJson(
+  ({ inboxUrl, messageId, read = true }, { requestId }) => requestAcknowledged(
     `${inboxUrl}/${encodeURIComponent(messageId)}/read`,
-    {
-      method: 'POST',
-      body: { read },
-      errorLabel: 'Failed to update inbox message',
-    },
+    { method: 'POST', body: { read }, requestId },
   ),
+  { idGenerator: createOperationRequestId },
 );
-
 export const deleteInboxMessage = createAsyncThunk(
   'uiData/deleteInboxMessage',
-  ({ inboxUrl, messageId }) => requestJson(
+  ({ inboxUrl, messageId }, { requestId }) => requestAcknowledged(
     `${inboxUrl}/${encodeURIComponent(messageId)}`,
-    {
-      method: 'DELETE',
-      errorLabel: 'Failed to delete inbox message',
-    },
+    { method: 'DELETE', requestId },
   ),
+  { idGenerator: createOperationRequestId },
 );
 
 export const eventHandlers = {
@@ -96,33 +97,18 @@ export const eventHandlers = {
 
 export function buildExtraReducers(builder) {
   builder
-    .addCase(fetchInbox.pending, (state) => {
+    .addCase(fetchInbox.pending, (state, action) => {
       state.inbox.loading = true;
       state.inbox.error = null;
-    })
-    .addCase(fetchInbox.fulfilled, (state, action) => {
-      applyInboxSnapshot(state.inbox, action.payload);
+      state.inbox.requestId = action.meta.requestId;
     })
     .addCase(fetchInbox.rejected, (state, action) => {
+      if (state.inbox.requestId !== action.meta.requestId) {
+        return;
+      }
       state.inbox.loading = false;
       state.inbox.error = action.error?.message || 'Failed to load inbox';
-    })
-    // Optimistic read/unread flip; the snapshot that follows the POST (or the
-    // store-change watcher) reconciles the true state either way.
-    .addCase(markInboxMessageRead.pending, (state, action) => {
-      const { messageId, read = true } = action.meta.arg;
-      const message = state.inbox.byId[messageId];
-      if (message) {
-        message.read = read;
-      }
-    })
-    // Optimistic removal; a failed DELETE is reconciled by the next snapshot.
-    .addCase(deleteInboxMessage.pending, (state, action) => {
-      const { messageId } = action.meta.arg;
-      if (state.inbox.byId[messageId]) {
-        delete state.inbox.byId[messageId];
-        state.inbox.order = state.inbox.order.filter((id) => id !== messageId);
-      }
+      state.inbox.requestId = null;
     });
 }
 

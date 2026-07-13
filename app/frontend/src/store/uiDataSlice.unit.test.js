@@ -78,88 +78,135 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.byId.a).toBeUndefined();
   });
 
-  it('deleteChatSession.fulfilled removes the chat immediately without waiting for realtime', () => {
+  it('deleteChatSession.fulfilled acknowledges without changing chats until chat.session.deleted arrives', () => {
     let s = reducer(undefined, snapshot(['a', 'b']));
-    s = reducer(s, deleteChatSession.fulfilled({ threadId: 'a' }, 'rid', {
+    s = reducer(s, deleteChatSession.fulfilled({
+      request_id: 'REQ1',
+      event_types: ['chat.session.deleted', 'chat.sessions.snapshot'],
+    }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
+    }));
+    expect(s.chats.order).toEqual(['a', 'b']);
+    expect(s.chats.byId.a).toBeDefined();
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.deleted',
+      payload: { thread_id: 'a', request_id: 'REQ1' },
     }));
     expect(s.chats.order).toEqual(['b']);
     expect(s.chats.byId.a).toBeUndefined();
   });
 
-  it('updateChatSessionMetadata.fulfilled applies archive state immediately', () => {
+  it('updateChatSessionMetadata.fulfilled acknowledges without changing archive state until chat.session.metadata.updated arrives', () => {
     let s = reducer(undefined, snapshot(['a', 'b']));
     s = reducer(s, updateChatSessionMetadata.fulfilled({
-      thread_id: 'a',
-      title: 'A',
-      archived: true,
-    }, 'rid', {
+      request_id: 'REQ1',
+      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+    }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'a',
       patch: { archived: true },
+    }));
+    expect(s.chats.byId.a.archived).toBeUndefined();
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.metadata.updated',
+      payload: {
+        request_id: 'REQ1',
+        session: { thread_id: 'a', title: 'A', archived: true },
+      },
     }));
     expect(s.chats.byId.a.archived).toBe(true);
     expect(s.chats.order).toEqual(['a', 'b']);
   });
 
-  it('updateChatSessionMetadata.fulfilled can move a touched chat to the top immediately', () => {
+  it('updateChatSessionMetadata.fulfilled waits for the canonical snapshot to reorder a touched chat', () => {
     let s = reducer(undefined, snapshot(['a', 'b', 'c']));
     s = reducer(s, updateChatSessionMetadata.fulfilled({
-      thread_id: 'c',
-      title: 'New chat',
-    }, 'rid', {
+      request_id: 'REQ1',
+      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+    }, 'REQ1', {
       chatsUrl: '/x',
       threadId: 'c',
       patch: { title: 'New chat', touch: true },
+    }));
+    expect(s.chats.order).toEqual(['a', 'b', 'c']);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.sessions.snapshot',
+      payload: {
+        request_id: 'REQ1',
+        sessions: [
+          { thread_id: 'c', title: 'New chat' },
+          { thread_id: 'a' },
+          { thread_id: 'b' },
+        ],
+      },
     }));
     expect(s.chats.order).toEqual(['c', 'a', 'b']);
     expect(s.chats.byId.c.title).toBe('New chat');
   });
 
-  it('ensureDraftChatSession.fulfilled moves the draft to the top immediately', () => {
+  it('ensureDraftChatSession.fulfilled waits for the canonical snapshot to reorder the draft', () => {
     let s = reducer(undefined, snapshot(['a', 'b', 'c']));
     s = reducer(s, ensureDraftChatSession.fulfilled({
-      thread_id: 'b',
-      title: 'New chat',
-      message_count: 0,
-    }, 'rid', {
+      request_id: 'REQ1',
+      event_types: ['chat.session.metadata.updated', 'chat.sessions.snapshot'],
+    }, 'REQ1', {
       chatsUrl: '/x',
-      threadId: 'thread_sess-new',
+      threadId: 'b',
+    }));
+    expect(s.chats.order).toEqual(['a', 'b', 'c']);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.sessions.snapshot',
+      payload: {
+        request_id: 'REQ1',
+        sessions: [
+          { thread_id: 'b', title: 'New chat', message_count: 0 },
+          { thread_id: 'a' },
+          { thread_id: 'c' },
+        ],
+      },
     }));
     expect(s.chats.order).toEqual(['b', 'a', 'c']);
     expect(s.chats.byId.b.title).toBe('New chat');
   });
 
-  it('selected applies only when request_id matches the active request', () => {
-    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
+  it('selected applies matching detail with messages and preserves request identity for hydration', () => {
+    const existingMessages = [
+      { role: 'user', content: 'Continue the existing chat' },
+      { role: 'assistant', content: 'Here is the next step.' },
+    ];
+    let s = reducer(undefined, requestChatSessionDetail.pending('REQ1', {
       chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
     }));
+    const pendingActive = s.chats.active;
+
+    // A selected event from another request must not replace the pending detail.
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        session: { thread_id: 'a', title: 'Stale selection' },
+        request_id: 'REQ2',
+      },
+    }));
+    expect(s.chats.active).toEqual(pendingActive);
+
+    // The matching stream event supplies the existing messages. Its request
+    // identity remains available for ConversationPage's hydration guard.
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        session: { thread_id: 'a', title: 'Existing chat', messages: existingMessages },
+        request_id: 'REQ1',
+      },
+    }));
+    expect(s.chats.active.detail.messages).toEqual(existingMessages);
     expect(s.chats.active.requestId).toBe('REQ1');
-
-    // mismatched request id is ignored
-    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { thread_id: 'a' }, request_id: 'REQ2' } }));
-    expect(s.chats.active.detail).toBeNull();
-
-    // matching request id applies
-    s = reducer(s, applyUiEvent({ type: 'chat.session.selected', payload: { session: { thread_id: 'a' }, request_id: 'REQ1' } }));
-    expect(s.chats.active.detail).toEqual({ thread_id: 'a' });
-  });
-
-  it('requestChatSessionDetail.fulfilled hydrates active detail from the direct response body', () => {
-    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
-      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
-    }));
-    s = reducer(s, requestChatSessionDetail.fulfilled({
-      threadId: 'a',
-      requestId: 'REQ1',
-      session: { thread_id: 'a', title: 'Loaded chat' },
-    }, 'rid', {
-      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
-    }));
-    expect(s.chats.active.detail).toEqual({ thread_id: 'a', title: 'Loaded chat' });
     expect(s.chats.active.threadId).toBe('a');
-    expect(s.chats.byId.a.title).toBe('Loaded chat');
+    expect(s.chats.active.loading).toBe(false);
   });
 
   it('clearActiveChatSession resets the active backend selection', () => {
@@ -348,8 +395,8 @@ describe('agent reducers', () => {
   });
 
   it('agent.selected applies only when request_id matches the active request', () => {
-    let s = reducer(undefined, requestAgentDetail.pending('rid', {
-      agentsUrl: '/x', agentId: 'alpha', requestId: 'REQ1',
+    let s = reducer(undefined, requestAgentDetail.pending('REQ1', {
+      agentsUrl: '/x', agentId: 'alpha',
     }));
     expect(s.agents.active.requestId).toBe('REQ1');
     s = reducer(s, applyUiEvent({ type: 'agent.selected', payload: { agent: { id: 'alpha' }, request_id: 'REQ2' } }));
@@ -502,24 +549,34 @@ describe('inbox events', () => {
     expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['b']);
   });
 
-  // Regression: fetchInbox.fulfilled used to only clear `loading`, leaving
-  // `loaded` false until the backend's echoed inbox.snapshot event happened
-  // to arrive over SSE - if that never came, a page effect keyed on `loaded`
-  // would keep re-dispatching the GET forever.
-  it('fetchInbox.fulfilled applies the response body directly, without needing an echoed SSE event', () => {
-    const payload = { messages: [{ id: 'a', title: 'A', read: false }], total: 1, unread: 1 };
-    const s = reducer(undefined, fetchInbox.fulfilled(payload, 'reqId', { inboxUrl: '/api/ui/inbox' }));
+  it('fetchInbox.fulfilled acknowledges without installing data until the matching inbox.snapshot event', () => {
+    const acknowledgement = { request_id: 'REQ1', event_types: ['inbox.snapshot'] };
+    let s = reducer(undefined, fetchInbox.pending('REQ1', { inboxUrl: '/api/ui/inbox' }));
+    s = reducer(s, fetchInbox.fulfilled(acknowledgement, 'REQ1', { inboxUrl: '/api/ui/inbox' }));
+    expect(selectInboxState({ uiData: s }).loaded).toBe(false);
+    expect(selectInboxState({ uiData: s }).loading).toBe(true);
+    expect(selectInboxMessages({ uiData: s })).toEqual([]);
+
+    s = reducer(s, applyUiEvent({
+      type: 'inbox.snapshot',
+      payload: {
+        request_id: 'REQ1',
+        messages: [{ id: 'a', title: 'A', read: false }],
+        total: 1,
+        unread: 1,
+      },
+    }));
     expect(selectInboxState({ uiData: s }).loaded).toBe(true);
     expect(selectInboxState({ uiData: s }).loading).toBe(false);
-    expect(selectInboxMessages({ uiData: s }).map((m) => m.id)).toEqual(['a']);
+    expect(selectInboxMessages({ uiData: s }).map((message) => message.id)).toEqual(['a']);
   });
 
-  it('fetchInbox.rejected clears loading and records the error without marking loaded', () => {
+  it('fetchInbox.rejected ignores an unmatched legacy finite-response error', () => {
     const action = fetchInbox.rejected(new Error('network down'), 'reqId', { inboxUrl: '/api/ui/inbox' });
     const s = reducer(undefined, action);
     expect(selectInboxState({ uiData: s }).loading).toBe(false);
     expect(selectInboxState({ uiData: s }).loaded).toBe(false);
-    expect(selectInboxState({ uiData: s }).error).toBe('network down');
+    expect(selectInboxState({ uiData: s }).error).toBeNull();
   });
 });
 

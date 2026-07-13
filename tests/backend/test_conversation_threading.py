@@ -8,7 +8,7 @@ from app.backend.session import SessionConfig, SessionManager
 from app.backend.state_reader import StateReader
 
 
-def test_get_session_sets_cookie_and_default_conversation_id(monkeypatch):
+def test_legacy_session_route_is_deleted_without_creating_a_cookie(monkeypatch):
     import app.backend.main as backend_main
 
     session_manager = SessionManager(SessionConfig(persist_dir=None))
@@ -17,30 +17,22 @@ def test_get_session_sets_cookie_and_default_conversation_id(monkeypatch):
     with TestClient(app) as client:
         response = client.get("/v1/session")
 
-    assert response.status_code == 200
-    data = response.json()
-    assert response.cookies.get("progenitor_session") == data["session_id"]
-    assert data["conversation_id"] == f"thread_{data['session_id']}"
-    assert data["message_count"] == 0
+    assert response.status_code == 404
+    assert "set-cookie" not in response.headers
 
 
-def test_get_session_ignores_stale_persisted_conversation_id(monkeypatch):
+def test_deleted_session_route_does_not_restore_stale_conversation_state(monkeypatch):
     import app.backend.main as backend_main
 
     session_manager = SessionManager(SessionConfig(persist_dir=None))
     monkeypatch.setattr(backend_main, "session_manager", session_manager)
 
     with TestClient(app) as client:
-        initial = client.get("/v1/session")
-        session_id = initial.json()["session_id"]
-
-        stored = session_manager._sessions[session_id]
-        stored.conversation_id = "thread_stale"
-
+        client.cookies.set("progenitor_session", "stale-session")
         response = client.get("/v1/session")
 
-    assert response.status_code == 200
-    assert response.json()["conversation_id"] == f"thread_{session_id}"
+    assert response.status_code == 404
+    assert "set-cookie" not in response.headers
 
 
 def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):

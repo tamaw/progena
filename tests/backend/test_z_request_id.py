@@ -1,211 +1,90 @@
-"""
-Tests for OBS-001: Request ID Correlation.
-
-Validates that request IDs are generated, propagated, and returned correctly.
-"""
+"""End-to-end coverage for finite-request correlation over canonical SSE."""
 
 import json
-from unittest.mock import AsyncMock, MagicMock
+import socket
+import threading
+import time
+from contextlib import contextmanager
+from collections.abc import Iterator
 
-import pytest
-from fastapi.testclient import TestClient
+import httpx
+import uvicorn
 
-
-@pytest.fixture
-def app():
-    """Get the FastAPI app instance."""
-    from app.backend.main import app
-
-    return app
+from app.backend.main import app
 
 
-class TestRequestIdMiddleware:
-    """Test request ID middleware behavior."""
+@contextmanager
+def _live_backend() -> Iterator[str]:
+    """Run the ASGI app on a loopback socket so SSE is not transport-buffered."""
+    from app.backend import ui_routes
 
-    def test_request_id_generated_when_not_provided(self, app):
-        """Test that a request ID is generated when not provided."""
-        with TestClient(app) as client:
-            response = client.get("/health")
+    # Earlier TestClient lifespans close their SSE connections. A live server
+    # needs a fresh event bound to its own loop rather than that closed lifecycle.
+    ui_routes._sse_shutdown_event = None
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        host, port = probe.getsockname()
 
-        assert "X-Request-ID" in response.headers
-        assert response.headers["X-Request-ID"].startswith("req-")
+    server = uvicorn.Server(
+        uvicorn.Config(app, host=host, port=port, lifespan="off", log_level="critical")
+    )
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 5
+    while not server.started:
+        assert thread.is_alive(), "Uvicorn stopped before accepting connections"
+        assert time.monotonic() < deadline, "Timed out starting Uvicorn"
+        time.sleep(0.01)
 
-    def test_request_id_preserved_when_provided(self, app):
-        """Test that provided request ID is preserved."""
-        custom_id = "custom-request-12345"
-
-        with TestClient(app) as client:
-            response = client.get("/health", headers={"X-Request-ID": custom_id})
-
-        assert response.headers["X-Request-ID"] == custom_id
-
-    def test_request_id_format(self, app):
-        """Test that generated request ID has expected format."""
-        with TestClient(app) as client:
-            response = client.get("/health")
-
-        request_id = response.headers["X-Request-ID"]
-        # Format should be req-{12 hex chars}
-        assert request_id.startswith("req-")
-        assert len(request_id) == 16  # "req-" (4) + 12 hex chars
-
-
-class TestClientRequestIdPropagation:
-    """Test that request ID is passed to the Progenitor client."""
-
-    @pytest.mark.asyncio
-    async def test_send_message_accepts_request_id(self):
-        """Test that send_message accepts request_id parameter."""
-        from app.backend.client import ProgenitorClient
-        from app.backend.config import ChatServerConfig
-
-        config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
-
-        # Mock the process
-        mock_process = MagicMock()
-        mock_process.stdin = MagicMock()
-        mock_process.stdin.write = MagicMock()
-        mock_process.stdin.drain = AsyncMock()
-        mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
-        mock_process.returncode = None  # Process is running
-
-        client._process = mock_process
-        client._started = True
-        client._last_heartbeat = 0  # Initialize heartbeat
-        config.progenitor_timeout = 30
-
-        # Call with request_id
-        await client.send_message("test message", request_id="req-abc123")
-
-        # Verify the payload included request_id
-        call_args = mock_process.stdin.write.call_args[0][0]
-        payload = json.loads(call_args.decode().strip())
-
-        assert payload["request_id"] == "req-abc123"
-        assert payload["content"] == "test message"
-
-    @pytest.mark.asyncio
-    async def test_send_message_without_request_id(self):
-        """Test that send_message works without request_id."""
-        from app.backend.client import ProgenitorClient
-        from app.backend.config import ChatServerConfig
-
-        config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
-
-        # Mock the process
-        mock_process = MagicMock()
-        mock_process.stdin = MagicMock()
-        mock_process.stdin.write = MagicMock()
-        mock_process.stdin.drain = AsyncMock()
-        mock_process.stdout = MagicMock()
-        mock_process.stdout.readline = AsyncMock(return_value=b'{"content": "test response"}\n')
-        mock_process.returncode = None  # Process is running
-
-        client._process = mock_process
-        client._started = True
-        client._last_heartbeat = 0  # Initialize heartbeat
-        config.progenitor_timeout = 30
-
-        # Call without request_id
-        await client.send_message("test message")
-
-        # Verify the payload does not include request_id
-        call_args = mock_process.stdin.write.call_args[0][0]
-        payload = json.loads(call_args.decode().strip())
-
-        assert "request_id" not in payload
-
-    @pytest.mark.asyncio
-    async def test_send_message_stream_events_accepts_request_id(self):
-        """Test that send_message_stream_events accepts request_id parameter."""
-        from app.backend.client import ProgenitorClient
-        from app.backend.config import ChatServerConfig
-
-        config = MagicMock(spec=ChatServerConfig)
-        client = ProgenitorClient(config)
-
-        # Mock the process
-        mock_process = MagicMock()
-        mock_process.stdin = MagicMock()
-        mock_process.stdin.write = MagicMock()
-        mock_process.stdin.drain = AsyncMock()
-        mock_process.stdout = MagicMock()
-
-        # Create async iterator for streaming response
-        async def mock_readline():
-            return b'{"type": "stream_chunk", "content": "test", "is_final": true}\n'
-
-        mock_process.stdout.readline = mock_readline
-
-        client._process = mock_process
-        client._started = True
-        config.progenitor_timeout = 30
-
-        # Call with request_id and consume the stream
-        events = []
-        async for event in client.send_message_stream_events(
-            "test message", request_id="req-xyz789"
-        ):
-            events.append(event)
-
-        # Verify the payload included request_id
-        call_args = mock_process.stdin.write.call_args[0][0]
-        payload = json.loads(call_args.decode().strip())
-
-        assert payload["request_id"] == "req-xyz789"
-        assert payload["stream"] is True
-        assert events == [
-            {
-                "type": "stream_chunk",
-                "content": "test",
-                "is_final": True,
-                "request_id": "req-xyz789",
-            }
-        ]
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=5)
+        ui_routes._sse_shutdown_event = None
+        assert not thread.is_alive(), "Uvicorn did not stop"
 
 
-class TestRequestIdInLogs:
-    """Test that request ID appears in log messages."""
-
-    def test_request_id_logged_on_request(self, caplog):
-        """Test that request ID is logged for incoming requests."""
-        import logging
-
-        from app.backend.main import app
-
-        with caplog.at_level(logging.INFO), TestClient(app) as client:
-            response = client.get("/health")
-
-        request_id = response.headers["X-Request-ID"]
-
-        # Check that the request ID appears in the logs
-        assert any(request_id in record.message for record in caplog.records)
+def _next_sse_frame(lines: Iterator[str]) -> tuple[str, dict[str, object]]:
+    """Decode one complete SSE frame from the endpoint's wire representation."""
+    event_name: str | None = None
+    data_lines: list[str] = []
+    for line in lines:
+        if line.startswith("event: "):
+            event_name = line.removeprefix("event: ")
+        elif line.startswith("data: "):
+            data_lines.append(line.removeprefix("data: "))
+        elif line == "" and event_name is not None:
+            return event_name, json.loads("\n".join(data_lines))
+    raise AssertionError("SSE stream closed before a complete event frame")
 
 
-class TestRequestIdHandlerIntegration:
-    """Test request ID integration in API handlers."""
+def test_finite_ui_request_returns_client_id_and_matching_stream_event():
+    """The finite acknowledgement and serialized canonical frame share the client ID."""
+    request_id = "client-generated-operation-id"
 
-    def test_responses_endpoint_uses_request_state(self):
-        """Verify /v1/responses handler accesses request.state.request_id."""
-        import app.backend.main as main_module
+    with _live_backend() as base_url, httpx.Client(base_url=base_url, timeout=5) as client:
+        with client.stream("GET", "/api/ui/stream") as stream:
+            assert stream.status_code == 200
+            assert stream.headers["content-type"].startswith("text/event-stream")
+            lines = stream.iter_lines()
+            ready_name, ready = _next_sse_frame(lines)
+            assert ready_name == "ui.event"
+            assert ready["type"] == "connection.ready"
 
-        with open(main_module.__file__, encoding="utf-8") as f:
-            content = f.read()
+            response = client.get(
+                "/api/ui/widgets",
+                headers={"X-Request-ID": request_id},
+            )
+            event_name, event = _next_sse_frame(lines)
 
-        # Check that the handler gets request_id from state
-        assert "request.state" in content
-        assert "request_id" in content
-
-    def test_stream_response_unified_accepts_request_id(self):
-        """Verify stream_response_unified function accepts request_id parameter."""
-        import app.backend.main as main_module
-
-        with open(main_module.__file__, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check function signature
-        assert "def stream_response_unified(" in content
-        assert "request_id: str | None = None" in content
+    assert response.status_code == 202
+    assert response.headers["X-Request-ID"] == request_id
+    assert response.json() == {
+        "request_id": request_id,
+        "event_types": ["widgets.updated"],
+    }
+    assert event_name == "ui.event"
+    assert event["type"] == "widgets.updated"
+    assert event["payload"]["request_id"] == request_id
+    assert isinstance(event["payload"]["items"], list)

@@ -1,10 +1,9 @@
 """Agent profile routes for the backend-owned agent catalog.
 
-This is a distinct resource from the runtime A2A registry exposed at
-``/api/ui/agents`` (``get_sub_agents``) and the per-agent request metrics at
-``/api/ui/agents/{name}``. Those describe live runtime state; these routes serve
-the editable agent catalog (definition + LangGraph-style graph) stored in the
-backend database and consumed by the Agents page.
+This is a distinct resource from the runtime A2A registry which describes live
+runtime state; these routes serve the editable agent catalog (definition +
+LangGraph-style graph) stored in the backend database and consumed by the
+Agents page.
 
 Mirrors the chat router pattern: a GET acknowledges the request and publishes the
 data on the shared ``/api/ui/stream`` so the frontend updates through its realtime
@@ -17,11 +16,11 @@ import asyncio
 from collections.abc import Callable
 from typing import Any, Literal, Protocol
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
-from .chat_sessions import UiEventEnvelope
+from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
 
 
 class BroadcastUiEvent(Protocol):
@@ -32,7 +31,16 @@ class BroadcastUiEvent(Protocol):
         *,
         scope: Literal["global", "session", "chat"] = "global",
         session_id: str | None = None,
+        request_id: str | None = None,
     ) -> UiEventEnvelope: ...
+
+
+def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
+    """Return the single middleware-generated correlation ID for a finite request."""
+    request_id = header_request_id or getattr(request.state, "request_id", None)
+    if not isinstance(request_id, str) or not request_id:
+        raise RuntimeError("Request correlation ID middleware is not configured")
+    return request_id
 
 
 class AgentGraphModel(BaseModel):
@@ -211,6 +219,8 @@ def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
 async def broadcast_agent_profiles_snapshot(
     get_agent_store: Callable[[], AgentStore | None],
     broadcast_ui_event: BroadcastUiEvent,
+    *,
+    request_id: str | None = None,
 ) -> AgentProfilesResponse | None:
     """Rebuild and publish the agent-profiles snapshot on the UI stream.
 
@@ -219,13 +229,13 @@ async def broadcast_agent_profiles_snapshot(
     editing ``/state/agents.json`` pushes live to the Agents page the same way
     a UI-driven edit already does. Returns ``None`` (no-op) if the agent store
     isn't configured yet rather than raising, since this also runs from a
-    background watcher with no request to fail.
+    background watcher with no request to manage.
     """
     store = get_agent_store()
     if store is None:
         return None
     response = await asyncio.to_thread(build_agent_profiles, store)
-    broadcast_ui_event("agents.snapshot", response.model_dump())
+    broadcast_ui_event("agents.snapshot", response.model_dump(), request_id=request_id)
     return response
 
 
@@ -255,57 +265,70 @@ def create_agent_profile_router(
             return None
         return store.get_agent(agent_id)
 
-    @router.get("/agent-profiles", response_model=AgentProfilesResponse)
-    async def list_agent_profiles():
+    @router.get("/agent-profiles", status_code=202, response_model=UiRequestAcknowledgement)
+    async def list_agent_profiles(
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Acknowledge agent-list requests and publish the list on the UI stream.
 
         Subagents come from the backend DB; A2A agents are read through from
         Progenitor's registry document so they always reflect the runtime's live
         view (status + agent card) without the backend fetching cards itself.
         """
+        request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
         response = await asyncio.to_thread(build_agent_profiles, store)
-        broadcast_ui_event("agents.snapshot", response.model_dump())
-        return response
+        broadcast_ui_event("agents.snapshot", response.model_dump(), request_id=request_id)
+        return acknowledgement_response(request_id, ["agents.snapshot"])
 
-    # Declared before the ``/{agent_id}`` route so the static path is not
-    # captured as an agent id.
-    @router.get("/agent-profiles/graph-schema")
-    async def get_agent_graph_schema():
-        """Publish the predefined JSON schema for editing an agent graph."""
-        return AGENT_GRAPH_SCHEMA
-
-    @router.get("/agent-profiles/{agent_id}", response_model=AgentProfile)
-    async def get_agent_profile(agent_id: str, request_id: str | None = None):
+    @router.get(
+        "/agent-profiles/{agent_id}", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def get_agent_profile(
+        agent_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Acknowledge agent-detail requests and publish the detail on the UI stream."""
+        request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
         agent = await asyncio.to_thread(_resolve_profile, store, agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail="Agent not found")
         profile = AgentProfile(**agent)
-        broadcast_ui_event("agent.upserted", {"agent": profile.model_dump()})
+        broadcast_ui_event("agent.upserted", {"agent": profile.model_dump()}, request_id=request_id)
         broadcast_ui_event(
             "agent.selected",
-            {"agent": profile.model_dump(), "request_id": request_id},
+            {"agent": profile.model_dump()},
+            request_id=request_id,
         )
-        return profile
+        return acknowledgement_response(request_id, ["agent.upserted", "agent.selected"])
 
-    @router.patch("/agent-profiles/{agent_id}/graph", response_model=AgentGraphModel)
-    async def update_agent_graph(agent_id: str, request: AgentGraphUpdateRequest):
+    @router.patch(
+        "/agent-profiles/{agent_id}/graph", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def update_agent_graph(
+        agent_id: str,
+        body: AgentGraphUpdateRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Validate and persist an edited agent graph, then broadcast the update."""
+        request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
         if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
             raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
         try:
-            validate_agent_graph(request.nodes, request.edges)
+            validate_agent_graph(body.nodes, body.edges)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         updated = store.update_graph(
             agent_id,
-            {"nodes": request.nodes, "edges": request.edges},
-            status=request.status,
-            summary=request.summary,
+            {"nodes": body.nodes, "edges": body.edges},
+            status=body.status,
+            summary=body.summary,
         )
         if updated is None:
             raise HTTPException(status_code=404, detail="Agent not found")
@@ -314,7 +337,8 @@ def create_agent_profile_router(
         broadcast_ui_event(
             "agent.graph.updated",
             {"agent_id": agent_id, "graph": graph.model_dump()},
+            request_id=request_id,
         )
-        return graph
+        return acknowledgement_response(request_id, ["agent.graph.updated"])
 
     return router

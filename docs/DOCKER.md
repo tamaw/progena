@@ -68,7 +68,6 @@ Current compose behavior:
 
 Because the backend is not host-published, host access normally goes through nginx on `http://localhost`:
 - UI: `http://localhost/`
-- Proxied backend health: `http://localhost/health`, `/ready`, `/live`
 - Proxied API: `http://localhost/v1/...` and `http://localhost/api/ui/...`
 
 If you need direct host access to backend port `8000`, add your own port mapping to the compose file or use a one-off override file.
@@ -94,5 +93,4 @@ Notes:
 
 Current health probes are implemented as follows:
 - `progenitor`: `curl -f http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint, same-container)
-- `backend`: `curl -f http://localhost:8000/health`
 - `frontend`: `wget -q -O /dev/null http://127.0.0.1/`

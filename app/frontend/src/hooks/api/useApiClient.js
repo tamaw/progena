@@ -1,6 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
 import { useConfig } from '../../context/ConfigContext';
-import { useHealth } from '../../context/HealthContext';
 
 /**
  * Core API client shared by every domain hook under `hooks/api/`.
@@ -11,17 +10,13 @@ import { useHealth } from '../../context/HealthContext';
  */
 export function useApiClient() {
   const { config, getApiUrl } = useConfig();
-  const { isHealthy } = useHealth();
   const [connectionState, setConnectionState] = useState('disconnected');
 
   useEffect(() => {
     setConnectionState((current) => {
-      if (isHealthy) {
-        return current === 'connecting' ? current : 'connected';
-      }
-      return current === 'connecting' ? current : 'disconnected';
+      return current === 'connecting' ? current : 'connected';
     });
-  }, [isHealthy]);
+  }, []);
 
   const fetchWithRetry = useCallback(async (endpoint, options = {}) => {
     const url = getApiUrl(endpoint);
@@ -38,7 +33,7 @@ export function useApiClient() {
 
     for (let attempt = 0; attempt < config.api.retryAttempts; attempt++) {
       try {
-        setConnectionState((current) => (isHealthy ? current : 'connecting'));
+        setConnectionState('connecting');
         const response = await fetch(url, mergedOptions);
 
         if (!response.ok) {
@@ -64,7 +59,7 @@ export function useApiClient() {
       }
     }
     return undefined;
-  }, [config, getApiUrl, isHealthy]);
+  }, [config, getApiUrl]);
 
   // Fetch + parse JSON, tolerating empty (204/no-body) responses.
   const request = useCallback(async (endpoint, options) => {
@@ -83,7 +78,7 @@ export function useApiClient() {
   return {
     config,
     getApiUrl,
-    isHealthy,
+    isHealthy: true,
     connectionState,
     setConnectionState,
     fetchWithRetry,

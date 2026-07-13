@@ -60,164 +60,397 @@ def backend_client(monkeypatch):
     yield mock_client
 
 
+def _assert_acknowledged(response, request_id: str, event_types: list[str]) -> None:
+    assert response.status_code == 202
+    assert response.json() == {
+        "request_id": request_id,
+        "event_types": event_types,
+    }
+    assert event_types
+
+
+def _drain_envelopes(queue: asyncio.Queue) -> list:
+    return [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+
+
 def _wait_for_completed_run(client: TestClient, workflow_id: str, *, timeout: float = 2.0) -> dict:
+    from app.backend.document_store import get_default_document_store
+    from app.backend.workflow_service import list_workflow_runs
+
     deadline = time.time() + timeout
     while time.time() < deadline:
-        items = client.get("/api/ui/workflow-runs").json()["items"]
-        matches = [item for item in items if item["workflow_id"] == workflow_id]
-        if matches and matches[0]["status"] in {"completed", "failed"}:
-            return matches[0]
-        time.sleep(0.02)
+        client.get("/api/ui/workflows")
+        runs = list_workflow_runs(get_default_document_store(), workflow_id=workflow_id)
+        for run in runs:
+            if run.status in {"completed", "failed"}:
+                return run.model_dump(mode="json")
+        time.sleep(0.05)
     raise AssertionError(f"Timed out waiting for workflow run completion for {workflow_id}")
 
 
 def test_workflow_crud_round_trip(workflow_env):
-    with TestClient(app) as client:
-        created = client.post(
-            "/api/ui/workflows",
-            json={"title": "Followup", "description": "Workflow under test"},
-        )
-        assert created.status_code == 200
-        payload = created.json()
-        workflow_id = payload["workflow"]["id"]
-        assert payload["path"] == f"/state/workflows/{workflow_id}.json"
+    """Persistence precedes request-correlated events and a data-free acknowledgement."""
+    import app.backend.ui_routes as ui_routes
 
-        listed = client.get("/api/ui/workflows")
-        assert listed.status_code == 200
-        assert listed.json()["items"][0]["id"] == workflow_id
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.add(queue)
+    try:
+        with TestClient(app) as client:
+            create_request_id = "workflow-create-request"
+            created = client.post(
+                "/api/ui/workflows",
+                json={"title": "Followup", "description": "Workflow under test"},
+                headers={"X-Request-ID": create_request_id},
+            )
+            _assert_acknowledged(
+                created,
+                create_request_id,
+                ["workflow.updated", "workflows.snapshot"],
+            )
+            envelopes = _drain_envelopes(queue)
+            assert [envelope.type for envelope in envelopes] == [
+                "workflow.updated",
+                "workflows.snapshot",
+            ]
+            assert all(
+                envelope.payload["request_id"] == create_request_id for envelope in envelopes
+            )
+            updated = envelopes[0]
+            workflow_id = updated.payload["workflow"]["id"]
+            path = updated.payload["path"]
+            assert path == f"/state/workflows/{workflow_id}.json"
 
-        loaded = client.get(
-            "/api/ui/workflows/content",
-            params={"path": f"/state/workflows/{workflow_id}.json"},
-        )
-        assert loaded.status_code == 200
-        assert loaded.json()["workflow"]["title"] == "Followup"
+            list_request_id = "workflow-list-request"
+            listed = client.get(
+                "/api/ui/workflows",
+                headers={"X-Request-ID": list_request_id},
+            )
+            _assert_acknowledged(listed, list_request_id, ["workflows.snapshot"])
+            snapshot = _drain_envelopes(queue)
+            assert len(snapshot) == 1
+            assert snapshot[0].type == "workflows.snapshot"
+            assert snapshot[0].payload["request_id"] == list_request_id
+            assert snapshot[0].payload["items"][0]["id"] == workflow_id
 
-        updated_workflow = loaded.json()["workflow"]
-        updated_workflow["title"] = "Followup v2"
-        saved = client.put(
-            "/api/ui/workflows/content",
-            json={"path": f"/state/workflows/{workflow_id}.json", "workflow": updated_workflow},
-        )
-        assert saved.status_code == 200
-        assert saved.json()["workflow"]["title"] == "Followup v2"
+            load_request_id = "workflow-load-request"
+            loaded = client.get(
+                "/api/ui/workflows/content",
+                params={"path": path},
+                headers={"X-Request-ID": load_request_id},
+            )
+            _assert_acknowledged(loaded, load_request_id, ["workflow.updated"])
+            loaded_update = _drain_envelopes(queue)
+            assert len(loaded_update) == 1
+            assert loaded_update[0].type == "workflow.updated"
+            assert loaded_update[0].payload["request_id"] == load_request_id
+            assert loaded_update[0].payload["workflow"]["title"] == "Followup"
 
-        deleted = client.delete(f"/api/ui/workflows/{workflow_id}")
-        assert deleted.status_code == 204
-        assert client.get("/api/ui/workflows").json()["items"] == []
+            updated_workflow = loaded_update[0].payload["workflow"]
+            updated_workflow["title"] = "Followup v2"
+            save_request_id = "workflow-save-request"
+            saved = client.put(
+                "/api/ui/workflows/content",
+                json={"path": path, "workflow": updated_workflow},
+                headers={"X-Request-ID": save_request_id},
+            )
+            _assert_acknowledged(
+                saved,
+                save_request_id,
+                ["workflow.updated", "workflows.snapshot"],
+            )
+            saved_events = _drain_envelopes(queue)
+            assert [event.type for event in saved_events] == [
+                "workflow.updated",
+                "workflows.snapshot",
+            ]
+            assert all(event.payload["request_id"] == save_request_id for event in saved_events)
+            assert saved_events[0].payload["workflow"]["title"] == "Followup v2"
+
+            delete_request_id = "workflow-delete-request"
+            deleted = client.delete(
+                f"/api/ui/workflows/{workflow_id}",
+                headers={"X-Request-ID": delete_request_id},
+            )
+            _assert_acknowledged(
+                deleted,
+                delete_request_id,
+                ["workflow.deleted", "workflows.snapshot"],
+            )
+            deleted_events = _drain_envelopes(queue)
+            assert [event.type for event in deleted_events] == [
+                "workflow.deleted",
+                "workflows.snapshot",
+            ]
+            assert all(event.payload["request_id"] == delete_request_id for event in deleted_events)
+            assert deleted_events[0].payload["workflow_id"] == workflow_id
+            assert deleted_events[1].payload["items"] == []
+    finally:
+        ui_routes._ui_stream_subscribers.discard(queue)
 
 
 def test_workflow_put_rejects_cycle(workflow_env):
-    with TestClient(app) as client:
-        created = client.post("/api/ui/workflows", json={"title": "Cycle check"}).json()
-        workflow = created["workflow"]
-        _event_node_id, prompt_a_id = list(workflow["graph"]["nodes"])
-        prompt_b_id = "prompt_cycle"
-        workflow["graph"]["nodes"][prompt_b_id] = {
-            "kind": "prompt",
-            "title": "Cycle prompt",
-            "prompt": "Create a cycle",
-            "agent_name": "progenitor",
-            "role": None,
-        }
-        workflow["graph"]["edges"].append(
-            {
-                "from": {"node": prompt_a_id, "port": "default"},
-                "to": {"node": prompt_b_id, "port": "default"},
-            }
-        )
-        workflow["graph"]["edges"].append(
-            {
-                "from": {"node": prompt_b_id, "port": "default"},
-                "to": {"node": prompt_a_id, "port": "default"},
-            }
-        )
-        workflow["ui"]["nodes"][prompt_b_id] = {
-            "position": {"x": 816, "y": 160},
-            "size": {
-                "data": {"width": 340, "height": 160},
-                "settings": {"width": 340, "height": 280},
-            },
-        }
+    import app.backend.ui_routes as ui_routes
 
-        response = client.put(
-            "/api/ui/workflows/content",
-            json={"path": created["path"], "workflow": workflow},
-        )
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.add(queue)
+    try:
+        with TestClient(app) as client:
+            created = client.post("/api/ui/workflows", json={"title": "Cycle check"})
+            _assert_acknowledged(
+                created, created.json()["request_id"], ["workflow.updated", "workflows.snapshot"]
+            )
 
-        assert response.status_code == 400
-        assert "acyclic" in response.json()["detail"]
+            envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+            updated = next(e for e in envelopes if e.type == "workflow.updated")
+            workflow = updated.payload["workflow"]
+            path = updated.payload["path"]
+
+            _event_node_id, prompt_a_id = list(workflow["graph"]["nodes"])
+            prompt_b_id = "prompt_cycle"
+            workflow["graph"]["nodes"][prompt_b_id] = {
+                "kind": "prompt",
+                "title": "Cycle prompt",
+                "prompt": "Create a cycle",
+                "agent_name": "progenitor",
+                "role": None,
+            }
+            workflow["graph"]["edges"].append(
+                {
+                    "from": {"node": prompt_a_id, "port": "default"},
+                    "to": {"node": prompt_b_id, "port": "default"},
+                }
+            )
+            workflow["graph"]["edges"].append(
+                {
+                    "from": {"node": prompt_b_id, "port": "default"},
+                    "to": {"node": prompt_a_id, "port": "default"},
+                }
+            )
+            workflow["ui"]["nodes"][prompt_b_id] = {
+                "position": {"x": 816, "y": 160},
+                "size": {
+                    "data": {"width": 340, "height": 160},
+                    "settings": {"width": 340, "height": 280},
+                },
+            }
+
+            request_id = "a0cd5a4d-2b1b-4bcb-8be2-3ba4c376275d"
+            response = client.put(
+                "/api/ui/workflows/content",
+                json={"path": path, "workflow": workflow},
+                headers={"X-Request-ID": request_id},
+            )
+
+            assert response.status_code == 400
+            assert response.headers["X-Request-ID"] == request_id
+            assert "acyclic" in response.json()["detail"]
+            post_rejection_events = _drain_envelopes(queue)
+            assert not any(
+                event.type in {"workflow.updated", "workflows.snapshot"}
+                for event in post_rejection_events
+            )
+            assert not any(
+                event.payload.get("request_id") == request_id for event in post_rejection_events
+            )
+    finally:
+        ui_routes._ui_stream_subscribers.discard(queue)
 
 
 def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env, backend_client):
+    import app.backend.ui_routes as ui_routes
+
     backend_client.send_message.side_effect = [
         AgentResponse(response="first response", reasoning=None, reasoning_tokens=None),
         AgentResponse(response="second response", reasoning=None, reasoning_tokens=None),
     ]
 
-    with TestClient(app) as client:
-        created = client.post("/api/ui/workflows", json={"title": "Two prompt chain"}).json()
-        workflow = created["workflow"]
-        event_node_id, prompt_a_id = list(workflow["graph"]["nodes"])
-        prompt_b_id = "prompt_second"
-        workflow["graph"]["nodes"][prompt_a_id]["prompt"] = "First prompt"
-        workflow["graph"]["nodes"][prompt_b_id] = {
-            "kind": "prompt",
-            "title": "Second prompt",
-            "prompt": "Second prompt",
-            "agent_name": "progenitor",
-            "role": None,
-        }
-        workflow["graph"]["edges"].append(
-            {
-                "from": {"node": prompt_a_id, "port": "default"},
-                "to": {"node": prompt_b_id, "port": "default"},
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.add(queue)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/ui/workflows",
+                json={"title": "Two prompt chain"},
+                headers={"X-Request-ID": "two-prompt-create"},
+            )
+            _assert_acknowledged(
+                created,
+                "two-prompt-create",
+                ["workflow.updated", "workflows.snapshot"],
+            )
+
+            updated = next(e for e in _drain_envelopes(queue) if e.type == "workflow.updated")
+            workflow = updated.payload["workflow"]
+            path = updated.payload["path"]
+
+            event_node_id, prompt_a_id = list(workflow["graph"]["nodes"])
+            prompt_b_id = "prompt_second"
+            workflow["graph"]["nodes"][prompt_a_id]["prompt"] = "First prompt"
+            workflow["graph"]["nodes"][prompt_b_id] = {
+                "kind": "prompt",
+                "title": "Second prompt",
+                "prompt": "Second prompt",
+                "agent_name": "progenitor",
+                "role": None,
             }
-        )
-        workflow["ui"]["nodes"][prompt_b_id] = {
-            "position": {"x": 816, "y": 160},
-            "size": {
-                "data": {"width": 340, "height": 160},
-                "settings": {"width": 340, "height": 280},
-            },
+            workflow["graph"]["edges"].append(
+                {
+                    "from": {"node": prompt_a_id, "port": "default"},
+                    "to": {"node": prompt_b_id, "port": "default"},
+                }
+            )
+            workflow["ui"]["nodes"][prompt_b_id] = {
+                "position": {"x": 816, "y": 160},
+                "size": {
+                    "data": {"width": 340, "height": 160},
+                    "settings": {"width": 340, "height": 280},
+                },
+            }
+            saved = client.put(
+                "/api/ui/workflows/content",
+                json={"path": path, "workflow": workflow},
+                headers={"X-Request-ID": "two-prompt-save"},
+            )
+            _assert_acknowledged(
+                saved,
+                "two-prompt-save",
+                ["workflow.updated", "workflows.snapshot"],
+            )
+            _drain_envelopes(queue)
+
+            trigger_request_id = "two-prompt-trigger"
+            trigger = client.post(
+                f"/api/ui/workflows/{workflow['id']}/trigger",
+                json={},
+                headers={"X-Request-ID": trigger_request_id},
+            )
+            _assert_acknowledged(trigger, trigger_request_id, ["workflow.run.started"])
+            trigger_event = next(
+                event
+                for event in _drain_envelopes(queue)
+                if event.type == "workflow.run.started"
+                and event.payload["request_id"] == trigger_request_id
+            )
+            assert trigger_event.payload["workflow_id"] == workflow["id"]
+
+            run = _wait_for_completed_run(client, workflow["id"])
+            assert run["status"] == "completed"
+            assert run["completed_node_ids"] == [event_node_id, prompt_a_id, prompt_b_id]
+            assert backend_client.send_message.await_count == 2
+            first_metadata = backend_client.send_message.await_args_list[0].kwargs["metadata"]
+            second_metadata = backend_client.send_message.await_args_list[1].kwargs["metadata"]
+            assert first_metadata["thread_id"] == second_metadata["thread_id"]
+            assert run["thread_id"] == first_metadata["thread_id"]
+    finally:
+        ui_routes._ui_stream_subscribers.discard(queue)
+
+
+def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
+    """A queued manual trigger reports the run that is actually active, not a synthetic one."""
+    import app.backend.ui_routes as ui_routes
+    from app.backend.workflow_service import save_workflow_run
+    from app.progenitor.workflows import WorkflowRun
+
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.add(queue)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/ui/workflows",
+                json={"title": "Already active workflow"},
+                headers={"X-Request-ID": "active-workflow-create"},
+            )
+            _assert_acknowledged(
+                created,
+                "active-workflow-create",
+                ["workflow.updated", "workflows.snapshot"],
+            )
+            workflow = next(
+                event for event in _drain_envelopes(queue) if event.type == "workflow.updated"
+            ).payload["workflow"]
+            active_run = WorkflowRun(
+                run_id="workflow_run_already_active",
+                workflow_id=workflow["id"],
+                status="paused",
+                current_node_id="prompt_active",
+                completed_node_ids=["event_active"],
+                thread_id="workflow-thread-active",
+                trigger_event={
+                    "event_type": "manual",
+                    "payload": {"source": "existing active run"},
+                    "request_id": "original-active-request",
+                },
+                last_output="Awaiting operator review.",
+                queued_at="2026-07-13T10:00:00+00:00",
+                started_at="2026-07-13T10:00:01+00:00",
+                updated_at="2026-07-13T10:00:02+00:00",
+            )
+            save_workflow_run(workflow_env, active_run)
+
+            request_id = "active-workflow-trigger"
+            triggered = client.post(
+                f"/api/ui/workflows/{workflow['id']}/trigger",
+                json={"payload": {"operator": "tester"}},
+                headers={"X-Request-ID": request_id},
+            )
+            _assert_acknowledged(triggered, request_id, ["workflow.run.started"])
+            event = next(
+                envelope
+                for envelope in _drain_envelopes(queue)
+                if envelope.type == "workflow.run.started"
+            )
+
+        assert event.payload == {
+            "workflow_id": workflow["id"],
+            "run_id": active_run.run_id,
+            "status": "paused",
+            "run": active_run.model_dump(mode="json"),
+            "request_id": request_id,
         }
-        saved = client.put(
-            "/api/ui/workflows/content",
-            json={"path": created["path"], "workflow": workflow},
-        )
-        assert saved.status_code == 200
-
-        trigger = client.post(f"/api/ui/workflows/{workflow['id']}/trigger", json={})
-        assert trigger.status_code == 200
-
-        run = _wait_for_completed_run(client, workflow["id"])
-        assert run["status"] == "completed"
-        assert run["completed_node_ids"] == [event_node_id, prompt_a_id, prompt_b_id]
-        assert backend_client.send_message.await_count == 2
-        first_metadata = backend_client.send_message.await_args_list[0].kwargs["metadata"]
-        second_metadata = backend_client.send_message.await_args_list[1].kwargs["metadata"]
-        assert first_metadata["thread_id"] == second_metadata["thread_id"]
-        assert run["thread_id"] == first_metadata["thread_id"]
+    finally:
+        ui_routes._ui_stream_subscribers.discard(queue)
 
 
 def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_client):
-    with TestClient(app) as client:
-        created = client.post(
-            "/api/ui/workflows",
-            json={"title": "Kanban created workflow", "event_type": "kanban.card.created"},
-        )
-        workflow_id = created.json()["workflow"]["id"]
+    """A kanban write persists, broadcasts a correlated snapshot, and triggers its workflow."""
+    import app.backend.ui_routes as ui_routes
 
-        response = client.post(
-            "/api/ui/kanban/cards",
-            json={"title": "Workflow card", "summary": "Triggers workflow"},
-        )
-        assert response.status_code == 200
+    queue = asyncio.Queue()
+    ui_routes._ui_stream_subscribers.add(queue)
+    try:
+        with TestClient(app) as client:
+            created = client.post(
+                "/api/ui/workflows",
+                json={"title": "Kanban created workflow", "event_type": "kanban.card.created"},
+                headers={"X-Request-ID": "kanban-workflow-create"},
+            )
+            _assert_acknowledged(
+                created,
+                "kanban-workflow-create",
+                ["workflow.updated", "workflows.snapshot"],
+            )
+            updated = next(e for e in _drain_envelopes(queue) if e.type == "workflow.updated")
+            workflow_id = updated.payload["workflow"]["id"]
 
-        run = _wait_for_completed_run(client, workflow_id)
-        assert run["status"] == "completed"
-        assert run["trigger_event"]["event_type"] == "kanban.card.created"
-        assert backend_client.send_message.await_count == 1
+            request_id = "kanban-card-create"
+            response = client.post(
+                "/api/ui/kanban/cards",
+                json={"title": "Workflow card", "summary": "Triggers workflow"},
+                headers={"X-Request-ID": request_id},
+            )
+            _assert_acknowledged(response, request_id, ["kanban.snapshot"])
+            snapshot = next(
+                event for event in _drain_envelopes(queue) if event.type == "kanban.snapshot"
+            )
+            assert snapshot.payload["request_id"] == request_id
+            assert any(card["title"] == "Workflow card" for card in snapshot.payload["cards"])
+
+            run = _wait_for_completed_run(client, workflow_id)
+            assert run["status"] == "completed"
+            assert run["trigger_event"]["event_type"] == "kanban.card.created"
+            assert backend_client.send_message.await_count == 1
+    finally:
+        ui_routes._ui_stream_subscribers.discard(queue)
 
 
 def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
@@ -228,16 +461,21 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Broadcast workflow"})
-            assert created.status_code == 200
-            workflow_id = created.json()["workflow"]["id"]
+            _assert_acknowledged(
+                created, created.json()["request_id"], ["workflow.updated", "workflows.snapshot"]
+            )
 
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
-            event_types = [envelope.type for envelope in envelopes]
+            updated = next(e for e in envelopes if e.type == "workflow.updated")
+            workflow_id = updated.payload["workflow"]["id"]
+            event_types = [e.type for e in envelopes]
             assert "workflow.updated" in event_types
             assert "workflows.snapshot" in event_types
 
             triggered = client.post(f"/api/ui/workflows/{workflow_id}/trigger", json={})
-            assert triggered.status_code == 200
+            _assert_acknowledged(
+                triggered, triggered.json()["request_id"], ["workflow.run.started"]
+            )
             _wait_for_completed_run(client, workflow_id)
 
             deadline = time.time() + 2.0
