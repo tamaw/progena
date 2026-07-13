@@ -893,6 +893,25 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(assistantItem.displayToolCalls).toEqual([{ name: 'search' }]);
   });
 
+  // Acceptance: a stream event with no timestamp (e.g. reconstructed from
+  // checkpoint data predating created_at stamping) must not corrupt the
+  // sort with NaN -- it falls back to the assistant row's own timestamp
+  // instead of landing in an undefined position.
+  it('sorts items with a missing timestamp next to the assistant row instead of producing NaN order', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'Hello',
+      timestamp: 2000,
+      streamEvents: [
+        { id: 'has_ts', eventType: 'tool_start', content: 'searching', timestamp: 1000 },
+        { id: 'no_ts', eventType: 'tool_start', content: 'legacy call', timestamp: undefined },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    expect(items.map((item) => item.id)).toEqual(['has_ts', 'no_ts', 'msg_1']);
+  });
+
   // Acceptance: the backend persists raw write_todos tool_start/tool_result
   // events but not the synthetic todos_update rows the live turn appends --
   // reconstruct one row per write_todos call, next to its tool_result, keyed
