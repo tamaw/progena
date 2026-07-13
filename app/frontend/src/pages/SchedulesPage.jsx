@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useDispatch, useSelector } from 'react-redux';
+import { useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { useEntityUrlSync } from '../lib/routes';
 import {
@@ -22,8 +22,11 @@ import DetailHeader, {
   PlayActionIcon,
 } from '../components/layout/DetailHeader';
 import { useSchedulesApi } from '../hooks/api/useSchedulesApi';
+import { useConfig } from '../context/ConfigContext';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
-import { scheduleSnapshotReceived, selectSchedules } from '../store/uiDataSlice';
+import { selectSchedules, selectUiWidgets } from '../store/uiDataSlice';
+import { requestAcknowledged } from '../store/http';
+import { selectUiEventQueue } from '../store/realtimeSlice';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -270,24 +273,30 @@ function MetricCard({ label, value, detail }) {
 }
 
 function SchedulesPage() {
-  const { getSchedules, retriggerSchedule } = useSchedulesApi();
+  const { retriggerSchedule } = useSchedulesApi();
+  const { getApiUrl } = useConfig();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
-  const dispatch = useDispatch();
-  // `titleSlug` is display context only (e.g. /schedules/sch_42/daily-digest)
-  // -- selection is driven entirely by the id, never by the slug.
   const { scheduleId: urlScheduleId } = useParams();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once via REST on mount; every change after that arrives as an event.
   const schedules = useSelector(selectSchedules);
+  const widgets = useSelector(selectUiWidgets);
   const [loading, setLoading] = useState(true);
+  const [pendingScheduleRequestId, setPendingScheduleRequestId] = useState(null);
+  const hasPendingScheduleSnapshot = useSelector((state) => (
+    pendingScheduleRequestId !== null
+    && selectUiEventQueue(state).some(({ event }) => (
+      event?.type === 'schedule.snapshot'
+      && event?.payload?.request_id === pendingScheduleRequestId
+    ))
+  ));
   const [error, setError] = useState(null);
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [selectedScheduleId, setSelectedScheduleId] = useState(() => urlScheduleId || null);
   const [mutating, setMutating] = useState(false);
-  const [scheduleWidgets, setScheduleWidgets] = useState({});
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const titleInputRef = useRef(null);
@@ -297,51 +306,61 @@ function SchedulesPage() {
   const [isEditingTrigger, setIsEditingTrigger] = useState(false);
   const [triggerText, setTriggerText] = useState('');
   const triggerInputRef = useRef(null);
-  const scheduleIdsKey = useMemo(() => schedules.map((schedule) => schedule.id).join('|'), [schedules]);
-
   useEffect(() => {
     let cancelled = false;
+    const requestId = crypto.randomUUID();
     setLoading(true);
-    getSchedules()
-      .then((data) => {
-        if (cancelled) return;
-        const items = Array.isArray(data?.items) ? data.items : [];
-        dispatch(scheduleSnapshotReceived(items));
-        setError(null);
-        setSelectedScheduleId((current) => current ?? items[0]?.id ?? null);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err.message || 'Failed to load schedules.');
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    setError(null);
+    setPendingScheduleRequestId(requestId);
+    requestAcknowledged(getApiUrl('schedules'), {
+      requestId,
+      errorLabel: 'Failed to load schedules',
+    }).catch((err) => {
+      if (!cancelled) {
+        setPendingScheduleRequestId(null);
+        setLoading(false);
+        setError(err.message || 'Failed to load schedules.');
+      }
+    });
     return () => {
       cancelled = true;
     };
-  }, [getSchedules, dispatch]);
+  }, [getApiUrl]);
+
+  useEffect(() => {
+    if (!pendingScheduleRequestId || !hasPendingScheduleSnapshot) {
+      return;
+    }
+    setPendingScheduleRequestId(null);
+    setLoading(false);
+    setError(null);
+  }, [hasPendingScheduleSnapshot, pendingScheduleRequestId]);
 
   useEffect(() => {
     let cancelled = false;
-    getWidgets()
-      .then((data) => {
-        if (cancelled) return;
-        const items = Array.isArray(data?.items) ? data.items : [];
-        const widgetMap = {};
-        for (const item of items) {
-          const scheduleId = item?.data?.schedule_id;
-          if (item?.type !== 'schedule' || typeof scheduleId !== 'string') continue;
-          widgetMap[scheduleId] = item;
-        }
-        setScheduleWidgets(widgetMap);
-      })
-      .catch(() => {
-        if (!cancelled) setScheduleWidgets({});
-      });
+    getWidgets().catch((err) => {
+      if (!cancelled) setError(err.message || 'Failed to load schedule logs.');
+    });
     return () => {
       cancelled = true;
     };
-  }, [getWidgets, scheduleIdsKey]);
+  }, [getWidgets]);
+
+  useEffect(() => {
+    setSelectedScheduleId((current) => (
+      schedules.some((schedule) => schedule.id === current)
+        ? current
+        : schedules[0]?.id ?? null
+    ));
+  }, [schedules]);
+
+  const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
+    const scheduleId = widget?.data?.schedule_id;
+    if (widget?.type === 'schedule' && typeof scheduleId === 'string') {
+      byScheduleId[scheduleId] = widget;
+    }
+    return byScheduleId;
+  }, {}), [widgets]);
 
   const visibleSchedules = useMemo(() => {
     const filtered = schedules.filter((schedule) => matchesSchedule(schedule, activeFilter, search));
@@ -625,7 +644,11 @@ function SchedulesPage() {
       </PaneList>
 
       <DetailPane className="detail-pane--dense schedules-detail" label="Schedule detail">
-        {!selectedSchedule ? (
+        {loading ? (
+          <div className="detail-pane__body">
+            <div className="agents-empty-state">Loading schedules…</div>
+          </div>
+        ) : !selectedSchedule ? (
           <div className="detail-pane__body">
             <div className="agents-empty-state">Select a schedule, or use New to ask Progenitor to create one.</div>
           </div>

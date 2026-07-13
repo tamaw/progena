@@ -25,8 +25,9 @@ import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
 import * as inbox from './uiData/inbox';
 import * as workflows from './uiData/workflows';
+import * as logs from './uiData/logs';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -175,7 +176,6 @@ export {
 
 export {
   fetchKanbanBoard,
-  fetchTaskContent,
   fetchTaskActivity,
   selectKanbanBoard,
   selectTasksState,
@@ -189,6 +189,7 @@ export {
   indexKnowledgeSource,
   selectKnowledgeBases,
   selectKnowledgeState,
+  selectKnowledgeSearch,
 } from './uiData/knowledge';
 
 export {
@@ -214,11 +215,17 @@ export {
 
 export {
   fetchWidgets,
+  markAlertsViewed,
   selectUiStatus,
   selectUiAlerts,
   selectUiWidgets,
   selectSchedules,
 } from './uiData/runtime';
+export {
+  selectLogsPage,
+  selectLogsState,
+  selectLogsExport,
+} from './uiData/logs';
 
 export {
   fetchInbox,

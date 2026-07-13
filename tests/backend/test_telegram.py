@@ -489,22 +489,14 @@ class TestTelegramRoutes:
         return TestClient(app)
 
     def test_telegram_status_disabled(self, client):
-        """Test status endpoint when Telegram is disabled."""
-        # This test depends on the actual config which has Telegram disabled by default
+        """Test status endpoint (deleted - should return 404)."""
         response = client.get("/api/ui/telegram/status")
-        assert response.status_code == 200
-        data = response.json()
-        assert "enabled" in data
-        assert "connected" in data
-        assert "will_forward_to_telegram" in data
+        assert response.status_code == 404
 
     def test_telegram_test_disabled(self, client):
-        """Test test endpoint when Telegram is disabled."""
+        """Test test endpoint (deleted - should return 404)."""
         response = client.post("/api/ui/telegram/test")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["success"] is False
-        assert "not enabled" in data["message"] or "not configured" in data["message"]
+        assert response.status_code == 404
 
 
 class TestTelegramPolling:

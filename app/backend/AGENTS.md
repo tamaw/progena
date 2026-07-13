@@ -21,11 +21,12 @@ backend/
 └── client.py            # Legacy subprocess client
 ```
 
-### Key Endpoints
-- `POST /v1/responses` - OpenAI-compatible responses endpoint
-- `GET /health` - Health check endpoint
-- `GET /ready` - Readiness endpoint
-- `GET /live` - Liveness endpoint
+- `POST /api/ui/responses` - Browser generation acknowledgement endpoint
+- `GET /api/ui/stream` - Canonical browser event stream
+- `GET /healthz` - Docker-only liveness probe (explicit event-stream exception; empty 200 response)
+- `GET /health` - Legacy application health route (absent)
+- `GET /ready` - Legacy readiness route (absent)
+- `GET /live` - Legacy liveness route (absent)
 
 ### Development
 ```bash
@@ -52,7 +53,7 @@ pytest tests/backend/ -v
 - Async/await throughout
 - Pydantic models for validation
 - Streaming responses via SSE
-- Health checks return JSON status
+- `/healthz` is an explicit Docker/container liveness exception to the event-stream-only rule; it returns an empty 200 and no application data
 
 ### React UI Event Stream
 
@@ -74,7 +75,7 @@ Use `broadcast_ui_event()` for new backend-owned UI changes after persistence su
 
 Frontend React code consumes this through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`. That listener owns the single `EventSource`, deduplicates events by id in `realtimeSlice.js`, then reducers in `uiDataSlice.js` apply domain updates. Pages should read selectors instead of opening their own long-lived UI streams.
 
-Chat session loading follows a request-then-stream pattern. `GET /api/ui/chats` returns HTTP 200 for request acknowledgement and also emits `chat.sessions.snapshot` on `/api/ui/stream`; the frontend left pane is populated by that streamed snapshot. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` for unknown-sidebar safety and `chat.session.selected` with the same `request_id` for active transcript hydration. The frontend only applies matching detail events so one tab cannot steal another tab's selected chat. Mutations emit targeted events such as `chat.session.created`, `chat.session.metadata.updated`, and `chat.session.deleted`, and may also emit a fresh snapshot when the whole list ordering can change.
+Chat session loading follows a request-then-stream pattern. Finite browser routes return HTTP 202 with `{request_id, event_types}` and emit authoritative state on `/api/ui/stream`; the frontend left pane is populated by the streamed `chat.sessions.snapshot`. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` for unknown-sidebar safety and `chat.session.selected` with the same `request_id` for active transcript hydration. The frontend only applies matching detail events so one tab cannot steal another tab's selected chat. Mutations emit targeted events such as `chat.session.created`, `chat.session.metadata.updated`, and `chat.session.deleted`, and may also emit a fresh snapshot when the whole list ordering can change.
 
 ### Configuration
 - Port: `8000` (default)

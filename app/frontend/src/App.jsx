@@ -1,9 +1,6 @@
 import { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider } from './context/ConfigContext';
-import { HealthProvider } from './context/HealthContext';
-import { AlertCenterProvider } from './context/AlertCenterContext';
-import { ChromeRuntimeProvider } from './context/ChromeRuntimeContext';
 import { NotificationProvider } from './context/NotificationContext';
 import AppRuntimeShell from './components/layout/AppRuntimeShell';
 import RealtimeBridge from './store/RealtimeBridge';
@@ -44,11 +41,8 @@ function App() {
   return (
     <ConfigProvider>
       <RealtimeBridge />
-      <HealthProvider>
-        <NotificationProvider>
-          <AlertCenterProvider>
-            <ChromeRuntimeProvider>
-              <BrowserRouter>
+      <NotificationProvider>
+        <BrowserRouter>
                 <Routes>
                   <Route element={<AppRuntimeShell />}>
                     <Route path="/" element={<Navigate to="/chat" replace />} />
@@ -97,10 +91,7 @@ function App() {
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>
               </BrowserRouter>
-            </ChromeRuntimeProvider>
-          </AlertCenterProvider>
         </NotificationProvider>
-      </HealthProvider>
     </ConfigProvider>
   );
 }

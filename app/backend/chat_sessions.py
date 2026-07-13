@@ -100,6 +100,18 @@ class UiEventEnvelope(BaseModel):
     timestamp: str = Field(default_factory=_now_iso)
 
 
+class UiRequestAcknowledgement(BaseModel):
+    """Acknowledgement body for a dispatched finite UI request."""
+
+    request_id: str
+    event_types: list[str] = Field(min_length=1)
+
+
+def acknowledgement_response(request_id: str, event_types: list[str]) -> UiRequestAcknowledgement:
+    """Build an acknowledgement after dispatching causal UI event envelopes."""
+    return UiRequestAcknowledgement(request_id=request_id, event_types=event_types)
+
+
 def _metadata_index(store: BackendDocumentStore) -> list[str]:
     document = store.get_document(CHAT_METADATA_PREFIX, CHAT_INDEX_KEY, [])
     if document is None or not isinstance(document.payload, list):

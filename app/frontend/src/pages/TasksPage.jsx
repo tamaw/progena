@@ -35,6 +35,7 @@ import {
   selectTaskActivityEntry,
   selectTasksState,
 } from '../store/uiDataSlice';
+import { selectRealtime } from '../store/realtimeSlice';
 import {
   agentColors,
   buildCardBadges,
@@ -470,6 +471,7 @@ export default function TasksPage({ context = null }) {
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const dispatch = useDispatch();
+  const realtime = useSelector(selectRealtime);
   // `titleSlug` is display context only (e.g. /tasks/card_42/fix-the-thing) --
   // selection is driven entirely by the id, never by the slug. Only the
   // unscoped /tasks page (no project `context`) owns the URL -- Tasks
@@ -500,23 +502,20 @@ export default function TasksPage({ context = null }) {
   const loadBoard = useCallback(async () => {
     setError('');
     try {
-      const nextBoard = await dispatch(fetchKanbanBoard({
+      await dispatch(fetchKanbanBoard({
         kanbanUrl: getApiUrl('kanban'),
       })).unwrap();
-      setSelectedCardId((current) => {
-        if (current && nextBoard.cards.some((card) => card.id === current && !isArchivedCard(card))) {
-          return current;
-        }
-        return nextBoard.cards.find((card) => !isArchivedCard(card))?.id || null;
-      });
     } catch (loadError) {
-      setError(loadError.message || 'Failed to load tasks');
+      setError(loadError.message || 'Failed to load tasks.');
     }
   }, [dispatch, getApiUrl]);
 
   useEffect(() => {
-    loadBoard();
-  }, [loadBoard]);
+    if (!realtime.connected) {
+      return;
+    }
+    void loadBoard();
+  }, [loadBoard, realtime.connected]);
 
   const groupedColumns = useMemo(
     () => groupVisibleCards(board, taskFilter, searchQuery, sortMode, context?.projectId),
@@ -663,13 +662,13 @@ export default function TasksPage({ context = null }) {
     setSaving(true);
     try {
       // The board refreshes via the kanban.snapshot event; no refetch needed.
-      await updateKanbanCard(selectedCard.id, { title: nextTitle });
+      await updateKanbanCard({ cardId: selectedCard.id, payload: { title: nextTitle } }, { dispatch, getApiUrl });
     } catch (saveError) {
       show('error', 'Rename failed', saveError.message || 'Failed to rename task');
     } finally {
       setSaving(false);
     }
-  }, [cancelTitleEdit, selectedCard?.id, selectedCard?.title, show, titleDraft, updateKanbanCard]);
+  }, [cancelTitleEdit, dispatch, getApiUrl, selectedCard?.id, selectedCard?.title, show, titleDraft, updateKanbanCard]);
 
   const handleDeleteSelected = useCallback(async () => {
     if (!selectedCard) {
@@ -678,7 +677,7 @@ export default function TasksPage({ context = null }) {
     const deletedTitle = selectedCard.title;
     setSaving(true);
     try {
-      await deleteKanbanCard(selectedCard.id);
+      await deleteKanbanCard({ cardId: selectedCard.id }, { dispatch, getApiUrl });
       // Trust the kanban.snapshot event to remove the card from the store; clear
       // the selection so selectedCard falls back to the first visible card.
       setSelectedCardId(null);
@@ -688,7 +687,7 @@ export default function TasksPage({ context = null }) {
     } finally {
       setSaving(false);
     }
-  }, [deleteKanbanCard, selectedCard, show]);
+  }, [deleteKanbanCard, dispatch, getApiUrl, selectedCard, show]);
 
   const handleQuickStatusUpdate = useCallback(async (nextStatus) => {
     if (!selectedCard?.id || selectedCard.status === nextStatus) {
@@ -696,14 +695,14 @@ export default function TasksPage({ context = null }) {
     }
     setStatusSaving(true);
     try {
-      await updateKanbanCard(selectedCard.id, { status: nextStatus });
+      await updateKanbanCard({ cardId: selectedCard.id, payload: { status: nextStatus } }, { dispatch, getApiUrl });
       // The board refreshes via the kanban.snapshot event; no refetch needed.
     } catch (updateError) {
       show('error', 'Status update failed', updateError.message || 'Failed to update task status');
     } finally {
       setStatusSaving(false);
     }
-  }, [selectedCard?.id, selectedCard?.status, show, updateKanbanCard]);
+  }, [dispatch, getApiUrl, selectedCard?.id, selectedCard?.status, show, updateKanbanCard]);
 
   const handleMetadataUpdate = useCallback(async (nextMetadata, activityMessage = '') => {
     if (!selectedCard?.id) {
@@ -711,22 +710,23 @@ export default function TasksPage({ context = null }) {
     }
     setMetadataSaving(true);
     try {
-      await updateKanbanCard(selectedCard.id, { metadata: nextMetadata });
+      await updateKanbanCard({ cardId: selectedCard.id, payload: { metadata: nextMetadata } }, { dispatch, getApiUrl });
       // The board refreshes via the kanban.snapshot event; no refetch needed.
       if (activityMessage) {
-        const created = await createTaskActivity(selectedCard.id, {
+        await createTaskActivity({ cardId: selectedCard.id, payload: {
           message: activityMessage,
           actor: 'user',
           kind: 'meta',
-        });
-        setTaskActivity((current) => [...current, created]);
+        } }, { dispatch, getApiUrl });
+        // `task.activity.updated` appends the canonical activity item in Redux;
+        // the acknowledgement carries only correlation metadata.
       }
     } catch (updateError) {
       show('error', 'Update failed', updateError.message || 'Failed to update task metadata');
     } finally {
       setMetadataSaving(false);
     }
-  }, [createTaskActivity, selectedCard?.id, show, updateKanbanCard]);
+  }, [createTaskActivity, dispatch, getApiUrl, selectedCard?.id, show, updateKanbanCard]);
 
   // ---- tags (free-form, searchable; stored on card.labels) -----------------
   const handleAddTag = useCallback(async (value) => {
@@ -735,13 +735,13 @@ export default function TasksPage({ context = null }) {
     }
     setSaving(true);
     try {
-      await updateKanbanCard(selectedCard.id, { labels: [...selectedTags, value] });
+      await updateKanbanCard({ cardId: selectedCard.id, payload: { labels: [...selectedTags, value] } }, { dispatch, getApiUrl });
     } catch (updateError) {
       show('error', 'Tag failed', updateError.message || 'Failed to add tag');
     } finally {
       setSaving(false);
     }
-  }, [selectedCard?.id, selectedTags, show, updateKanbanCard]);
+  }, [dispatch, getApiUrl, selectedCard?.id, selectedTags, show, updateKanbanCard]);
 
   const handleRemoveTag = useCallback(async (value) => {
     if (!selectedCard?.id) {
@@ -749,13 +749,13 @@ export default function TasksPage({ context = null }) {
     }
     setSaving(true);
     try {
-      await updateKanbanCard(selectedCard.id, { labels: selectedTags.filter((tag) => tag !== value) });
+      await updateKanbanCard({ cardId: selectedCard.id, payload: { labels: selectedTags.filter((tag) => tag !== value) } }, { dispatch, getApiUrl });
     } catch (updateError) {
       show('error', 'Tag failed', updateError.message || 'Failed to remove tag');
     } finally {
       setSaving(false);
     }
-  }, [selectedCard?.id, selectedTags, show, updateKanbanCard]);
+  }, [dispatch, getApiUrl, selectedCard?.id, selectedTags, show, updateKanbanCard]);
 
   // ---- checklist (exactly one per task) ------------------------------------
   // Persist the flat item list back as the single checklist document.

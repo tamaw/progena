@@ -6,9 +6,44 @@ const initialState = {
   lastEventId: null,
   lastEventAt: null,
   lastEvent: null,
+  // Ordered canonical frames for foreground consumers. A queue, rather than a
+  // single last-event slot, preserves token bursts and request-correlated
+  // events followed immediately by a snapshot.
+  eventQueue: [],
+  eventSequence: 0,
   error: null,
   receivedIds: [],
+  // Pending operations awaiting their causal ui.event — keyed by request_id
+  pendingOps: {},
+  // Request-correlated events seen recently. This allows a causal stream frame
+  // that arrives before its HTTP acknowledgement to be reconciled when the
+  // acknowledgement later declares its event types.
+  receivedRequestEvents: {},
 };
+
+function isUiEventEnvelope(event) {
+  return Boolean(
+    event
+    && typeof event === 'object'
+    && !Array.isArray(event)
+    && typeof event.id === 'string'
+    && event.id
+    && typeof event.type === 'string'
+    && event.type
+    && event.payload
+    && typeof event.payload === 'object'
+    && !Array.isArray(event.payload),
+  );
+}
+
+function hasMatchingReceivedEvent(state, requestId, eventTypes) {
+  if (!requestId || !Array.isArray(eventTypes) || eventTypes.length === 0) {
+    return false;
+  }
+  return (state.receivedRequestEvents[requestId] || []).some((event) => (
+    eventTypes.includes(event.type)
+  ));
+}
 
 const realtimeSlice = createSlice({
   name: 'realtime',
@@ -39,7 +74,7 @@ const realtimeSlice = createSlice({
     },
     uiEventReceived(state, action) {
       const event = action.payload;
-      if (!event?.id || state.receivedIds.includes(event.id)) {
+      if (!isUiEventEnvelope(event) || state.receivedIds.includes(event.id)) {
         return;
       }
       state.lastEventId = event.id;
@@ -48,9 +83,80 @@ const realtimeSlice = createSlice({
         state.lastEvent = event;
       }
       state.receivedIds.push(event.id);
+      state.eventSequence += 1;
+      state.eventQueue.push({ sequence: state.eventSequence, event });
+      if (state.eventQueue.length > 500) {
+        state.eventQueue.splice(0, state.eventQueue.length - 500);
+      }
       if (state.receivedIds.length > 300) {
         state.receivedIds.splice(0, state.receivedIds.length - 300);
       }
+      // Keep a bounded request-correlated record even when an event wins the
+      // race with its 202 acknowledgement. The acknowledgement is reconciled
+      // against this record by registerPendingOp.
+      const requestId = event?.payload?.request_id;
+      if (requestId) {
+        const received = state.receivedRequestEvents[requestId] || [];
+        if (!received.some((receivedEvent) => receivedEvent.id === event.id)) {
+          received.push({ id: event.id, type: event.type });
+        }
+        state.receivedRequestEvents[requestId] = received;
+        const requestIds = Object.keys(state.receivedRequestEvents);
+        if (requestIds.length > 300) {
+          delete state.receivedRequestEvents[requestIds[0]];
+        }
+      }
+
+      // Resolve only the operation with the same request_id and one of the
+      // event types that its acknowledgement declared.
+      const pendingOp = requestId ? state.pendingOps[requestId] : null;
+      if (pendingOp && event.type && pendingOp.eventTypes.includes(event.type)) {
+        delete state.pendingOps[requestId];
+      }
+    },
+    registerPendingOp(state, action) {
+      const { requestId, eventTypes } = action.payload;
+      if (!requestId) return;
+
+      const acknowledged = Array.isArray(eventTypes);
+      const normalizedEventTypes = acknowledged
+        ? eventTypes.filter((eventType) => typeof eventType === 'string' && eventType)
+        : state.pendingOps[requestId]?.eventTypes || [];
+
+      // A valid acknowledgement must declare at least one causal event. The
+      // HTTP client rejects malformed acknowledgements; do not persist one if a
+      // caller dispatches an invalid acknowledgement action directly.
+      if (acknowledged && normalizedEventTypes.length === 0) {
+        delete state.pendingOps[requestId];
+        return;
+      }
+
+      // The event may have reached EventSource before the 202 response. Do
+      // not recreate a pending operation after that causal event was applied.
+      if (hasMatchingReceivedEvent(state, requestId, normalizedEventTypes)) {
+        delete state.pendingOps[requestId];
+        return;
+      }
+
+      const existing = state.pendingOps[requestId];
+      state.pendingOps[requestId] = {
+        requestId,
+        eventTypes: normalizedEventTypes,
+        status: acknowledged ? 'pending' : 'awaiting_acknowledgement',
+        timestamp: existing?.timestamp || Date.now(),
+        error: null,
+      };
+    },
+    resolvePendingOp(state, action) {
+      const { requestId } = action.payload;
+      delete state.pendingOps[requestId];
+    },
+    failPendingOp(state, action) {
+      const { requestId, error } = action.payload;
+      if (state.pendingOps[requestId]) {
+        delete state.pendingOps[requestId];
+      }
+      state.error = error || 'Request failed';
     },
   },
 });
@@ -61,9 +167,20 @@ export const {
   realtimeDisconnected,
   realtimeErrored,
   uiEventReceived,
+  registerPendingOp,
+  resolvePendingOp,
+  failPendingOp,
 } = realtimeSlice.actions;
 
 export const selectRealtime = (state) => state.realtime;
 export const selectLastUiEvent = (state) => state.realtime.lastEvent;
+export const selectUiEventQueue = (state) => state.realtime.eventQueue;
+export const selectPendingOp = (state, requestId) =>
+  requestId ? state.realtime.pendingOps[requestId] || null : null;
+export const selectHasPendingOp = (state) => (
+  Object.values(state.realtime.pendingOps).some((operation) => (
+    operation.status === 'awaiting_acknowledgement' || operation.status === 'pending'
+  ))
+);
 
 export default realtimeSlice.reducer;

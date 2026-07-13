@@ -1,10 +1,9 @@
 """OpenAI-compatible Responses API and backend client models."""
 
-import time
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 @dataclass(slots=True)
@@ -16,47 +15,11 @@ class AgentResponse:
     reasoning_tokens: int | None
 
 
-class Usage(BaseModel):
-    """Token usage information."""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
 class ResponseInputMessage(BaseModel):
     """Message format for the Responses API."""
 
     role: Literal["system", "user", "assistant", "tool"] = "user"
     content: str | None = None
-
-
-class ResponseOutputText(BaseModel):
-    """Text part of a Responses output message."""
-
-    type: Literal["output_text"] = "output_text"
-    text: str
-
-
-class ResponseReasoningSummaryText(BaseModel):
-    """Reasoning summary text item emitted by the Responses API."""
-
-    type: Literal["summary_text"] = "summary_text"
-    text: str
-
-
-class ResponseOutputReasoning(BaseModel):
-    """Reasoning part of a Responses output message."""
-
-    type: Literal["reasoning"] = "reasoning"
-    summary: list[ResponseReasoningSummaryText]
-
-
-class ResponseOutputMessage(BaseModel):
-    """Assistant message emitted by the Responses API."""
-
-    role: Literal["assistant"] = "assistant"
-    content: list[ResponseOutputText | ResponseOutputReasoning]
 
 
 class ResponseRequest(BaseModel):
@@ -69,33 +32,6 @@ class ResponseRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-class ResponsePayload(BaseModel):
-    """Unified Responses API response payload."""
-
-    id: str
-    object: Literal["response"] = "response"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    model: str
-    output: list[ResponseOutputMessage]
-    usage: Usage = Field(default_factory=Usage)
-
-
-class ModelInfo(BaseModel):
-    """Model information for /v1/models endpoint."""
-
-    id: str
-    object: Literal["model"] = "model"
-    created: int = Field(default_factory=lambda: int(time.time()))
-    owned_by: str = "progenitor"
-
-
-class ModelsResponse(BaseModel):
-    """Response for /v1/models endpoint."""
-
-    object: Literal["list"] = "list"
-    data: list[ModelInfo]
-
-
 class ErrorDetail(BaseModel):
     """Error detail."""
 
@@ -106,16 +42,9 @@ class ErrorDetail(BaseModel):
 
 
 class ErrorResponse(BaseModel):
-    """Error response."""
+    """Standard API error response wrapper."""
 
     error: ErrorDetail
-
-
-class SimpleChatRequest(BaseModel):
-    """Simple chat request for /chat endpoint."""
-
-    message: str = Field(..., min_length=1, max_length=100000)
-    stream: bool = False
 
 
 class StreamingResponseRequest(ResponseRequest):

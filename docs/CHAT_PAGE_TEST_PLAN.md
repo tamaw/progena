@@ -6,23 +6,34 @@
 **Prerequisite:** the frontend has no test harness yet. Unit/comp/hook/e2e rows
 assume adding Vitest + React Testing Library (and Playwright for e2e). Backend
 (api) rows run under the existing `pytest tests/backend` setup. e2e flows can
-run against `PROGENITOR_MOCK_LLM=true` for determinism; background-error cases
-(BG-09/10) can be forced by intercepting the `/v1/responses` stream to emit an
-SSE `error` event after a delay.
+run against `PROGENITOR_MOCK_LLM=true` for determinism. Background-error cases
+inject a canonical `chat.response.failed` `ui.event` envelope after a matching
+`chat.response.started` event; they MUST NOT mock a response-body SSE stream.
+
+**Architecture note:** All chat data arrives through the event-stream
+architecture. Finite HTTP requests return HTTP `202 Accepted`
+(`{request_id, event_types}`) — no application data in response bodies. Chat
+events (`chat.sessions.snapshot`, `chat.session.upserted`,
+`chat.session.selected`, etc.) arrive on `/api/ui/stream` and hydrate Redux.
+Tests MUST NOT assert that chat data appears in HTTP response bodies; instead
+they assert the `202` acknowledgement and/or the matching stream event.
 
 ## Scope
-The chat page and everything it backs onto, per PR #270:
-`pages/ConversationPage.jsx`, `components/chat/*`, `hooks/useChatStream.js`,
-`hooks/useChatSessionPrefs.js`, `hooks/useApi.js`, `store/*`, plus the backend
-`chat_routes.py` / `chat_sessions.py` read-model and the `/v1/responses`
-streaming endpoint the page consumes.
+The chat page and its event-driven dependencies:
+`pages/ConversationPage.jsx`, `components/chat/*`, chat request helpers,
+`hooks/useChatSessionPrefs.js`, `store/*`, `chat_routes.py` /
+`chat_sessions.py`, and the finite `/api/ui/responses` acknowledgement route
+whose results are published through `/api/ui/stream`.
 
 ## Test layers & tooling
-- **unit** — pure functions/models (`conversationModel`, `chatSessionsModel`, `streamEventsModel`, `streamFilters`, `chatStorage`). Vitest. *No frontend harness exists yet — adding Vitest is a prerequisite.*
-- **comp** — React component behavior (`Message`, `ChatInput`, `StreamFilterMenu`, `QuickActions`). Vitest + React Testing Library.
-- **hook** — `useChatStream` / `useApi` / reducers with a mocked stream + store.
+- **unit** — pure functions/models (`conversationModel`, `chatSessionsModel`,
+  event reducers, filters, `chatStorage`). Vitest.
+- **comp** — React component behavior (`Message`, `ChatInput`,
+  `StreamFilterMenu`, `QuickActions`). Vitest + React Testing Library.
+- **hook** — request helpers, `RealtimeBridge`, reducers, and page lifecycle
+  with a mocked canonical `EventSource` + Redux store.
 - **e2e** — full chat page against a running/mock stack. Playwright.
-- **api** — backend FastAPI routes. pytest (`tests/backend`), already established.
+- **api** — backend FastAPI routes plus captured canonical stream events.
 
 ## Legend
 - Priority: **P1** core/high-risk · **P2** important UX · **P3** cosmetic/edge.
@@ -68,38 +79,37 @@ streaming endpoint the page consumes.
 | CO-10 | Autofocus / focusToken | Focuses on mount and when `focusToken` changes | comp | P3 | ◻ |
 | CO-11 | Keep focus after send | Focus retained when `keepFocusAfterSend` | comp | P3 | ◻ |
 
-## C. Streaming lifecycle — `useChatStream` + `useApi`
+## C. Generation lifecycle — canonical `chat.response.*` events
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| ST-01 | Optimistic placeholders | User message + streaming assistant placeholder added | hook | P1 | ◻ |
-| ST-02 | Chunk append + tokens | Content concatenates; tokenCount += 1 per chunk | hook | P1 | ◻ |
-| ST-03 | Model from node_update | `metadata.model_name` sets message model once | hook | P2 | ◻ |
-| ST-04 | Reasoning accumulation | Deltas append; summary updates reasoning tokens | hook/unit | P2 | ◻ |
-| ST-05 | Normal completion | isStreaming cleared; `fetchChatSessions` dispatched; isGenerating false | hook | P1 | ◻ |
-| ST-06 | Error path (foreground) | Toast shown; inline `Error:` message; isGenerating false | hook | P1 | ◻ |
-| ST-07 | Stop → cancelled | onComplete('cancelled') finalizes with ` [Cancelled]` | hook | P2 | ◻ |
-| ST-08 | Supersede same chat | Second send finalizes prior placeholder (no stuck spinner) | hook | P2 | ◻ |
-| ST-09 | Backend streaming (server) | `/v1/responses` stream emits structured events | api | P1 | ✅ `test_async_streaming_response`, `test_stream_response_unified_emits_structured_stream_events` |
-| ST-10 | Thread id from session | Streaming uses the session's thread_id | api | P1 | ✅ `test_streaming_responses_use_session_thread_id` |
-| ST-11 | Cancel endpoint | Cancel sets active-stream event; 404 unknown id | api | P1 | ✅ `test_cancel_response_sets_active_stream_event`, `..._returns_404_for_unknown_request` |
-| ST-12 | Reasoning output (non-stream) | Reasoning included in response output | api | P2 | ✅ `test_non_streaming_responses_include_reasoning_output` |
-| ST-13 | appendStreamEvent rules | Skips message_delta; merges reasoning; dedups identical; caps at 200 | unit | P2 | ◻ |
+| ST-01 | Acknowledged dispatch remains pending | `POST /api/ui/responses` returns only an HTTP `202` acknowledgement; no transcript is hydrated until a matching event | hook/api | P1 | ◻ |
+| ST-02 | Started event | Matching `chat.response.started` creates/marks the in-progress assistant state | hook | P1 | ◻ |
+| ST-03 | Delta and token accumulation | Matching `chat.response.delta` events append content and token metadata in order | hook | P1 | ◻ |
+| ST-04 | Metadata and reasoning | Canonical event payload metadata sets model/reasoning state without a response parser | hook/unit | P2 | ◻ |
+| ST-05 | Normal completion | Matching `chat.response.completed` finalizes the message and refreshes durable chat state through a correlated snapshot/event | hook | P1 | ◻ |
+| ST-06 | Failure path | Matching `chat.response.failed` shows an error and clears the operation/generation state | hook | P1 | ◻ |
+| ST-07 | Cancellation | `PUT /api/ui/responses/{generation_id}/cancel` returns `202`; matching `chat.response.cancelled` finalizes cancellation | hook/api | P2 | ◻ |
+| ST-08 | Concurrent attribution | Interleaved response events remain attached to their request/thread; no response overwrites another | hook | P1 | ◻ |
+| ST-09 | No response-body stream | `/api/ui/responses` never returns token SSE or response data, including `stream: true` | api | P1 | ◻ |
+| ST-10 | Thread routing | A generation request includes the selected session `thread_id` and its stream events preserve that thread context | api | P1 | ◻ |
+| ST-11 | Event replay | Replayed delta/terminal events are deduplicated/idempotent and do not double-finalize a message | unit | P1 | ◻ |
+| ST-12 | Request-ID correlation | Only matching event types with the submitted `request_id` resolve pending generation state | hook/api | P1 | ◻ |
 
-## D. Background streaming (hardened in this PR)
+## D. Background canonical generation
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| BG-01 | Switch mid-stream keeps it alive | Stream continues after navigating away | e2e/hook | P1 | ◻ |
-| BG-02 | Orange dot on origin | Origin card shows pulsing orange dot while streaming | e2e | P1 | ◻ |
-| BG-03 | Multiple orange dots | N concurrent background chats each show their own orange dot | e2e/unit | P1 | ◻ |
-| BG-04 | Complete → unread + top | Background completion → green dot + card sorts to top | e2e | P1 | ◻ |
-| BG-05 | Switch-back reload (no false unread) | Returning to a still-streaming chat: reply reloads in place, NOT marked unread | e2e/hook | P1 | ◻ |
-| BG-06 | Select clears dot | Selecting an unread/errored chat clears its dot | e2e | P1 | ◻ |
-| BG-07 | Cross-chat send doesn't abort | Sending in chat B leaves chat A's stream running | e2e/hook | P1 | ◻ |
-| BG-08 | Concurrent attribution | Two concurrent streams' replies land in the correct chats (no swap) | e2e/hook | P1 | ◻ |
-| BG-09 | Background error → red dot | A background turn that errors shows a red dot in place of green | e2e/hook | P1 | ◻ |
-| BG-10 | Error cleared by later success | A later successful background completion reverts red → green | hook | P2 | ◻ |
+| BG-01 | Switch mid-generation keeps it alive | Canonical response events continue after navigation away | e2e/hook | P1 | ◻ |
+| BG-02 | Orange dot on origin | Origin card shows pulsing orange dot while a response is in progress | e2e | P1 | ◻ |
+| BG-03 | Multiple orange dots | N concurrent background generations each show their own dot | e2e/unit | P1 | ◻ |
+| BG-04 | Complete → unread + top | Background terminal event → green dot + card sorts to top | e2e | P1 | ◻ |
+| BG-05 | Switch-back reload (no false unread) | Returning to a generating chat renders its canonical events in place, not as unread | e2e/hook | P1 | ◻ |
+| BG-06 | Select clears dot | Selecting an unread/errored chat clears its local presentation state | e2e | P1 | ◻ |
+| BG-07 | Cross-chat send does not cancel | A request in chat B leaves chat A's generation pending | e2e/hook | P1 | ◻ |
+| BG-08 | Concurrent attribution | Two generations' event sequences land in their correct chats (no swap) | e2e/hook | P1 | ◻ |
+| BG-09 | Background error → red dot | A background terminal failure shows a red dot in place of green | e2e/hook | P1 | ◻ |
+| BG-10 | Error cleared by later success | A later completed event reverts red → green | hook | P2 | ◻ |
 
 ## E. Session sidebar — `chatSessionsModel` + `conversationModel`
 
@@ -155,28 +165,30 @@ streaming endpoint the page consumes.
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| RT-01 | Single stream + dedupe | One EventSource; duplicate event ids ignored | hook | P2 | ◻ |
-| RT-02 | sessions.snapshot | Replaces the chat list | unit | P1 | ◻ |
-| RT-03 | created / metadata.updated | Upsert + merge into active detail | unit | P2 | ◻ |
-| RT-04 | upserted | Adds chat if missing | unit | P3 | ◻ |
-| RT-05 | selected request_id match | Applied only when request_id matches active | unit | P1 | ◻ |
-| RT-06 | deleted | Removes chat; clears active if it was selected | unit | P2 | ◻ |
-| RT-07 | Bridge fetch on connect | RealtimeBridge fetches chats once when connected | hook | P2 | ◻ |
-| RT-08 | selectChatSessions memo | Stable array reference when chat state unchanged | unit | P3 | ◻ |
+| RT-01 | Single stream + dedupe | One EventSource targets `/api/ui/stream`; duplicate envelope ids are ignored | hook | P1 | ◻ |
+| RT-02 | sessions snapshot | `chat.sessions.snapshot` replaces the chat list from its envelope payload | unit | P1 | ◻ |
+| RT-03 | Durable chat mutations | Created, metadata-updated, and upserted events update Redux whether locally requested or global | unit | P1 | ◻ |
+| RT-04 | Global event does not resolve local work | An event from another request/tab updates state but leaves this tab's unrelated pending operation pending | unit | P1 | ◻ |
+| RT-05 | Selected correlation | `chat.session.selected` applies detail and resolves only its matching request ID | unit | P1 | ◻ |
+| RT-06 | Deleted replay | `chat.session.deleted` removes state safely, including a replayed delete | unit | P1 | ◻ |
+| RT-07 | Ready/resync | `connection.ready` after reconnect triggers needed correlated snapshot requests when store state is not safe to continue | hook | P1 | ◻ |
+| RT-08 | Selector memoization | `selectChatSessions` has a stable result when chat state is unchanged | unit | P3 | ◻ |
 
 ## J. Backend chat routes — `chat_routes` / `chat_sessions`
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| BE-01 | List + snapshot | GET /chats lists (include_archived); emits snapshot | api | P1 | ✅ `test_chat_endpoints_store_metadata_without_transcripts` |
-| BE-02 | Detail selection event | GET /chats/{id} emits request-scoped selection | api | P1 | ✅ `test_chat_detail_request_emits_request_scoped_selection_event` |
-| BE-03 | Rehydrate from checkpoint | Card history rebuilt from checkpoint thread | api | P1 | ✅ `test_chat_card_rehydrates_history_from_checkpoint_thread` |
-| BE-04 | Soft-delete hides from list | DELETE sets deleted flag; hidden from list | api | P1 | ✅ `test_chat_delete_sets_soft_delete_flag_and_hides_from_list` |
-| BE-05 | Materialize current-state card | PATCH/DELETE on the live current-state card materializes + applies | api | P1 | ✅ `test_chat_patch_and_delete_materialize_current_state_card` |
-| BE-06 | PATCH on soft-deleted → 404 | Patching a deleted chat returns 404 | api | P2 | ◻ |
-| BE-07 | Create returns detail | POST /chats returns the created session detail | api | P2 | ◻ (partial via BE-01) |
-| BE-08 | Title display derivation | Default titles derive from first user message | api/unit | P2 | ◻ |
-| BE-09 | Tool calls / images in detail | Detail surfaces tool_calls + images from checkpoint | api | P2 | ◻ |
+| BE-01 | List + snapshot | `GET /api/ui/chats` returns HTTP **202** acknowledgement; emits correlated `chat.sessions.snapshot` on `/api/ui/stream` | api | P1 | ◻ |
+| BE-02 | Detail selection event | `GET /api/ui/chats/{id}` returns HTTP **202** acknowledgement; emits request-scoped `chat.session.upserted` and `chat.session.selected` | api | P1 | ◻ |
+| BE-03 | Rehydrate from checkpoint | A detail envelope rebuilds card history from the checkpoint thread | api | P1 | ◻ |
+| BE-04 | Soft-delete hides from list | DELETE persists soft deletion and emits a correlated deleted/snapshot result; the list hides it | api | P1 | ◻ |
+| BE-05 | Materialize current-state card | PATCH/DELETE on the live current-state card materializes then applies; both acknowledge with HTTP **202** and stream causal events | api | P1 | ◻ |
+| BE-06 | PATCH on soft-deleted → 404 | Patching a deleted chat returns 404 and emits no success event | api | P2 | ◻ |
+| BE-07 | Create returns acknowledgement | `POST /api/ui/chats` returns only an HTTP `202` acknowledgement; chat detail arrives via `chat.session.created` and snapshot events | api | P2 | ◻ |
+| BE-08 | Title display derivation | Default titles derive from the first user message | api/unit | P2 | ◻ |
+| BE-09 | Detail payload completeness | Detail event carries tool calls and images from the checkpoint | api | P2 | ◻ |
+| BE-10 | Event request ID | Every causal envelope `payload.request_id` equals the submitted `X-Request-ID` | api | P1 | ◻ |
+| BE-11 | No application data in acknowledgement | The only body is `{request_id, event_types}` | api | P1 | ◻ |
 
 ## K. Persistence — `chatStorage` + page effects
 
@@ -215,17 +227,24 @@ These guard the specific defects found and fixed during development.
 | BG-07/08 | Sending in another chat aborted the first chat's in-flight stream (reply silently lost) | First chat's stream survives and is attributed correctly |
 | BG-03 | Only one orange dot showed with multiple concurrent backgrounds | Each concurrent background chat shows its own dot |
 | BG-09 | A background error left no indication | Errored background turn shows a red dot |
-| BE-05 | Pin/archive/delete of the live current-state card returned 404 | Materializes then applies (200 / 204) |
+| BE-05 | Pin/archive/delete of the live current-state card returned 404 | Materializes then applies through **202 acknowledgement + causal events** |
 
 ## Coverage summary
-- **Total:** ~95 functional tests across 12 areas (A–L). ~10 already covered (all backend).
-- **Backend (api):** core chat routes + responses streaming/cancel/thread/reasoning largely covered (✅). Gaps: BE-06, BE-08, BE-09.
-- **Frontend (unit/comp/hook/e2e):** essentially **uncovered** — no frontend test harness exists.
+- **Total:** update this count when tests are implemented; contract rows above
+  deliberately test canonical-stream behavior rather than historical direct SSE.
+- **Backend (api):** assert HTTP `202` acknowledgements, persistence-before-event,
+  causal request IDs, and no response-body data.
+- **Frontend (unit/comp/hook/e2e):** assert one EventSource, event-only Redux
+  hydration, bounded-replay resync, and pending-operation correlation.
 
 ### Suggested build order
 1. **Harness:** add Vitest + RTL (and Playwright config) to `app/frontend`.
-2. **Unit (fast, high ROI):** `streamEventsModel` (ST-13, ST-04), `chatSessionsModel`/`conversationModel` (E rows, SB-13/14), `streamFilters` (FL-01/04), `chatStorage` (PST-02/04), `uiDataSlice` reducers (RT-02..06/08).
-3. **Hook:** `useChatStream` lifecycle + background (C, D, BG regressions) with a mocked `sendMessageStream`.
-4. **Component:** `Message`, `ChatInput`, `StreamFilterMenu`, `QuickActions` (A, B, FL, TB-02/03, AG-10/11).
-5. **e2e (P1 only):** the background-streaming flows (BG-01..09), auto-select (SB-12), ghost-card (SB-13), tabs (TB), thread routing (LC-05).
-6. **Backend gaps:** BE-06, BE-08, BE-09.
+2. **Unit:** event reducers, pending-operation correlation, replay/dedup,
+   session models, filters, and storage rules.
+3. **Hook:** canonical `EventSource` lifecycle plus foreground/background
+   generation events; never mock a response-body stream.
+4. **Component:** `Message`, `ChatInput`, `StreamFilterMenu`, and
+   `QuickActions`.
+5. **E2E:** event-driven background generation, reconnect/resync, auto-select,
+   ghost-card prevention, tabs, and thread routing.
+6. **Backend:** table-drive acknowledgement/event correlation and failures.

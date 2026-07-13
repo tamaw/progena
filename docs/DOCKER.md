@@ -68,7 +68,6 @@ Current compose behavior:
 
 Because the backend is not host-published, host access normally goes through nginx on `http://localhost`:
 - UI: `http://localhost/`
-- Proxied backend health: `http://localhost/health`, `/ready`, `/live`
 - Proxied API: `http://localhost/v1/...` and `http://localhost/api/ui/...`
 
 If you need direct host access to backend port `8000`, add your own port mapping to the compose file or use a one-off override file.
@@ -92,7 +91,12 @@ Notes:
 
 ## Health checks
 
+`/healthz` is the explicit Docker/container liveness exception to the
+event-stream-only browser API. It returns an empty `200 OK` and no application
+data.
+
 Current health probes are implemented as follows:
+- `backend`: `curl -fsS http://127.0.0.1:8000/healthz`
+- `frontend` through Nginx: `curl -fsS http://127.0.0.1/healthz` (proxied to `backend`)
+- `frontend` container process: `wget -q -O /dev/null http://127.0.0.1/`
 - `progenitor`: `curl -f http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint, same-container)
-- `backend`: `curl -f http://localhost:8000/health`
-- `frontend`: `wget -q -O /dev/null http://127.0.0.1/`
