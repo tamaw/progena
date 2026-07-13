@@ -51,6 +51,42 @@ export function isEventVisible(event, filters) {
   return filters?.[category] !== false;
 }
 
+// Continuation events share their opening event's category -- counting them
+// too would double- (or many-times-, e.g. subagent_message_delta fires once
+// per streamed token) count a single tool call or subagent dispatch as if it
+// were several. Only the event that opens each one should increment its
+// category's tally.
+const CONTINUATION_EVENT_TYPES = new Set([
+  'tool_result',
+  'subagent_result',
+  'subagent_tool_start',
+  'subagent_tool_result',
+  'subagent_tool_error',
+  'subagent_message_delta',
+  'a2a_call_progress',
+]);
+
+/**
+ * Tallies one message's stream events into `counts` (mutated in place), one
+ * increment per invocation rather than per raw event -- so the filter chips
+ * agree with conversationModel.js's countToolInvocations(), which counts
+ * only tool_start for the page header's "N tools" figure. `tool_error` is
+ * the one exception among continuation types: it only shares a category
+ * with its own tool_start when the call was call_agent ('a2a', already
+ * counted there via that tool_start); for every other tool, tool_error is
+ * the sole signal that invocation failed, so it still increments 'errors'.
+ */
+export function countCategorizedEvents(streamEvents, counts) {
+  for (const event of (Array.isArray(streamEvents) ? streamEvents : [])) {
+    const cat = categoryForEventType(event?.eventType, event?.metadata);
+    if (!cat || cat === 'reasoning') continue;
+    if (CONTINUATION_EVENT_TYPES.has(event.eventType)) continue;
+    if (event.eventType === 'tool_error' && cat === 'a2a') continue;
+    if (cat in counts) counts[cat] += 1;
+  }
+  return counts;
+}
+
 export function loadStreamFilters(storageKey) {
   try {
     const raw = localStorage.getItem(storageKey);

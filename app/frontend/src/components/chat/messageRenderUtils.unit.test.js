@@ -175,42 +175,38 @@ describe('describeStreamEvent (a2a_call_progress)', () => {
   });
 });
 
-// Regression: a call_agent-tagged tool_start/tool_result/tool_error that
-// falls through to this generic renderer (e.g. buildDefaultAssistantTimeline
-// couldn't form a group for it) used to get the generic 'Tool' badge like
-// every other tool call -- not wrong, but inconsistent with its sibling
-// a2a_call_progress events and the grouped card, which both read 'A2A'.
+// Progenitor's own dispatch/return for call_agent is an ordinary tool call
+// and gets no special-casing here -- badged 'Tool', titled with its own name
+// (prettifyLabel('call_agent')), exactly like search_web or read_file would
+// be. Only the intermediate a2a_call_progress (tested above) is genuinely
+// new information with no tool-call equivalent, so it alone gets its own
+// 'A2A' badge.
 describe('describeStreamEvent (call_agent tool_start/tool_result/tool_error)', () => {
-  it('badges a call_agent tool_start as A2A, not Tool', () => {
+  it('badges a call_agent tool_start as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_start',
       metadata: { tool_name: 'call_agent', args_preview: { agent: 'greetings_agent' } },
     });
-    expect(description.badge).toBe('A2A');
+    expect(description.badge).toBe('Tool');
+    expect(description.title).toBe('→ Call Agent');
   });
 
-  it('badges a call_agent tool_result as A2A, not Tool', () => {
+  it('badges a call_agent tool_result as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_result',
       metadata: { tool_name: 'call_agent', result_preview: 'Hello!' },
     });
-    expect(description.badge).toBe('A2A');
+    expect(description.badge).toBe('Tool');
+    expect(description.title).toBe('✓ Call Agent');
   });
 
-  it('badges a call_agent tool_error as A2A, not Tool', () => {
+  it('badges a call_agent tool_error as Tool, same as any other tool', () => {
     const description = describeStreamEvent({
       eventType: 'tool_error',
       metadata: { tool_name: 'call_agent', error: 'agent unreachable' },
     });
-    expect(description.badge).toBe('A2A');
-  });
-
-  it('leaves non-call_agent tool events badged Tool', () => {
-    const description = describeStreamEvent({
-      eventType: 'tool_start',
-      metadata: { tool_name: 'shell' },
-    });
     expect(description.badge).toBe('Tool');
+    expect(description.title).toBe('✗ Call Agent');
   });
 });
 

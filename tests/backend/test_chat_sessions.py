@@ -9,12 +9,15 @@ indirect coverage via test_ui_routes.py's TestClient-based tests).
 
 from __future__ import annotations
 
+import json
+
 from app.backend.chat_sessions import (
     ChatCreateRequest,
     ChatDraftRequest,
     ChatPatchRequest,
     ChatSessionSummary,
     _checkpoint_snapshot_for_metadata,
+    _extract_progress_log_from_content,
     _resolve_metadata_key,
     acquire_reusable_draft,
     create_chat_metadata,
@@ -479,3 +482,45 @@ class TestPendingToolCallFlush:
         assert reply.content == ""
         assert [tc["name"] for tc in reply.tool_calls] == ["task"]
         assert reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
+
+
+class TestExtractProgressLogFromContent:
+    """agent_name must survive this extraction -- it's what lets a reloaded
+    chat repopulate the A2A card's header (see the matching agent_name param
+    on extract_progress_log in app/progenitor/a2a/payloads.py). Regression
+    coverage for a bug where this function's own {state, message_text}
+    whitelist silently dropped agent_name even though every upstream layer
+    already carried it."""
+
+    def test_preserves_agent_name_alongside_state_and_message_text(self):
+        content = json.dumps(
+            {
+                "progress_log": [
+                    {
+                        "state": "submitted",
+                        "message_text": "Accepted: hi",
+                        "agent_name": "greetings_agent",
+                    },
+                    {
+                        "state": "working",
+                        "message_text": "Working...",
+                        "agent_name": "greetings_agent",
+                    },
+                ],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {"state": "submitted", "message_text": "Accepted: hi", "agent_name": "greetings_agent"},
+            {"state": "working", "message_text": "Working...", "agent_name": "greetings_agent"},
+        ]
+
+    def test_defaults_agent_name_to_empty_string_when_absent(self):
+        """Older persisted data (predating this field) must still parse cleanly."""
+        content = json.dumps(
+            {
+                "progress_log": [{"state": "submitted", "message_text": "Accepted: hi"}],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {"state": "submitted", "message_text": "Accepted: hi", "agent_name": ""},
+        ]

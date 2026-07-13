@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -413,6 +414,35 @@ def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
     return images
 
 
+def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
+    """Pull call_agent's compact progress-update log (build_task_response's
+    `progress_log` key, see app/progenitor/a2a/payloads.py) out of a
+    ToolMessage's raw string content, before result_text below truncates it
+    away -- it's the last key in that JSON object, so a naive 400-char slice
+    always cuts if off first."""
+    if not isinstance(content, str) or not content.strip():
+        return []
+    try:
+        parsed = json.loads(content)
+    except ValueError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    raw_log = parsed.get("progress_log")
+    if not isinstance(raw_log, list):
+        return []
+    entries: list[dict[str, str]] = []
+    for item in raw_log:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "")
+        message_text = str(item.get("message_text") or "")
+        agent_name = str(item.get("agent_name") or "")
+        if state or message_text:
+            entries.append({"state": state, "message_text": message_text, "agent_name": agent_name})
+    return entries
+
+
 def _raw_message_id(raw: Any, index: int) -> str:
     raw_id = raw.get("id") if isinstance(raw, dict) else getattr(raw, "id", None)
     return str(raw_id or f"message_{index}")
@@ -613,12 +643,15 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
             raw.get("content", "") if isinstance(raw, dict) else getattr(raw, "content", "")
         )
         images = _extract_images_from_content(raw_content)
+        progress_log = _extract_progress_log_from_content(raw_content)
         result_text = _message_text(raw_content)
         result_entry: dict[str, Any] = {
             "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
         }
         if images:
             result_entry["images"] = images
+        if progress_log:
+            result_entry["progress_log"] = progress_log
         tool_results[str(call_id)] = result_entry
 
     # Second pass: build messages, accumulating tool calls from tool-only AIMessages
@@ -645,6 +678,8 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
                 tc_with_result = {**tc, "result": entry.get("result", "")}
                 if "images" in entry:
                     tc_with_result["images"] = entry["images"]
+                if "progress_log" in entry:
+                    tc_with_result["progress_log"] = entry["progress_log"]
                 pending_tool_calls.append(tc_with_result)
 
         tool_calls_to_attach = list(pending_tool_calls) if role == "assistant" else None

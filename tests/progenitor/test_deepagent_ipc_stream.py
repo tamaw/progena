@@ -253,6 +253,161 @@ async def test_task_tool_events_expand_into_subagent_events():
     } in items
     assert {"type": "stream_chunk", "content": "HELLO_FROM_SUBAGENT", "is_final": False} in items
 
+    # Regression: the raw generic tool_start/tool_result for the top-level
+    # `task` call itself must NOT also go out once it's been successfully
+    # translated into subagent_start/subagent_result above -- neither the
+    # live frontend's grouping logic nor reload reconstruction recognizes
+    # that raw pair, so it used to surface as a redundant, ungrouped
+    # "Tool: Task" row sitting right next to the SubagentCard built from the
+    # very same event.
+    raw_task_events = [
+        item
+        for item in items
+        if item.get("type") == "stream_event"
+        and item.get("event_type") in {"tool_start", "tool_result", "tool_error"}
+        and item.get("metadata", {}).get("tool_name") == "task"
+    ]
+    assert raw_task_events == []
+
+
+@pytest.mark.asyncio
+async def test_task_tool_start_without_subagent_type_falls_back_to_raw_event():
+    """If expansion can't determine which subagent this is (malformed/unexpected
+    args_preview), the raw generic tool_start must still go out -- better to show
+    an unlabeled "Tool: Task" row than silently drop the event entirely."""
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_1",
+                        "args_preview": {},
+                    },
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert {
+        "type": "stream_event",
+        "event_type": "tool_start",
+        "content": "task",
+        "metadata": {
+            "tool_name": "task",
+            "tool_call_id": "call_1",
+            "args_preview": {},
+        },
+    } in items
+    assert not any(item.get("event_type") == "subagent_start" for item in items)
+
+
+@pytest.mark.asyncio
+async def test_call_agent_tool_events_pass_through_unmodified_alongside_task_expansion():
+    """A2A's call_agent tool calls must pass through completely unmodified --
+    Progenitor's own act of dispatching/receiving that tool call is an
+    ordinary tool call, same as search_web or read_file, and gets no
+    dedicated event-type translation the way `task` does above (only
+    a2a_call_progress -- the A2A protocol's own status stream, with no
+    tool-call equivalent -- is emitted as a dedicated type, directly from
+    call_agent.py, not translated after the fact here). Interleaved with a
+    `task` call in the same stream to confirm _expand_task_subagent_events'
+    tool_name == "task" guard keeps the two calls from interfering with each
+    other."""
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_1",
+                        "args_preview": {"subagent_type": "hello-world"},
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "call_agent",
+                    "metadata": {
+                        "tool_name": "call_agent",
+                        "tool_call_id": "call_9",
+                        "args_preview": {"agent": "greetings_agent"},
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_1",
+                        "duration_ms": 12.5,
+                        "success": True,
+                        "result_preview": "HELLO_FROM_SUBAGENT",
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "call_agent",
+                    "metadata": {
+                        "tool_name": "call_agent",
+                        "tool_call_id": "call_9",
+                        "duration_ms": 5.0,
+                        "success": True,
+                        "result_preview": "Hello!",
+                    },
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert {
+        "type": "stream_event",
+        "event_type": "tool_start",
+        "content": "call_agent",
+        "metadata": {
+            "tool_name": "call_agent",
+            "tool_call_id": "call_9",
+            "args_preview": {"agent": "greetings_agent"},
+        },
+    } in items
+    assert {
+        "type": "stream_event",
+        "event_type": "tool_result",
+        "content": "call_agent",
+        "metadata": {
+            "tool_name": "call_agent",
+            "tool_call_id": "call_9",
+            "duration_ms": 5.0,
+            "success": True,
+            "result_preview": "Hello!",
+        },
+    } in items
+    event_types = [item.get("event_type") for item in items if item.get("type") == "stream_event"]
+    assert "subagent_start" in event_types
+    assert "subagent_result" in event_types
+    assert "a2a_call_start" not in event_types
+    assert "a2a_call_result" not in event_types
+
 
 @pytest.mark.asyncio
 async def test_astream_kwargs_include_subgraphs_when_graph_supports_it():

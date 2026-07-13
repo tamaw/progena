@@ -63,6 +63,7 @@ import {
   PERSISTED_CATEGORIES,
   STREAM_EVENT_CATEGORIES,
   categoryForEventType,
+  countCategorizedEvents,
   isEventVisible,
   loadStreamFilters,
 } from '../components/chat/streamFilters';
@@ -886,11 +887,7 @@ function ConversationPage() {
         );
       }
       counts.images += collectMessageImages(message).length;
-      for (const event of (Array.isArray(message.streamEvents) ? message.streamEvents : [])) {
-        const cat = categoryForEventType(event.eventType, event.metadata);
-        if (cat === 'reasoning') continue;
-        if (cat && cat in counts) counts[cat]++;
-      }
+      countCategorizedEvents(message.streamEvents, counts);
     }
     return counts;
   }, [messages]);

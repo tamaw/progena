@@ -3,9 +3,19 @@
  *
  * Each item is either:
  *   - `{ kind: 'assistant_message', ... }` — the agent's text response row
- *   - `{ kind: 'stream_event', event: ... }` — a tool/reasoning/node event row
+ *   - `{ kind: 'stream_event', event: ... }` — a tool/reasoning/node event
+ *     row. call_agent's own tool_start/tool_result/tool_error render here
+ *     too, completely unmodified (Progenitor's act of dispatching/receiving
+ *     an A2A call is an ordinary tool call and reads as one, same as
+ *     search_web or read_file). Only the intermediate a2a_call_progress
+ *     updates are consumed into the richer card below instead of rendering
+ *     their own row (see applyAssistantStreamEvent in
+ *     liveAssistantTurnModel.js) -- a plain tool call has no equivalent of
+ *     an in-flight progress stream.
  *   - `{ kind: 'subagent', ... }` — a nested `task` tool delegation card
- *   - `{ kind: 'a2a_call', ... }` — a blocking `call_agent` A2A invocation card
+ *   - `{ kind: 'a2a_call', ... }` — the remote agent's own submitted/
+ *     working/completed self-reporting for a call_agent invocation,
+ *     alongside (not instead of) its plain tool_start/tool_result rows above
  */
 
 import { Fragment } from 'react';

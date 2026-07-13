@@ -131,28 +131,22 @@ export function extractCallAgentSummary(resultText) {
 
 /**
  * `{ label, tone }` for StatusPill (StatusPill.jsx), shared by every place
- * that renders the running/success/error vocabulary: SubagentCard's and
- * A2ACallCard's own card-level status, and SubagentChild's per-nested-call
- * status (all three use these exact three values -- see
- * liveAssistantTurnModel.js's item shapes) -- one mapping instead of three
- * copies of the same ternary chain.
+ * that renders the running/success/error vocabulary: SubagentCard's own
+ * card-level status and SubagentChild's per-nested-call status (both use
+ * these exact three values -- see liveAssistantTurnModel.js's item shapes)
+ * -- one mapping instead of two copies of the same ternary chain.
+ *
+ * A2ACallCard's own card-level header deliberately doesn't use this: unlike
+ * a subagent (whose only status signal is this running/success/error
+ * summary), an A2A card's status progression is already fully visible one
+ * level down, as its own chain of submitted/working/completed/... sub-
+ * entries (A2ASubEntry) -- a StatusPill up top would just repeat the last
+ * sub-entry's own label.
  */
 export function statusPillProps(status) {
   if (status === 'error') return { label: 'error', tone: 'err' };
   if (status === 'success') return { label: 'done', tone: 'ok' };
   return { label: 'running', tone: 'pending' };
-}
-
-/**
- * `{ label, tone }` for StatusPill, for A2A's own per-update wire states
- * (submitted/working/completed/failed, from TaskStatusUpdateEvent.status.
- * state) -- a different vocabulary from statusPillProps above, so it isn't
- * reused for this: A2A reports its own state names, not ours.
- */
-export function a2aStatePillProps(state) {
-  if (state === 'failed') return { label: 'error', tone: 'err' };
-  if (state === 'completed') return { label: 'done', tone: 'ok' };
-  return { label: state || 'pending', tone: 'pending' };
 }
 
 export function formatArgsPreview(args) {
@@ -241,18 +235,11 @@ export function describeStreamEvent(event) {
     };
   }
 
-  // call_agent-tagged tool_start/tool_result/tool_error only reach these
-  // three branches via the same fallback paths a2a_call_progress does below
-  // (buildDefaultAssistantTimeline couldn't form a group -- see
-  // liveAssistantTurnModel.js) -- badged 'A2A' rather than the generic
-  // 'Tool' every other tool call gets, so a fallen-through call_agent event
-  // still reads as part of the same family as its sibling a2a_call_progress
-  // events and the grouped card.
   if (eventType === 'tool_start') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
     const args = formatArgsPreview(metadata.args_preview);
     return {
-      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
+      badge: 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
       metaDetail: args || 'invoking…',
       bodyDetail: '',
@@ -269,7 +256,7 @@ export function describeStreamEvent(event) {
       parts.push(metadata.result_preview);
     }
     return {
-      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
+      badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
       metaDetail: parts.join(' • ') || 'completed',
       bodyDetail: '',
@@ -286,7 +273,7 @@ export function describeStreamEvent(event) {
       parts.push(metadata.error);
     }
     return {
-      badge: toolName === 'call_agent' ? 'A2A' : 'Tool',
+      badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
       metaDetail: parts.join(' • ') || 'error',
       bodyDetail: '',
@@ -401,13 +388,16 @@ export function describeStreamEvent(event) {
     };
   }
 
-  // Flat a2a_call_progress events only reach this generic renderer via the
-  // reload fallback (buildDefaultAssistantTimeline groups them into a
-  // single A2ACallCard when it can -- see liveAssistantTurnModel.js) or
-  // chats persisted before grouping shipped. Handled explicitly, setting
-  // badge: 'A2A' directly, same rationale as the subagent_* branch above --
-  // otherwise this would fall into badgeForEventType()'s generic fallback,
-  // which mislabels anything containing "agent" as "Agent".
+  // a2a_call_progress only reaches this generic renderer via the reload
+  // fallback (buildDefaultAssistantTimeline groups it into the a2a_call card
+  // when it can -- see liveAssistantTurnModel.js) or chats persisted before
+  // grouping shipped. call_agent's own tool_start/tool_result/tool_error
+  // get no equivalent special-casing here -- Progenitor's dispatch/return
+  // for that call is an ordinary tool call and is handled by the plain
+  // tool_start/tool_result/tool_error branches above like any other tool,
+  // with the same 'Tool' badge; only a2a_call_progress is genuinely new
+  // information (the A2A protocol's own status stream) with no tool-call
+  // equivalent, so it alone gets its own badge.
   if (eventType === 'a2a_call_progress') {
     const agentName = typeof metadata.agent_name === 'string' && metadata.agent_name
       ? metadata.agent_name

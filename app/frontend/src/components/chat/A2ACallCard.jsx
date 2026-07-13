@@ -2,25 +2,31 @@
  * Renders a `{ kind: 'a2a_call', ... }` timeline item -- one card per
  * blocking `call_agent` invocation of a deployed A2A agent, live-updated as
  * intermediate status updates stream in. Structurally mirrors SubagentCard
- * (same entry/gutter/main layout, same fixed-height auto-scrolling body,
- * same nested .tool block styling per update), except each entry is keyed by
- * the A2A task's self-reported status (submitted/working/completed/...)
- * rather than a tool name -- A2A only exposes the remote agent's status
- * text, never its own internal tool calls.
+ * (same entry/gutter/main layout, same fixed-height auto-scrolling body).
+ *
+ * Each status update renders as its own small `.entry` node in a nested
+ * chain (A2ASubEntry below) -- a second, smaller-scale application of the
+ * same .entry/.chat-entry-chain grammar the outer timeline already uses,
+ * rather than a bespoke boxed .tool block. The outer card's own connecting
+ * line to whatever comes next in the *outer* chain is unaffected by this --
+ * it's driven by the outer .entry__gutter (sized to .entry__main's full
+ * height via CSS grid stretch), which knows nothing about what's nested
+ * inside, so it keeps flowing straight through regardless of how tall the
+ * nested sub-chain grows.
  */
 
 import {
   formatDuration,
   formatTimestamp,
   extractCallAgentSummary,
-  statusPillProps,
-  a2aStatePillProps,
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
-import StatusPill from './StatusPill';
+import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
 
 // Distinguishes the A2A card's badge from SubagentCard's at a glance -- a
 // link between two endpoints, standing in for "agent-to-agent connection".
+// Also the fallback glyph for any sub-entry state with no dedicated icon
+// below (input-required, auth-required, unknown, ...).
 function A2AGlyph() {
   return (
     <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -31,23 +37,70 @@ function A2AGlyph() {
   );
 }
 
-// Reuses the generic .tool/.tool__* block SubagentChild renders each nested
-// tool call with (chrome-frame.css), rather than A2A-specific styling, so a
-// call's progress log reads as the same visual language as a subagent's
-// tool-call list -- kind/status up top, content below -- instead of two
-// different card families looking unrelated for no real reason. `state`
-// (submitted/working/completed/failed) stands in for the tool name slot;
-// there's no args-equivalent for a status update, so .tool__desc is just a
-// spacer (it's what pushes the status badge to the right in the original).
-function A2ACallUpdate({ message }) {
+// Submitted: the task was just handed off -- an upward/outward arrow. Spans
+// nearly the full viewBox (y 3-21, x 4-20), matching the visual weight of
+// the other glyphs -- a smaller/tighter arrow reads as noticeably thinner
+// next to WorkingGlyph's 18-unit ring and CompletedGlyph's 16-unit check.
+// A2A-specific (no equivalent "submitted" state elsewhere), so this one
+// stays local instead of moving to eventGlyphs.jsx.
+function SubmittedGlyph() {
   return (
-    <div className="tool">
-      <div className="tool__head">
-        <span className="tool__kind">{message.state || 'update'}</span>
-        <span className="tool__desc" />
-        <StatusPill {...a2aStatePillProps(message.state)} />
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="12" y1="21" x2="12" y2="3" />
+      <polyline points="4 11 12 3 20 11" />
+    </svg>
+  );
+}
+
+const A2A_STATE_GLYPHS = {
+  submitted: SubmittedGlyph,
+  working: WorkingGlyph,
+  completed: CompletedGlyph,
+  failed: FailedGlyph,
+  rejected: FailedGlyph,
+  canceled: FailedGlyph,
+};
+
+// Called directly as a plain function (not rendered as `<X />`) since these
+// glyphs are pure markup with no hooks of their own -- picking one out of a
+// stable, module-level map is safe, but JSX-element-style invocation of a
+// dynamically-selected component trips react-hooks/static-components, which
+// can't verify that stability statically.
+function glyphForA2AState(state) {
+  const Glyph = A2A_STATE_GLYPHS[state] || A2AGlyph;
+  return Glyph();
+}
+
+// One status update = one mini entry in the nested chain: its own badge, its
+// own tag naming *this update's own* state (submitted/working/completed/...)
+// rather than a generic "A2A" repeated on every line, its own connecting
+// line down to the next update -- `isLast` drops that trailing line the same
+// way the outer chain drops it for its own last item (entry--chain-end vs
+// entry--chain-item). No separate role text next to the tag (that would just
+// repeat the same word) and no per-line StatusPill either (that redundant-
+// emphasis problem is why the previous plain-log version dropped it too) --
+// the tag text is the label, and the badge's own glyph/color
+// (glyphForA2AState, chat-panel.css) is the status indicator in place of a
+// pill.
+function A2ASubEntry({ message, isLast }) {
+  const state = message.state || 'update';
+  // A per-entry clock time, not just chain position -- shows exactly when
+  // each of the remote agent's own reported states occurred.
+  const formattedTime = formatTimestamp(message.timestamp);
+  return (
+    <div className={`entry a2a-sub-entry ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
+      <div className="entry__gutter" aria-hidden="true">
+        <span className={`entry__badge a2a-call-card__badge a2a-sub-entry__badge--${state}`}>
+          {glyphForA2AState(state)}
+        </span>
       </div>
-      {message.text && <pre className="tool__body">{message.text}</pre>}
+      <div className="entry__main">
+        <div className="entry__head">
+          <span className="entry__tag a2a-call-card__tag">{state}</span>
+          {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+        </div>
+        {message.text && <div className="a2a-sub-entry__text">{message.text}</div>}
+      </div>
     </div>
   );
 }
@@ -74,7 +127,6 @@ export default function A2ACallCard({ item }) {
         <div className="entry__head">
           <span className="entry__tag a2a-call-card__tag">A2A</span>
           <span className="entry__role">{item.agentName || 'agent'}</span>
-          <StatusPill {...statusPillProps(item.status)} />
           <span className="msg__head-trailing">
             {messageCount > 0 && (
               <span className="muted">{messageCount} update{messageCount === 1 ? '' : 's'}</span>
@@ -85,9 +137,9 @@ export default function A2ACallCard({ item }) {
         </div>
         <div className="a2a-call-card__body entry__content" ref={scrollRef} onScroll={onScroll}>
           {messageCount > 0 && (
-            <div className="a2a-call-card__messages">
-              {item.messages.map((message) => (
-                <A2ACallUpdate key={message.id} message={message} />
+            <div className="a2a-call-card__subchain">
+              {item.messages.map((message, index) => (
+                <A2ASubEntry key={message.id} message={message} isLast={index === messageCount - 1} />
               ))}
             </div>
           )}

@@ -84,6 +84,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
     const result = toolName === 'call_agent'
       ? (extractCallAgentSummary(rawResult) || rawResult)
       : rawResult;
+    const toolCallId = typeof tc.id === 'string' ? tc.id : '';
     // The backend stamps the declaring AIMessage's created_at onto each tool
     // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
     // history reloads can sort tool calls against the answer text by real
@@ -97,10 +98,37 @@ function buildToolStreamEvents(toolCalls, messageId) {
       metadata: {
         tool_name: toolName,
         args_preview: args,
-        tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+        tool_call_id: toolCallId,
         source: 'checkpoint',
       },
     });
+    // Replays the same submitted/working/completed/... sequence a live
+    // viewer saw as synthetic a2a_call_progress events (progress_log comes
+    // from build_task_response on the backend, populated from
+    // A2AClient.call_agent()'s own progress_updates -- see
+    // app/progenitor/a2a/payloads.py's extract_progress_log). Without this,
+    // applyA2ACallEvent has nothing to group on reload, and the card falls
+    // back to a single result blob instead of the chained sub-entries the
+    // live path shows.
+    if (toolName === 'call_agent' && Array.isArray(tc.progress_log)) {
+      tc.progress_log.forEach((entry, progressIndex) => {
+        if (!entry || typeof entry !== 'object') return;
+        const messageText = typeof entry.message_text === 'string' ? entry.message_text : '';
+        events.push({
+          id: `${messageId}-a2a-progress-${index}-${progressIndex}`,
+          eventType: 'a2a_call_progress',
+          content: messageText,
+          timestamp,
+          metadata: {
+            tool_call_id: toolCallId,
+            state: typeof entry.state === 'string' ? entry.state : '',
+            message_text: messageText,
+            agent_name: typeof entry.agent_name === 'string' ? entry.agent_name : '',
+            source: 'checkpoint',
+          },
+        });
+      });
+    }
     if (result || (Array.isArray(tc.images) && tc.images.length > 0)) {
       const resultEvent = {
         id: `${messageId}-tool-result-${index}`,
@@ -112,7 +140,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
           result_preview: Array.isArray(tc.images) && tc.images.length > 0
             ? `${tc.images.length} image${tc.images.length !== 1 ? 's' : ''}`
             : result,
-          tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+          tool_call_id: toolCallId,
           source: 'checkpoint',
         },
       };

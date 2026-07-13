@@ -60,6 +60,38 @@ def extract_message_text(message_payload: Any) -> str | None:
     return None
 
 
+def extract_progress_log(progress_updates: Any, agent_name: str = "") -> list[dict[str, str]]:
+    """Compact A2AClient.call_agent()'s raw `progress_updates` (full
+    TaskStatusUpdateEvent payloads) down to the {state, message_text,
+    agent_name} triples a reloaded chat needs to rebuild the same progress
+    chain a live viewer saw -- callers persist this instead of the raw
+    envelopes (task/context ids, kind markers, ...), which add nothing for
+    that purpose and would only get truncated away anyway (see
+    chat_sessions.py's 400-char result preview).
+
+    `agent_name` isn't part of the raw TaskStatusUpdateEvent -- it's the
+    caller's own resolved agent name (see dispatch_tracked_a2a_task), stamped
+    onto every entry so a reload can repopulate the card header the same way
+    the live `a2a_call_progress` stream event does (see
+    build_a2a_call_progress_event); without it, a reload has no source for
+    the name at all once the task auto-routed (the LLM's raw tool-call args
+    never named an agent) and falls back to a generic placeholder."""
+    if not isinstance(progress_updates, list):
+        return []
+    entries: list[dict[str, str]] = []
+    for update in progress_updates:
+        if not isinstance(update, dict):
+            continue
+        status = update.get("status")
+        state = str(status.get("state") or "") if isinstance(status, dict) else ""
+        message_text = (
+            extract_message_text(status.get("message")) if isinstance(status, dict) else ""
+        ) or ""
+        if state or message_text:
+            entries.append({"state": state, "message_text": message_text, "agent_name": agent_name})
+    return entries
+
+
 def summarize_task_payload(task_payload: dict[str, Any]) -> str | None:
     """Produce a compact user-facing progress summary from an A2A task snapshot."""
     status = task_payload.get("status")
@@ -117,6 +149,7 @@ def build_task_response(record: A2ATaskRecord) -> dict[str, Any]:
         "updated_at": record.updated_at.isoformat(),
         "completed_at": record.completed_at.isoformat() if record.completed_at else None,
         "task": record.latest_task,
+        "progress_log": record.progress_log,
     }
 
 

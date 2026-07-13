@@ -343,10 +343,35 @@
 .a2a-call-card__body {
     max-height: 240px;
     margin-top: 4px;
+    padding: 8px 10px;
+    border-radius: var(--border-radius-md);
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-color: color-mix(in oklab, var(--color-text-muted) 36%, transparent) transparent;
     scrollbar-width: thin;
+}
+
+/* This body plays the same role .message.assistant plays under a plain
+   entry: the header row above it (badge/tag/role/status) stays bare chrome,
+   identical to every other entry type, and this is the one part that reads
+   as "the answer" -- so the tinted background lives here, not on the header
+   or the outer .entry. See the matching .entry__main comment history: the
+   tint used to live one level up, which visually merged the badge into the
+   card and threw off the chain's connecting line. */
+.subagent-card__body {
+    background-color: color-mix(in srgb, var(--color-success) 6%, transparent);
+}
+
+.subagent-card--error .subagent-card__body {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
+}
+
+.a2a-call-card__body {
+    background-color: color-mix(in srgb, var(--color-a2a) 6%, transparent);
+}
+
+.a2a-call-card--error .a2a-call-card__body {
+    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
 .subagent-card__body::-webkit-scrollbar,
@@ -377,15 +402,17 @@
    Accent reuses --color-success -- the same green already used for the
    "Tools"/.tool__status--ok accent elsewhere, so "subagent" reads as a
    member of the same tool-call family rather than a one-off hue. */
+/* Header row (badge/tag/role/status) is bare chrome -- no padding or fill of
+   its own, exactly like assistant_message/stream_event rows -- so the badge/
+   gutter column stays flush with every other entry type and the chain's
+   connecting line runs straight through instead of jogging sideways at this
+   card's edges. Mirrors two existing precedents: .chat-event-entry.entry
+   resets its own box styling to transparent for the same reason, and
+   .message bubbles are scoped to a child of .entry__main, never .entry
+   itself. The tinted "card" look lives on .subagent-card__body below
+   instead -- see its comment. */
 .subagent-card {
-    padding: 8px 10px;
-    border-radius: var(--border-radius-md);
-    background-color: color-mix(in srgb, var(--color-success) 6%, transparent);
     animation: fadeIn 0.2s ease;
-}
-
-.subagent-card--error {
-    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
 /* Compounded with the shared .entry__badge/.entry__tag base class (not just
@@ -427,11 +454,40 @@
     font-size: var(--font-size-sm);
 }
 
+/* Each nested tool call renders as its own mini .entry node (SubagentChild
+   in SubagentCard.jsx) chained together, the same "mini card/event" pattern
+   .a2a-call-card__subchain uses below for A2A's own per-update sub-entries
+   -- scaled-down 18px gutter/16px badge for the same reason (already
+   indented once as a card in the outer chain). Badge color reuses the outer
+   card's own .subagent-card__badge--running/--error modifiers directly
+   (child.status shares the exact same running/success/error vocabulary as
+   the outer card's item.status) rather than a parallel set of child-specific
+   color rules. */
 .subagent-card__children {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     margin-top: 8px;
+}
+
+.subagent-card__children .entry {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+}
+
+.subagent-card__children .entry__gutter::before {
+    top: 16px;
+    bottom: -12px;
+}
+
+.subagent-card__children .entry__badge {
+    width: 16px;
+    height: 16px;
+}
+
+.subagent-card__children .entry__badge svg {
+    width: 9px;
+    height: 9px;
 }
 
 /* A2A call card -- one per blocking `call_agent` invocation of a deployed
@@ -441,15 +497,10 @@
    (main.css) -- the teal .subagent-card used to own before the green swap
    above -- still its own hue, distinct from the tool-green family, so the
    two card families stay visually distinguishable at a glance. */
+/* See the matching comment on .subagent-card above -- same bare-header
+   rationale, applied to the A2A card. */
 .a2a-call-card {
-    padding: 8px 10px;
-    border-radius: var(--border-radius-md);
-    background-color: color-mix(in srgb, var(--color-a2a) 6%, transparent);
     animation: fadeIn 0.2s ease;
-}
-
-.a2a-call-card--error {
-    background-color: color-mix(in srgb, var(--color-error) 6%, transparent);
 }
 
 /* Compounded with .entry__badge/.entry__tag -- see the matching comment on
@@ -489,13 +540,94 @@
     font-size: var(--font-size-sm);
 }
 
-/* Each update renders as a shared .tool block (see A2ACallUpdate in
-   A2ACallCard.jsx) -- same layout rhythm as .subagent-card__children. */
-.a2a-call-card__messages {
+/* Each update renders as its own mini .entry node (A2ASubEntry in
+   A2ACallCard.jsx) -- a second, nested application of the same
+   .entry/.chat-entry-chain grammar the outer timeline uses, so updates
+   chain together with their own connecting line instead of a boxed .tool
+   block. Scaled down from the outer chain's 28px gutter/22px badge (18px/
+   16px here): this is already indented once as a card in the outer chain,
+   so a second full-size gutter would compound into an oddly deep staircase.
+   Every rule below is scoped under this class so it only affects entries
+   nested inside an A2A card, never the outer chain's own .entry sizing. */
+.a2a-call-card__subchain {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     margin-top: 8px;
+}
+
+.a2a-call-card__subchain .entry {
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 8px;
+}
+
+.a2a-call-card__subchain .entry__gutter::before {
+    top: 16px;
+    bottom: -12px;
+}
+
+.a2a-call-card__subchain .entry__badge {
+    width: 16px;
+    height: 16px;
+}
+
+.a2a-call-card__subchain .entry__badge svg {
+    width: 9px;
+    height: 9px;
+}
+
+.a2a-call-card__subchain .entry__head {
+    margin-bottom: 2px;
+}
+
+.a2a-call-card__subchain .entry__tag {
+    font-size: 9px;
+}
+
+.a2a-call-card__subchain .entry__time {
+    font-size: 9px;
+}
+
+.a2a-sub-entry__text {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Each sub-entry's badge glyph and color are keyed off its own status (see
+   glyphForA2AState in A2ACallCard.jsx) so submitted/working/completed/failed
+   read as distinct visual events instead of one repeated icon -- the label
+   text is already the raw state string (.a2a-call-card__subchain .entry__role
+   above), this is just the graphic/color half of "styled individually".
+   Compounded with .entry__badge.a2a-call-card__badge (not a bare modifier
+   class) for the same specificity-tie-then-source-order reason as
+   .entry__badge.a2a-call-card__badge--error above -- both are two classes,
+   so this deterministically wins by appearing later. States with no rule
+   here (submitted, input-required, auth-required, unknown, ...) fall back to
+   that base a2a-tinted look rather than going unstyled -- submitted used to
+   get its own flat gray here, but sitting next to the teal/green/red others
+   it just read as an off, disconnected hue rather than a deliberate choice;
+   the arrow-vs-ring glyph shape alone already distinguishes it from working. */
+.entry__badge.a2a-sub-entry__badge--working {
+    color: color-mix(in srgb, var(--color-a2a) 82%, white);
+    background: color-mix(in srgb, var(--color-a2a) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-a2a) 34%, var(--color-border-light));
+}
+
+.entry__badge.a2a-sub-entry__badge--completed {
+    color: color-mix(in srgb, var(--color-success) 82%, white);
+    background: color-mix(in srgb, var(--color-success) 16%, var(--color-bg-tertiary));
+    border: 1px solid color-mix(in srgb, var(--color-success) 34%, var(--color-border-light));
+}
+
+.entry__badge.a2a-sub-entry__badge--failed,
+.entry__badge.a2a-sub-entry__badge--rejected,
+.entry__badge.a2a-sub-entry__badge--canceled {
+    color: var(--color-error);
+    background: color-mix(in oklab, var(--color-error) 14%, transparent);
+    border-color: color-mix(in oklab, var(--color-error) 30%, transparent);
 }
 
 /* Chat Input Container */

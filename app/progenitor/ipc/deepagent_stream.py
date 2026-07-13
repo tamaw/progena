@@ -233,9 +233,34 @@ class DeepAgentIPCStream:
             images = event.get("images")
             if isinstance(images, list) and images:
                 item["images"] = images
-        items = [item]
-        items.extend(self._expand_task_subagent_events(envelope))
-        return items
+
+        expanded = self._expand_task_subagent_events(envelope)
+        if expanded:
+            # This is the top-level `task` tool's own generic tool_start/
+            # tool_result/tool_error -- fully superseded by its richer
+            # subagent_* translation (that's the whole point of
+            # _expand_task_subagent_events: a subagent's own internal
+            # streaming has no other way to reach the UI). The raw generic
+            # pair must not go out *as well* -- neither the live frontend's
+            # grouping logic nor reload reconstruction (chatSessionsModel.js,
+            # which never even constructs it for a `task` tool call)
+            # recognizes it, so left in, it would surface as a redundant,
+            # ungrouped "Tool: Task" row sitting right next to the
+            # SubagentCard built from this very same event. call_agent (A2A)
+            # is unaffected: _expand_task_subagent_events guards on
+            # `tool_name == "task"` specifically, so it always returns []
+            # for call_agent's own tool_start/tool_result, which fall
+            # through to the plain `return [item]` below exactly as before.
+            # call_agent gets no equivalent translation, deliberately:
+            # Progenitor's own act of dispatching/receiving that tool call is
+            # an ordinary tool call, same as search_web or read_file, and is
+            # meant to be indistinguishable from one in the stream -- only
+            # a2a_call_progress (the A2A protocol's own status updates, with
+            # no tool-call equivalent) is a dedicated type, emitted directly
+            # from call_agent.py rather than translated after the fact.
+            return expanded
+
+        return [item]
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
