@@ -5,21 +5,21 @@ describe('shouldPreserveStreamInBackground', () => {
   it('preserves when a stream is active for a known origin chat', () => {
     expect(shouldPreserveStreamInBackground({
       streamingOriginId: 'thread_a',
-      activeAssistantId: 'msg_1_assistant',
+      activeStreamId: 'stream_1',
     })).toBe(true);
   });
 
   it('does not preserve when there is no origin chat (e.g. a never-materialized draft)', () => {
     expect(shouldPreserveStreamInBackground({
       streamingOriginId: null,
-      activeAssistantId: 'msg_1_assistant',
+      activeStreamId: 'stream_1',
     })).toBe(false);
   });
 
   it('does not preserve when nothing is actively streaming', () => {
     expect(shouldPreserveStreamInBackground({
       streamingOriginId: 'thread_a',
-      activeAssistantId: null,
+      activeStreamId: null,
     })).toBe(false);
   });
 });

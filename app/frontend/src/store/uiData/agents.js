@@ -121,9 +121,11 @@ export function buildExtraReducers(builder) {
     })
     .addCase(fetchAgentProfiles.fulfilled, (state) => {
       state.agents.loading = false;
+      state.agents.loaded = true;
     })
     .addCase(fetchAgentProfiles.rejected, (state, action) => {
       state.agents.loading = false;
+      state.agents.loaded = true;
       state.agents.error = action.error?.message || 'Failed to load agents';
     })
     .addCase(requestAgentDetail.pending, (state, action) => {

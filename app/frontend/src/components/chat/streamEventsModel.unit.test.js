@@ -10,7 +10,6 @@ import {
   appendReasoningText,
   createStreamEvent,
   appendStreamEvent,
-  finalizeSupersededAssistant,
 } from './streamEventsModel';
 
 const evt = (overrides = {}) => ({
@@ -153,6 +152,36 @@ describe('appendStreamEvent', () => {
     expect(out).toHaveLength(0);
   });
 
+  it('appends a new entry for each todos_update instead of replacing in place', () => {
+    const first = evt({ id: 't1', eventType: 'todos_update', metadata: { todos: [{ content: 'a', status: 'pending' }] } });
+    let events = appendStreamEvent([], first);
+    const second = evt({ id: 't2', eventType: 'todos_update', metadata: { todos: [{ content: 'a', status: 'completed' }] } });
+    events = appendStreamEvent(events, second);
+
+    expect(events).toHaveLength(2);
+    expect(events[0].id).toBe('t1');
+    expect(events[0].metadata.todos).toEqual([{ content: 'a', status: 'pending' }]);
+    expect(events[1].id).toBe('t2');
+    expect(events[1].metadata.todos).toEqual([{ content: 'a', status: 'completed' }]);
+  });
+
+  it('dedupes a consecutive todos_update with identical content', () => {
+    const first = evt({ id: 't1', eventType: 'todos_update', metadata: { todos: [{ content: 'a', status: 'pending' }] } });
+    let events = appendStreamEvent([], first);
+    const dup = evt({ id: 't2', eventType: 'todos_update', metadata: { todos: [{ content: 'a', status: 'pending' }] } });
+    events = appendStreamEvent(events, dup);
+
+    expect(events).toHaveLength(1);
+  });
+
+  it('appends a todos_update entry alongside other events', () => {
+    const events = appendStreamEvent(
+      [evt({ id: 'tool1', eventType: 'tool_start' })],
+      evt({ id: 't1', eventType: 'todos_update', metadata: { todos: [{ content: 'a', status: 'pending' }] } }),
+    );
+    expect(events).toHaveLength(2);
+  });
+
   it('caps the timeline at MAX_STREAM_EVENTS_PER_MESSAGE keeping the newest', () => {
     let events = [];
     for (let i = 0; i < MAX_STREAM_EVENTS_PER_MESSAGE + 5; i += 1) {
@@ -164,22 +193,3 @@ describe('appendStreamEvent', () => {
   });
 });
 
-describe('finalizeSupersededAssistant', () => {
-  it('returns the message unchanged when not streaming', () => {
-    const m = { isStreaming: false, content: 'hi' };
-    expect(finalizeSupersededAssistant(m)).toBe(m);
-  });
-
-  it('drops an empty streaming placeholder', () => {
-    expect(finalizeSupersededAssistant({ isStreaming: true, content: '', streamEvents: [] })).toBeNull();
-  });
-
-  it('finalizes a streaming message with output and appends the cancelled suffix once', () => {
-    const out = finalizeSupersededAssistant({ isStreaming: true, content: 'partial', streamEvents: [] });
-    expect(out.isStreaming).toBe(false);
-    expect(out.content).toBe(`partial${CANCELLED_SUFFIX}`);
-
-    const already = finalizeSupersededAssistant({ isStreaming: true, content: `done${CANCELLED_SUFFIX}`, streamEvents: [] });
-    expect(already.content).toBe(`done${CANCELLED_SUFFIX}`);
-  });
-});

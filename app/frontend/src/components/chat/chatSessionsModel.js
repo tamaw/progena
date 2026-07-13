@@ -5,7 +5,7 @@ import {
   getTimeBucket,
   toValidTimestamp,
 } from './conversationModel';
-
+import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -29,10 +29,17 @@ function buildToolStreamEvents(toolCalls, messageId) {
     const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
     const result = typeof tc.result === 'string' ? tc.result : '';
+    // The backend stamps the declaring AIMessage's created_at onto each tool
+    // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
+    // history reloads can sort tool calls against the answer text by real
+    // time instead of guessing an order. No separate timestamp exists for
+    // the result, so it reuses the call's.
+    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
     events.push({
       id: `${messageId}-tool-start-${index}`,
       eventType: 'tool_start',
       content: '',
+      timestamp,
       metadata: {
         tool_name: toolName,
         args_preview: args,
@@ -45,6 +52,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
         id: `${messageId}-tool-result-${index}`,
         eventType: 'tool_result',
         content: '',
+        timestamp,
         metadata: {
           tool_name: toolName,
           result_preview: Array.isArray(tc.images) && tc.images.length > 0
@@ -82,7 +90,7 @@ export function normalizeBackendChatMessage(message, index) {
     id,
   );
 
-  return {
+  const normalized = {
     id,
     role,
     content,
@@ -105,6 +113,17 @@ export function normalizeBackendChatMessage(message, index) {
     streamEvents,
     raw,
   };
+
+  // Attach a synthetic fallback timeline for backend-loaded messages.
+  // Backend checkpoint data does not preserve the exact live interleave
+  // between assistant text and stream events, so we build a fallback order
+  // by sorting everything (stream events, restored todos_update rows, and
+  // the assistant row itself) by real timestamp -- see
+  // buildDefaultAssistantTimeline's own docstring for the ordering contract.
+  if (role === 'assistant') {
+    normalized.timelineItems = buildDefaultAssistantTimeline(normalized);
+  }
+  return normalized;
 }
 
 function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating) {
