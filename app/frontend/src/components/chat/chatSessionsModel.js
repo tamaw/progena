@@ -171,7 +171,9 @@ export function normalizeBackendChatMessage(message, index) {
   // Attach a synthetic fallback timeline for backend-loaded messages.
   // Backend checkpoint data does not preserve the exact live interleave
   // between assistant text and stream events, so we build a fallback order
-  // (assistant row first, then known stream events).
+  // by sorting everything (stream events, restored todos_update rows, and
+  // the assistant row itself) by real timestamp -- see
+  // buildDefaultAssistantTimeline's own docstring for the ordering contract.
   if (role === 'assistant') {
     normalized.timelineItems = buildDefaultAssistantTimeline(normalized);
   }
