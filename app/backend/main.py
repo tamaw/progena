@@ -28,7 +28,6 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from .agent_routes import router as agent_router
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
@@ -42,6 +41,7 @@ from .models import (
     ResponseRequest,
     StreamingResponseRequest,
 )
+from .request_utils import request_correlation_id as _strict_request_correlation_id
 from .session import (
     SessionConfig,
     SessionManager,
@@ -822,7 +822,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-app.include_router(agent_router)
 app.include_router(ui_router)
 app.include_router(knowledge_router)
 
@@ -974,8 +973,11 @@ def _update_activity():
 
 
 def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Return the middleware-correlated request ID for a finite request."""
-    return header_request_id or getattr(request.state, "request_id", None) or str(uuid.uuid4())
+    """Resolve middleware correlation, with an explicit standalone fallback."""
+    try:
+        return _strict_request_correlation_id(request, header_request_id)
+    except RuntimeError:
+        return str(uuid.uuid4())
 
 
 @app.post("/api/ui/responses", status_code=202, response_model=UiRequestAcknowledgement)
@@ -994,7 +996,7 @@ async def responses(
     try:
         if body.stream:
             StreamingResponseRequest.validate_for_streaming(body)
-        last_user_msg, _ = _extract_response_input(body)
+        last_user_msg = _extract_response_input(body)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -1108,28 +1110,20 @@ async def cancel_response(
     return acknowledgement_response(request_id, ["chat.response.cancelled"])
 
 
-def _extract_response_input(request: ResponseRequest) -> tuple[str, list[str]]:
-    """Normalize Responses API input to a single user string."""
-    inputs: list[str] = []
-
+def _extract_response_input(request: ResponseRequest) -> str:
+    """Normalize Responses API input to the validated final user string."""
     raw_input = request.input
     if isinstance(raw_input, str):
-        inputs.append(raw_input)
+        last_input = raw_input
+    elif raw_input:
+        item = raw_input[-1]
+        last_input = item if isinstance(item, str) else item.content or ""
     else:
-        for item in raw_input:
-            if isinstance(item, str):
-                inputs.append(item)
-            else:
-                inputs.append(item.content or "")
-
-    if not inputs:
         raise ValueError("No input provided")
 
-    last_input = inputs[-1]
     if not last_input.strip():
         raise ValueError("Input cannot be empty")
-
-    return last_input, inputs
+    return last_input
 
 
 def _default_conversation_id(session: SessionState) -> str:
@@ -1180,15 +1174,13 @@ async def _run_response_event_stream(
         cancel_event = asyncio.Event()
         _active_response_streams[request_id] = cancel_event
 
+    def response_payload(**fields: Any) -> dict[str, Any]:
+        return {"id": response_id, "model": model, "thread_id": thread_id, **fields}
+
     def emit_cancelled() -> None:
         broadcast_ui_event(
             "chat.response.cancelled",
-            {
-                "id": response_id,
-                "model": model,
-                "thread_id": thread_id,
-                "cancelled": True,
-            },
+            response_payload(cancelled=True),
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
@@ -1217,12 +1209,7 @@ async def _run_response_event_stream(
                         continue
                     broadcast_ui_event(
                         "chat.response.delta",
-                        {
-                            "id": response_id,
-                            "model": model,
-                            "thread_id": thread_id,
-                            "delta": chunk,
-                        },
+                        response_payload(delta=chunk),
                         scope="chat",
                         session_id=thread_id,
                         request_id=request_id,
@@ -1230,14 +1217,11 @@ async def _run_response_event_stream(
                 elif item_type == "stream_event":
                     # Structured events may carry rich image blocks. Keep them
                     # intact rather than reducing them to response text.
-                    payload: dict[str, Any] = {
-                        "id": response_id,
-                        "model": model,
-                        "thread_id": thread_id,
-                        "event_type": item.get("event_type", "unknown"),
-                        "content": item.get("content", ""),
-                        "metadata": item.get("metadata", {}),
-                    }
+                    payload: dict[str, Any] = response_payload(
+                        event_type=item.get("event_type", "unknown"),
+                        content=item.get("content", ""),
+                        metadata=item.get("metadata", {}),
+                    )
                     if isinstance(item.get("images"), list):
                         payload["images"] = item["images"]
                     broadcast_ui_event(
@@ -1261,14 +1245,11 @@ async def _run_response_event_stream(
             reasoning_text = (response_details.reasoning or "").strip()
             broadcast_ui_event(
                 "chat.response.delta",
-                {
-                    "id": response_id,
-                    "model": model,
-                    "thread_id": thread_id,
-                    "delta": response_details.response,
-                    "reasoning": reasoning_text or None,
-                    "reasoning_tokens": response_details.reasoning_tokens,
-                },
+                response_payload(
+                    delta=response_details.response,
+                    reasoning=reasoning_text or None,
+                    reasoning_tokens=response_details.reasoning_tokens,
+                ),
                 scope="chat",
                 session_id=thread_id,
                 request_id=request_id,
@@ -1276,12 +1257,7 @@ async def _run_response_event_stream(
 
         broadcast_ui_event(
             "chat.response.completed",
-            {
-                "id": response_id,
-                "model": model,
-                "thread_id": thread_id,
-                "completed": True,
-            },
+            response_payload(completed=True),
             scope="chat",
             session_id=thread_id,
             request_id=request_id,
@@ -1293,12 +1269,7 @@ async def _run_response_event_stream(
         else:
             broadcast_ui_event(
                 "chat.response.failed",
-                {
-                    "id": response_id,
-                    "model": model,
-                    "thread_id": thread_id,
-                    "error": "Response generation timed out",
-                },
+                response_payload(error="Response generation timed out"),
                 scope="chat",
                 session_id=thread_id,
                 request_id=request_id,
@@ -1310,12 +1281,7 @@ async def _run_response_event_stream(
         else:
             broadcast_ui_event(
                 "chat.response.failed",
-                {
-                    "id": response_id,
-                    "model": model,
-                    "thread_id": thread_id,
-                    "error": str(error),
-                },
+                response_payload(error=str(error)),
                 scope="chat",
                 session_id=thread_id,
                 request_id=request_id,

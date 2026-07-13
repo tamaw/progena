@@ -3,6 +3,7 @@ import time
 from unittest.mock import AsyncMock
 
 import pytest
+from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
 from app.backend.document_store import InMemoryDocumentStore, set_default_document_store
@@ -60,15 +61,6 @@ def backend_client(monkeypatch):
     yield mock_client
 
 
-def _assert_acknowledged(response, request_id: str, event_types: list[str]) -> None:
-    assert response.status_code == 202
-    assert response.json() == {
-        "request_id": request_id,
-        "event_types": event_types,
-    }
-    assert event_types
-
-
 def _drain_envelopes(queue: asyncio.Queue) -> list:
     return [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
 
@@ -102,10 +94,8 @@ def test_workflow_crud_round_trip(workflow_env):
                 json={"title": "Followup", "description": "Workflow under test"},
                 headers={"X-Request-ID": create_request_id},
             )
-            _assert_acknowledged(
-                created,
-                create_request_id,
-                ["workflow.updated", "workflows.snapshot"],
+            assert_acknowledged(
+                created, ["workflow.updated", "workflows.snapshot"], request_id=create_request_id
             )
             envelopes = _drain_envelopes(queue)
             assert [envelope.type for envelope in envelopes] == [
@@ -125,7 +115,7 @@ def test_workflow_crud_round_trip(workflow_env):
                 "/api/ui/workflows",
                 headers={"X-Request-ID": list_request_id},
             )
-            _assert_acknowledged(listed, list_request_id, ["workflows.snapshot"])
+            assert_acknowledged(listed, ["workflows.snapshot"], request_id=list_request_id)
             snapshot = _drain_envelopes(queue)
             assert len(snapshot) == 1
             assert snapshot[0].type == "workflows.snapshot"
@@ -138,7 +128,7 @@ def test_workflow_crud_round_trip(workflow_env):
                 params={"path": path},
                 headers={"X-Request-ID": load_request_id},
             )
-            _assert_acknowledged(loaded, load_request_id, ["workflow.updated"])
+            assert_acknowledged(loaded, ["workflow.updated"], request_id=load_request_id)
             loaded_update = _drain_envelopes(queue)
             assert len(loaded_update) == 1
             assert loaded_update[0].type == "workflow.updated"
@@ -153,10 +143,8 @@ def test_workflow_crud_round_trip(workflow_env):
                 json={"path": path, "workflow": updated_workflow},
                 headers={"X-Request-ID": save_request_id},
             )
-            _assert_acknowledged(
-                saved,
-                save_request_id,
-                ["workflow.updated", "workflows.snapshot"],
+            assert_acknowledged(
+                saved, ["workflow.updated", "workflows.snapshot"], request_id=save_request_id
             )
             saved_events = _drain_envelopes(queue)
             assert [event.type for event in saved_events] == [
@@ -171,10 +159,8 @@ def test_workflow_crud_round_trip(workflow_env):
                 f"/api/ui/workflows/{workflow_id}",
                 headers={"X-Request-ID": delete_request_id},
             )
-            _assert_acknowledged(
-                deleted,
-                delete_request_id,
-                ["workflow.deleted", "workflows.snapshot"],
+            assert_acknowledged(
+                deleted, ["workflow.deleted", "workflows.snapshot"], request_id=delete_request_id
             )
             deleted_events = _drain_envelopes(queue)
             assert [event.type for event in deleted_events] == [
@@ -196,8 +182,10 @@ def test_workflow_put_rejects_cycle(workflow_env):
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Cycle check"})
-            _assert_acknowledged(
-                created, created.json()["request_id"], ["workflow.updated", "workflows.snapshot"]
+            assert_acknowledged(
+                created,
+                ["workflow.updated", "workflows.snapshot"],
+                request_id=created.json()["request_id"],
             )
 
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
@@ -273,10 +261,8 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
                 json={"title": "Two prompt chain"},
                 headers={"X-Request-ID": "two-prompt-create"},
             )
-            _assert_acknowledged(
-                created,
-                "two-prompt-create",
-                ["workflow.updated", "workflows.snapshot"],
+            assert_acknowledged(
+                created, ["workflow.updated", "workflows.snapshot"], request_id="two-prompt-create"
             )
 
             updated = next(e for e in _drain_envelopes(queue) if e.type == "workflow.updated")
@@ -311,10 +297,8 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
                 json={"path": path, "workflow": workflow},
                 headers={"X-Request-ID": "two-prompt-save"},
             )
-            _assert_acknowledged(
-                saved,
-                "two-prompt-save",
-                ["workflow.updated", "workflows.snapshot"],
+            assert_acknowledged(
+                saved, ["workflow.updated", "workflows.snapshot"], request_id="two-prompt-save"
             )
             _drain_envelopes(queue)
 
@@ -324,7 +308,7 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
                 json={},
                 headers={"X-Request-ID": trigger_request_id},
             )
-            _assert_acknowledged(trigger, trigger_request_id, ["workflow.run.started"])
+            assert_acknowledged(trigger, ["workflow.run.started"], request_id=trigger_request_id)
             trigger_event = next(
                 event
                 for event in _drain_envelopes(queue)
@@ -360,10 +344,10 @@ def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
                 json={"title": "Already active workflow"},
                 headers={"X-Request-ID": "active-workflow-create"},
             )
-            _assert_acknowledged(
+            assert_acknowledged(
                 created,
-                "active-workflow-create",
                 ["workflow.updated", "workflows.snapshot"],
+                request_id="active-workflow-create",
             )
             workflow = next(
                 event for event in _drain_envelopes(queue) if event.type == "workflow.updated"
@@ -393,7 +377,7 @@ def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
                 json={"payload": {"operator": "tester"}},
                 headers={"X-Request-ID": request_id},
             )
-            _assert_acknowledged(triggered, request_id, ["workflow.run.started"])
+            assert_acknowledged(triggered, ["workflow.run.started"], request_id=request_id)
             event = next(
                 envelope
                 for envelope in _drain_envelopes(queue)
@@ -424,10 +408,10 @@ def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_cl
                 json={"title": "Kanban created workflow", "event_type": "kanban.card.created"},
                 headers={"X-Request-ID": "kanban-workflow-create"},
             )
-            _assert_acknowledged(
+            assert_acknowledged(
                 created,
-                "kanban-workflow-create",
                 ["workflow.updated", "workflows.snapshot"],
+                request_id="kanban-workflow-create",
             )
             updated = next(e for e in _drain_envelopes(queue) if e.type == "workflow.updated")
             workflow_id = updated.payload["workflow"]["id"]
@@ -438,7 +422,7 @@ def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_cl
                 json={"title": "Workflow card", "summary": "Triggers workflow"},
                 headers={"X-Request-ID": request_id},
             )
-            _assert_acknowledged(response, request_id, ["kanban.snapshot"])
+            assert_acknowledged(response, ["kanban.snapshot"], request_id=request_id)
             snapshot = next(
                 event for event in _drain_envelopes(queue) if event.type == "kanban.snapshot"
             )
@@ -461,8 +445,10 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Broadcast workflow"})
-            _assert_acknowledged(
-                created, created.json()["request_id"], ["workflow.updated", "workflows.snapshot"]
+            assert_acknowledged(
+                created,
+                ["workflow.updated", "workflows.snapshot"],
+                request_id=created.json()["request_id"],
             )
 
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
@@ -473,8 +459,8 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
             assert "workflows.snapshot" in event_types
 
             triggered = client.post(f"/api/ui/workflows/{workflow_id}/trigger", json={})
-            _assert_acknowledged(
-                triggered, triggered.json()["request_id"], ["workflow.run.started"]
+            assert_acknowledged(
+                triggered, ["workflow.run.started"], request_id=triggered.json()["request_id"]
             )
             _wait_for_completed_run(client, workflow_id)
 

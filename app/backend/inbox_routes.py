@@ -16,19 +16,12 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from .chat_routes import BroadcastUiEvent
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
+from .request_utils import BroadcastUiEvent
+from .request_utils import request_correlation_id as _request_correlation_id
 
 INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
-
-
-def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Return the single middleware-generated correlation ID for a finite request."""
-    request_id = header_request_id or getattr(request.state, "request_id", None)
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError("Request correlation ID middleware is not configured")
-    return request_id
 
 
 class InboxMessage(BaseModel):
@@ -155,7 +148,7 @@ def create_inbox_router(
         store.save_document(PROGENITOR_STATE_PREFIX, _message_key(message_id), payload)
         broadcast_ui_event(
             "inbox.message.upserted",
-            {"message": message.model_dump(), "request_id": request_id},
+            {"message": message.model_dump()},
             request_id=request_id,
         )
         broadcast_snapshot(request_id=request_id)
@@ -174,7 +167,7 @@ def create_inbox_router(
         store.delete_document(PROGENITOR_STATE_PREFIX, _message_key(message_id))
         broadcast_ui_event(
             "inbox.message.deleted",
-            {"message_id": message_id, "request_id": request_id},
+            {"message_id": message_id},
             request_id=request_id,
         )
         broadcast_snapshot(request_id=request_id)

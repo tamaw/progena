@@ -13,11 +13,7 @@ from app.backend.alerts import AlertInfo
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
 from app.backend.main import _build_alert_summary_prompt, _handle_alert_request
-from app.backend.models import (
-    AgentResponse,
-    ResponsePayload,
-    ResponseRequest,
-)
+from app.backend.models import AgentResponse, ResponseRequest
 from app.backend.sse_client import start_sse_client_with_retry
 
 
@@ -46,21 +42,13 @@ class TestChatServerConfig:
 
 
 class TestResponseModels:
-    """Tests for Responses API models."""
+    """Tests for Responses API input models."""
 
-    def test_response_request_and_payload(self):
-        """Test Responses API models."""
+    def test_response_request_defaults(self):
+        """Test Responses API request defaults."""
         req = ResponseRequest(input="Hello")
         assert req.model == "progenitor-v1"
         assert req.stream is False
-
-        payload = ResponsePayload(
-            id="resp-1",
-            model="progenitor-v1",
-            output=[],
-        )
-        assert payload.object == "response"
-        assert payload.model == "progenitor-v1"
 
 
 class TestProgenitorClient:

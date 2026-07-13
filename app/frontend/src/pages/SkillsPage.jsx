@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
+import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   fetchSkills,
   saveSkill,
@@ -10,7 +11,7 @@ import {
   selectSkills,
   selectSkillsState,
 } from '../store/uiDataSlice';
-import { renderMarkdownToHtml } from '../lib/markdown';
+import { useSnapshotSave } from '../store/uiData/snapshotSave';
 import DetailHeader, {
   DetailHeaderAction,
   DetailHeaderActions,
@@ -231,24 +232,23 @@ export default function SkillsPage() {
   const hasUnsavedChanges = selectedSkill ? draftContent !== (selectedSkill.content || '') : false;
   const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
 
-  useEffect(() => {
-    if (
-      !pendingSave?.acknowledged
-      || skillsState.snapshotRequestId !== pendingSave.requestId
-    ) {
-      return;
-    }
-    const updatedSkill = skills.find((skill) => skill.path === pendingSave.path);
-    if (!updatedSkill) {
-      return;
-    }
-    // Canonical event application is the intentional source of this local UI transition.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraftContent(updatedSkill.content || '');
-    setSaving(false);
-    setPendingSave(null);
-    setStatusMessage(`Saved ${updatedSkill.path}.`);
-  }, [pendingSave, skills, skillsState.snapshotRequestId]);
+  const handleSave = useSnapshotSave({
+    items: skills,
+    snapshotRequestId: skillsState.snapshotRequestId,
+    pendingSave,
+    dispatch,
+    thunk: saveSkill,
+    path: selectedSkill?.path,
+    content: draftContent,
+    savedContent: selectedSkill?.content || '',
+    saving,
+    setDraftContent,
+    setSaving,
+    setPendingSave,
+    setStatusMessage,
+    setError,
+    buildArgs: ({ path, content, requestId }) => ({ skillsUrl, path, content, requestId }),
+  });
   const normalizedNewAgent = normalizeSkillSegment(newAgent);
   const normalizedNewSkillName = normalizeSkillSegment(newSkillName);
   const canCreateSkill = SKILL_NAME_PATTERN.test(normalizedNewAgent) && SKILL_NAME_PATTERN.test(normalizedNewSkillName);
@@ -293,28 +293,6 @@ export default function SkillsPage() {
     setStatusMessage('Reverted unsaved changes.');
   };
 
-  const handleSave = async () => {
-    if (!selectedSkill || !hasUnsavedChanges || saving) {
-      return;
-    }
-    const requestId = crypto.randomUUID();
-    setSaving(true);
-    setPendingSave({ requestId, path: selectedSkill.path, acknowledged: false });
-    setError(null);
-    setStatusMessage('');
-    try {
-      await dispatch(
-        saveSkill({ skillsUrl, path: selectedSkill.path, content: draftContent, requestId }),
-      ).unwrap();
-      setPendingSave((current) => (
-        current?.requestId === requestId ? { ...current, acknowledged: true } : current
-      ));
-    } catch (saveError) {
-      setPendingSave(null);
-      setSaving(false);
-      setError(saveError);
-    }
-  };
 
   const handleCreateSkill = async () => {
     if (!canCreateSkill) {

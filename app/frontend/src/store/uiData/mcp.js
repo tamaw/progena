@@ -2,8 +2,7 @@
  * MCP domain: external MCP servers, kept live by `mcp.snapshot` events on
  * /api/ui/stream and seeded via REST when the Tools page mounts.
  */
-import { createAsyncThunk } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged } from '../http';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 export const initialState = {
   mcp: {
     servers: [],
@@ -16,9 +15,9 @@ export const initialState = {
 
 // Acknowledge an MCP-list request; the snapshot arrives on the realtime stream
 // as `mcp.snapshot` (the GET just triggers the broadcast).
-export const fetchMcp = createAsyncThunk('uiData/fetchMcp', async ({ mcpUrl }, { requestId }) => {
+export const fetchMcp = createAcknowledgedThunk('uiData/fetchMcp', async ({ mcpUrl }, { requestId }) => {
   return requestAcknowledged(mcpUrl, { requestId });
-}, { idGenerator: createOperationRequestId });
+});
 
 export const eventHandlers = {
   'mcp.snapshot': (state, payload) => {
@@ -33,20 +32,10 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchMcp.pending, (state, action) => {
-      state.mcp.loading = true;
-      state.mcp.error = null;
-      state.mcp.requestId = action.meta.requestId;
-    })
-    .addCase(fetchMcp.rejected, (state, action) => {
-      if (state.mcp.requestId !== action.meta.requestId) {
-        return;
-      }
-      state.mcp.loading = false;
-      state.mcp.error = action.error?.message || 'Failed to load MCP servers';
-      state.mcp.requestId = null;
-    });
+  return addRequestLifecycle(builder, fetchMcp, {
+    select: (state) => state.mcp,
+    errorMessage: 'Failed to load MCP servers',
+  });
 }
 
 export const selectMcpServers = (state) => state.uiData.mcp.servers;

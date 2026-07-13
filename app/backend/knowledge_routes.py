@@ -32,19 +32,12 @@ from app.progenitor.knowledge import (
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import get_default_document_store, store_database_url
 from .knowledge_service import load_bases, save_bases, snapshot_bases
+from .request_utils import request_correlation_id as _request_correlation_id
 from .ui_routes import broadcast_knowledge_snapshot, broadcast_ui_event
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ui/knowledge", tags=["knowledge"])
-
-
-def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Return the single middleware-generated correlation ID for a finite request."""
-    request_id = header_request_id or getattr(request.state, "request_id", None)
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError("Request correlation ID middleware is not configured")
-    return request_id
 
 
 def _database_url() -> str:

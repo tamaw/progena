@@ -3,13 +3,14 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
+import { renderMarkdownToHtml } from '../lib/markdown';
 import {
   fetchPrompts,
   savePrompt,
   selectPrompts,
   selectPromptsState,
 } from '../store/uiDataSlice';
-import { renderMarkdownToHtml } from '../lib/markdown';
+import { useSnapshotSave } from '../store/uiData/snapshotSave';
 import {
   PaneCollapseSeam,
   PaneExpandRail,
@@ -239,24 +240,23 @@ export default function PromptsPage() {
   const hasUnsavedChanges = selectedPrompt ? draftContent !== (selectedPrompt.content || '') : false;
   const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
 
-  useEffect(() => {
-    if (
-      !pendingSave?.acknowledged
-      || promptsState.snapshotRequestId !== pendingSave.requestId
-    ) {
-      return;
-    }
-    const updatedPrompt = prompts.find((prompt) => prompt.path === pendingSave.path);
-    if (!updatedPrompt) {
-      return;
-    }
-    // Canonical event application is the intentional source of this local UI transition.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setDraftContent(updatedPrompt.content || '');
-    setSaving(false);
-    setPendingSave(null);
-    setStatusMessage(`Saved ${updatedPrompt.path}.`);
-  }, [pendingSave, prompts, promptsState.snapshotRequestId]);
+  const handleSave = useSnapshotSave({
+    items: prompts,
+    snapshotRequestId: promptsState.snapshotRequestId,
+    pendingSave,
+    dispatch,
+    thunk: savePrompt,
+    path: selectedPrompt?.path,
+    content: draftContent,
+    savedContent: selectedPrompt?.content || '',
+    saving,
+    setDraftContent,
+    setSaving,
+    setPendingSave,
+    setStatusMessage,
+    setError,
+    buildArgs: ({ path, content, requestId }) => ({ promptsUrl, path, content, requestId }),
+  });
 
   const toggleBranch = (branchKey) => {
     setExpandedNodes((current) => ({
@@ -284,33 +284,6 @@ export default function PromptsPage() {
     setStatusMessage('Reverted unsaved changes.');
   };
 
-  const handleSave = async () => {
-    if (!selectedPrompt || !hasUnsavedChanges || saving) {
-      return;
-    }
-    const requestId = crypto.randomUUID();
-    const pending = {
-      requestId,
-      path: selectedPrompt.path,
-      acknowledged: false,
-    };
-    setSaving(true);
-    setPendingSave(pending);
-    setError(null);
-    setStatusMessage('');
-    try {
-      await dispatch(
-        savePrompt({ promptsUrl, path: selectedPrompt.path, content: draftContent, requestId }),
-      ).unwrap();
-      setPendingSave((current) => (
-        current?.requestId === requestId ? { ...current, acknowledged: true } : current
-      ));
-    } catch (saveError) {
-      setPendingSave(null);
-      setSaving(false);
-      setError(saveError);
-    }
-  };
 
   const handleRefreshList = async () => {
     try {

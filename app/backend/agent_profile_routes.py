@@ -14,33 +14,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import Any, Literal, Protocol
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
-from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
-
-
-class BroadcastUiEvent(Protocol):
-    def __call__(
-        self,
-        event_type: str,
-        payload: dict[str, Any],
-        *,
-        scope: Literal["global", "session", "chat"] = "global",
-        session_id: str | None = None,
-        request_id: str | None = None,
-    ) -> UiEventEnvelope: ...
-
-
-def _request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Return the single middleware-generated correlation ID for a finite request."""
-    request_id = header_request_id or getattr(request.state, "request_id", None)
-    if not isinstance(request_id, str) or not request_id:
-        raise RuntimeError("Request correlation ID middleware is not configured")
-    return request_id
+from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
+from .request_utils import BroadcastUiEvent
+from .request_utils import request_correlation_id as _request_correlation_id
 
 
 class AgentGraphModel(BaseModel):

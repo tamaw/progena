@@ -3,8 +3,8 @@
  * events on /api/ui/stream and seeded via REST when the Prompts page mounts.
  * Each prompt is the raw API shape so edits PUT the file content straight back.
  */
-import { createAsyncThunk } from '@reduxjs/toolkit';
-import { createOperationRequestId, requestAcknowledged, withQuery } from '../http';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { withQuery } from '../http';
 
 export const initialState = {
   prompts: {
@@ -31,23 +31,23 @@ function applyPrompts(state, items, requestId = null) {
 
 // Load the prompt catalogue. The GET triggers a `prompts.snapshot` broadcast
 // that hydrates state from the realtime stream.
-export const fetchPrompts = createAsyncThunk('uiData/fetchPrompts', async ({ promptsUrl, agent } = {}, { requestId }) => {
+export const fetchPrompts = createAcknowledgedThunk('uiData/fetchPrompts', async ({ promptsUrl, agent } = {}, { requestId }) => {
   return requestAcknowledged(
     agent ? withQuery(promptsUrl, { agent }) : promptsUrl,
     { requestId },
   );
-}, { idGenerator: createOperationRequestId });
+});
 
 // Persist edits to one prompt file. The backend saves it and broadcasts
 // `prompts.snapshot`; the acknowledgement triggers the snapshot event
 // which reconciles state.
-export const savePrompt = createAsyncThunk('uiData/savePrompt', async ({ promptsUrl, path, content }, { requestId }) => {
+export const savePrompt = createAcknowledgedThunk('uiData/savePrompt', async ({ promptsUrl, path, content }, { requestId }) => {
   return requestAcknowledged(`${promptsUrl}/content`, {
     method: 'PUT',
     body: { path, content },
     requestId,
   });
-}, { idGenerator: createOperationRequestId });
+});
 
 export const eventHandlers = {
   'prompts.snapshot': (state, payload) => {
@@ -56,20 +56,10 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchPrompts.pending, (state, action) => {
-      state.prompts.loading = true;
-      state.prompts.error = null;
-      state.prompts.requestId = action.meta.requestId;
-    })
-    .addCase(fetchPrompts.rejected, (state, action) => {
-      if (state.prompts.requestId !== action.meta.requestId) {
-        return;
-      }
-      state.prompts.loading = false;
-      state.prompts.error = action.error?.message || 'Failed to load prompts';
-      state.prompts.requestId = null;
-    });
+  return addRequestLifecycle(builder, fetchPrompts, {
+    select: (state) => state.prompts,
+    errorMessage: 'Failed to load prompts',
+  });
 }
 export const selectPrompts = (state) => state.uiData.prompts.items;
 export const selectPromptsState = (state) => state.uiData.prompts;

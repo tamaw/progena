@@ -21,11 +21,6 @@ from fastapi.testclient import TestClient
 from app.backend.main import app
 from app.backend.models import (
     ResponseInputMessage,
-    ResponseOutputMessage,
-    ResponseOutputReasoning,
-    ResponseOutputText,
-    ResponsePayload,
-    ResponseReasoningSummaryText,
     ResponseRequest,
     StreamingResponseRequest,
 )
@@ -281,36 +276,6 @@ class TestConnectionEvents:
         """Test liveness endpoint returns 404 (deleted)."""
         response = client.get("/live")
         assert response.status_code == 404
-
-
-class TestResponsePayloadModel:
-    """Tests for Responses payload model."""
-
-    def test_payload_creation(self):
-        """Test ResponsePayload creation."""
-        payload = ResponsePayload(
-            id="resp-123",
-            model="test-model",
-            output=[
-                ResponseOutputMessage(
-                    content=[
-                        ResponseOutputReasoning(
-                            summary=[
-                                ResponseReasoningSummaryText(
-                                    text="Checked constraints before answering."
-                                )
-                            ]
-                        ),
-                        ResponseOutputText(text="Hello"),
-                    ]
-                )
-            ],
-        )
-        assert payload.id == "resp-123"
-        assert payload.object == "response"
-        assert payload.model == "test-model"
-        assert payload.output[0].content[0].type == "reasoning"
-        assert payload.output[0].content[1].text == "Hello"
 
 
 class TestTypingIndicatorEvents:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from typing import Any, Literal, Protocol
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
@@ -14,7 +14,6 @@ from .chat_sessions import (
     ChatPatchRequest,
     ChatSessionDetail,
     ChatSessionsResponse,
-    UiEventEnvelope,
     UiRequestAcknowledgement,
     acknowledgement_response,
     acquire_reusable_draft,
@@ -27,23 +26,20 @@ from .chat_sessions import (
     patch_chat_metadata,
 )
 from .document_store import BackendDocumentStore
-
-
-class BroadcastUiEvent(Protocol):
-    def __call__(
-        self,
-        event_type: str,
-        payload: dict[str, Any],
-        *,
-        scope: Literal["global", "session", "chat"] = "global",
-        session_id: str | None = None,
-        request_id: str | None = None,
-    ) -> UiEventEnvelope: ...
+from .request_utils import (
+    BroadcastUiEvent,
+)
+from .request_utils import (
+    request_correlation_id as _strict_request_correlation_id,
+)
 
 
 def request_correlation_id(request: Request, header_request_id: str | None) -> str:
-    """Use the request-ID middleware value when the caller omitted the header."""
-    return header_request_id or getattr(request.state, "request_id", None) or str(uuid.uuid4())
+    """Resolve the middleware ID, explicitly falling back for standalone chat use."""
+    try:
+        return _strict_request_correlation_id(request, header_request_id)
+    except RuntimeError:
+        return str(uuid.uuid4())
 
 
 def chat_sessions_response(
