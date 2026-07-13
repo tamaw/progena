@@ -25,7 +25,7 @@ class TestRequestIdMiddleware:
     def test_request_id_generated_when_not_provided(self, app):
         """Test that a request ID is generated when not provided."""
         with TestClient(app) as client:
-            response = client.get("/health")
+            response = client.get("/api/ui/widgets")
 
         assert "X-Request-ID" in response.headers
         assert response.headers["X-Request-ID"].startswith("req-")
@@ -35,14 +35,14 @@ class TestRequestIdMiddleware:
         custom_id = "custom-request-12345"
 
         with TestClient(app) as client:
-            response = client.get("/health", headers={"X-Request-ID": custom_id})
+            response = client.get("/api/ui/widgets", headers={"X-Request-ID": custom_id})
 
         assert response.headers["X-Request-ID"] == custom_id
 
     def test_request_id_format(self, app):
         """Test that generated request ID has expected format."""
         with TestClient(app) as client:
-            response = client.get("/health")
+            response = client.get("/api/ui/widgets")
 
         request_id = response.headers["X-Request-ID"]
         # Format should be req-{12 hex chars}
@@ -177,7 +177,7 @@ class TestRequestIdInLogs:
         from app.backend.main import app
 
         with caplog.at_level(logging.INFO), TestClient(app) as client:
-            response = client.get("/health")
+            response = client.get("/api/ui/widgets")
 
         request_id = response.headers["X-Request-ID"]
 
@@ -186,26 +186,19 @@ class TestRequestIdInLogs:
 
 
 class TestRequestIdHandlerIntegration:
-    """Test request ID integration in API handlers."""
+    """Finite application acknowledgements preserve client operation IDs."""
 
-    def test_responses_endpoint_uses_request_state(self):
-        """Verify /v1/responses handler accesses request.state.request_id."""
-        import app.backend.main as main_module
+    def test_finite_handler_echoes_supplied_request_id(self, app):
+        request_id = "finite-operation-id"
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/ui/widgets",
+                headers={"X-Request-ID": request_id},
+            )
 
-        with open(main_module.__file__, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check that the handler gets request_id from state
-        assert "request.state" in content
-        assert "request_id" in content
-
-    def test_stream_response_unified_accepts_request_id(self):
-        """Verify stream_response_unified function accepts request_id parameter."""
-        import app.backend.main as main_module
-
-        with open(main_module.__file__, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check function signature
-        assert "def stream_response_unified(" in content
-        assert "request_id: str | None = None" in content
+        assert response.status_code == 202
+        assert response.headers["X-Request-ID"] == request_id
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["widgets.updated"],
+        }

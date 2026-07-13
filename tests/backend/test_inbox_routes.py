@@ -3,6 +3,7 @@
 import asyncio
 
 import pytest
+from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
 from app.backend.document_store import (
@@ -79,48 +80,52 @@ class _StreamCapture:
 
 
 class TestInboxRoutes:
-    def test_get_inbox_returns_snapshot_newest_first(self, client, seeded_store):
+    def test_get_inbox_returns_request_correlated_snapshot(self, client, seeded_store):
+        """The accepted client ID resolves on the inbox snapshot event."""
+        request_id = "e6579b7c-366a-4d61-a71b-1b4fb08dcd91"
         with _StreamCapture() as capture:
-            response = client.get("/api/ui/inbox")
+            response = client.get(
+                "/api/ui/inbox",
+                headers={"X-Request-ID": request_id},
+            )
 
-        assert response.status_code == 200
-        data = response.json()
-        assert [message["id"] for message in data["messages"]] == ["msg_new", "msg_old"]
-        assert data["total"] == 2
-        assert data["unread"] == 1
-        assert data["messages"][0]["body"] == "Body of msg_new"
-
+        assert_acknowledged(
+            response,
+            ["inbox.snapshot"],
+            request_id,
+            check_request_id_header=True,
+        )
         envelopes = capture.event_types()
         assert [envelope.type for envelope in envelopes] == ["inbox.snapshot"]
-        assert envelopes[0].payload["unread"] == 1
+        snapshot = envelopes[0]
+        assert snapshot.payload["request_id"] == request_id
+        assert len(snapshot.payload["messages"]) == 2
+        assert snapshot.payload["total"] == 2
+        assert snapshot.payload["unread"] == 1
+        assert snapshot.payload["messages"][0]["id"] == "msg_new"
+        assert snapshot.payload["messages"][1]["id"] == "msg_old"
+        assert snapshot.payload["messages"][0]["body"] == "Body of msg_new"
 
     def test_get_inbox_empty(self, client, document_store):
         response = client.get("/api/ui/inbox")
-        assert response.status_code == 200
-        assert response.json() == {"messages": [], "total": 0, "unread": 0}
+        assert_acknowledged(response, ["inbox.snapshot"])
 
     def test_mark_read_persists_and_broadcasts(self, client, seeded_store):
         with _StreamCapture() as capture:
             response = client.post("/api/ui/inbox/msg_new/read")
 
-        assert response.status_code == 200
-        message = response.json()
-        assert message["read"] is True
-        assert message["read_at"]
+        assert_acknowledged(response, ["inbox.snapshot"])
 
         stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["read"] is True
-        assert stored.payload["read_at"] == message["read_at"]
+        assert stored.payload["read_at"]
 
         types = [envelope.type for envelope in capture.event_types()]
         assert types == ["inbox.message.upserted", "inbox.snapshot"]
 
     def test_mark_unread_clears_read_at(self, client, seeded_store):
         response = client.post("/api/ui/inbox/msg_old/read", json={"read": False})
-        assert response.status_code == 200
-        message = response.json()
-        assert message["read"] is False
-        assert message["read_at"] is None
+        assert_acknowledged(response, ["inbox.snapshot"])
 
         stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old")
         assert stored.payload["read"] is False
@@ -134,7 +139,7 @@ class TestInboxRoutes:
         with _StreamCapture() as capture:
             response = client.delete("/api/ui/inbox/msg_old")
 
-        assert response.status_code == 204
+        assert_acknowledged(response, ["inbox.snapshot"])
         assert seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old") is None
 
         envelopes = capture.event_types()

@@ -3,8 +3,8 @@
  * graph, kept live by `agents.snapshot` / `agent.upserted` / `agent.selected` /
  * `agent.graph.updated` events on /api/ui/stream.
  */
-import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { requestJson, withQuery } from '../http';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 
 export const initialState = {
   agents: {
@@ -13,6 +13,7 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    requestId: null,
     active: {
       agentId: null,
       detail: null,
@@ -50,57 +51,47 @@ function upsertAgent(agents, agent) {
   }
 }
 
-export const fetchAgentProfiles = createAsyncThunk(
-  'uiData/fetchAgentProfiles',
-  ({ agentsUrl }) => requestJson(agentsUrl, { errorLabel: 'Failed to load agents' }),
-);
+export const fetchAgentProfiles = createAcknowledgedThunk('uiData/fetchAgentProfiles', ({ agentsUrl }, { requestId }) => requestAcknowledged(agentsUrl, { requestId }));
 
-export const requestAgentDetail = createAsyncThunk(
-  'uiData/requestAgentDetail',
-  async ({ agentsUrl, agentId, requestId }) => {
-    await requestJson(
-      withQuery(`${agentsUrl}/${encodeURIComponent(agentId)}`, { request_id: requestId }),
-      { errorLabel: 'Failed to load agent' },
-    );
-    return { agentId, requestId };
+export const requestAgentDetail = createAcknowledgedThunk('uiData/requestAgentDetail', async ({ agentsUrl, agentId }, { requestId }) => {
+  return requestAcknowledged(
+    `${agentsUrl}/${encodeURIComponent(agentId)}`,
+    { requestId },
+  );
+});
+
+export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph', ({ agentsUrl, agentId, nodes, edges, status, summary }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/graph`,
+  {
+    method: 'PATCH',
+    body: { nodes, edges, status, summary },
+    requestId,
   },
-);
-
-export const updateAgentGraph = createAsyncThunk(
-  'uiData/updateAgentGraph',
-  ({ agentsUrl, agentId, nodes, edges, status, summary }) => requestJson(
-    `${agentsUrl}/${encodeURIComponent(agentId)}/graph`,
-    {
-      method: 'PATCH',
-      body: { nodes, edges, status, summary },
-      errorLabel: 'Failed to update agent graph:',
-    },
-  ),
-);
+));
 
 export const eventHandlers = {
   'agents.snapshot': (state, payload) => {
     replaceAgentList(state.agents, payload.agents);
     state.agents.loaded = true;
-    state.agents.loading = false;
-    state.agents.error = null;
+    if (!state.agents.loading || payload.request_id === state.agents.requestId) {
+      state.agents.loading = false;
+      state.agents.error = null;
+      state.agents.requestId = null;
+    }
   },
   'agent.upserted': (state, payload) => {
     upsertAgent(state.agents, payload.agent);
     state.agents.loaded = true;
   },
   'agent.selected': (state, payload) => {
-    if (
-      payload.request_id
-      && state.agents.active.requestId
-      && payload.request_id !== state.agents.active.requestId
-    ) {
+    if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {
       return;
     }
     state.agents.active.detail = payload.agent || null;
     state.agents.active.agentId = payload.agent?.id || null;
     state.agents.active.loading = false;
     state.agents.active.error = null;
+    state.agents.active.requestId = null;
   },
   'agent.graph.updated': (state, payload) => {
     const { agent_id: agentId, graph } = payload;
@@ -114,37 +105,21 @@ export const eventHandlers = {
 };
 
 export function buildExtraReducers(builder) {
-  builder
-    .addCase(fetchAgentProfiles.pending, (state) => {
-      state.agents.loading = true;
-      state.agents.error = null;
-    })
-    .addCase(fetchAgentProfiles.fulfilled, (state) => {
+  addRequestLifecycle(builder, fetchAgentProfiles, {
+    select: (state) => state.agents,
+    errorMessage: 'Failed to load agents',
+    onFulfilled: (state) => {
       state.agents.loading = false;
       state.agents.loaded = true;
-    })
-    .addCase(fetchAgentProfiles.rejected, (state, action) => {
-      state.agents.loading = false;
-      state.agents.loaded = true;
-      state.agents.error = action.error?.message || 'Failed to load agents';
-    })
-    .addCase(requestAgentDetail.pending, (state, action) => {
+    },
+  });
+  return addRequestLifecycle(builder, requestAgentDetail, {
+    select: (state) => state.agents.active,
+    errorMessage: 'Failed to load agent',
+    onPending: (state, action) => {
       state.agents.active.agentId = action.meta.arg.agentId;
-      state.agents.active.loading = true;
-      state.agents.active.error = null;
-      state.agents.active.requestId = action.meta.arg.requestId;
-    })
-    .addCase(requestAgentDetail.fulfilled, (state, action) => {
-      if (state.agents.active.requestId === action.payload.requestId) {
-        state.agents.active.loading = false;
-      }
-    })
-    .addCase(requestAgentDetail.rejected, (state, action) => {
-      if (state.agents.active.requestId === action.meta.arg.requestId) {
-        state.agents.active.loading = false;
-        state.agents.active.error = action.error?.message || 'Failed to load agent';
-      }
-    });
+    },
+  });
 }
 
 export const selectAgentProfiles = createSelector(

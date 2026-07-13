@@ -202,59 +202,39 @@ def complete_state_files(tmp_path):
 class TestCriticalUIDataPipeline:
     """Test the complete data pipeline from state files to UI."""
 
-    def test_all_endpoints_return_200(self, client):
-        """All UI endpoints must be accessible - alien visitors must not see errors."""
-        endpoints = [
+    def test_retained_requests_acknowledge_and_deleted_routes_are_absent(self, client):
+        """Only retained operations acknowledge; plan-deleted paths never gain compatibility bodies."""
+        request_id = "first-contact-widgets"
+        retained = client.get(
+            "/api/ui/widgets",
+            headers={"X-Request-ID": request_id},
+        )
+        assert retained.status_code == 202
+        assert retained.json() == {
+            "request_id": request_id,
+            "event_types": ["widgets.updated"],
+        }
+
+        for path in (
+            "/health",
+            "/health/detailed",
+            "/ready",
+            "/live",
+            "/v1/models",
             "/api/ui/status/snapshot",
+            "/api/ui/loops",
             "/api/ui/agents",
             "/api/ui/backlog",
             "/api/ui/schedule",
-            "/api/ui/loops",
             "/api/ui/tasks",
-            "/api/ui/alerts",
-            "/api/ui/logs",
-        ]
-
-        for endpoint in endpoints:
-            response = client.get(endpoint)
-            assert response.status_code == 200, (
-                f"Endpoint {endpoint} failed with {response.status_code}"
-            )
+        ):
+            response = client.get(path)
+            assert response.status_code == 404, path
 
     def test_status_endpoint_complete_data(self, client):
-        """Status endpoint must provide ALL data needed by the UI."""
+        """Status endpoint was deleted - should return 404."""
         response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Core connectivity
-        assert "connected" in data
-        assert "server_status" in data
-        assert "progenitor_running" in data
-        assert "progenitor_status" in data
-
-        # Agent info
-        assert "pid" in data
-        assert "thread_id" in data
-        assert "cycle_count" in data
-        assert "uptime_seconds" in data
-        assert "version" in data
-        assert "last_active" in data
-
-        # Collections for UI display
-        assert "loops" in data
-        assert "agents" in data
-        assert "backlog" in data
-        assert "schedule" in data
-
-        # Build status
-        assert "build" in data
-
-        # All must be correct types
-        assert isinstance(data["loops"], list)
-        assert isinstance(data["agents"], list)
-        assert isinstance(data["backlog"], list)
-        assert isinstance(data["schedule"], list)
+        assert response.status_code == 404
 
     def test_state_reader_with_complete_state(self, complete_state_files):
         """StateReader must correctly read all state data for aliens."""
@@ -513,17 +493,12 @@ class TestErrorRecoveryAndGracefulDegradation:
 
     def test_api_endpoints_handle_missing_state(self, client):
         """API endpoints should work even without state files."""
-        # All these should return valid responses
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-        assert "connected" in data
-
+        # /api/ui/agents no longer exists - check that it returns 404
         response = client.get("/api/ui/agents")
-        assert response.status_code == 200
+        assert response.status_code == 404
 
         response = client.get("/api/ui/backlog")
-        assert response.status_code == 200
+        assert response.status_code == 404
 
 
 class TestDataIntegrityUnderAllConditions:
@@ -632,18 +607,9 @@ class TestSubAgentStatusVisibility:
 
     def test_agent_list_contains_all_details(self, client):
         """Agent list must contain all details needed by UI."""
+        # /api/ui/agents no longer exists - should return 404
         response = client.get("/api/ui/agents")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "agents" in data
-        assert "total" in data
-
-        for agent in data["agents"]:
-            # Required fields
-            assert "name" in agent
-            assert "status" in agent
-            assert "kind" in agent
+        assert response.status_code == 404
 
     def test_agent_status_endpoint_exists(self, client):
         """Individual agent status endpoint must exist."""
@@ -702,60 +668,49 @@ class TestUIPageIntegrity:
 
     def test_navigation_elements_present(self, client):
         """Test that API endpoints for UI are accessible."""
-        api_endpoints = ["/api/ui/status/snapshot", "/api/ui/agents", "/api/ui/backlog"]
+        api_endpoints = ["/api/ui/backlog"]
 
         for endpoint in api_endpoints:
             response = client.get(endpoint)
-            assert response.status_code == 200, f"API endpoint {endpoint} failed"
+            assert response.status_code == 404, f"API endpoint {endpoint} should 404"
 
 
 class TestCriticalChatFlow:
     """Test the critical chat flow that aliens will use."""
 
     def test_models_endpoint_available(self, client):
-        """Models endpoint must list available models."""
+        """Models endpoint was deleted - should return 404."""
         response = client.get("/v1/models")
-        assert response.status_code == 200
-        data = response.json()
+        assert response.status_code == 404
 
-        assert "data" in data
-        assert len(data["data"]) >= 1
+    def test_responses_endpoint_acknowledges_without_generated_text(self, client):
+        """Foreground generation data is stream-only, including on the critical path."""
+        import app.backend.main as backend_main
+        from app.backend.models import AgentResponse
 
-        for model in data["data"]:
-            assert "id" in model
-            assert "object" in model
+        original_client = backend_main.client
+        request_id = "first-contact-generation"
 
-    def test_responses_endpoint_accepts_requests(self, client):
-        """Responses endpoint must accept requests (may error if agent not running)."""
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "progenitor-v1",
-                "input": "Greetings, we come in peace.",
-                "stream": False,
-            },
-        )
+        class _MockClient:
+            async def send_message(self, *args, **kwargs):
+                return AgentResponse(response="Peace", reasoning=None, reasoning_tokens=None)
 
-        # Should not be 404 or 405 - endpoint exists
-        assert response.status_code in [200, 500, 503]
+        backend_main.client = _MockClient()
+        try:
+            response = client.post(
+                "/api/ui/responses",
+                json={
+                    "model": "progenitor-v1",
+                    "input": "Greetings, we come in peace.",
+                    "stream": False,
+                },
+                headers={"X-Request-ID": request_id},
+            )
+        finally:
+            backend_main.client = original_client
 
-    def test_responses_api_endpoint_accepts_requests(self, client):
-        """Responses endpoint must accept requests."""
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "progenitor-v1",
-                "input": "Begin first contact protocol",
-            },
-        )
-
-        # Should not be 404 or 405 - endpoint exists
-        assert response.status_code in [200, 500, 503]
-
-    def test_health_endpoint(self, client):
-        """Health endpoint must always return status."""
-        response = client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "status" in data
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["chat.response.started"],
+        }

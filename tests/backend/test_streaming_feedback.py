@@ -363,18 +363,14 @@ class TestSubAgentDelegation:
     """Tests for sub-agent task delegation feedback."""
 
     def test_task_response_structure(self):
-        """Test task endpoint returns proper structure."""
+        """Test tasks endpoint (deleted - should return 404)."""
         from fastapi.testclient import TestClient
 
         from app.backend.main import app
 
         client = TestClient(app)
         response = client.get("/api/ui/tasks")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert "tasks" in data
-        assert "total" in data
+        assert response.status_code == 404
 
     def test_backlog_item_priority(self):
         """Test backlog items have priority for ordering."""
@@ -458,8 +454,8 @@ class TestChatAPIStreaming:
     """Tests for chat API streaming responses."""
 
     @patch("app.backend.main.get_sse_client")
-    def test_responses_endpoint_exists(self, mock_get_client):
-        """Test responses endpoint accepts requests."""
+    def test_ui_responses_endpoint_exists(self, mock_get_client):
+        """Canonical browser generation dispatches or returns an operational failure."""
         from fastapi.testclient import TestClient
 
         from app.backend.main import app
@@ -473,7 +469,7 @@ class TestChatAPIStreaming:
 
         client = TestClient(app)
         response = client.post(
-            "/v1/responses",
+            "/api/ui/responses",
             json={
                 "model": "progenitor-v1",
                 "input": "test",
@@ -481,34 +477,8 @@ class TestChatAPIStreaming:
             },
         )
 
-        # May return error but endpoint should be reachable
-        assert response.status_code in [200, 500, 503, 504]
-
-    @patch("app.backend.main.get_sse_client")
-    def test_responses_api_endpoint_exists(self, mock_get_client):
-        """Test responses endpoint accepts requests."""
-        from fastapi.testclient import TestClient
-
-        from app.backend.main import app
-
-        # Mock the client to avoid IPC connection issues
-        mock_client = AsyncMock()
-        mock_client.send_message.return_value = AgentResponse(
-            response="mocked", reasoning=None, reasoning_tokens=None
-        )
-        mock_get_client.return_value = mock_client
-
-        client = TestClient(app)
-        response = client.post(
-            "/v1/responses",
-            json={
-                "model": "progenitor-v1",
-                "input": "test",
-            },
-        )
-
-        # May return error but endpoint should be reachable
-        assert response.status_code in [200, 400, 500, 503]
+        # A successful finite dispatch is 202, with operational failures preserved.
+        assert response.status_code in [202, 500, 503, 504]
 
 
 class TestRealTimeUpdates:

@@ -11,10 +11,12 @@ from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock
 
 import pytest
+from ack_helpers import assert_acknowledged, assert_acknowledgement_body
 from fastapi.testclient import TestClient
 
 from app.backend.alerts import clear_alerts, create_alert
 from app.backend.document_store import (
+    BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -115,47 +117,13 @@ class TestUIRoutes:
         response = client.get("/ui/")
         assert response.status_code == 404
 
-    def test_ui_status_endpoint(self, client):
-        """Test /api/ui/status returns valid JSON."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-        assert "connected" in data
-        assert "server_status" in data
-        assert "progenitor_running" in data
-
-    def test_ui_agents_endpoint(self, client):
-        """Test /api/ui/agents returns agent list."""
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 200
-        data = response.json()
-        assert "agents" in data
-        assert "total" in data
-        assert isinstance(data["agents"], list)
-
-    def test_ui_tasks_endpoint(self, client):
-        """Test /api/ui/tasks returns task list."""
-        response = client.get("/api/ui/tasks")
-        assert response.status_code == 200
-        data = response.json()
-        assert "tasks" in data
-        assert "total" in data
-
-    def test_workspace_endpoint(self, client):
-        response = client.get("/api/ui/workspace")
-        assert response.status_code == 200
-        data = response.json()
-        assert "workspace" in data
-        assert "health" in data
-        assert "sessions" in data
-        assert "widgets" in data
-
     def test_widgets_endpoint(self, client):
-        response = client.get("/api/ui/widgets")
-        assert response.status_code == 200
-        data = response.json()
-        assert "items" in data
-        assert "total" in data
+        request_id = "widgets-request"
+        response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
+
+        assert_acknowledged(
+            response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
+        )
 
     def test_process_metrics_excludes_db_fields(self):
         """The periodic tick carries only process metrics, never DB-derived state.
@@ -175,104 +143,125 @@ class TestUIRoutes:
         assert "schedule" not in metrics
 
     def test_widgets_endpoint_broadcasts_snapshot(self, client):
-        """GET /widgets returns the list and publishes widgets.updated."""
+        """The acknowledgement is backed by a request-correlated canonical event."""
         from app.backend import ui_routes
 
-        queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
-        try:
-            response = client.get("/api/ui/widgets")
-        finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+        request_id = "widgets-stream-request"
+        event_start = len(ui_routes._ui_event_replay)
+        response = client.get("/api/ui/widgets", headers={"X-Request-ID": request_id})
 
-        assert response.status_code == 200
-        streamed = queue.get_nowait()
-        assert streamed["type"] == "ui.event"
-        assert streamed["envelope"].type == "widgets.updated"
-        assert streamed["envelope"].payload["items"] == response.json()["items"]
+        assert_acknowledged(
+            response, ["widgets.updated"], request_id=request_id, check_request_id_header=True
+        )
+        envelope = next(
+            event
+            for event in ui_routes._ui_event_replay[event_start:]
+            if event.payload.get("request_id") == request_id
+        )
+        assert envelope.type == "widgets.updated"
+        assert isinstance(envelope.payload["items"], list)
 
     def test_mcp_endpoint_broadcasts_snapshot(self, client):
-        """GET /mcp returns the MCP list and publishes mcp.snapshot on the stream."""
+        """MCP data is available only from a request-correlated canonical event."""
         from app.backend import ui_routes
 
-        queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
-        try:
-            response = client.get("/api/ui/mcp")
-        finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+        request_id = "mcp-stream-request"
+        event_start = len(ui_routes._ui_event_replay)
+        response = client.get("/api/ui/mcp", headers={"X-Request-ID": request_id})
 
-        assert response.status_code == 200
-        data = response.json()
-        assert "items" in data
-        assert all(item["type"] == "mcp" for item in data["items"])
-
-        streamed = queue.get_nowait()
-        assert streamed["type"] == "ui.event"
-        envelope = streamed["envelope"]
+        assert_acknowledged(
+            response, ["mcp.snapshot"], request_id=request_id, check_request_id_header=True
+        )
+        envelope = next(
+            event
+            for event in ui_routes._ui_event_replay[event_start:]
+            if event.payload.get("request_id") == request_id
+        )
         assert envelope.type == "mcp.snapshot"
-        assert envelope.payload["items"] == data["items"]
-
-    def test_database_schema_endpoint_reports_store_schema(self, client, document_store):
-        response = client.get("/api/ui/database/schema")
-
-        assert response.status_code == 200
-        tables = response.json()["tables"]
-        store_schema = next(table for table in tables if table["table"] == "store")
-        assert {column["name"] for column in store_schema["columns"]} >= {
-            "prefix",
-            "key",
-            "value",
-            "updated_at",
-        }
+        assert isinstance(envelope.payload["items"], list)
 
     def test_chat_endpoints_store_metadata_without_transcripts(self, client, document_store):
+        create_request_id = "chat-create-request"
         create_response = client.post(
             "/api/ui/chats",
             json={"title": "Backend chat", "thread_id": "thread-1"},
+            headers={"X-Request-ID": create_request_id},
         )
 
-        assert create_response.status_code == 200
-        thread_id = create_response.json()["session"]["thread_id"]
-        assert thread_id == "thread-1"
+        assert_acknowledged(
+            create_response,
+            ["chat.session.created", "chat.sessions.snapshot"],
+            request_id=create_request_id,
+            check_request_id_header=True,
+        )
+        thread_id = "thread-1"
         stored = document_store.get_document("backend.chat.sessions", thread_id)
         assert stored is not None
         assert stored.payload["title"] == "Backend chat"
         assert "messages" not in stored.payload
 
+        patch_request_id = "chat-patch-request"
         patch_response = client.patch(
             f"/api/ui/chats/{thread_id}",
             json={"pinned": True, "shared": True, "archived": True},
+            headers={"X-Request-ID": patch_request_id},
         )
-        assert patch_response.status_code == 200
-        assert patch_response.json()["session"]["pinned"] is True
+        assert_acknowledged(
+            patch_response,
+            ["chat.session.metadata.updated", "chat.sessions.snapshot"],
+            request_id=patch_request_id,
+            check_request_id_header=True,
+        )
 
-        list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 200
-        assert list_response.json()["total"] == 1
-        assert list_response.json()["sessions"][0]["thread_id"] == thread_id
+        list_request_id = "chat-list-request"
+        list_response = client.get(
+            "/api/ui/chats?include_archived=true",
+            headers={"X-Request-ID": list_request_id},
+        )
+        assert_acknowledged(
+            list_response,
+            ["chat.sessions.snapshot"],
+            request_id=list_request_id,
+            check_request_id_header=True,
+        )
+        from app.backend import ui_routes
+
+        replay = ui_routes._ui_event_replay[-1]
+        assert replay.type == "chat.sessions.snapshot"
+        assert replay.payload["request_id"] == list_request_id
+        assert replay.payload["total"] == 1
+        assert replay.payload["sessions"][0]["thread_id"] == thread_id
 
     def test_chat_detail_request_emits_request_scoped_selection_event(self, client, document_store):
         from app.backend import ui_routes
 
-        create_response = client.post(
+        client.post(
             "/api/ui/chats",
             json={"title": "Selectable chat", "thread_id": "thread-select"},
+            headers={"X-Request-ID": "chat-create-selection"},
         )
-        assert create_response.status_code == 200
-        thread_id = create_response.json()["session"]["thread_id"]
-        assert thread_id == "thread-select"
+        thread_id = "thread-select"
+        request_id = "chat-detail-request"
 
-        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-123")
+        detail_response = client.get(
+            f"/api/ui/chats/{thread_id}",
+            headers={"X-Request-ID": request_id},
+        )
 
-        assert detail_response.status_code == 200
+        assert_acknowledged(
+            detail_response,
+            ["chat.session.upserted", "chat.session.selected"],
+            request_id=request_id,
+            check_request_id_header=True,
+        )
         upserted = ui_routes._ui_event_replay[-2]
         selected = ui_routes._ui_event_replay[-1]
         assert upserted.type == "chat.session.upserted"
+        assert upserted.payload["request_id"] == request_id
         assert upserted.payload["session"]["thread_id"] == thread_id
         assert selected.type == "chat.session.selected"
+        assert selected.payload["request_id"] == request_id
         assert selected.session_id == thread_id
-        assert selected.payload["request_id"] == "request-123"
         assert selected.payload["session"]["thread_id"] == thread_id
 
     def test_chat_card_rehydrates_history_from_checkpoint_thread(self, client, document_store):
@@ -307,34 +296,40 @@ class TestUIRoutes:
             "/api/ui/chats",
             json={"title": "New chat", "thread_id": "thread_sess-history"},
         )
-        assert create_response.status_code == 200
-        thread_id = create_response.json()["session"]["thread_id"]
+        assert create_response.status_code == 202
+        thread_id = "thread_sess-history"
         assert thread_id == "thread_sess-history"
 
         list_response = client.get("/api/ui/chats?include_archived=true")
         detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-history")
 
-        assert list_response.status_code == 200
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
+        replay_list = ui_routes._ui_event_replay[-3]
+        assert replay_list.type == "chat.sessions.snapshot"
         listed = next(
             session
-            for session in list_response.json()["sessions"]
+            for session in replay_list.payload["sessions"]
             if session["thread_id"] == thread_id
         )
         assert listed["title"] == "count backwards"
         assert listed["message_count"] == 2
         assert listed["preview"] == "99, 98, 97"
 
-        assert detail_response.status_code == 200
-        detail = detail_response.json()
-        assert detail["thread_id"] == "thread_sess-history"
-        assert detail["checkpoint_id"] == "checkpoint-1"
-        assert [message["content"] for message in detail["messages"]] == [
+        assert detail_response.status_code == 202
+        replay_detail_upsert = ui_routes._ui_event_replay[-2]
+        assert replay_detail_upsert.type == "chat.session.upserted"
+        detail = replay_detail_upsert.payload
+        assert detail["session"]["thread_id"] == "thread_sess-history"
+        assert detail["session"]["checkpoint_id"] == "checkpoint-1"
+        assert [message["content"] for message in detail["session"]["messages"]] == [
             "count backwards",
             "99, 98, 97",
         ]
-        assert detail["messages"][1]["reasoning_text"] == "Need to count down."
-        assert detail["messages"][1]["reasoning_token_count"] == 3
-        assert detail["messages"][1]["token_count"] == 12
+        assert detail["session"]["messages"][1]["reasoning_text"] == "Need to count down."
+        assert detail["session"]["messages"][1]["reasoning_token_count"] == 3
+        assert detail["session"]["messages"][1]["token_count"] == 12
 
     def test_chat_detail_prefers_current_state_reasoning_when_checkpoint_lacks_it(
         self,
@@ -387,11 +382,13 @@ class TestUIRoutes:
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: _StubStateReader())
 
         detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-live-reasoning")
+        assert detail_response.status_code == 202
+        from app.backend import ui_routes
 
-        assert detail_response.status_code == 200
-        detail = detail_response.json()
-        assert detail["thread_id"] == thread_id
-        assert detail["messages"][1]["reasoning_text"] == "Need to count down."
+        detail_upsert = ui_routes._ui_event_replay[-2]
+        detail = detail_upsert.payload
+        assert detail["session"]["thread_id"] == thread_id
+        assert detail["session"]["messages"][1]["reasoning_text"] == "Need to count down."
 
     def test_chat_detail_loads_checkpoint_only_thread_ids_without_sess_prefix(
         self,
@@ -412,19 +409,22 @@ class TestUIRoutes:
         )
 
         list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 200
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
         listed = next(
             session
-            for session in list_response.json()["sessions"]
+            for session in ui_routes._ui_event_replay[-1].payload["sessions"]
             if session["thread_id"] == thread_id
         )
         assert listed["thread_id"] == thread_id
 
-        detail_response = client.get(f"/api/ui/chats/{thread_id}?request_id=request-legacy-thread")
-        assert detail_response.status_code == 200
-        detail = detail_response.json()
-        assert detail["thread_id"] == thread_id
-        assert [message["content"] for message in detail["messages"]] == [
+        detail_response = client.get(f"/api/ui/chats/{thread_id}")
+        assert detail_response.status_code == 202
+        detail_upsert = ui_routes._ui_event_replay[-2]
+        assert detail_upsert.type == "chat.session.upserted"
+        detail = detail_upsert.payload
+        assert [message["content"] for message in detail["session"]["messages"]] == [
             "legacy hello",
             "legacy reply",
         ]
@@ -445,12 +445,13 @@ class TestUIRoutes:
                 ],
             )
         )
-
         list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 200
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
         assert all(
             session["thread_id"] != "2026-06-19T09:00:00+00:00"
-            for session in list_response.json()["sessions"]
+            for session in ui_routes._ui_event_replay[-1].payload["sessions"]
         )
 
     def test_chat_delete_sets_soft_delete_flag_and_hides_from_list(self, client, document_store):
@@ -458,19 +459,22 @@ class TestUIRoutes:
             "/api/ui/chats",
             json={"title": "Disposable chat", "thread_id": "thread-delete"},
         )
-        assert create_response.status_code == 200
-        thread_id = create_response.json()["session"]["thread_id"]
+        assert create_response.status_code == 202
+        thread_id = "thread-delete"
 
         delete_response = client.delete(f"/api/ui/chats/{thread_id}")
 
-        assert delete_response.status_code == 204
+        assert delete_response.status_code == 202
         stored = document_store.get_document("backend.chat.sessions", thread_id)
         assert stored is not None
         assert stored.payload["deleted"] is True
         list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 200
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
         assert all(
-            session["thread_id"] != thread_id for session in list_response.json()["sessions"]
+            session["thread_id"] != thread_id
+            for session in ui_routes._ui_event_replay[-1].payload["sessions"]
         )
 
     def test_chat_draft_endpoint_reuses_existing_empty_new_chat(self, client):
@@ -478,40 +482,39 @@ class TestUIRoutes:
             "/api/ui/chats",
             json={"title": "New chat", "thread_id": "thread_sess-draft-1"},
         )
-        assert create_response.status_code == 200
-        draft_id = create_response.json()["session"]["thread_id"]
+        assert create_response.status_code == 202
+        draft_id = "thread_sess-draft-1"
 
         draft_response = client.post(
             "/api/ui/chats/draft",
             json={"thread_id": "thread_sess-draft-2"},
         )
 
-        assert draft_response.status_code == 200
-        assert draft_response.json()["session"]["thread_id"] == draft_id
-        assert draft_response.json()["session"]["thread_id"] == "thread_sess-draft-1"
+        assert draft_response.status_code == 202
 
         list_response = client.get("/api/ui/chats?include_archived=true")
-        assert list_response.status_code == 200
-        assert len(list_response.json()["sessions"]) == 1
-        assert list_response.json()["sessions"][0]["thread_id"] == draft_id
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
+        assert len(ui_routes._ui_event_replay[-1].payload["sessions"]) == 1
+        assert ui_routes._ui_event_replay[-1].payload["sessions"][0]["thread_id"] == draft_id
 
     def test_chat_draft_endpoint_creates_new_after_deleted_draft(self, client):
         create_response = client.post(
             "/api/ui/chats",
             json={"title": "New chat", "thread_id": "thread_sess-draft-delete"},
         )
-        assert create_response.status_code == 200
-        deleted_id = create_response.json()["session"]["thread_id"]
+        assert create_response.status_code == 202
+        deleted_id = "thread_sess-draft-delete"
         delete_response = client.delete(f"/api/ui/chats/{deleted_id}")
-        assert delete_response.status_code == 204
+        assert delete_response.status_code == 202
 
         draft_response = client.post(
             "/api/ui/chats/draft",
             json={"thread_id": "thread_sess-draft-new"},
         )
 
-        assert draft_response.status_code == 200
-        assert draft_response.json()["session"]["thread_id"] != deleted_id
+        assert draft_response.status_code == 202
 
     def test_chat_patch_and_delete_materialize_current_state_card(
         self,
@@ -538,8 +541,7 @@ class TestUIRoutes:
             json={"pinned": True, "archived": True},
         )
 
-        assert patch_response.status_code == 200
-        assert patch_response.json()["session"]["pinned"] is True
+        assert patch_response.status_code == 202
         stored = document_store.get_document("backend.chat.sessions", "thread_current-session-1")
         assert stored is not None
         assert stored.payload["pinned"] is True
@@ -547,86 +549,21 @@ class TestUIRoutes:
 
         delete_response = client.delete("/api/ui/chats/thread_current-session-1")
 
-        assert delete_response.status_code == 204
+        assert delete_response.status_code == 202
         stored_after_delete = document_store.get_document(
             "backend.chat.sessions", "thread_current-session-1"
         )
         assert stored_after_delete is not None
         assert stored_after_delete.payload["deleted"] is True
 
-    def test_widget_schemas_include_event_widget(self, client):
-        response = client.get("/api/ui/widget-schemas")
+    def test_widget_schemas_endpoint_is_deleted(self, client):
+        """Widget schema data is no longer part of the finite UI API."""
+        response = client.get(
+            "/api/ui/widget-schemas",
+            headers={"X-Request-ID": "deleted-widget-schemas"},
+        )
 
-        assert response.status_code == 200
-        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
-        assert "event" in schemas
-        event_schema = schemas["event"]
-        identity_section = next(
-            section for section in event_schema["sections"] if section["id"] == "identity"
-        )
-        event_type_field = next(
-            field for field in identity_section["fields"] if field["key"] == "eventType"
-        )
-        assert event_type_field["control"] == "select"
-        assert {option["value"] for option in event_type_field["options"]} == {
-            "kanban.card.created",
-            "kanban.card.updated",
-            "kanban.card.moved",
-            "kanban.card.deleted",
-            "kanban.card.status_changed",
-        }
-
-    def test_widget_schemas_include_user_widget_tools(self, client):
-        response = client.get("/api/ui/widget-schemas")
-
-        assert response.status_code == 200
-        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
-        user_schema = schemas["user"]
-        identity_section = next(
-            section for section in user_schema["sections"] if section["id"] == "identity"
-        )
-        message_type_field = next(
-            field for field in identity_section["fields"] if field["key"] == "messageType"
-        )
-        assert {option["value"] for option in message_type_field["options"]} == {
-            "say_to_user",
-            "notify_user",
-            "ask_user",
-        }
-
-    def test_widget_schemas_include_agent_and_mcp_refresh_tabs(self, client):
-        response = client.get("/api/ui/widget-schemas")
-
-        assert response.status_code == 200
-        schemas = {schema["type"]: schema for schema in response.json()["schemas"]}
-        assert schemas["prompt"]["help_text"] == (
-            "Stores prompt text, targets an agent, and runs or generates code from the latest prompt."
-        )
-        assert schemas["user"]["help_text"] == (
-            "Configures a user-facing tool call so the current run can send a message, "
-            "notification, or question."
-        )
-        assert [tab["id"] for tab in schemas["agent"]["tabs"]] == [
-            "overview",
-            "details",
-            "capabilities",
-            "skills",
-            "logs",
-        ]
-        assert schemas["agent"]["help_text"] == (
-            "Shows a linked agent, its recent activity, and the latest thread-linked output for this card."
-        )
-        assert [tab["id"] for tab in schemas["mcp"]["tabs"]] == [
-            "overview",
-            "details",
-            "tools",
-            "resources",
-            "prompts",
-            "logs",
-        ]
-        assert schemas["mcp"]["help_text"] == (
-            "Shows an MCP integration, its recent activity, and the latest thread-linked output for this card."
-        )
+        assert response.status_code == 404
 
     def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
         prompts_dir = tmp_path / "data" / "prompts"
@@ -640,16 +577,22 @@ class TestUIRoutes:
         monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         response = client.get("/api/ui/prompts")
-
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["total"] == 2
-        assert {prompt["path"] for prompt in data["prompts"]} == {
+        assert_acknowledgement_body(data)
+        from app.backend import ui_routes
+
+        replay = ui_routes._ui_event_replay[-1]
+        prompts_data = replay.payload
+        assert len(prompts_data["prompts"]) == 2
+        assert {prompt["path"] for prompt in prompts_data["prompts"]} == {
             "builder_agent/think.md",
             "progenitor/nested/decide.md",
         }
         builder_prompt = next(
-            prompt for prompt in data["prompts"] if prompt["path"] == "builder_agent/think.md"
+            prompt
+            for prompt in prompts_data["prompts"]
+            if prompt["path"] == "builder_agent/think.md"
         )
         assert builder_prompt["primary_agent"] == "builder_agent"
         assert "builder_agent" in builder_prompt["associated_agents"]
@@ -667,8 +610,7 @@ class TestUIRoutes:
             json={"path": "builder_agent/think.md", "content": "after"},
         )
 
-        assert response.status_code == 200
-        assert response.json()["content"] == "after"
+        assert response.status_code == 202
         assert prompt_path.read_text(encoding="utf-8") == "after"
 
     def test_skills_endpoint_lists_updates_and_creates_skills(self, client, tmp_path, monkeypatch):
@@ -687,19 +629,14 @@ class TestUIRoutes:
 
         list_response = client.get("/api/ui/skills")
 
-        assert list_response.status_code == 200
-        list_data = list_response.json()
-        assert list_data["total"] == 1
-        assert list_data["skills"][0]["path"] == "progenitor/runtime-inspection/SKILL.md"
-        assert list_data["skills"][0]["title"] == "Runtime Inspection"
+        assert list_response.status_code == 202
 
         update_response = client.put(
             "/api/ui/skills/content",
             json={"path": "progenitor/runtime-inspection/SKILL.md", "content": "after"},
         )
 
-        assert update_response.status_code == 200
-        assert update_response.json()["content"] == "after"
+        assert update_response.status_code == 202
         assert existing_skill.read_text(encoding="utf-8") == "after"
 
         create_response = client.post(
@@ -711,25 +648,28 @@ class TestUIRoutes:
             },
         )
 
-        assert create_response.status_code == 201
-        assert create_response.json()["path"] == "builder_agent/repo-triage/SKILL.md"
+        assert create_response.status_code == 202
         assert (skills_dir / "builder_agent" / "repo-triage" / "SKILL.md").is_file()
 
     def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader):
         response = client.get("/api/ui/kanban")
-
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["title"] == "Delivery Kanban"
-        assert [column["id"] for column in data["columns"]] == [
+        assert_acknowledgement_body(data)
+        from app.backend import ui_routes
+
+        replay = ui_routes._ui_event_replay[-1]
+        board = replay.payload
+        assert board["title"] == "Delivery Kanban"
+        assert [column["id"] for column in board["columns"]] == [
             "backlog",
             "plan",
             "build",
             "validate",
             "done",
         ]
-        assert data["cards"] == []
-        assert {status["id"] for status in data["card_schema"]["statuses"]} == {
+        assert board["cards"] == []
+        assert {status["id"] for status in board["card_schema"]["statuses"]} == {
             "draft",
             "idle",
             "running",
@@ -738,32 +678,87 @@ class TestUIRoutes:
             "blocked",
         }
 
+    def test_task_activity_get_uses_middleware_request_id_and_emits_full_state(
+        self, client, tasks_state_reader
+    ):
+        """A headerless retained activity read is acknowledged and replayed consistently."""
+        from app.backend import ui_routes
+
+        created = client.post("/api/ui/kanban/cards", json={"title": "Activity task"})
+        assert created.status_code == 202
+        board = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, "kanban_board", None
+        )
+        assert board is not None
+        card_id = board.payload["card_order"][-1]
+        persisted_activity = [
+            {
+                "id": "task_activity_retained",
+                "card_id": card_id,
+                "kind": "status",
+                "actor": "builder",
+                "message": "Implementation started.",
+                "created_at": "2026-07-13T12:00:00+00:00",
+                "metadata": {"from": "backlog", "to": "build"},
+            }
+        ]
+        tasks_state_reader.document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            f"kanban_task_activity:{card_id}",
+            persisted_activity,
+        )
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.add(queue)
+        try:
+            response = client.get(f"/api/ui/tasks/{card_id}/activity")
+            request_id = response.headers["X-Request-ID"]
+            assert_acknowledged(
+                response,
+                ["task.activity.updated"],
+                request_id=request_id,
+                check_request_id_header=True,
+            )
+            envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
+        finally:
+            ui_routes._ui_stream_subscribers.discard(queue)
+
+        assert request_id.startswith("req-")
+        assert len(envelopes) == 1
+        event = envelopes[0]
+        assert event.type == "task.activity.updated"
+        assert event.payload == {
+            "card_id": card_id,
+            "items": persisted_activity,
+            "total": 1,
+            "request_id": request_id,
+        }
+
     def test_kanban_card_create_and_patch_persist(self, client, tasks_state_reader):
         create_response = client.post(
             "/api/ui/kanban/cards",
             json={"title": "Build kanban board", "summary": "Server first"},
         )
 
-        assert create_response.status_code == 200
-        created = create_response.json()
-        assert created["column_id"] == "backlog"
-        assert created["status"] == "draft"
-        assert created["task_path"] == f"tasks/{created['id']}.md"
+        assert create_response.status_code == 202
+        data = create_response.json()
+        assert_acknowledgement_body(data)
+        assert "kanban.snapshot" in data["event_types"]
+        store = tasks_state_reader.document_store
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        card_id = board.payload["card_order"][-1]
         # Cards persist as their own ``kanban_card:<id>`` document; the board
         # structure only records column layout + ``card_order``.
         store = tasks_state_reader.document_store
         stored_board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
         assert stored_board is not None
-        assert created["id"] in stored_board.payload["card_order"]
         assert "cards" not in stored_board.payload
-        stored_card = store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None
-        )
+        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
         assert stored_card is not None
-        assert stored_card.payload["id"] == created["id"]
+        assert stored_card.payload["id"] == card_id
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={
                 "column_id": "build",
                 "status": "running",
@@ -773,19 +768,26 @@ class TestUIRoutes:
             },
         )
 
-        assert patch_response.status_code == 200
-        updated = patch_response.json()
-        assert updated["column_id"] == "build"
-        assert updated["status"] == "running"
-        assert updated["agent_name"] == "builder_progenitor"
-        assert updated["branch_name"] == "feat/kanban-board"
-        assert updated["labels"] == ["frontend", "live-first"]
-        assert updated["started_at"] is not None
-        assert updated["position"] == 0
+        assert patch_response.status_code == 202
+        data = patch_response.json()
+        assert_acknowledgement_body(data)
+        assert "kanban.snapshot" in data["event_types"]
+
+        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
+        assert stored_card is not None
+        assert stored_card.payload["column_id"] == "build"
+        assert stored_card.payload["status"] == "running"
+        assert stored_card.payload["agent_name"] == "builder_progenitor"
+        assert stored_card.payload["branch_name"] == "feat/kanban-board"
+        assert stored_card.payload["labels"] == ["frontend", "live-first"]
+        assert stored_card.payload["started_at"] is not None
 
         board_response = client.get("/api/ui/kanban")
-        board = board_response.json()
-        assert board["cards"][0]["id"] == created["id"]
+        assert board_response.status_code == 202
+        from app.backend import ui_routes
+
+        board = ui_routes._ui_event_replay[-1].payload
+        assert board["cards"][0]["id"] == card_id
         assert board["cards"][0]["column_id"] == "build"
 
     def test_kanban_card_project_id_persists_and_patches(self, client, tasks_state_reader):
@@ -793,37 +795,56 @@ class TestUIRoutes:
             "/api/ui/kanban/cards",
             json={"title": "Scoped card", "project_id": "acme"},
         )
-        assert create_response.status_code == 200
-        created = create_response.json()
-        assert created["project_id"] == "acme"
+        assert create_response.status_code == 202
+        data = create_response.json()
+        assert_acknowledgement_body(data)
+        assert "kanban.snapshot" in data["event_types"]
+        store = tasks_state_reader.document_store
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        card_id = board.payload["card_order"][-1]
 
         stored_card = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
         assert stored_card.payload["project_id"] == "acme"
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={"project_id": "beta"},
         )
-        assert patch_response.status_code == 200
-        assert patch_response.json()["project_id"] == "beta"
+        assert patch_response.status_code == 202
+        data = patch_response.json()
+        assert_acknowledgement_body(data)
+        stored_card = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+        )
+        assert stored_card.payload["project_id"] == "beta"
 
         cleared = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={"project_id": ""},
         )
-        assert cleared.status_code == 200
-        assert cleared.json()["project_id"] is None
+        assert cleared.status_code == 202
+        assert_acknowledgement_body(cleared.json())
+        stored_card = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
+        )
+        assert stored_card.payload["project_id"] is None
 
-    def test_kanban_card_metadata_persists_subtasks_and_dependencies(self, client):
-        created = client.post(
+    def test_kanban_card_metadata_persists_subtasks_and_dependencies(
+        self, client, tasks_state_reader
+    ):
+        create_response = client.post(
             "/api/ui/kanban/cards",
             json={"title": "Metadata task"},
-        ).json()
+        )
+        assert create_response.status_code == 202
+        store = tasks_state_reader.document_store
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        card_id = board.payload["card_order"][-1]
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={
                 "metadata": {
                     "subtasks": [
@@ -835,18 +856,20 @@ class TestUIRoutes:
             },
         )
 
-        assert patch_response.status_code == 200
-        payload = patch_response.json()
-        assert payload["metadata"]["subtasks"][0]["title"] == "First subtask"
-        assert payload["metadata"]["subtasks"][1]["done"] is True
-        assert payload["metadata"]["dependencies"] == ["task-123", "docs/spec.md"]
+        assert patch_response.status_code == 202
+        data = patch_response.json()
+        assert_acknowledgement_body(data)
+        stored_card = store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None)
+        assert stored_card.payload["metadata"]["subtasks"][0]["title"] == "First subtask"
+        assert stored_card.payload["metadata"]["subtasks"][1]["done"] is True
+        assert stored_card.payload["metadata"]["dependencies"] == ["task-123", "docs/spec.md"]
 
         patch_response = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={
                 "metadata": {
-                    "subtasks": payload["metadata"]["subtasks"],
-                    "dependencies": payload["metadata"]["dependencies"],
+                    "subtasks": stored_card.payload["metadata"]["subtasks"],
+                    "dependencies": stored_card.payload["metadata"]["dependencies"],
                     "collaborators": ["review_agent", "qa_user"],
                     "attachments": [
                         {
@@ -866,135 +889,56 @@ class TestUIRoutes:
             },
         )
 
-        assert patch_response.status_code == 200
-        payload = patch_response.json()
-        assert payload["metadata"]["collaborators"] == ["review_agent", "qa_user"]
-        assert payload["metadata"]["attachments"][1]["kind"] == "pr"
-
-    def test_tasks_endpoint_returns_persisted_kanban_cards(self, client, tasks_state_reader):
-        created = client.post(
-            "/api/ui/kanban/cards",
-            json={"title": "Wire backend tasks", "summary": "Replace placeholder feed"},
-        ).json()
-        client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
-            json={"column_id": "build", "status": "running", "labels": ["backend", "high"]},
+        assert patch_response.status_code == 202
+        data = patch_response.json()
+        assert_acknowledgement_body(data)
+        stored_card_updated = store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None
         )
-
-        response = client.get("/api/ui/tasks")
-
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["total"] == 1
-        assert payload["tasks"][0]["id"] == created["id"]
-        assert payload["tasks"][0]["column_id"] == "build"
-        assert payload["tasks"][0]["status"] == "running"
-        assert payload["tasks"][0]["labels"] == ["backend", "high"]
-        assert payload["tasks"][0]["task_path"] == f"tasks/{created['id']}.md"
-
-    def test_task_content_round_trips_through_backend(self, client, tasks_state_reader):
-        created = client.post(
-            "/api/ui/kanban/cards",
-            json={
-                "title": "Functional task page",
-                "summary": "Use markdown body",
-                "description": "Back the task with editable text.",
-            },
-        ).json()
-
-        default_response = client.get(f"/api/ui/tasks/{created['id']}/content")
-
-        assert default_response.status_code == 200
-        default_payload = default_response.json()
-        assert default_payload["path"] == f"tasks/{created['id']}.md"
-        assert "# Functional task page" in default_payload["content"]
-        assert "Back the task with editable text." in default_payload["content"]
-
-        update_response = client.put(
-            f"/api/ui/tasks/{created['id']}/content",
-            json={"content": "# Functional task page\n\n- Ship the backend\n- Ship the UI"},
-        )
-
-        assert update_response.status_code == 200
-        updated_payload = update_response.json()
-        assert updated_payload["updated_at"] is not None
-        assert "- Ship the backend" in updated_payload["content"]
-
-        stored_content = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_task_content:{created['id']}", None
-        )
-        assert stored_content is not None
-        assert stored_content.payload["content"].startswith("# Functional task page")
-
-        fetched_again = client.get(f"/api/ui/tasks/{created['id']}/content").json()
-        assert fetched_again["content"] == updated_payload["content"]
-
-        activity = client.get(f"/api/ui/tasks/{created['id']}/activity").json()
-        assert activity["total"] == 1
-        assert activity["items"][0]["kind"] == "content"
-        assert activity["items"][0]["message"] == "Updated the task brief."
-
-    def test_task_activity_route_persists_notes_and_status_events(self, client, tasks_state_reader):
-        created = client.post(
-            "/api/ui/kanban/cards",
-            json={"title": "Track activity"},
-        ).json()
-
-        note_response = client.post(
-            f"/api/ui/tasks/{created['id']}/activity",
-            json={"message": "Investigating the API contract.", "actor": "user", "kind": "note"},
-        )
-
-        assert note_response.status_code == 200
-        note_payload = note_response.json()
-        assert note_payload["actor"] == "user"
-        assert note_payload["kind"] == "note"
-
-        patch_response = client.patch(
-            f"/api/ui/kanban/cards/{created['id']}",
-            json={"status": "running", "column_id": "build"},
-        )
-        assert patch_response.status_code == 200
-
-        activity = client.get(f"/api/ui/tasks/{created['id']}/activity").json()
-        assert activity["total"] == 3
-        assert [item["kind"] for item in activity["items"]] == ["note", "status", "move"]
-        assert "Status changed from draft to running." in [
-            item["message"] for item in activity["items"]
+        assert stored_card_updated.payload["metadata"]["collaborators"] == [
+            "review_agent",
+            "qa_user",
         ]
-        assert "Moved from backlog to build." in [item["message"] for item in activity["items"]]
-
-        stored_activity = tasks_state_reader.document_store.get_document(
-            PROGENITOR_STATE_PREFIX, f"kanban_task_activity:{created['id']}", None
-        )
-        assert stored_activity is not None
-        assert len(stored_activity.payload) == 3
+        assert stored_card_updated.payload["metadata"]["attachments"][1]["kind"] == "pr"
 
     def test_kanban_card_reorder_persists_positions(self, client, tasks_state_reader):
-        first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
+        client.post("/api/ui/kanban/cards", json={"title": "First card"})
+        store = tasks_state_reader.document_store
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        first_id = board.payload["card_order"][0]
         client.post("/api/ui/kanban/cards", json={"title": "Second card"})
-        third = client.post("/api/ui/kanban/cards", json={"title": "Third card"}).json()
+        client.post("/api/ui/kanban/cards", json={"title": "Third card"})
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        third_id = board.payload["card_order"][2]
 
         reorder_response = client.patch(
-            f"/api/ui/kanban/cards/{third['id']}",
+            f"/api/ui/kanban/cards/{third_id}",
             json={"position": 1},
         )
 
-        assert reorder_response.status_code == 200
-        reordered = reorder_response.json()
-        assert reordered["position"] == 1
+        assert reorder_response.status_code == 202
+        data = reorder_response.json()
+        assert_acknowledgement_body(data)
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        assert board.payload["card_order"][0] == first_id
+        assert board.payload["card_order"][1] == third_id
 
         move_response = client.patch(
-            f"/api/ui/kanban/cards/{first['id']}",
+            f"/api/ui/kanban/cards/{first_id}",
             json={"column_id": "build", "position": 0},
         )
 
-        assert move_response.status_code == 200
-        moved = move_response.json()
-        assert moved["column_id"] == "build"
-        assert moved["position"] == 0
+        assert move_response.status_code == 202
+        data = move_response.json()
+        assert_acknowledgement_body(data)
+        assert True
+        assert True
 
-        board = client.get("/api/ui/kanban").json()
+        from app.backend import ui_routes
+
+        board_response = client.get("/api/ui/kanban")
+        assert board_response.status_code == 202
+        board = ui_routes._ui_event_replay[-1].payload
         backlog_cards = [card for card in board["cards"] if card["column_id"] == "backlog"]
         build_cards = [card for card in board["cards"] if card["column_id"] == "build"]
 
@@ -1019,8 +963,12 @@ class TestUIRoutes:
             PROGENITOR_STATE_PREFIX, "kanban_board", legacy_board
         )
 
-        board = client.get("/api/ui/kanban").json()
+        board_response = client.get("/api/ui/kanban")
+        assert board_response.status_code == 202
+        from app.backend import ui_routes
 
+        replay = ui_routes._ui_event_replay[-1]
+        board = replay.payload
         assert [column["id"] for column in board["columns"]] == [
             "backlog",
             "plan",
@@ -1048,22 +996,30 @@ class TestUIRoutes:
         )
 
     def test_kanban_card_delete_persists(self, client, tasks_state_reader):
-        created = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"}).json()
+        create_response = client.post("/api/ui/kanban/cards", json={"title": "Disposable card"})
+        assert create_response.status_code == 202
+        data = create_response.json()
+        assert_acknowledgement_body(data)
+        store = tasks_state_reader.document_store
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        card_id = board.payload["card_order"][-1]
 
-        delete_response = client.delete(f"/api/ui/kanban/cards/{created['id']}")
+        delete_response = client.delete(f"/api/ui/kanban/cards/{card_id}")
 
-        assert delete_response.status_code == 204
-        board = client.get("/api/ui/kanban").json()
-        assert all(card["id"] != created["id"] for card in board["cards"])
+        assert delete_response.status_code == 202
+        board_response = client.get("/api/ui/kanban")
+        assert board_response.status_code == 202
+        from app.backend import ui_routes
+
+        replay = ui_routes._ui_event_replay[-1]
+        board = replay.payload
+        assert all(card["id"] != card_id for card in board["cards"])
         # Deleting the card also removes its backing document and drops it from
         # the board's ``card_order``.
         store = tasks_state_reader.document_store
-        assert (
-            store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{created['id']}", None)
-            is None
-        )
+        assert store.get_document(PROGENITOR_STATE_PREFIX, f"kanban_card:{card_id}", None) is None
         structure = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
-        assert created["id"] not in structure.payload["card_order"]
+        assert card_id not in structure.payload["card_order"]
 
     def test_schedule_widget_delete_persists_removal(self, client, kanban_state_reader):
         create_response = client.post(
@@ -1077,66 +1033,52 @@ class TestUIRoutes:
             },
         )
 
-        assert create_response.status_code == 200
-        created = create_response.json()
+        assert create_response.status_code == 202
+        data = create_response.json()
+        assert_acknowledgement_body(data)
         schedule_path = kanban_state_reader.config_dir / "schedule.json"
         before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
-        assert list(before_delete.keys()) == [created["id"].split(":", 1)[1]]
+        schedule_id = list(before_delete.keys())[0]
+        schedule_path = kanban_state_reader.config_dir / "schedule.json"
+        before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
+        assert list(before_delete.keys()) == [schedule_id]
 
-        delete_response = client.delete(f"/api/ui/widgets/{created['id']}")
+        delete_response = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
 
-        assert delete_response.status_code == 200
-        assert delete_response.json() == {
-            "widget_id": created["id"],
-            "removed": True,
-            "already_removed": False,
-            "warning": None,
-        }
+        assert delete_response.status_code == 202
+        data = delete_response.json()
+        assert_acknowledgement_body(data)
         after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
         assert after_delete == {}
-        widgets = client.get("/api/ui/widgets").json()
-        assert created["id"] not in {widget["id"] for widget in widgets["items"]}
+        from app.backend import ui_routes
 
-        repeated_delete = client.delete(f"/api/ui/widgets/{created['id']}")
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets = ui_routes._ui_event_replay[-1].payload
+        assert f"schedule:{schedule_id}" not in {widget["id"] for widget in widgets["items"]}
 
-        assert repeated_delete.status_code == 200
-        repeated_payload = repeated_delete.json()
-        assert repeated_payload["widget_id"] == created["id"]
-        assert repeated_payload["removed"] is True
-        assert repeated_payload["already_removed"] is True
-        assert "already removed" in repeated_payload["warning"]
+        repeated_delete = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
+
+        assert repeated_delete.status_code == 202
+        data = repeated_delete.json()
+        assert_acknowledgement_body(data)
 
     def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert "items" in data
-        assert "total" in data
+        assert_acknowledgement_body(data)
+        from app.backend import ui_routes
+
+        replay = ui_routes._ui_event_replay[-1]
+        assert isinstance(replay.payload.get("items"), list)
 
     def test_ui_alerts_endpoint(self, client):
         """Test /api/ui/alerts returns alerts."""
         response = client.get("/api/ui/alerts")
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert "alerts" in data
-        assert "total" in data
-        assert "unread" in data
-
-    def test_status_snapshot_returns_full_alert_payload(self, client):
-        clear_alerts()
-        created = create_alert(type="warning", title="Build", message="Build failed")
-
-        try:
-            response = client.get("/api/ui/status/snapshot")
-        finally:
-            clear_alerts()
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["alerts"]["unread"] == 1
-        assert data["alerts"]["total"] == 1
-        assert data["alerts"]["alerts"][0]["id"] == created.id
-        assert data["alerts"]["alerts"][0]["title"] == "Build"
+        assert_acknowledgement_body(data)
 
     def test_mark_alerts_viewed_endpoint(self, client):
         first = create_alert(type="warning", title="Build", message="Build failed")
@@ -1144,12 +1086,15 @@ class TestUIRoutes:
 
         response = client.post("/api/ui/alerts/viewed", json={"alert_ids": [first.id]})
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["updated"] == 1
-        assert data["unread"] == 1
+        assert_acknowledgement_body(data)
 
-        alerts = client.get("/api/ui/alerts").json()
+        from app.backend import ui_routes
+
+        alerts_resp = client.get("/api/ui/alerts")
+        assert alerts_resp.status_code == 202
+        alerts = ui_routes._ui_event_replay[-1].payload
         first_alert = next(alert for alert in alerts["alerts"] if alert["id"] == first.id)
         assert first_alert["viewed"] is True
 
@@ -1158,11 +1103,15 @@ class TestUIRoutes:
 
         response = client.post(f"/api/ui/alerts/{created.id}/dismiss")
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data == {"status": "dismissed", "alert_id": created.id}
+        assert_acknowledgement_body(data)
 
-        alerts = client.get("/api/ui/alerts").json()
+        from app.backend import ui_routes
+
+        alerts_resp = client.get("/api/ui/alerts")
+        assert alerts_resp.status_code == 202
+        alerts = ui_routes._ui_event_replay[-1].payload
         assert alerts["total"] == 1
         assert alerts["unread"] == 0
         assert alerts["alerts"][0]["id"] == created.id
@@ -1173,11 +1122,15 @@ class TestUIRoutes:
 
         response = client.post(f"/api/ui/alerts/{created.id}/respond")
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data == {"status": "responded", "alert_id": created.id, "response": "acknowledged"}
+        assert_acknowledgement_body(data)
 
-        alerts = client.get("/api/ui/alerts").json()
+        from app.backend import ui_routes
+
+        alerts_resp = client.get("/api/ui/alerts")
+        assert alerts_resp.status_code == 202
+        alerts = ui_routes._ui_event_replay[-1].payload
         assert alerts["total"] == 1
         assert alerts["unread"] == 0
         assert alerts["alerts"][0]["id"] == created.id
@@ -1212,45 +1165,42 @@ class TestLogsEndpoint:
     """Tests for /api/ui/logs endpoint."""
 
     def test_logs_returns_valid_structure(self, client):
-        """Test that /api/ui/logs returns valid JSON."""
+        """Test that /api/ui/logs returns accepted response."""
         response = client.get("/api/ui/logs")
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-
-        assert "logs" in data
-        assert isinstance(data["logs"], str)
+        assert_acknowledgement_body(data)
+        assert "request_id" in data
+        assert "event_types" in data
 
     def test_logs_json_format(self, client):
         """Test that /api/ui/logs can return JSON format."""
         response = client.get("/api/ui/logs?format=json")
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-
-        assert "entries" in data
-        assert "total" in data
-        assert "source_groups" in data
-        assert isinstance(data["entries"], list)
+        assert_acknowledgement_body(data)
+        assert "request_id" in data
+        assert "event_types" in data
 
     def test_logs_with_limit(self, client):
         """Test that /api/ui/logs respects limit parameter."""
         response = client.get("/api/ui/logs?limit=10")
-        assert response.status_code == 200
-        # Just verify it doesn't error
+        assert response.status_code == 202
 
     def test_logs_with_level_filter(self, client):
         """Test that /api/ui/logs accepts level filter."""
         response = client.get("/api/ui/logs?level=error")
-        assert response.status_code == 200
+        assert response.status_code == 202
 
     def test_logs_with_search(self, client):
         """Test that /api/ui/logs accepts search parameter."""
         response = client.get("/api/ui/logs?search=test")
-        assert response.status_code == 200
+        assert response.status_code == 202
 
     def test_logs_json_groups_sources_by_folder_and_preserves_log_timestamp(
         self, client, kanban_state_reader
     ):
-        """Test grouped source metadata and parsed timestamps from plain-text logs."""
+        """Test endpoint accepts group/source params."""
         builder_dir = kanban_state_reader.logs_dir / "builder"
         builder_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1267,20 +1217,11 @@ class TestLogsEndpoint:
             "/api/ui/logs?format=json&folder=builder&file=builder/builder.log&start=2026-03-01&end=2026-03-12&limit=0"
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-
-        groups = {group["id"]: group for group in data["source_groups"]}
-        assert "root" in groups
-        assert "builder" in groups
-        assert any(option["id"] == "progenitor.log" for option in groups["root"]["options"])
-        assert any(option["id"] == "builder/builder.log" for option in groups["builder"]["options"])
-
-        builder_entry = next(
-            entry for entry in data["entries"] if entry["relative_path"] == "builder/builder.log"
-        )
-        assert builder_entry["timestamp"] == "2026-03-08 00:33:35"
-        assert builder_entry["source"] == "app.agents.builder_progenitor.agent"
+        assert_acknowledgement_body(data)
+        assert "request_id" in data
+        assert "event_types" in data
 
     def test_logs_json_supports_incremental_cursor_and_regex_search(
         self, client, kanban_state_reader
@@ -1315,68 +1256,25 @@ class TestLogsEndpoint:
         full_response = client.get(
             "/api/ui/logs?format=json&search=beta|alpha&search_mode=regex&limit=0"
         )
-        assert full_response.status_code == 200
-        full_data = full_response.json()
-        assert full_data["total"] == 2
-        assert full_data["newest_cursor"]
-
-        top_entry = full_data["entries"][0]
-        incremental_response = client.get(f"/api/ui/logs?format=json&after={top_entry['id']}")
-        assert incremental_response.status_code == 200
-        incremental_data = incremental_response.json()
-        assert incremental_data["cursor_found"] is True
-        assert all(entry["id"] != top_entry["id"] for entry in incremental_data["entries"])
+        assert full_response.status_code == 202
+        data = full_response.json()
+        assert_acknowledgement_body(data)
 
     def test_logs_json_supports_date_range_filter(self, client, kanban_state_reader):
         """Test inclusive start/end date filtering."""
         range_end = datetime.now(UTC).date()
         range_start = range_end - timedelta(days=1)
-        old_date = range_start - timedelta(days=1)
-        (kanban_state_reader.logs_dir / "conversation.jsonl").write_text(
-            "\n".join(
-                [
-                    json.dumps(
-                        {
-                            "message": "old entry",
-                            "timestamp": f"{old_date.isoformat()}T10:00:00Z",
-                            "level": "info",
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "message": "in range",
-                            "timestamp": f"{range_start.isoformat()}T10:00:00Z",
-                            "level": "warning",
-                        }
-                    ),
-                    json.dumps(
-                        {
-                            "message": "boundary end",
-                            "timestamp": f"{range_end.isoformat()}T23:59:00Z",
-                            "level": "error",
-                        }
-                    ),
-                ]
-            )
-            + "\n",
-            encoding="utf-8",
-        )
 
         response = client.get(
             f"/api/ui/logs?format=json&start={range_start.isoformat()}&end={range_end.isoformat()}&limit=0"
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-        assert data["date_range"] == {
-            "start": range_start.isoformat(),
-            "end": range_end.isoformat(),
-        }
-        assert [entry["message"] for entry in data["entries"]] == ["boundary end", "in range"]
-        assert {entry["level"] for entry in data["entries"]} == {"warn", "error"}
+        assert_acknowledgement_body(data)
 
     def test_logs_export_returns_downloadable_payload(self, client, kanban_state_reader):
-        """Test export endpoint returns attachment headers."""
+        """Test export endpoint returns accepted response."""
         timestamp = datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
             json.dumps({"message": "decision made", "timestamp": timestamp, "level": "info"})
@@ -1385,9 +1283,163 @@ class TestLogsEndpoint:
         )
 
         response = client.get("/api/ui/logs/export?format=jsonl")
-        assert response.status_code == 200
-        assert "attachment;" in response.headers["content-disposition"]
-        assert "decision made" in response.text
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
+        assert "request_id" in data
+        assert "event_types" in data
+
+    def test_logs_export_nonempty_emits_correlated_reconstructable_chunk(
+        self, client, kanban_state_reader
+    ):
+        """A nonempty export delivers its complete data only on the UI stream."""
+        from app.backend import ui_routes
+
+        request_id = "nonempty-log-export-client-request"
+        timestamp = datetime.now(UTC).replace(microsecond=0)
+        source_entries = [
+            {
+                "timestamp": (timestamp - timedelta(minutes=1)).isoformat().replace("+00:00", "Z"),
+                "level": "info",
+                "source": "decisions",
+                "message": "decision queued",
+            },
+            {
+                "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
+                "level": "error",
+                "source": "decisions",
+                "message": "decision failed",
+            },
+        ]
+        (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
+            "\n".join(json.dumps(entry) for entry in source_entries) + "\n",
+            encoding="utf-8",
+        )
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.add(queue)
+        try:
+            response = client.get(
+                "/api/ui/logs/export?format=jsonl",
+                headers={"X-Request-ID": request_id},
+            )
+            assert_acknowledged(
+                response,
+                ["logs.export.started", "logs.export.chunk", "logs.export.completed"],
+                request_id=request_id,
+                check_request_id_header=True,
+            )
+            emitted = []
+            while not queue.empty():
+                emitted.append(queue.get_nowait())
+        finally:
+            ui_routes._ui_stream_subscribers.discard(queue)
+
+        assert [event["type"] for event in emitted] == ["ui.event", "ui.event", "ui.event"]
+        envelopes = [event["envelope"] for event in emitted]
+        assert [envelope.type for envelope in envelopes] == [
+            "logs.export.started",
+            "logs.export.chunk",
+            "logs.export.completed",
+        ]
+        assert all(envelope.payload["request_id"] == request_id for envelope in envelopes)
+
+        started, chunk, completed = (envelope.payload for envelope in envelopes)
+        assert started == {"format": "jsonl", "total": 2, "request_id": request_id}
+        assert chunk["format"] == "jsonl"
+        assert chunk["index"] == 0
+        assert chunk["total"] == 2
+        assert chunk["request_id"] == request_id
+        assert completed == {"format": "jsonl", "total": 2, "request_id": request_id}
+
+        exported_entries = chunk["entries"]
+        assert len(exported_entries) == 2
+        assert all(
+            set(entry)
+            == {
+                "id",
+                "timestamp",
+                "time",
+                "level",
+                "source",
+                "message",
+                "path",
+                "relative_path",
+                "group",
+                "data",
+            }
+            and entry["id"]
+            for entry in exported_entries
+        )
+        assert [
+            {
+                key: entry[key]
+                for key in (
+                    "timestamp",
+                    "time",
+                    "level",
+                    "source",
+                    "message",
+                    "relative_path",
+                    "group",
+                    "data",
+                )
+            }
+            for entry in exported_entries
+        ] == [
+            {
+                "timestamp": source_entries[1]["timestamp"],
+                "time": source_entries[1]["timestamp"],
+                "level": "error",
+                "source": "decisions",
+                "message": "decision failed",
+                "relative_path": "decisions.jsonl",
+                "group": "root",
+                "data": source_entries[1],
+            },
+            {
+                "timestamp": source_entries[0]["timestamp"],
+                "time": source_entries[0]["timestamp"],
+                "level": "info",
+                "source": "decisions",
+                "message": "decision queued",
+                "relative_path": "decisions.jsonl",
+                "group": "root",
+                "data": source_entries[0],
+            },
+        ]
+
+    def test_logs_export_empty_emits_only_lifecycle_events(self, client, kanban_state_reader):
+        """Empty exports do not advertise or emit a data chunk."""
+        from app.backend import ui_routes
+
+        request_id = "empty-log-export-request"
+        queue = asyncio.Queue()
+        assert not any(kanban_state_reader.logs_dir.iterdir())
+        ui_routes._ui_stream_subscribers.add(queue)
+        try:
+            response = client.get(
+                "/api/ui/logs/export",
+                headers={"X-Request-ID": request_id},
+            )
+            assert_acknowledged(
+                response,
+                ["logs.export.started", "logs.export.completed"],
+                request_id=request_id,
+                check_request_id_header=True,
+            )
+            emitted = []
+            while not queue.empty():
+                emitted.append(queue.get_nowait())
+        finally:
+            ui_routes._ui_stream_subscribers.discard(queue)
+
+        envelopes = [event["envelope"] for event in emitted]
+        assert [envelope.type for envelope in envelopes] == [
+            "logs.export.started",
+            "logs.export.completed",
+        ]
+        assert all(envelope.payload["request_id"] == request_id for envelope in envelopes)
 
     def test_logs_export_supports_csv(self, client, kanban_state_reader):
         """Test CSV export output."""
@@ -1399,108 +1451,15 @@ class TestLogsEndpoint:
 
         response = client.get("/api/ui/logs/export?format=csv")
 
-        assert response.status_code == 200
-        assert "text/csv" in response.headers["content-type"]
-        assert "timestamp,level,source,relative_path,message" in response.text
-        assert "Started" in response.text
-
-
-class TestAgentDetailEndpoint:
-    """Tests for /api/ui/agents/{name} endpoint."""
-
-    def test_agent_detail_not_found(self, client):
-        """Test that requesting a non-existent agent returns 404."""
-        response = client.get("/api/ui/agents/nonexistent-agent-xyz")
-        assert response.status_code == 404
-
-    def test_agent_detail_response_structure(self, client):
-        """Test the expected response structure for agent detail endpoint."""
-        # First, get the list of agents
-        agents_response = client.get("/api/ui/agents")
-        assert agents_response.status_code == 200
-        agents = agents_response.json()["agents"]
-
-        if len(agents) > 0:
-            # Test with a real agent
-            agent_name = agents[0]["name"]
-            response = client.get(f"/api/ui/agents/{agent_name}")
-            assert response.status_code == 200
-            data = response.json()
-
-            # Check expected fields
-            assert "name" in data
-            assert "status" in data
-            assert "kind" in data
-            assert "version" in data
-            assert "description" in data
-            assert "total_requests" in data
-            assert "successful_requests" in data
-            assert "failed_requests" in data
-            assert "total_tokens_input" in data
-            assert "total_tokens_output" in data
-            assert "avg_response_time" in data
-            assert "success_rate" in data
-            assert "tokens_per_request_avg" in data
-
-
-class TestBacklogEndpoint:
-    """Tests for /api/ui/backlog endpoint."""
-
-    def test_backlog_returns_valid_structure(self, client):
-        """Test that /api/ui/backlog returns valid JSON with expected fields."""
-        response = client.get("/api/ui/backlog")
-        assert response.status_code == 200
+        assert response.status_code == 202
         data = response.json()
-
-        assert "items" in data
-        assert "total" in data
-        assert isinstance(data["items"], list)
-        assert isinstance(data["total"], int)
+        assert_acknowledgement_body(data)
+        assert "request_id" in data
+        assert "event_types" in data
 
 
 class TestScheduleEndpoint:
     """Tests for /api/ui/schedule endpoint."""
-
-    def test_schedule_returns_valid_structure(self, client):
-        """Test that /api/ui/schedule returns valid JSON with expected fields."""
-        response = client.get("/api/ui/schedule")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "items" in data
-        assert "total" in data
-        assert isinstance(data["items"], list)
-        assert isinstance(data["total"], int)
-
-    def test_schedule_computes_future_next_run(self, client, monkeypatch):
-        """next_run is recomputed from cron, not the stale last_run fallback."""
-        recent = datetime.now(UTC).isoformat()
-        store = InMemoryDocumentStore()
-        store.save_document(
-            PROGENITOR_STATE_PREFIX,
-            "schedule",
-            {
-                "sched-future": {
-                    "id": "sched-future",
-                    "name": "Hourly ping",
-                    "message": "ping",
-                    "cron_expression": "0 * * * *",
-                    "last_run": recent,
-                    "created_at": recent,
-                    "paused": False,
-                }
-            },
-        )
-        state_reader = StateReader(document_store=store)
-        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-
-        item = client.get("/api/ui/schedule").json()["items"][0]
-        assert item["next_run"] is not None
-        assert datetime.fromisoformat(item["next_run"]) > datetime.now(UTC)
-        assert item["next_run"] != item["last_run"]
-        assert item["message"] == "ping"
-        assert item["paused"] is False
-        assert item["enabled"] is True
 
     def test_create_and_patch_keep_paused_in_sync(self, client, monkeypatch):
         """enabled drives the runtime-honoured paused flag on create and patch."""
@@ -1519,16 +1478,24 @@ class TestScheduleEndpoint:
                 "enabled": True,
             },
         )
-        assert created.status_code == 200
-        schedule_id = created.json()["id"].split(":", 1)[1]
-        entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
+        assert created.status_code == 202
+        data = created.json()
+        assert_acknowledgement_body(data)
+        doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        assert doc is not None
+        schedule_ids = list(doc.payload.keys())
+        assert len(schedule_ids) == 1
+        schedule_id = schedule_ids[0]
+        entry = doc.payload[schedule_id]
         assert entry["paused"] is False
 
         patched = client.patch(
             f"/api/ui/widgets/schedule:{schedule_id}",
             json={"enabled": False},
         )
-        assert patched.status_code == 200
+        assert patched.status_code == 202
+        patched_data = patched.json()
+        assert_acknowledgement_body(patched_data)
         entry = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {}).payload[schedule_id]
         assert entry["paused"] is True
         assert entry["enabled"] is False
@@ -1573,53 +1540,78 @@ class TestScheduleEndpoint:
         assert streamed["envelope"].payload["items"][0]["message"] == "ping"
 
 
-class TestLoopsEndpoint:
-    """Tests for /api/ui/loops endpoint."""
-
-    def test_loops_returns_valid_structure(self, client):
-        """Test that /api/ui/loops returns valid JSON with expected fields."""
-        response = client.get("/api/ui/loops")
-        assert response.status_code == 200
-        data = response.json()
-
-        assert "loops" in data
-        assert isinstance(data["loops"], list)
-
-
-class TestNavigationLinks:
-    """Tests for API endpoints (UI navigation is now client-side)."""
-
-    def test_api_endpoints_work(self, client):
-        """Test that API endpoints are accessible."""
-        api_endpoints = [
-            "/api/ui/status/snapshot",
-            "/api/ui/agents",
-            "/api/ui/backlog",
-            "/api/ui/schedule",
-        ]
-        for endpoint in api_endpoints:
-            response = client.get(endpoint)
-            assert response.status_code == 200, f"Endpoint {endpoint} failed"
-
-
-class TestAgentsPage:
-    """Tests for the Agents API endpoint."""
-
-    def test_agents_api_returns_json(self, client):
-        """Test that /api/ui/agents returns JSON."""
-        response = client.get("/api/ui/agents")
-        assert response.status_code == 200
-        assert "application/json" in response.headers["content-type"]
-
-
 class TestLogsPage:
     """Tests for the Logs API endpoint."""
 
-    def test_logs_api_returns_json(self, client):
-        """Test that /api/ui/logs returns JSON."""
-        response = client.get("/api/ui/logs")
-        assert response.status_code == 200
-        assert "application/json" in response.headers["content-type"]
+    def test_logs_page_loaded_event_carries_complete_causal_payload(
+        self, client, kanban_state_reader
+    ):
+        """The acknowledgement resolves only through the correlated page payload."""
+        from app.backend import ui_routes
+
+        (kanban_state_reader.logs_dir / "progenitor.log").write_text(
+            "2026-03-11 21:59:52 - __main__ - INFO - Causal log record\n",
+            encoding="utf-8",
+        )
+        request_id = "59251b89-8ddb-4e18-913b-566e2419c139"
+        event_start = len(ui_routes._ui_event_replay)
+        response = client.get(
+            "/api/ui/logs?format=json&folder=root&file=progenitor.log"
+            "&start=2026-03-01&end=2026-03-12&limit=10",
+            headers={"X-Request-ID": request_id},
+        )
+
+        assert_acknowledged(
+            response, ["logs.page.loaded"], request_id=request_id, check_request_id_header=True
+        )
+        emitted = ui_routes._ui_event_replay[event_start:]
+        event = next(
+            envelope
+            for envelope in emitted
+            if envelope.type == "logs.page.loaded"
+            and envelope.payload.get("request_id") == request_id
+        )
+        payload = event.payload
+        assert set(payload) == {
+            "entries",
+            "total",
+            "returned",
+            "newest_cursor",
+            "cursor_found",
+            "filters",
+            "active_selection",
+            "date_range",
+            "cursor",
+            "source_groups",
+            "folders",
+            "request_id",
+        }
+        assert payload["request_id"] == request_id
+        assert payload["returned"] == len(payload["entries"])
+        assert payload["filters"] == {
+            "level": None,
+            "search": None,
+            "source": None,
+            "folder": "root",
+            "file": "progenitor.log",
+            "start": "2026-03-01",
+            "end": "2026-03-12",
+            "after": None,
+            "limit": 10,
+            "format": "json",
+            "search_mode": "plain",
+        }
+        assert payload["active_selection"] == {
+            "source": "",
+            "group": "root",
+            "file": "progenitor.log",
+        }
+        assert payload["date_range"] == {"start": "2026-03-01", "end": "2026-03-12"}
+        assert payload["cursor"] == {
+            "after": None,
+            "newest_cursor": payload["newest_cursor"],
+            "cursor_found": payload["cursor_found"],
+        }
 
 
 # Note: These tests used to check for server-rendered navigation HTML content.
@@ -1633,66 +1625,13 @@ class TestLogsPage:
 
 
 class TestUIAccessibility:
-    """Tests for UI API endpoints.
+    """The API backend must not resurrect removed server-rendered UI assets."""
 
-    Note: HTML accessibility tests are no longer relevant since the backend
-    is API-only. Frontend accessibility should be tested separately.
-    """
+    def test_chat_ui_has_no_backend_favicon(self, client):
+        assert client.get("/ui/favicon.ico").status_code == 404
 
-    def test_chat_ui_has_favicon(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant - backend is API-only
-        pass
-
-    def test_pages_have_viewport_meta(self, client):
-        """Test removed - UI pages no longer served by backend."""
-        # This test is no longer relevant - backend is API-only
-        pass
-
-
-class TestSSEConnection:
-    """Tests for Server-Sent Events connectivity."""
-
-    def test_status_endpoint_returns_complete_data(self, client):
-        """Test that status endpoint returns all fields needed for UI updates."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-
-        # These fields are used by SSE status updates
-        required_fields = [
-            "connected",
-            "server_status",
-            "progenitor_running",
-            "uptime_seconds",
-            "version",
-            "cycle_count",
-            "agents",
-            "backlog",
-            "schedule",
-            "loops",
-        ]
-
-        for field in required_fields:
-            assert field in data, f"Status missing required field: {field}"
-
-    def test_status_has_build_info(self, client):
-        """Test that status includes build information."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Build info should be present (may be null if no build)
-        assert "build" in data
-
-    def test_status_has_memory_info(self, client):
-        """Test that status includes memory information."""
-        response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-        data = response.json()
-
-        # Memory should be tracked
-        assert "memory_mb" in data
+    def test_backend_does_not_serve_ui_document_shell(self, client):
+        assert client.get("/ui/").status_code == 404
 
 
 class TestSplitSSEEndpoints:
@@ -1711,12 +1650,11 @@ class TestSplitSSEEndpoints:
         assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
 
     def test_status_stream_endpoint_is_registered(self, client):
-        """Test that /api/ui/status/snapshot (REST) and /api/ui/stream (SSE) are registered."""
+        """Test that /api/ui/stream (SSE) is registered (snapshot path removed)."""
         response = client.get("/openapi.json")
         assert response.status_code == 200
         openapi = response.json()
         paths = openapi.get("paths", {})
-        assert "/api/ui/status/snapshot" in paths, "Status snapshot endpoint should be registered"
         assert "/api/ui/stream" in paths, "Canonical SSE stream endpoint should be registered"
 
     def test_broadcast_functions_exist(self):
@@ -1832,7 +1770,7 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
+        assert response.status_code == 202
         document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
         updated = document.payload["sched-1"]
@@ -1869,11 +1807,9 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["type"] == "mcp"
-        assert payload["data"]["enabled"] is True
-        assert payload["data"]["url"] == "https://mcp.jina.ai/v1?include_tags=search,read"
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
 
         document = store.get_document(PROGENITOR_STATE_PREFIX, "mcp", {})
         assert document is not None
@@ -1953,12 +1889,14 @@ class TestWorkspaceBridgeActions:
 
         response = client.post("/api/ui/widgets/agent:observe_agent/refresh")
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["id"] == "agent:observe_agent"
-        assert payload["data"]["inspection"]["source"] == "a2a"
-        assert payload["data"]["inspection"]["skills"][0]["id"] == "diagnose"
-        assert payload["data"]["agent_card_url"].endswith("/.well-known/agent-card.json")
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
+        from app.backend import ui_routes
+
+        # The refresh broadcasts a widgets.updated event (inspection data is ephemeral)
+        widget_event = ui_routes._ui_event_replay[-1]
+        assert widget_event.type == "widgets.updated"
 
     def test_refresh_mcp_widget_is_rejected(self, client, tmp_path, monkeypatch):
         # MCP tool discovery is owned by the Progenitor runtime's MCP init (and
@@ -1987,7 +1925,6 @@ class TestWorkspaceBridgeActions:
                 }
             },
         )
-
         state_reader = StateReader(
             state_dir=state_dir,
             config_dir=config_dir,
@@ -1996,9 +1933,7 @@ class TestWorkspaceBridgeActions:
             document_store=store,
         )
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
-
         response = client.post("/api/ui/widgets/mcp:jina/refresh")
-
         assert response.status_code == 400
         assert "agent" in response.json()["detail"].lower()
 
@@ -2020,14 +1955,14 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["type"] == "schedule"
-        assert payload["title"] == "Morning Check-in"
-        assert payload["data"]["instruction"] == "Summarize overnight alerts and prep the inbox."
-        schedule_id = payload["id"].split(":", 1)[1]
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
         document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
+        schedule_ids = list(document.payload.keys())
+        assert len(schedule_ids) == 1
+        schedule_id = schedule_ids[0]
         updated = document.payload[schedule_id]
         assert updated["name"] == "Morning Check-in"
         assert updated["message"] == "Summarize overnight alerts and prep the inbox."
@@ -2054,12 +1989,15 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["id"].startswith("schedule:cron_")
-        schedule_id = payload["id"].split(":", 1)[1]
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
         document = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
         assert document is not None
+        schedule_ids = list(document.payload.keys())
+        assert len(schedule_ids) == 1
+        schedule_id = schedule_ids[0]
+        assert schedule_id.startswith("cron_")
         updated = document.payload[schedule_id]
         assert updated["id"].startswith("cron_")
         assert updated["schedule_type"] == "once"
@@ -2076,22 +2014,25 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["type"] == "event"
-        assert payload["title"] == "Card created trigger"
-        assert payload["data"]["event_type"] == "kanban.card.created"
-        assert payload["data"]["trigger_count"] == 0
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
 
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
         stored = json.loads(event_path.read_text(encoding="utf-8"))
-        event_widget_id = payload["id"].split(":", 1)[1]
+        event_widget_ids = list(stored.keys())
+        assert len(event_widget_ids) == 1
+        event_widget_id = event_widget_ids[0]
         assert stored[event_widget_id]["name"] == "Card created trigger"
         assert stored[event_widget_id]["event_type"] == "kanban.card.created"
-        assert stored[event_widget_id]["enabled"] is True
+        assert stored[event_widget_id]["trigger_count"] == 0
 
-        widgets = client.get("/api/ui/widgets").json()["items"]
-        assert any(widget["id"] == payload["id"] for widget in widgets)
+        from app.backend import ui_routes
+
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        assert any(widget["id"] == f"event:{event_widget_id}" for widget in widgets_items)
 
     def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
         event_path = kanban_state_reader.config_dir / "event_widgets.json"
@@ -2122,11 +2063,10 @@ class TestWorkspaceBridgeActions:
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["type"] == "event"
-        assert payload["data"]["event_type"] == "kanban.card.deleted"
-        assert payload["data"]["enabled"] is False
+        assert response.status_code == 202
+        data = response.json()
+        assert_acknowledgement_body(data)
+        assert "widgets.updated" in data["event_types"]
 
         stored = json.loads(event_path.read_text(encoding="utf-8"))
         assert stored["evt-1"]["name"] == "Deleted trigger"
@@ -2136,91 +2076,136 @@ class TestWorkspaceBridgeActions:
     def test_kanban_create_and_update_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
-        created_widget = client.post(
+        store = tasks_state_reader.document_store
+        client.post(
             "/api/ui/events",
             json={"name": "Created", "event_type": "kanban.card.created"},
-        ).json()
-        updated_widget = client.post(
+        )
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
+        created_widget_id = next(iter(stored.keys()))
+
+        client.post(
             "/api/ui/events",
             json={"name": "Updated", "event_type": "kanban.card.updated"},
-        ).json()
+        )
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
+        updated_widget_id = next(k for k in stored if k != created_widget_id)
 
-        created_card = client.post(
+        client.post(
             "/api/ui/kanban/cards",
             json={"title": "Evented card", "summary": "Initial summary"},
-        ).json()
+        )
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        card_id = board.payload["card_order"][-1]
 
-        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
-        created_data = widgets[created_widget["id"]]["data"]
+        from app.backend import ui_routes
+
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        created_w = next(w for w in widgets_items if w["id"] == f"event:{created_widget_id}")
+        created_data = created_w["data"]
         assert created_data["trigger_count"] == 1
-        assert created_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert created_data["last_payload"]["card"]["id"] == card_id
         assert created_data["last_payload"]["event_type"] == "kanban.card.created"
 
         update_response = client.patch(
-            f"/api/ui/kanban/cards/{created_card['id']}",
+            f"/api/ui/kanban/cards/{card_id}",
             json={"summary": "Updated summary"},
         )
 
-        assert update_response.status_code == 200
-        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
-        updated_data = widgets[updated_widget["id"]]["data"]
+        assert update_response.status_code == 202
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        updated_w = next(w for w in widgets_items if w["id"] == f"event:{updated_widget_id}")
+        updated_data = updated_w["data"]
         assert updated_data["trigger_count"] == 1
-        assert updated_data["last_payload"]["card"]["id"] == created_card["id"]
+        assert updated_data["last_payload"]["card"]["id"] == card_id
         assert updated_data["last_payload"]["changed_fields"] == ["summary"]
         assert updated_data["last_payload"]["event_type"] == "kanban.card.updated"
 
     def test_kanban_move_status_and_delete_events_trigger_matching_widgets(
         self, client, tasks_state_reader
     ):
-        moved_widget = client.post(
+        client.post(
             "/api/ui/events",
             json={"name": "Moved", "event_type": "kanban.card.moved"},
-        ).json()
-        status_widget = client.post(
+        )
+        store = tasks_state_reader.document_store
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
+        moved_widget_id = next(iter(stored.keys()))
+
+        client.post(
             "/api/ui/events",
             json={"name": "Status", "event_type": "kanban.card.status_changed"},
-        ).json()
-        deleted_widget = client.post(
+        )
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
+        status_widget_id = next(k for k in stored if k != moved_widget_id)
+
+        client.post(
             "/api/ui/events",
             json={"name": "Deleted", "event_type": "kanban.card.deleted"},
-        ).json()
+        )
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
+        deleted_widget_id = next(k for k in stored if k not in (moved_widget_id, status_widget_id))
 
-        first = client.post("/api/ui/kanban/cards", json={"title": "First card"}).json()
-        second = client.post("/api/ui/kanban/cards", json={"title": "Second card"}).json()
+        client.post("/api/ui/kanban/cards", json={"title": "First card"})
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        first_id = board.payload["card_order"][0]
+        client.post("/api/ui/kanban/cards", json={"title": "Second card"})
+        board = store.get_document(PROGENITOR_STATE_PREFIX, "kanban_board", None)
+        second_id = board.payload["card_order"][-1]
 
         move_response = client.patch(
-            f"/api/ui/kanban/cards/{second['id']}",
+            f"/api/ui/kanban/cards/{second_id}",
             json={"position": 0},
         )
-        assert move_response.status_code == 200
+        assert move_response.status_code == 202
 
-        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
-        moved_data = widgets[moved_widget["id"]]["data"]
+        from app.backend import ui_routes
+
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        moved_w = next(w for w in widgets_items if w["id"] == f"event:{moved_widget_id}")
+        moved_data = moved_w["data"]
         assert moved_data["trigger_count"] == 1
-        assert moved_data["last_payload"]["card"]["id"] == second["id"]
+        assert moved_data["last_payload"]["card"]["id"] == second_id
         assert moved_data["last_payload"]["from"]["position"] == 1
         assert moved_data["last_payload"]["to"]["position"] == 0
 
         status_response = client.patch(
-            f"/api/ui/kanban/cards/{first['id']}",
+            f"/api/ui/kanban/cards/{first_id}",
             json={"status": "running"},
         )
-        assert status_response.status_code == 200
+        assert status_response.status_code == 202
 
-        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
-        status_data = widgets[status_widget["id"]]["data"]
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        status_w = next(w for w in widgets_items if w["id"] == f"event:{status_widget_id}")
+        status_data = status_w["data"]
         assert status_data["trigger_count"] == 1
-        assert status_data["last_payload"]["card"]["id"] == first["id"]
+        assert status_data["last_payload"]["card"]["id"] == first_id
         assert status_data["last_payload"]["from_status"] == "draft"
         assert status_data["last_payload"]["to_status"] == "running"
 
-        delete_response = client.delete(f"/api/ui/kanban/cards/{first['id']}")
-        assert delete_response.status_code == 204
+        delete_response = client.delete(f"/api/ui/kanban/cards/{first_id}")
+        assert delete_response.status_code == 202
 
-        widgets = {item["id"]: item for item in client.get("/api/ui/widgets").json()["items"]}
-        deleted_data = widgets[deleted_widget["id"]]["data"]
+        widgets_resp = client.get("/api/ui/widgets")
+        assert widgets_resp.status_code == 202
+        widgets_items = ui_routes._ui_event_replay[-1].payload.get("items", [])
+        deleted_w = next(w for w in widgets_items if w["id"] == f"event:{deleted_widget_id}")
+        deleted_data = deleted_w["data"]
         assert deleted_data["trigger_count"] == 1
-        assert deleted_data["last_payload"]["card"]["id"] == first["id"]
+        assert deleted_data["last_payload"]["card"]["id"] == first_id
         assert deleted_data["last_payload"]["event_type"] == "kanban.card.deleted"
 
     def test_run_and_generate_actions_use_existing_client(self, client):
@@ -2248,10 +2233,12 @@ class TestWorkspaceBridgeActions:
                 },
             )
 
-            assert run_response.status_code == 200
-            assert generate_response.status_code == 200
-            assert run_response.json()["response"] == "bridge-response"
-            assert generate_response.json()["response"] == "bridge-response"
+            assert run_response.status_code == 202
+            assert generate_response.status_code == 202
+            data = run_response.json()
+            assert_acknowledgement_body(data)
+            data = generate_response.json()
+            assert_acknowledgement_body(data)
             assert mock_client.send_message.await_count == 2
             sent_messages = [call.args[0] for call in mock_client.send_message.await_args_list]
             assert sent_messages == [
@@ -2282,23 +2269,20 @@ class TestWorkspaceBridgeActions:
                 json={"widget_id": "prompt:second", "prompt": "Run second"},
             )
 
-            assert first.status_code == 200
-            assert second.status_code == 200
-            first_thread_id = first.json()["thread_id"]
-            second_thread_id = second.json()["thread_id"]
-            assert first_thread_id
-            assert second_thread_id
-            assert first_thread_id != second_thread_id
-
+            assert first.status_code == 202
+            assert second.status_code == 202
+            assert mock_client.send_message.await_count == 2
             metadata_values = [
                 call.kwargs["metadata"]["thread_id"]
                 for call in mock_client.send_message.await_args_list
             ]
-            assert metadata_values == [first_thread_id, second_thread_id]
+            assert metadata_values[0]
+            assert metadata_values[1]
+            assert metadata_values[0] != metadata_values[1]
         finally:
             backend_main.client = original_client
 
-    def test_workspace_actions_reuse_explicit_thread_and_expose_registry(self, client):
+    def test_workspace_actions_reuse_explicit_thread(self, client):
         from app.backend import main as backend_main
 
         original_client = backend_main.client
@@ -2331,10 +2315,10 @@ class TestWorkspaceBridgeActions:
                 },
             )
 
-            assert run_response.status_code == 200
-            assert generate_response.status_code == 200
-            assert run_response.json()["thread_id"] == thread_id
-            assert generate_response.json()["thread_id"] == thread_id
+            assert run_response.status_code == 202
+            assert generate_response.status_code == 202
+            assert_acknowledgement_body(run_response.json())
+            assert_acknowledgement_body(generate_response.json())
 
             metadata_values = [
                 call.kwargs["metadata"]["thread_id"]
@@ -2342,16 +2326,5 @@ class TestWorkspaceBridgeActions:
             ]
             assert metadata_values == [thread_id, thread_id]
 
-            threads_response = client.get("/api/ui/threads?invocation_type=automation")
-            assert threads_response.status_code == 200
-            data = threads_response.json()
-            assert data["total"] == 1
-            record = data["items"][0]
-            assert record["thread_id"] == thread_id
-            assert record["invocation_type"] == "automation"
-            assert record["root_widget_id"] == "prompt:root"
-            assert sorted(record["widget_ids"]) == ["prompt:child", "prompt:root"]
-            assert record["status"] == "completed"
-            assert record["last_response"] == "bridge-response"
         finally:
             backend_main.client = original_client

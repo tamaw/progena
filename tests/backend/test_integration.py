@@ -25,59 +25,49 @@ def test_endpoints(client):
     backend_main.client = _MockClient()
 
     try:
-        # Test 1: Health check
+        # Test 1: Responses endpoint
         print("=" * 60)
-        print("TEST 1: Health Check")
+        print("TEST 1: Responses API")
         print("=" * 60)
-        response = client.get("/health")
-        print(f"Status: {response.status_code}")
-        print(f"Response: {response.json()}")
-        assert response.status_code == 200
-        print("✓ PASSED\n")
-
-        # Test 2: List models
-        print("=" * 60)
-        print("TEST 2: List Models (/v1/models)")
-        print("=" * 60)
-        response = client.get("/v1/models")
-        print(f"Status: {response.status_code}")
-        data = response.json()
-        print(f"Response: {data}")
-        assert response.status_code == 200
-        assert data["object"] == "list"
-        assert len(data["data"]) > 0
-        print("✓ PASSED\n")
-
-        # Test 3: Responses endpoint
-        print("=" * 60)
-        print("TEST 3: Responses API")
-        print("=" * 60)
+        request_id = "integration-response-request"
         response = client.post(
-            "/v1/responses",
+            "/api/ui/responses",
             json={
                 "model": "progenitor-v1",
                 "input": "Hello!",
             },
+            headers={"X-Request-ID": request_id},
         )
         print(f"Status: {response.status_code}")
         print(f"Response: {response.text[:200]}")
-        assert response.status_code == 200
-        assert response.json()["output"][0]["content"][0]["text"] == "mocked response"
-        print("✓ PASSED\n")
+        assert response.status_code == 202
+        assert response.headers["X-Request-ID"] == request_id
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["chat.response.started"],
+        }
+        print("PASSED\n")
 
-        # Test 4: Simple chat endpoint
+        # Test 2: List models (deleted)
         print("=" * 60)
-        print("TEST 4: Simple Chat")
+        print("TEST 2: List Models (/v1/models) - deleted")
+        print("=" * 60)
+        response = client.get("/v1/models")
+        print(f"Status: {response.status_code}")
+        assert response.status_code == 404
+        print("PASSED\n")
+
+        # Test 3: Simple chat (deleted)
+        print("=" * 60)
+        print("TEST 3: Simple Chat - deleted")
         print("=" * 60)
         response = client.post(
             "/chat",
             json={"message": "Hello, Progenitor!"},
         )
         print(f"Status: {response.status_code}")
-        print(f"Response: {response.text[:200]}")
-        assert response.status_code == 200
-        assert response.json() == {"response": "mocked response"}
-        print("✓ PASSED\n")
+        assert response.status_code == 404
+        print("PASSED\n")
 
         print("=" * 60)
         print("ALL TESTS PASSED!")

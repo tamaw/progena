@@ -13,11 +13,7 @@ from app.backend.alerts import AlertInfo
 from app.backend.client import ProgenitorClient
 from app.backend.config import ChatServerConfig
 from app.backend.main import _build_alert_summary_prompt, _handle_alert_request
-from app.backend.models import (
-    AgentResponse,
-    ResponsePayload,
-    ResponseRequest,
-)
+from app.backend.models import AgentResponse, ResponseRequest
 from app.backend.sse_client import start_sse_client_with_retry
 
 
@@ -46,21 +42,13 @@ class TestChatServerConfig:
 
 
 class TestResponseModels:
-    """Tests for Responses API models."""
+    """Tests for Responses API input models."""
 
-    def test_response_request_and_payload(self):
-        """Test Responses API models."""
+    def test_response_request_defaults(self):
+        """Test Responses API request defaults."""
         req = ResponseRequest(input="Hello")
         assert req.model == "progenitor-v1"
         assert req.stream is False
-
-        payload = ResponsePayload(
-            id="resp-1",
-            model="progenitor-v1",
-            output=[],
-        )
-        assert payload.object == "response"
-        assert payload.model == "progenitor-v1"
 
 
 class TestProgenitorClient:
@@ -260,42 +248,28 @@ class TestChatServerAPI:
 
         return TestClient(app)
 
-    def test_health_check(self, test_client):
-        """Test health check endpoint."""
-        response = test_client.get("/health")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] in ("ok", "draining")
-        assert "name" in data
-        assert "version" in data
-        assert "uptime_seconds" in data
-
     def test_list_models(self, test_client):
-        """Test models listing endpoint."""
+        """Test models listing endpoint (deleted - should return 404)."""
         response = test_client.get("/v1/models")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["object"] == "list"
-        assert len(data["data"]) >= 1
+        assert response.status_code == 404
 
-    def test_responses_no_input(self, test_client):
-        """Test responses endpoint with empty input."""
+    def test_legacy_responses_route_is_absent(self, test_client):
+        """The retired browser generation route must not be routable."""
         response = test_client.post(
             "/v1/responses",
             json={"model": "test", "input": ""},
         )
-        assert response.status_code == 400
+        assert response.status_code in (404, 405)
 
-    def test_responses_endpoint(self, test_client):
-        """Test unified responses endpoint (preferred)."""
+    def test_ui_responses_no_input(self, test_client):
+        """Canonical browser generation rejects an empty prompt."""
         response = test_client.post(
-            "/v1/responses",
+            "/api/ui/responses",
             json={"model": "test", "input": ""},
         )
         assert response.status_code == 400
 
     def test_simple_chat_no_message(self, test_client):
-        """Test simple chat with no message."""
+        """Test simple chat with no message (deleted - should return 404)."""
         response = test_client.post("/chat", json={})
-        # Returns 503 if client not initialized, 400 if no message, or 422 for Pydantic validation
-        assert response.status_code in (400, 422, 503)
+        assert response.status_code == 404

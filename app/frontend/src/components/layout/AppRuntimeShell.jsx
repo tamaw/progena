@@ -2,13 +2,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
+  ensureDraftChatSession,
+  fetchWidgets,
+  markAlertsViewed,
   selectChatIndicators,
   selectInboxUnreadCount,
   selectUnseenNavRoutes,
+  selectUiStatus,
+  selectUiWidgets,
+  selectUiAlerts,
   setActiveNavRoute,
 } from '../../store/uiDataSlice';
-import { useAlertCenter } from '../../context/AlertCenterContext';
-import { useChromeRuntime } from '../../context/ChromeRuntimeContext';
+import { selectUiEventQueue } from '../../store/realtimeSlice';
+import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
@@ -134,6 +140,7 @@ const navGroups = [
 // Flattened list of rail items, plus the routes that no longer appear in the
 // rail but still need a breadcrumb label.
 const navItems = navGroups.flatMap((group) => group.items);
+const EMPTY_ALERTS = [];
 // Pages whose nav dot reflects "an event arrived while you weren't there"
 // (see uiDataSlice's NAV_ACTIVITY_EVENT_ROUTES for the event->route mapping).
 const NAV_ACTIVITY_ROUTES = navItems.filter((item) => item.trackActivity).map((item) => item.to);
@@ -165,11 +172,6 @@ function getPageLabel(pathname) {
 }
 
 const insightRanges = ['24h', '7d', '30d'];
-
-function formatTime(value) {
-  if (!value) return '--';
-  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
 
 function formatTimestamp(timestamp) {
   if (!timestamp) return '';
@@ -401,17 +403,15 @@ function WorkspaceSwitcher() {
 
 function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuickChat, onToggleNav }) {
   const { currentTheme, toggleTheme } = useTheme();
-  const { unreadCount, markAllViewed } = useAlertCenter();
+  const alerts = useSelector(selectUiAlerts);
+  const unreadCount = alerts?.filter((a) => !a.viewed)?.length || 0;
   const location = useLocation();
   const pageLabel = getPageLabel(location.pathname);
 
   const openPanel = useCallback((panel) => {
     setActivePanel((current) => (current === panel ? null : panel));
     onOpenPanel(panel);
-    if (panel === 'alerts') {
-      void markAllViewed();
-    }
-  }, [markAllViewed, onOpenPanel, setActivePanel]);
+  }, [onOpenPanel, setActivePanel]);
 
   return (
     <header className="app-shell__header">
@@ -613,17 +613,33 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
 }
 
 function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const {
-    alerts,
-    unreadCount,
-    selectedAlert,
-    isLoading,
-    error,
-    openAlert,
-    closeAlert,
-    markAllViewed,
-  } = useAlertCenter();
+  const alerts = useSelector(selectUiAlerts) || EMPTY_ALERTS;
+  const [selectedAlertId, setSelectedAlertId] = useState(null);
   const [filter, setFilter] = useState('all');
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const selectedAlert = alerts.find((alert) => alert.id === selectedAlertId) || null;
+  const unreadAlertIds = useMemo(
+    () => alerts.filter((alert) => !alert.viewed).map((alert) => alert.id),
+    [alerts],
+  );
+  const acknowledgeAlerts = useCallback((alertIds) => {
+    if (!alertIds.length) {
+      return;
+    }
+    // Do not alter Redux state here: only the correlated alerts.updated frame
+    // confirms that the server has cleared an alert's unread state.
+    void dispatch(markAlertsViewed({
+      alertsUrl: getApiUrl('/api/ui/alerts'),
+      alertIds,
+    })).unwrap().catch(() => undefined);
+  }, [dispatch, getApiUrl]);
+  const selectAlert = useCallback((alert) => {
+    setSelectedAlertId(alert.id);
+    if (!alert.viewed) {
+      acknowledgeAlerts([alert.id]);
+    }
+  }, [acknowledgeAlerts]);
 
   const visibleAlerts = useMemo(() => {
     if (filter === 'unread') return alerts.filter((alert) => !alert.viewed);
@@ -644,24 +660,27 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
     return { className: alert.viewed ? 'alert__ic--muted' : 'alert__ic--info', label: alert.viewed ? '●' : '@' };
   };
 
+  const unreadCount = alerts.filter((a) => !a.viewed).length;
+
   return (
     <TopNavPane
       title="Alerts"
       badge={unreadCount > 0 ? `${unreadCount} new` : 'All caught up'}
+      actions={unreadAlertIds.length > 0 ? (
+        <button
+          type="button"
+          className="topnav-pane__text-btn"
+          onClick={() => acknowledgeAlerts(unreadAlertIds)}
+        >
+          Mark all read
+        </button>
+      ) : null}
       className="topnav-pane--alerts"
       bodyClassName="alerts-pane__body"
       isPinned={isPinned}
       onTogglePin={onTogglePin}
       isOpen={isOpen}
-      onClose={() => {
-        closeAlert();
-        onClose();
-      }}
-      actions={(
-        <button type="button" className="topnav-pane__text-btn" onClick={() => void markAllViewed()}>
-          Mark all viewed
-        </button>
-      )}
+      onClose={onClose}
     >
       <SegmentedControl
         className="alerts-pane__tabs"
@@ -674,9 +693,7 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           { value: 'critical', label: 'Critical' },
         ]}
       />
-      {isLoading ? <div className="chrome-empty">Loading alerts...</div> : null}
-      {!isLoading && error ? <div className="chrome-empty">Failed to load alerts: {error}</div> : null}
-      {!isLoading && !error && visibleAlerts.length === 0 ? <div className="chrome-empty">No matching alerts.</div> : null}
+      {!alerts.length && visibleAlerts.length === 0 ? <div className="chrome-empty">No matching alerts.</div> : null}
       <div className="alerts-pane__scroll">
         {alertGroups.map((group) => (
           <div key={group.title} className="alerts-group">
@@ -688,7 +705,7 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                   key={alert.id}
                   type="button"
                   className={`alert ${alert.viewed ? 'is-viewed' : 'is-new'}`}
-                  onClick={() => openAlert(alert.id)}
+                  onClick={() => selectAlert(alert)}
                 >
                   <span className={`alert__ic ${icon.className}`}>{icon.label}</span>
                   <span className="alert__body">
@@ -704,7 +721,7 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       </div>
       {selectedAlert ? (
         <section className="alert-detail-card">
-          <button type="button" className="alert-detail-card__close" onClick={closeAlert}><CloseIcon /></button>
+          <button type="button" className="alert-detail-card__close" onClick={() => setSelectedAlertId(null)}><CloseIcon /></button>
           <h3>{selectedAlert.title}</h3>
           <p>{formatTimestamp(selectedAlert.timestamp)}</p>
           <pre>{selectedAlert.message}</pre>
@@ -713,7 +730,6 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
     </TopNavPane>
   );
 }
-
 // Persist the quick chat conversation across panel open/close (the panel unmounts
 // when closed), so reopening the *same* mode resumes the same conversation.
 // Cleared by "New chat" (resetQuickChat) and whenever the mode changes between
@@ -721,11 +737,13 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // "create a knowledge base" from Knowledge must not resume the old one, or its
 // suggestion chips never show since the history is no longer empty). Resets
 // naturally on full page reload.
-const quickChatMemory = { history: [], session: null, mode: null };
+const quickChatMemory = { history: [], threadId: null, mode: null };
 
 function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
-  const { createSession, sendMessageStream, cancelStream } = useChatApi();
-  const { config } = useConfig();
+  const { sendMessageStream, cancelStream } = useChatApi();
+  const { config, getApiUrl } = useConfig();
+  const dispatch = useDispatch();
+  const uiEventQueue = useSelector(selectUiEventQueue);
   const navigate = useNavigate();
   const location = useLocation();
   const isOnChatPage = location.pathname.startsWith('/chat');
@@ -735,15 +753,17 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   );
   if (quickChatMemory.mode !== normalizedConfig.mode) {
     quickChatMemory.history = [];
-    quickChatMemory.session = null;
+    quickChatMemory.threadId = null;
     quickChatMemory.mode = normalizedConfig.mode;
   }
   const [history, setHistory] = useState(quickChatMemory.history);
-  const [scratchSession, setScratchSession] = useState(quickChatMemory.session);
+  const [scratchThreadId, setScratchThreadId] = useState(quickChatMemory.threadId);
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState('');
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const sessionPromiseRef = useRef(null);
+  const pendingDraftRef = useRef(null);
+  const eventSequenceRef = useRef(0);
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
   const scrollEndRef = useRef(null);
@@ -753,28 +773,92 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
   useEffect(() => {
     scrollEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
   }, [history, isSending]);
+  // A draft acknowledgement carries no session data. Resolve it only from the
+  // causal stream event with the same request ID, using that event's thread ID.
+  useEffect(() => {
+    eventSequenceRef.current = consumeUiEventQueue(
+      uiEventQueue,
+      eventSequenceRef.current,
+      ({ event }) => {
+        const pendingDraft = pendingDraftRef.current;
+        const session = event?.payload?.session;
+        const threadId = session?.thread_id;
+        if (
+          !pendingDraft
+          || event?.payload?.request_id !== pendingDraft.requestId
+          || !['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
+          || typeof threadId !== 'string'
+          || !threadId
+        ) {
+          return undefined;
+        }
 
-  const startFreshQuickSession = useCallback(() => {
+        pendingDraftRef.current = null;
+        sessionPromiseRef.current = Promise.resolve(threadId);
+        if (isQuickChatMountedRef.current) {
+          setScratchThreadId(threadId);
+        }
+        pendingDraft.resolve(threadId);
+        return false;
+      },
+    );
+  }, [uiEventQueue]);
+
+  const startFreshQuickThread = useCallback(async () => {
     if (isQuickChatMountedRef.current) {
-      setScratchSession(null);
+      setScratchThreadId(null);
     }
-    const sessionPromise = createSession()
-      .then((session) => {
-        if (isQuickChatMountedRef.current) {
-          setScratchSession(session);
-        }
-        return session;
-      })
-      .catch((sessionError) => {
-        if (isQuickChatMountedRef.current) {
-          setError(sessionError.message);
-        }
-        sessionPromiseRef.current = null;
-        return null;
-      });
+    pendingDraftRef.current?.resolve(null);
+    pendingDraftRef.current = null;
+
+    const proposedThreadId = crypto.randomUUID();
+    const requestId = crypto.randomUUID();
+    let resolveSession;
+    const sessionPromise = new Promise((resolve) => {
+      resolveSession = resolve;
+    });
+    // Register the causal event waiter before dispatching. The backend may
+    // publish chat.session.created/metadata.updated before the 202 acknowledgement,
+    // so assigning this after dispatch can miss the event and leave submit
+    // waiting forever for a thread ID.
+    pendingDraftRef.current = { requestId, resolve: resolveSession };
     sessionPromiseRef.current = sessionPromise;
+    const draftRequest = dispatch(ensureDraftChatSession({
+      chatsUrl: getApiUrl('chats'),
+      threadId: proposedThreadId,
+      requestId,
+    }));
+
+    try {
+      await draftRequest.unwrap();
+    } catch (sessionError) {
+      if (pendingDraftRef.current?.requestId === requestId) {
+        pendingDraftRef.current.resolve(null);
+        pendingDraftRef.current = null;
+        sessionPromiseRef.current = null;
+      }
+      if (isQuickChatMountedRef.current) {
+        setError(sessionError.message);
+      }
+      return null;
+    }
+
     return sessionPromise;
-  }, [createSession]);
+  }, [dispatch, getApiUrl]);
+
+  const ensureQuickThread = useCallback(async () => {
+    if (scratchThreadId) {
+      return scratchThreadId;
+    }
+    const threadId = sessionPromiseRef.current
+      ? await sessionPromiseRef.current
+      : await startFreshQuickThread();
+    if (!threadId) {
+      throw new Error('Unable to create a quick chat thread.');
+    }
+    return threadId;
+  }, [scratchThreadId, startFreshQuickThread]);
+
 
   // Mirror conversation state into module-level memory so it survives the
   // panel unmounting on close. Streaming turns are stored as settled so a
@@ -783,48 +867,26 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     quickChatMemory.history = history.map((turn) => (turn.isStreaming ? { ...turn, isStreaming: false } : turn));
   }, [history]);
   useEffect(() => {
-    quickChatMemory.session = scratchSession;
-  }, [scratchSession]);
+    quickChatMemory.threadId = scratchThreadId;
+  }, [scratchThreadId]);
 
   useEffect(() => {
     isQuickChatMountedRef.current = true;
-    let cancelled = false;
-    // Resume the persisted conversation; only spin up a fresh session the first
-    // time (or after "New chat" cleared it).
-    if (quickChatMemory.session) {
-      sessionPromiseRef.current = Promise.resolve(quickChatMemory.session);
+    if (quickChatMemory.threadId) {
+      sessionPromiseRef.current = Promise.resolve(quickChatMemory.threadId);
     } else {
-      startFreshQuickSession()
-        .then((session) => {
-          if (!cancelled && session) {
-            setScratchSession(session);
-          }
-          return session;
-        });
+      void startFreshQuickThread();
     }
 
     return () => {
-      cancelled = true;
-      isQuickChatMountedRef.current = false;
       activeAssistantIdRef.current = null;
-      cancelStream();
+      pendingDraftRef.current?.resolve(null);
+      pendingDraftRef.current = null;
+      isQuickChatMountedRef.current = false;
+      void cancelStream();
     };
-  }, [cancelStream, startFreshQuickSession]);
+  }, [cancelStream, startFreshQuickThread]);
 
-  const ensureQuickSession = useCallback(async () => {
-    if (scratchSession) {
-      return scratchSession;
-    }
-
-    let session = sessionPromiseRef.current
-      ? await sessionPromiseRef.current
-      : null;
-    if (!session) {
-      session = await createSession();
-    }
-    setScratchSession(session);
-    return session;
-  }, [createSession, scratchSession]);
 
   const submit = useCallback(async (message) => {
     const text = message.trim();
@@ -853,7 +915,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     setError('');
 
     try {
-      await ensureQuickSession();
+      const threadId = await ensureQuickThread();
       let assistantContent = '';
       const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
@@ -868,12 +930,20 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
               : turn
           )));
         },
-        (completeText) => {
+        (status) => {
           if (isStale()) return;
           setHistory((currentHistory) => currentHistory.map((turn) => {
             if (turn.id !== assistantId) return turn;
-            const content = completeText || assistantContent || turn.content || '(No response text)';
-            return { ...turn, content, isStreaming: false };
+            const content = assistantContent || turn.content || (status === 'cancelled'
+              ? '(Response cancelled)'
+              : '(No response text)');
+            return {
+              ...turn,
+              content: status === 'cancelled' && content !== '(Response cancelled)'
+                ? `${content} [Cancelled]`
+                : content,
+              isStreaming: false,
+            };
           }));
           activeAssistantIdRef.current = null;
         },
@@ -887,6 +957,8 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
           )));
           activeAssistantIdRef.current = null;
         },
+        undefined,
+        { thread_id: threadId },
       );
 
       if (!isStale()) {
@@ -912,7 +984,7 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
       }
       setIsSending(false);
     }
-  }, [ensureQuickSession, history, isSending, normalizedConfig, sendMessageStream]);
+  }, [ensureQuickThread, history, isSending, normalizedConfig, sendMessageStream]);
 
   const openInChat = useCallback(() => {
     if (history.length > 0) {
@@ -931,13 +1003,13 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
         config.storage.quickChatHandoff,
         JSON.stringify({
           messages: promotedMessages,
-          threadId: scratchSession?.conversation_id ?? null,
+          threadId: scratchThreadId,
         }),
       );
       window.dispatchEvent(new CustomEvent('progenitor:load-chat-history', {
         detail: {
           messages: promotedMessages,
-          threadId: scratchSession?.conversation_id ?? null,
+          threadId: scratchThreadId,
         },
       }));
     }
@@ -945,19 +1017,23 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
     if (!isOnChatPage) {
       navigate('/chat');
     }
-  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchSession?.conversation_id]);
+  }, [config.storage.chatHistory, config.storage.quickChatHandoff, history, isOnChatPage, navigate, onClose, scratchThreadId]);
 
   const resetQuickChat = useCallback(() => {
-    cancelStream();
+    void cancelStream();
     activeAssistantIdRef.current = null;
     quickChatMemory.history = [];
-    quickChatMemory.session = null;
+    quickChatMemory.threadId = null;
     setHistory([]);
+    setScratchThreadId(null);
+    pendingDraftRef.current?.resolve(null);
+    pendingDraftRef.current = null;
+    sessionPromiseRef.current = null;
     setIsSending(false);
     setError('');
     setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
-    void startFreshQuickSession();
-  }, [cancelStream, startFreshQuickSession]);
+    void startFreshQuickThread();
+  }, [cancelStream, startFreshQuickThread]);
 
   const selectPrompt = useCallback((prompt) => {
     setComposerSeed((current) => ({ key: current.key + 1, message: prompt }));
@@ -1288,8 +1364,10 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
   );
 }
 
-function InsightsPanel({ runtime, onClose, isPinned, onTogglePin, isOpen }) {
-  const { health, isStatusStreamConnected, lastEventAt, refreshWidgets, status, widgets } = runtime;
+function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
+  const dispatch = useDispatch();
+  const status = useSelector(selectUiStatus);
+  const widgets = useSelector(selectUiWidgets);
   const [range, setRange] = useState('7d');
   const agentWidgets = widgets.filter((widget) => widget.type === 'agent' || widget.type === 'mcp');
   const scheduleWidgets = widgets.filter((widget) => widget.type === 'schedule');
@@ -1297,11 +1375,15 @@ function InsightsPanel({ runtime, onClose, isPinned, onTogglePin, isOpen }) {
   const ready = agentWidgets.filter((widget) => (widget.status || widget.data?.agentStatus) === 'ready').length;
   const cycleCount = status?.cycle_count ?? 0;
   const totalActivity = Math.max(1, agentWidgets.length + scheduleWidgets.length + cycleCount);
+  const refreshWidgets = useCallback(
+    () => dispatch(fetchWidgets({ widgetsUrl: '/api/ui/widgets' })),
+    [dispatch],
+  );
 
   return (
     <TopNavPane
       title="Token consumption"
-      subtitle={`${isStatusStreamConnected ? 'Live status stream connected' : 'Waiting for status stream'} · progenitor-main`}
+      subtitle="Real-time status stream · progenitor-main"
       onClose={onClose}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
@@ -1322,8 +1404,8 @@ function InsightsPanel({ runtime, onClose, isPinned, onTogglePin, isOpen }) {
       <div className="ins-kpis">
         <div className="ins-kpi">
           <div className="ins-kpi__label">Runtime</div>
-          <div className="ins-kpi__value">{health.isHealthy ? 'Online' : 'Offline'}</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">Health {formatTime(health.lastCheck)} · SSE {formatTime(lastEventAt)}</div>
+          <div className="ins-kpi__value">Online</div>
+          <div className="ins-kpi__delta ins-kpi__delta--muted">Live</div>
         </div>
         <div className="ins-kpi">
           <div className="ins-kpi__label">Agents</div>
@@ -1427,7 +1509,8 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
 
-function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, runtime, isPinned, onTogglePin }) {
+function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, isPinned, onTogglePin }) {
+  const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
   // `displayed` = what is currently rendered in the DOM (may lag activePanel during transitions).
@@ -1507,8 +1590,8 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
   }
   if (displayed === 'settings') return <>{scrim}<SettingsPanel onClose={closePanel} isOpen={isOpen} /></>;
   if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} isOpen={isOpen} /></>;
-  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={runtime.widgets} onClose={closePanel} {...shared} /></>;
-  if (displayed === 'insights') return <>{scrim}<InsightsPanel runtime={runtime} onClose={closePanel} {...shared} /></>;
+  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} /></>;
+  if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} /></>;
   return null;
 }
 
@@ -1519,8 +1602,6 @@ function AppRuntimeShell() {
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
-  const runtime = useChromeRuntime();
-
   // Below 980px the sidebar becomes a fixed overlay drawer (CSS handles it).
   // Ensure the nav is not in icon-rail mode at those widths — the drawer is
   // either open (is-open class) or hidden off-screen, never a collapsed rail.
@@ -1583,13 +1664,11 @@ function AppRuntimeShell() {
     setSearchQuery(query);
     setActivePanel('search');
   }, []);
-
   const handleOpenPanel = useCallback((panel) => {
-    if (panel === 'insights' && runtime.health.isHealthy) {
-      void runtime.refreshWidgets();
+    if (panel === 'insights') {
+      // Widgets refreshed on mount by InsightsPanel
     }
-  }, [runtime]);
-
+  }, []);
   return (
     <div className={shellClass}>
       <PrimaryNav
@@ -1613,13 +1692,11 @@ function AppRuntimeShell() {
       <main className="app-shell__content">
         <Outlet />
       </main>
-      {isNavOpen ? <button type="button" className="app-shell__nav-scrim" aria-label="Close navigation" onClick={() => setIsNavOpen(false)} /> : null}
       <PanelHost
         activePanel={activePanel}
         quickChatConfig={quickChatConfig}
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}
-        runtime={runtime}
         isPinned={isPinned}
         onTogglePin={handleTogglePin}
       />

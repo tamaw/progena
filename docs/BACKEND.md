@@ -1,113 +1,195 @@
-# Backend API
+# Backend API — Client Contract
 
-## What is running
+This is the authoritative browser-client contract. The browser application has one
+application-data transport: **`GET /api/ui/stream`**. Do not infer an alternate
+contract from an individual route implementation or from a historical response
+model.
 
-The backend is the FastAPI app in `app/backend/main.py`.
+## Transport boundary
 
-Current behavior:
-- API-only service: it does **not** serve frontend assets.
-- Uses the HTTP client in `app/backend/sse_client.py` (`SSEProgenitorClient`) to talk to a separately running Progenitor runtime over HTTP + SSE.
-- Mounts UI-specific routes from `app/backend/ui_routes.py` under `/api/ui`.
-- Initializes session management, SSE status watching, and optional Telegram integration during lifespan startup.
+`GET /api/ui/stream` establishes a long-lived `200 OK`,
+`text/event-stream` connection. It is **not** a finite work request and is the
+only successful browser response that contains application data.
 
-`app/backend/client.py` still exists, but `app/backend/main.py` currently wires up the HTTP client path, not the legacy subprocess client.
+Every retained finite application route—whether it is `GET`, `POST`, `PUT`,
+`PATCH`, or `DELETE`—returns only an HTTP `202 Accepted` acknowledgement.
+Its body is exactly `{request_id, event_types}`. A finite response MUST NOT contain an entity, list, query
+result, status snapshot, generated text, attachment, download, or a second SSE
+stream. The browser obtains those results from canonical stream events and
+hydrates Redux from those events.
 
-## Runtime dependency
+Direct `/health`, `/ready`, `/live`, and `/health/detailed` routes are absent. `/healthz` is the sole explicit Docker/container liveness exception: it returns an empty `200 OK`, carries no application data, and is not a browser API route.
 
-The backend expects Progenitor's runtime HTTP server to be reachable:
-- `PROGENITOR_RUNTIME_URL` (default `http://127.0.0.1:9501`)
+## Canonical SSE frames
 
-The backend does not start Progenitor for you. In local development, start the runtime separately.
+Each application frame has the SSE event name `ui.event`, an SSE `id` equal to
+the envelope `id`, and a JSON `data` value with this exact outer shape:
 
-## Active endpoint surface
+```json
+{
+  "id": "ui-42",
+  "seq": 42,
+  "type": "chat.sessions.snapshot",
+  "scope": "chat",
+  "session_id": null,
+  "payload": {
+    "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100"
+  },
+  "timestamp": "2026-01-01T00:00:00+00:00"
+}
+```
 
-### Health and operations
-- `GET /health` - simple health status (`healthy` or `draining`)
-- `GET /health/detailed` - uptime, client status, rate limiter, shutdown info, memory, config summary
-- `GET /ready` - readiness probe; fails if backend is shutting down or client setup did not complete
-- `GET /live` - liveness probe
-- `GET /health/features` - feature-manager status (sessions, attachments, conversation, shutdown)
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `id` | `string` | Stream-global identifier, currently `ui-{seq}`. It is the deduplication and replay cursor value. |
+| `seq` | `integer` | Increasing process-local sequence number. It defines the order of retained replay events. |
+| `type` | `string` | Typed domain event, such as `chat.sessions.snapshot` or `logs.page.loaded`. |
+| `scope` | `"global" \| "session" \| "chat"` | Event routing scope. It is not an arbitrary nullable string. |
+| `session_id` | `string \| null` | Session scope identifier when applicable. |
+| `payload` | `object` | Event-specific result data. Every event caused by a finite request also has `payload.request_id`. |
+| `timestamp` | `string` | ISO-8601 envelope creation time. |
 
-`/ready` is a backend-local check; it does not perform a live handshake to Progenitor.
+The SSE event name remains `ui.event` for **all** of these envelopes, including
+connection events. There is no `server.shutdown` SSE event name.
 
-### Chat API
-- `GET /v1/models` - advertises the configured backend model name
-- `POST /v1/responses` - primary OpenAI-style endpoint used by the frontend
-  - request shape: `{ "model": "...", "input": <string|message[]>, "stream": <bool> }`
-  - streaming returns Server-Sent Events with `response.output_text.delta` and `response.completed`
-- `POST /chat` - simple non-OpenAI helper endpoint for manual testing
+### Connection events
 
-The backend does **not** currently implement `/v1/chat/completions`.
+The canonical stream also emits these `ui.event` envelope types:
 
-### Attachments
-- `POST /v1/attachments`
-- `GET /v1/attachments/{attachment_id}`
+| Type | Payload | Meaning |
+| --- | --- | --- |
+| `connection.ready` | `{ "stream": "ui", "status": <status>, "alerts": <alerts> }` | Sent after replay on each connection/reconnection; it marks the live-stream boundary. It is not a request-correlated domain snapshot. |
+| `connection.heartbeat` | `{ "timestamp": <unix-seconds> }` | Keepalive frame emitted while the subscriber queue is idle (15 seconds by default, configurable through `SSE_HEARTBEAT_INTERVAL`). |
+| `connection.shutdown` | `{ "reason": "server_shutdown", "message": "Server is shutting down" }` | Final canonical envelope before a graceful server-side close. |
 
-Uploads are parsed through `app/backend/attachments.py`. Extracted attachment content is cached in memory for the running backend process; the configured `data/attachments/` directory is created, but this code path does not currently persist uploads there.
+Connection events do not resolve a pending finite operation unless their payload
+has the matching request ID, which these connection events do not.
 
-### Session and settings
-- `GET /v1/session`
-- `POST /v1/session`
-- `PATCH /v1/session/preferences`
-- `GET /v1/session/settings/export`
-- `POST /v1/session/settings/import`
+## Replay, reconnect, and resync
 
-Sessions use the `progenitor_session` cookie and are persisted by `SessionManager` in `data/sessions/sessions.json`.
+The backend retains the most recent **200 broadcast application envelopes** in
+memory. A reconnect may supply `Last-Event-ID: ui-N`; the server replays retained
+envelopes whose `seq` is greater than `N`, in order, then emits
+`connection.ready`, then delivers new queued events.
 
-### Conversation history
-- `GET /v1/conversation`
-- `GET /v1/conversation/{message_id}`
-- `DELETE /v1/conversation`
+This is bounded best-effort replay, not durable catch-up:
 
-Conversation history is maintained in backend memory; it is not restored from disk on startup.
+- An absent, malformed, or evicted cursor cannot prove that no event was missed.
+  The server does not synthesize an unbounded history or a gap marker.
+- `connection.ready` marks the end of whatever replay was available. A client
+  that cannot safely continue from its Redux state MUST issue the appropriate
+  finite snapshot requests and wait for their correlated stream events.
+- Reducers MUST be idempotent for replayed snapshots, updates, and deletes and
+  MUST deduplicate by envelope `id`.
+- A connection loss does not cancel a finite request. An acknowledgement means
+  the causal event was enqueued, not delivered to or applied by this browser.
 
-### UI routes (`/api/ui/*`)
+The browser owns exactly one `EventSource`, for `/api/ui/stream`. There is no
+`GET /api/ui/events`, no `/api/ui/status` stream, and no per-page SSE stream.
 
-The frontend relies on additional routes in `app/backend/ui_routes.py`, including:
-- status snapshot and SSE streams: `/api/ui/status/snapshot`, `/api/ui/status`, `/api/ui/events`
-- state views: `/api/ui/loops`, `/api/ui/agents`, `/api/ui/backlog`, `/api/ui/schedule`, `/api/ui/workspace`
-- UI config/content: `/api/ui/widgets`, `/api/ui/widget-schemas`, `/api/ui/prompts*`
-- logs and exports: `/api/ui/logs*`
-- Telegram status/testing: `/api/ui/telegram/*`
+## Finite request acknowledgement and correlation
 
-These routes read repo/runtime state from file-backed runtime artifacts plus
-shared documents via `app/backend/state_reader.py`.
+For every finite browser application request, the frontend generates one UUID
+and sends it as `X-Request-ID`. The successful response is exactly:
 
-## Important environment variables
+```json
+{
+  "request_id": "4e58d2dc-88bf-4c10-9bf0-1f2ccce2c100",
+  "event_types": ["chat.sessions.snapshot"]
+}
+```
 
-Backend-specific:
-- `CHAT_SERVER_HOST`
-- `CHAT_SERVER_PORT`
-- `CHAT_SERVER_PROGENITOR_TIMEOUT`
-- `CHAT_SERVER_PROGENITOR_STOP_TIMEOUT`
-- `PROGENITOR_RUNTIME_URL`
-- `CHAT_SERVER_MODEL_NAME`
-- `CHAT_SERVER_RATE_LIMIT_ENABLED`
-- `CHAT_SERVER_RATE_LIMIT_PER_MINUTE`
-- `CHAT_SERVER_RATE_LIMIT_PER_HOUR`
+An acknowledgement has no optional data field. `request_id` MUST equal the
+client header value. The nonempty `event_types` array declares the causal event
+type or types that the operation awaits; each declared causal envelope MUST carry
+that same value at `payload.request_id`.
 
-Optional Telegram integration:
-- `TELEGRAM_ENABLED`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `TELEGRAM_ALLOWED_USERS`
-- `TELEGRAM_POLLING_ENABLED`
+The required success ordering is:
 
-The backend also depends on the Progenitor runtime's LLM configuration being valid because requests are forwarded to that runtime.
+1. Validate the request and persist/dispatch its synchronous work.
+2. Enqueue every causal `ui.event` envelope, each with `payload.request_id`.
+3. Return the HTTP `202 Accepted` acknowledgement.
+
+HTTP `202` therefore means **dispatched and accepted**, not browser completion. The
+frontend records the acknowledgement as pending and completes the operation
+only when an event with both a declared type and the same `request_id` arrives.
+An event from another tab or process may update durable Redux data, but MUST NOT
+resolve an unrelated local pending operation.
+
+Failures retain a non-`202` HTTP status (for example validation `400`/`422`,
+not found `404`, conflict `409`, unavailable `503`, or timeout `504`) and MUST
+NOT emit a success event. The client clears a pending operation on HTTP failure
+or an explicit UI timeout/reconnect policy; it does not treat the acknowledgement
+itself as completion.
+
+## Browser-retained route disposition
+
+The browser-facing retained route families in this table use the acknowledgement
+contract above. The listed events are the result/data source; route responses
+never are.
+
+| Domain | Retained routes | Causal event types |
+| --- | --- | --- |
+| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}` | `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected`, `chat.session.deleted` |
+| Generation | `POST /api/ui/responses`; `PUT /api/ui/responses/{generation_id}/cancel` | `chat.response.started`, `chat.response.delta`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled` |
+| Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
+| Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `DELETE /api/ui/inbox/{message_id}` | `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
+| Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | `knowledge.snapshot`, request-scoped `knowledge.search.results` |
+| Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
+| Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
+| Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | `widgets.updated`, `mcp.snapshot` |
+| Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | `schedule.snapshot`, `widgets.updated` |
+| Prompts and skills | `GET /api/ui/prompts`; `GET /api/ui/skills`; `PUT /api/ui/prompts/content`; `PUT /api/ui/skills/content`; `POST /api/ui/skills` | `prompts.snapshot`, `skills.snapshot` |
+| Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | `alerts.updated` and `alert` for independently generated alerts |
+| Logs | `GET /api/ui/logs`; `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | `logs.page.loaded`, `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
+
+For log export, chunk events carry the download data; the browser reconstructs
+the download locally. For generation, token deltas and terminal results are
+canonical stream events even when the request body contains `stream: true`.
+There is no response-body token stream.
+
+Browser generation uses the `/api/ui/responses` routes above. It is distinct from
+the backend-to-runtime `/v1/chat` and `/v1/events` protocols, which remain
+internal and are not browser APIs.
+
+`POST /api/ui/events` is a finite **event-widget creation** route if present in
+the retained widget surface; it is not an EventSource endpoint and returns only
+a `202` acknowledgement. Do not confuse it with the deleted `GET /api/ui/events`
+legacy stream.
+
+## Removed client surface
+
+The following are intentionally absent rather than compatibility endpoints:
+
+- `GET /health`, `GET /health/detailed`, `GET /ready`, `GET /live`, `GET /v1/models`, and `POST /chat`.
+- Attachment upload/download routes and legacy session, preferences, settings,
+  and conversation APIs.
+- `POST /agents/register`.
+- `GET /api/ui/status/snapshot`, `/loops`, `/agents`, `/backlog`, `/schedule`,
+  `/tasks`, `/agents/{agent_name}`, `/database/schema`, and `/telegram/status`,
+  plus `POST /api/ui/telegram/test`.
+- `GET /api/ui/tasks/{card_id}/content`, `GET /api/ui/prompts/content`,
+  `GET /api/ui/skills/content`, `GET /api/ui/agent-profiles/graph-schema`, and
+  the unmounted workspace-only surface, including `/api/ui/workspace`,
+  `/api/ui/widget-schemas`, and their consumers.
+- `GET /api/ui/events` and every `/api/ui/status` EventSource variant.
+
+A deleted path returns `404`; it is not a fallback for a stream failure.
 
 ## Local development
 
+Start the runtime and backend separately:
+
 ```bash
 source .venv/bin/activate
-export AGENT_NAME=progenitor
 python -m app.progenitor.main
 ```
-
-In another shell:
 
 ```bash
 source .venv/bin/activate
 python -m uvicorn app.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
-The frontend dev server proxies `/api`, `/v1`, and health endpoints to this backend.
+The frontend development server proxies `/api`, `/v1`, and operational health
+requests to the backend. Client code should use this document—not proxy details
+or historical endpoint responses—as its API contract.

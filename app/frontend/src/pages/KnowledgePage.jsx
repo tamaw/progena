@@ -8,8 +8,11 @@ import {
   indexKnowledgeSource,
   saveKnowledge,
   selectKnowledgeBases,
+  selectKnowledgeSearch,
   selectKnowledgeState,
 } from '../store/uiDataSlice';
+import { selectRealtime } from '../store/realtimeSlice';
+import { requestAcknowledged } from '../store/http';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -122,7 +125,10 @@ export default function KnowledgePage() {
   // The page renders from the realtime store: `knowledge.snapshot` events keep
   // `rawBases` live; the GET on mount just seeds + triggers the first broadcast.
   const rawBases = useSelector(selectKnowledgeBases);
-  const { loaded } = useSelector(selectKnowledgeState);
+  const knowledgeState = useSelector(selectKnowledgeState);
+  const { loaded } = knowledgeState;
+  const knowledgeSearch = useSelector(selectKnowledgeSearch);
+  const realtime = useSelector(selectRealtime);
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
@@ -133,6 +139,7 @@ export default function KnowledgePage() {
   const [testLoading, setTestLoading] = useState(false);
   const [testError, setTestError] = useState('');
   const [config, setConfig] = useState({ limit: 5, minScore: 0 });
+  const [pendingSearchRequestId, setPendingSearchRequestId] = useState(null);
   const [addingTag, setAddingTag] = useState(false);
   const [tagDraft, setTagDraft] = useState('');
   const [savingTag, setSavingTag] = useState(false);
@@ -163,8 +170,11 @@ export default function KnowledgePage() {
   const knowledgeUrl = getApiUrl('/api/ui/knowledge');
 
   useEffect(() => {
-    dispatch(fetchKnowledge({ knowledgeUrl }));
-  }, [dispatch, knowledgeUrl]);
+    if (!realtime.connected) {
+      return;
+    }
+    void dispatch(fetchKnowledge({ knowledgeUrl })).unwrap().catch(() => {});
+  }, [dispatch, knowledgeUrl, realtime.connected]);
 
   const bases = useMemo(() => rawBases.map(fromApiBase), [rawBases]);
 
@@ -172,6 +182,8 @@ export default function KnowledgePage() {
   useEffect(() => {
     setTestResults(null);
     setTestError('');
+    setTestLoading(false);
+    setPendingSearchRequestId(null);
     setAddingTag(false);
     setTagDraft('');
     setTagError('');
@@ -231,8 +243,6 @@ export default function KnowledgePage() {
     setEditingDesc(false);
   }, [selectedDescription, selectedBaseId]);
 
-  // PUT the whole settings document; the backend validates + broadcasts, so the
-  // store (and this page) update from the resulting `knowledge.snapshot`.
   const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
   const patchSelected = (patch) => putBases(
     rawBases.map((base) => (base.id === selectedBase?.id
@@ -254,45 +264,49 @@ export default function KnowledgePage() {
       return;
     }
     const id = selectedBase.id;
-    setSelectedBaseId(null);
     try {
       await putBases(rawBases.filter((base) => base.id !== id));
-    } catch {
-      // ignore; the snapshot will reconcile the list
+    } catch (deleteError) {
+      setFolderError(deleteError.message || 'Could not delete the knowledge base.');
     }
   };
 
-  // Run a live pgvector search against this store via the backend, which queries
-  // Postgres directly — the same path the agent's knowledge_search tool uses.
+  // The search request only acknowledges acceptance. Its matching
+  // `knowledge.search.results` event hydrates Redux and resolves this view.
   const runTestQuery = async (event) => {
     event?.preventDefault?.();
     if (!selectedBase || !testQuery.trim() || testLoading) {
       return;
     }
+    const requestId = crypto.randomUUID();
     setTestLoading(true);
     setTestError('');
+    setTestResults(null);
     try {
       const url = `${knowledgeUrl}/${encodeURIComponent(selectedBase.id)}/search`
         + `?q=${encodeURIComponent(testQuery.trim())}&limit=${config.limit}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        setTestResults(null);
-        setTestError(`Search failed (${response.status}).`);
-        return;
-      }
-      const payload = await response.json();
-      let results = Array.isArray(payload.results) ? payload.results : [];
-      if (config.minScore > 0) {
-        results = results.filter((row) => Number(row.score || 0) >= config.minScore);
-      }
-      setTestResults({ count: results.length, results });
-    } catch {
-      setTestResults(null);
-      setTestError('Could not reach the knowledge database.');
-    } finally {
+      const acknowledgement = await requestAcknowledged(url, {
+        requestId,
+        errorLabel: 'Knowledge search failed',
+      });
+      setPendingSearchRequestId(acknowledgement.request_id);
+    } catch (searchError) {
       setTestLoading(false);
+      setTestError(searchError.message || 'Could not reach the knowledge database.');
     }
   };
+
+  useEffect(() => {
+    if (!pendingSearchRequestId || knowledgeSearch.requestId !== pendingSearchRequestId) {
+      return;
+    }
+    const results = config.minScore > 0
+      ? knowledgeSearch.results.filter((row) => Number(row.score || 0) >= config.minScore)
+      : knowledgeSearch.results;
+    setTestResults({ count: results.length, results });
+    setTestLoading(false);
+    setPendingSearchRequestId(null);
+  }, [config.minScore, knowledgeSearch, pendingSearchRequestId]);
 
   // Persist the full tag list, then let the broadcast refresh the view.
   const saveTags = async (nextTags) => {
@@ -474,9 +488,7 @@ export default function KnowledgePage() {
     const sourceId = generateSourceId();
     try {
       await patchSelected({ sources: [...sources, { id: sourceId, path }] });
-      await dispatch(
-        indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId }),
-      ).unwrap();
+      await dispatch(indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId })).unwrap();
       setPathDraft('');
       setFolderFormOpen(false);
     } catch (error) {
@@ -493,9 +505,7 @@ export default function KnowledgePage() {
     setBusySourceId(sourceId);
     setFolderError('');
     try {
-      await dispatch(
-        indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId }),
-      ).unwrap();
+      await dispatch(indexKnowledgeSource({ knowledgeUrl, baseId: selectedBase.id, sourceId })).unwrap();
     } catch (error) {
       setFolderError(error.message || 'Re-index failed.');
     } finally {
@@ -547,6 +557,7 @@ export default function KnowledgePage() {
             </PaneListToolbar>
 
             <PaneListScroll>
+              {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
               {!visibleBases.length && loaded ? (
                 <div className="task-empty">
                   {bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}
