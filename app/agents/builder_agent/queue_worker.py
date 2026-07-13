@@ -230,6 +230,18 @@ class BuilderTaskQueue:
                     task_id, context_id, TaskState.canceled, "Build task cancelled.", final=True
                 )
             )
+            append_task_record(
+                TaskRecord(
+                    task_id=task_id,
+                    status="cancelled",
+                    phase_completed="cancelled",
+                    build_id=None,
+                    pr_url=None,
+                    timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                    error_message="Build task cancelled",
+                ),
+                self._log_path,
+            )
         finally:
             self._running_tasks.pop(task_id, None)
 
