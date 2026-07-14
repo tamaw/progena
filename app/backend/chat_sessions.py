@@ -431,7 +431,11 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
         return []
     try:
         parsed = json.loads(content)
-    except ValueError:
+    except (ValueError, RecursionError):
+        # A deeply nested (but otherwise valid) raw `task` payload alongside
+        # progress_log makes json.loads raise RecursionError, not ValueError
+        # -- one such persisted tool result must not break chat-session
+        # hydration entirely, only this optional progress log.
         return []
     if not isinstance(parsed, dict):
         return []

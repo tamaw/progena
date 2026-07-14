@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from deepagents.middleware.async_subagents import AsyncSubAgent
-from deepagents.middleware.subagents import SubAgent
+from deepagents.middleware.subagents import GENERAL_PURPOSE_SUBAGENT, SubAgent
 
 from ..async_subagents import HELLO_WORLD_ASYNC_ASSISTANT_ID
 from .middleware import AuditLoggingMiddleware
@@ -90,6 +90,22 @@ def create_research_subagent(*, log_sink: Any | None = None) -> SubAgent:
     )
 
 
+def create_general_purpose_subagent(*, log_sink: Any | None = None) -> SubAgent:
+    """Create an explicit general-purpose subagent spec.
+
+    deepagents auto-adds its own default "general-purpose" subagent unless a
+    spec with that name is already supplied -- an explicit spec is the only
+    way to opt it into our audit-logging middleware, since the auto-added
+    default never receives it. Without this, delegations to general-purpose
+    (deepagents' catch-all, used whenever no more specific subagent fits)
+    would be the one subagent to emit no nested tool lifecycle events.
+    """
+    return SubAgent(
+        **GENERAL_PURPOSE_SUBAGENT,
+        middleware=_subagent_middleware(log_sink),
+    )
+
+
 def create_hello_world_async_subagent(http_base_url: str) -> AsyncSubAgent:
     """Create the deterministic async subagent used for background delegation tests."""
     return AsyncSubAgent(
@@ -110,6 +126,7 @@ def create_progenitor_sync_subagents(*, log_sink: Any | None = None) -> list[Sub
         create_hello_world_subagent(log_sink=log_sink),
         create_code_review_subagent(log_sink=log_sink),
         create_research_subagent(log_sink=log_sink),
+        create_general_purpose_subagent(log_sink=log_sink),
     ]
 
 

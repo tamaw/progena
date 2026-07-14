@@ -98,14 +98,24 @@ def build_tool_start_event(
 ) -> dict[str, Any]:
     """Build a ``tool_start`` event payload with redacted+truncated args."""
     redacted = _redact_value(raw_args)
+    metadata: dict[str, Any] = {
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
+    }
+    if tool_name == "task" and isinstance(redacted, dict):
+        # A large free-form `description` can push args_preview past the 2KB
+        # budget above, collapsing it from a dict into a truncated string --
+        # _expand_task_subagent_events (deepagent_stream.py) needs
+        # subagent_type to correlate this dispatch with its eventual result,
+        # so stash it separately here where truncation can't reach it.
+        subagent_type = redacted.get("subagent_type")
+        if isinstance(subagent_type, str):
+            metadata["subagent_type"] = subagent_type
     return {
         "event_type": "tool_start",
         "content": tool_name,
-        "metadata": {
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
-        },
+        "metadata": metadata,
     }
 
 

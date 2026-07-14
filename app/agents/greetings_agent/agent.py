@@ -62,7 +62,6 @@ from a2a.server.tasks import (
     InMemoryPushNotificationConfigStore,
     InMemoryTaskStore,
     PushNotificationSender,
-    TaskStore,
 )
 from a2a.types import (
     AgentCapabilities,
@@ -523,12 +522,20 @@ async def _run_mock_steps(
     completed: list[str] = []
     for i, name in enumerate(names, start=1):
         if progress_callback is not None:
+            # Bookend with the same "Calling X..." / "X finished." framing
+            # _report_message_progress uses for the real (non-mock) path, so
+            # a mock run's live progress actually exercises the do_step
+            # lifecycle that _run_greeting_payload's display_tool_calls
+            # metadata claims this request made -- not just a generic label.
+            await progress_callback("Calling do_step...")
             await progress_callback(f"Step {i}/{len(names)}: {name}...")
         # Deliberately slower than the minimum needed for correctness: fast
         # enough for the test suite, slow enough that live progress in the
         # chat UI is actually visible to a human watching it stream in.
         await asyncio.sleep(_MOCK_STEP_DELAY_SECONDS)
         completed.append(f"{i}. {name} done")
+        if progress_callback is not None:
+            await progress_callback("do_step finished.")
     return completed
 
 
@@ -541,6 +548,12 @@ async def _run_mock_sleep(duration: float, progress_callback: ProgressCallback =
     multi-"working"-update progress a multi-step request does (see
     _run_mock_steps) -- a second, duration-driven way to generate live
     progress events, alongside the step-count-driven one."""
+    if progress_callback is not None and duration > 0:
+        # Bookend with "Calling sleep..." / "sleep finished." (see
+        # _run_mock_steps) so this exercises the same per-tool lifecycle
+        # display_tool_calls reports "sleep" as having made, not just the
+        # elapsed-time pings below.
+        await progress_callback("Calling sleep...")
     remaining = duration
     elapsed = 0.0
     while remaining > 0:
@@ -552,6 +565,8 @@ async def _run_mock_sleep(duration: float, progress_callback: ProgressCallback =
             await progress_callback(
                 f"Still working... {elapsed:.0f}s elapsed of {duration:.0f}s total."
             )
+    if progress_callback is not None and duration > 0:
+        await progress_callback("sleep finished.")
 
 
 async def _mock_response(request_text: str, progress_callback: ProgressCallback = None) -> str:
@@ -571,10 +586,18 @@ async def _mock_response(request_text: str, progress_callback: ProgressCallback 
     if "fail" in lowered:
         raise RuntimeError("Intentional failure requested by mock input")
     if "copilot" in lowered:
+        if progress_callback is not None:
+            await progress_callback("Calling probe_copilot...")
         reply = await _probe_copilot("Say hello back in one short sentence.")
+        if progress_callback is not None:
+            await progress_callback("probe_copilot finished.")
         return f"Copilot says: {reply}"
     if _BARE_GREETING_RE.match(request_text):
+        if progress_callback is not None:
+            await progress_callback("Calling pick_greeting_style...")
         style, phrase = _pick_greeting_style()
+        if progress_callback is not None:
+            await progress_callback("pick_greeting_style finished.")
         return (
             f"Hello from greetings_agent! You said: {request_text!r}. "
             f"{style}-style right back at you: {phrase}"
@@ -708,10 +731,8 @@ class GreetingsExecutor(AgentExecutor):
 
     def __init__(
         self,
-        task_store: TaskStore | None = None,
         push_sender: PushNotificationSender | None = None,
     ) -> None:
-        self._task_store = task_store or TASK_STORE
         self._push_sender = push_sender
         self._workers: dict[str, asyncio.Task[None]] = {}
         # The `event_queue` a cancel() call receives is a *fresh* tap
@@ -894,12 +915,17 @@ class GreetingsExecutor(AgentExecutor):
                 task_id=task_id, context_id=context_id, final=False, status=working.status
             )
         )
-        await self._notify(working)
+        # No self._notify() call here (or after the terminal event below):
+        # DefaultRequestHandler already sends a push notification through
+        # the same push_sender after it processes each event this pushes
+        # through event_queue (both message/send and message/stream wire
+        # this up) -- calling it here too would deliver every transition to
+        # push subscribers twice.
 
         # No CancelledError handling here: cancel() owns pushing the
-        # terminal event and writing task_store (see its docstring for why),
-        # so on cancellation this just propagates uncaught, same as any
-        # other coroutine that doesn't catch its own cancellation.
+        # terminal event (see its docstring for why), so on cancellation
+        # this just propagates uncaught, same as any other coroutine that
+        # doesn't catch its own cancellation.
         try:
             text, metadata = await _run_greeting_payload(request_text, _progress)
             state = TaskState.completed
@@ -915,7 +941,6 @@ class GreetingsExecutor(AgentExecutor):
                 task_id=task_id, context_id=context_id, final=True, status=terminal.status
             )
         )
-        await self._notify(terminal)
 
     async def _save_state(
         self,
@@ -926,30 +951,30 @@ class GreetingsExecutor(AgentExecutor):
         *,
         metadata: dict[str, Any] | None = None,
     ) -> Task:
-        """Read-modify-write the stored task; the store is what pollers observe."""
+        """Build the Task object for one status transition.
+
+        Deliberately does not touch a task store: every TaskStatusUpdateEvent
+        this builds gets pushed through event_queue and independently
+        persisted by the framework's own TaskManager once it consumes that
+        event (DefaultRequestHandler wires this for every message/send and
+        message/stream call). Persisting here too produced not just a
+        duplicate history entry per transition but sometimes a *stale* one --
+        TaskManager caches its own in-memory Task across the whole request
+        instead of re-reading the store after its first event, so a write
+        made here after that point was invisible to it, and it would
+        re-append whatever message its own stale copy still had instead.
+        """
         message = _text_message(text)
         if metadata:
             message.metadata = {k: v for k, v in metadata.items() if v not in (None, "", [])}
         status = TaskStatus(state=state, message=message, timestamp=_utc_now_iso())
-        task = await self._task_store.get(task_id)
-        if task is None:
-            task = Task(
-                id=task_id,
-                context_id=context_id,
-                history=[],
-                status=status,
-                metadata=dict(message.metadata or {}),
-            )
-        else:
-            task.status = status
-            if metadata:
-                task.metadata = {**dict(task.metadata or {}), **dict(message.metadata or {})}
-        if status.message is not None:
-            history = list(task.history or [])
-            history.append(status.message)
-            task.history = history
-        await self._task_store.save(task)
-        return task
+        return Task(
+            id=task_id,
+            context_id=context_id,
+            history=[],
+            status=status,
+            metadata=dict(message.metadata or {}),
+        )
 
     async def _notify(self, task: Task) -> None:
         if self._push_sender is None:
@@ -1037,7 +1062,7 @@ PUSH_CONFIG_STORE = InMemoryPushNotificationConfigStore()
 _push_httpx = httpx.AsyncClient(timeout=10.0)
 PUSH_SENDER = BasePushNotificationSender(_push_httpx, PUSH_CONFIG_STORE)
 _handler = DefaultRequestHandler(
-    agent_executor=GreetingsExecutor(task_store=TASK_STORE, push_sender=PUSH_SENDER),
+    agent_executor=GreetingsExecutor(push_sender=PUSH_SENDER),
     task_store=TASK_STORE,
     push_config_store=PUSH_CONFIG_STORE,
     push_sender=PUSH_SENDER,

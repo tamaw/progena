@@ -145,6 +145,34 @@ describe('normalizeBackendChatMessage', () => {
     });
   });
 
+  // Regression: an image-only subagent result has empty extracted text, so
+  // checking only `result` for truthiness never emitted a terminal
+  // subagent_result event, leaving the reconstructed card stuck "running"
+  // forever on reload and silently dropping the image.
+  it('still emits a terminal subagent_result for an image-only task result', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm6b',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'researcher', description: 'render a chart' },
+        result: '',
+        images: [{ url: 'data:image/png;base64,abc' }],
+      }],
+    }, 1);
+    const types = m.streamEvents.map((e) => e.eventType);
+    expect(types).toEqual(['subagent_start', 'subagent_result']);
+    expect(m.streamEvents[1].metadata).toMatchObject({
+      subagent_name: 'researcher',
+      tool_call_id: 'call_1',
+      success: true,
+      result_preview: '1 image',
+    });
+    expect(m.streamEvents[1].images).toEqual([{ url: 'data:image/png;base64,abc' }]);
+  });
+
   it('reconstructs a grouped subagent timeline card from the reloaded task call', () => {
     const m = normalizeBackendChatMessage({
       id: 'm7',

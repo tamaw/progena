@@ -47,7 +47,7 @@ def _build_handler(
 ) -> tuple[DefaultRequestHandler, InMemoryTaskStore]:
     task_store = store or InMemoryTaskStore()
     config_store = push_config_store or InMemoryPushNotificationConfigStore()
-    executor = GreetingsExecutor(task_store=task_store, push_sender=push_sender)
+    executor = GreetingsExecutor(push_sender=push_sender)
     handler = DefaultRequestHandler(
         agent_executor=executor,
         task_store=task_store,
@@ -254,6 +254,88 @@ async def test_push_notification_sent_on_completion(monkeypatch: pytest.MonkeyPa
 
 
 @pytest.mark.asyncio
+async def test_push_notification_not_sent_twice_per_transition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: GreetingsExecutor used to call self._notify() itself after
+    every enqueue_event(), duplicating the push notification
+    DefaultRequestHandler already sends via the same push_sender once it
+    processes that queued event -- each transition must be delivered once,
+    not twice."""
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    push_sender = AsyncMock()
+    handler, _store = _build_handler(push_sender=push_sender)
+
+    # Not a bare greeting (not anchored at the start, see the "thing hi"
+    # case in test_mock_response_bare_greeting_uses_a_random_style), not a
+    # steps/sleep/copilot trigger either -- the generic fallback branch,
+    # which reports no tool calls and so never invokes progress_callback.
+    # Keeps this test's expected count independent of how many progress
+    # transitions any particular mock branch happens to emit.
+    result = await handler.on_message_send(
+        MessageSendParams(
+            message=_make_text_message("thing hi"),
+            configuration=MessageSendConfiguration(blocking=False),
+        )
+    )
+    terminal = await _poll_terminal(handler, result.id)
+    assert terminal.status.state == TaskState.completed
+
+    # submitted, working, completed -- exactly one notification per
+    # transition, not two.
+    assert push_sender.send_notification.await_count == 3
+
+
+@pytest.mark.asyncio
+async def test_task_history_matches_exact_transition_sequence_with_no_duplicates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: GreetingsExecutor used to read-modify-write the task
+    store itself in _save_state() in addition to the framework's own
+    TaskManager persisting every queued TaskStatusUpdateEvent, so each
+    status message ended up appended to task.history twice. A multi-step
+    request (several sequential progress transitions after the first) is
+    what reliably exposed it: TaskManager caches its own in-memory Task
+    after its first event and stops re-reading the store, so from the
+    second transition onward it doesn't just duplicate but re-appends its
+    own *stale* cached message instead of the new one."""
+    monkeypatch.setenv("PROGENITOR_MOCK_LLM", "true")
+    handler, store = _build_handler()
+
+    result = await handler.on_message_send(
+        MessageSendParams(
+            message=_make_text_message("do a 3-step task: prep, build, verify"),
+            configuration=MessageSendConfiguration(blocking=False),
+        )
+    )
+    terminal = await _poll_terminal(handler, result.id)
+    assert terminal.status.state == TaskState.completed
+
+    saved = await store.get(result.id)
+    assert saved is not None
+    texts = [msg.parts[0].root.text for msg in (saved.history or [])]
+    # Mock mode is fully deterministic, so the exact sequence is known --
+    # note "Calling do_step..."/"do_step finished." legitimately repeats
+    # once per step (see test_run_mock_steps_bookends_each_step_with_do_step_lifecycle),
+    # so a same-text-appears-twice check can't tell that apart from the
+    # duplicate-persistence bug this guards against; only an exact sequence can.
+    assert texts == [
+        "do a 3-step task: prep, build, verify",
+        "Accepted: do a 3-step task: prep, build, verify",
+        "Working on your greeting...",
+        "Calling do_step...",
+        "Step 1/3: prep...",
+        "do_step finished.",
+        "Calling do_step...",
+        "Step 2/3: build...",
+        "do_step finished.",
+        "Calling do_step...",
+        "Step 3/3: verify...",
+        "do_step finished.",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_empty_request_fails_fast() -> None:
     queue = AsyncMock(spec=EventQueue)
     queue.enqueue_event = AsyncMock()
@@ -262,7 +344,7 @@ async def test_empty_request_fails_fast() -> None:
     context.context_id = "ctx-1"
     context.message = _make_text_message("   ")
 
-    await GreetingsExecutor(task_store=InMemoryTaskStore()).execute(context, queue)
+    await GreetingsExecutor().execute(context, queue)
 
     assert queue.enqueue_event.await_count == 1
     event = queue.enqueue_event.await_args.args[0]
@@ -561,9 +643,11 @@ async def test_run_mock_sleep_reports_progress_once_per_chunk(
 
     assert real_sleeps == [2.0, 2.0, 2.0]
     assert calls == [
+        "Calling sleep...",
         "Still working... 2s elapsed of 6s total.",
         "Still working... 4s elapsed of 6s total.",
         "Still working... 6s elapsed of 6s total.",
+        "sleep finished.",
     ]
 
 
@@ -585,7 +669,11 @@ async def test_run_mock_sleep_with_duration_shorter_than_one_chunk(
     await agent_module._run_mock_sleep(1.0, progress_callback)
 
     assert real_sleeps == [1.0]
-    assert calls == ["Still working... 1s elapsed of 1s total."]
+    assert calls == [
+        "Calling sleep...",
+        "Still working... 1s elapsed of 1s total.",
+        "sleep finished.",
+    ]
 
 
 @pytest.mark.asyncio
@@ -620,6 +708,70 @@ async def test_mock_response_bare_greeting_uses_a_random_style(
     assert await agent_module._mock_response("thing hi") == (
         "Hello from greetings_agent! You said: 'thing hi'"
     )
+
+
+@pytest.mark.asyncio
+async def test_run_mock_steps_bookends_each_step_with_do_step_lifecycle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: mock-mode progress used to emit only a generic "Step i/N"
+    ping per step, not the "Calling do_step..." / "do_step finished." pair
+    the real (non-mock) path emits for an actual do_step tool call -- so a
+    multi-step mock run couldn't exercise the per-tool lifecycle
+    display_tool_calls (see _run_greeting_payload) reports it as having."""
+    monkeypatch.setattr(agent_module.asyncio, "sleep", AsyncMock())
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._run_mock_steps(["prep", "build"], progress_callback)
+
+    assert calls == [
+        "Calling do_step...",
+        "Step 1/2: prep...",
+        "do_step finished.",
+        "Calling do_step...",
+        "Step 2/2: build...",
+        "do_step finished.",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mock_response_bare_greeting_reports_pick_greeting_style_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the bare-greeting mock branch recorded pick_greeting_style
+    in the final display_tool_calls metadata but never called
+    progress_callback at all, so a live viewer saw no progress for it."""
+    monkeypatch.setattr(
+        agent_module, "_pick_greeting_style", lambda: ("Australian", "G'day, mate!")
+    )
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._mock_response("hello", progress_callback)
+
+    assert calls == ["Calling pick_greeting_style...", "pick_greeting_style finished."]
+
+
+@pytest.mark.asyncio
+async def test_mock_response_copilot_branch_reports_probe_copilot_progress(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same class of bug as the bare-greeting case: the copilot mock branch
+    recorded probe_copilot in display_tool_calls but never reported progress."""
+    monkeypatch.setattr(agent_module, "_probe_copilot", AsyncMock(return_value="hi there"))
+    calls: list[str] = []
+
+    async def progress_callback(text: str) -> None:
+        calls.append(text)
+
+    await agent_module._mock_response("ask copilot please", progress_callback)
+
+    assert calls == ["Calling probe_copilot...", "probe_copilot finished."]
 
 
 def test_normalize_base_url_cases() -> None:
