@@ -192,4 +192,3 @@ describe('appendStreamEvent', () => {
     expect(events[0].content).toBe('c5'); // oldest 5 dropped
   });
 });
-

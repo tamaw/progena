@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
+import { selectRealtime } from '../store/realtimeSlice';
 import { useSearchParams } from 'react-router-dom';
 import {
   addEdge,
@@ -931,6 +932,7 @@ function WorkflowsInner() {
   const { show } = useNotifications();
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
+  const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
   const workflowRuns = useSelector(selectWorkflowRuns);
@@ -961,22 +963,29 @@ function WorkflowsInner() {
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
 
-  const loadWorkflows = useCallback(() => (
-    dispatch(fetchWorkflows({ workflowsUrl })).unwrap().catch((error) => {
+  const loadWorkflows = useCallback(async () => {
+    try {
+      await dispatch(fetchWorkflows({ workflowsUrl })).unwrap();
+    } catch (error) {
       show('error', 'Workflow load failed', error.message);
-    })
-  ), [dispatch, show, workflowsUrl]);
+    }
+  }, [dispatch, show, workflowsUrl]);
 
-  const loadRuns = useCallback(() => (
-    dispatch(fetchWorkflowRuns({ workflowRunsUrl })).unwrap().catch((error) => {
+  const loadRuns = useCallback(async () => {
+    try {
+      await dispatch(fetchWorkflowRuns({ workflowRunsUrl })).unwrap();
+    } catch (error) {
       show('error', 'Workflow runs load failed', error.message);
-    })
-  ), [dispatch, show, workflowRunsUrl]);
+    }
+  }, [dispatch, show, workflowRunsUrl]);
 
   useEffect(() => {
-    loadWorkflows();
-    loadRuns();
-  }, [loadRuns, loadWorkflows]);
+    if (!realtime.connected) {
+      return;
+    }
+    void loadWorkflows();
+    void loadRuns();
+  }, [loadRuns, loadWorkflows, realtime.connected]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -1005,14 +1014,13 @@ function WorkflowsInner() {
   }, [searchParams, selectedPath, setSearchParams]);
 
   useEffect(() => {
-    if (!selectedPath || selectedDetail) {
+    if (!realtime.connected || !selectedPath || selectedDetail) {
       return;
     }
     dispatch(fetchWorkflowContent({ workflowsUrl, path: selectedPath }))
       .unwrap()
       .catch((error) => show('error', 'Workflow detail load failed', error.message));
-  }, [dispatch, selectedDetail, selectedPath, show, workflowsUrl]);
-
+  }, [dispatch, realtime.connected, selectedDetail, selectedPath, show, workflowsUrl]);
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const filtered = workflows.filter((item) => {
@@ -1461,12 +1469,11 @@ function WorkflowsInner() {
     }
     setSaving(true);
     try {
-      const saved = await dispatch(saveWorkflow({
+      await dispatch(saveWorkflow({
         workflowsUrl,
         path: selectedPath,
         workflow: draftWorkflow,
       })).unwrap();
-      syncDraftFromWorkflow(saved.workflow, selectedLatestRun, saved.path);
     } catch (error) {
       show('error', 'Workflow save failed', error.message);
     } finally {
@@ -1482,8 +1489,7 @@ function WorkflowsInner() {
     setBusyAction(selectedDetail.workflow.paused ? 'resume' : 'pause');
     try {
       const action = selectedDetail.workflow.paused ? resumeWorkflow : pauseWorkflow;
-      const updated = await dispatch(action({ workflowsUrl, workflowId })).unwrap();
-      syncDraftFromWorkflow(updated.workflow, selectedLatestRun, updated.path);
+      await dispatch(action({ workflowsUrl, workflowId })).unwrap();
     } catch (error) {
       show('error', 'Workflow update failed', error.message);
     } finally {
@@ -1521,7 +1527,6 @@ function WorkflowsInner() {
     setBusyAction('delete');
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
-      setSelectedPath('');
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {

@@ -34,7 +34,7 @@ npm run test:e2e       # playwright (needs the full stack running)
 ## Backend wiring
 
 The frontend never talks to the runtime directly. `vite.config.js` has a custom
-proxy plugin that forwards `/health`, `/api/*`, and `/v1/*` to the backend at
+proxy plugin that forwards `/api/*` and `/v1/*` to the backend at
 `http://127.0.0.1:8000` (dev **and** preview). Everything else is served by Vite.
 
 ## Directory map (`src/`)
@@ -72,11 +72,10 @@ styles/                 # global stylesheets imported by App.jsx (+ workspace/no
 
 ## Core conventions (follow these)
 
-### API hooks — `hooks/api/`
-One core client + per-domain hooks. `useApiClient.js` owns fetch/headers/errors;
-domain hooks (`useChatApi`, `useWidgetsApi`, `useWorkspaceApi`, `useSchedulesApi`,
-`usePromptsApi`, `useSkillsApi`, `useTasksApi`, `useLogsApi`, `useAlertsApi`) build on
-it. Add new endpoints to the matching domain hook — do **not** reintroduce a god hook.
+### API requests — `store/`
+`store/http.js` owns acknowledged finite requests and request-ID helpers. Domain
+operations live in the Redux thunks under `store/uiData/`; pages consume their
+selectors and do not add direct JSON API hooks.
 
 ### State & realtime — `store/`
 - `store.js` wires the Redux store; `uiDataSlice.js` is split into per-domain modules

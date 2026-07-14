@@ -6,7 +6,8 @@ import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
-import { selectLastUiEvent } from '../store/realtimeSlice';
+import { selectUiEventQueue } from '../store/realtimeSlice';
+import { consumeUiEventQueue } from '../store/uiData/eventQueue';
 import {
   clearChatErrored,
   clearChatGenerating,
@@ -189,9 +190,9 @@ function ConversationPage() {
   const { threadId: urlThreadId } = useParams();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
-  const { connectionState, sendMessageStream, cancelStream, getSession, createSession } = useChatApi();
+  const { connectionState, sendMessageStream, cancelStream } = useChatApi();
   const { show } = useNotifications();
-  const lastUiEvent = useSelector(selectLastUiEvent);
+  const uiEventQueue = useSelector(selectUiEventQueue);
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
@@ -251,7 +252,7 @@ function ConversationPage() {
   const [composerFocusTick, setComposerFocusTick] = useState(0);
   const messagesEndRef = useRef(null);
   const titleInputRef = useRef(null);
-  const lastProcessedUiEventIdRef = useRef(null);
+  const lastProcessedUiEventSequenceRef = useRef(uiEventQueue.at(-1)?.sequence ?? 0);
   // Tracks the requestId of the fetch last applied to local `messages` state.
   // Each dispatch of requestChatSessionDetail carries a fresh requestId
   // (chats.js's active.requestId), so this differs across any two distinct
@@ -260,6 +261,9 @@ function ConversationPage() {
   // whenever this component had remounted since the id was last seen — e.g.
   // navigating to another nav item and back mid-stream.
   const lastAppliedBackendChatRequestIdRef = useRef(null);
+  // Draft creation is acknowledged separately from its causal session event.
+  // Register resolvers before dispatch so a fast stream event cannot be missed.
+  const pendingDraftSessionsRef = useRef(new Map());
   const hasAutoSelectedOnMountRef = useRef(false);
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
@@ -276,13 +280,13 @@ function ConversationPage() {
   // without marking the open chat unread).
   const reloadOpenChat = useCallback((threadId) => {
     lastAppliedBackendChatRequestIdRef.current = null;
-    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const requestId = crypto.randomUUID();
     dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
       requestId,
-    })).unwrap().catch((error) => show('error', 'Chat reload failed', error.message));
-  }, [dispatch, getApiUrl, show]);
+    }));
+  }, [dispatch, getApiUrl]);
 
   const {
     archivedSessions,
@@ -334,13 +338,34 @@ function ConversationPage() {
     dispatch(clearChatUnread(threadId));
     dispatch(clearChatErrored(threadId));
     lastAppliedBackendChatRequestIdRef.current = null;
-    const requestId = `chat-detail-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    await dispatch(requestChatSessionDetail({
+    dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
-      requestId,
-    })).unwrap();
+      requestId: crypto.randomUUID(),
+    }));
   }, [activeStreamIdRef, dispatch, getApiUrl, setIsGenerating]);
+
+  const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
+    const requestId = crypto.randomUUID();
+    let resolveSession;
+    const sessionEvent = new Promise((resolve) => {
+      resolveSession = resolve;
+    });
+    pendingDraftSessionsRef.current.set(requestId, resolveSession);
+
+    try {
+      await dispatch(ensureDraftChatSession({
+        chatsUrl: getApiUrl('chats'),
+        threadId: requestedThreadId || crypto.randomUUID(),
+        requestId,
+      })).unwrap();
+    } catch (error) {
+      pendingDraftSessionsRef.current.delete(requestId);
+      throw error;
+    }
+
+    return sessionEvent;
+  }, [dispatch, getApiUrl]);
 
   const materializeCurrentChatCard = useCallback(async (title) => {
     if (!threadId) {
@@ -352,7 +377,7 @@ function ConversationPage() {
     if (existingBackendCard) {
       return existingBackendCard;
     }
-    return dispatch(createChatSession({
+    await dispatch(createChatSession({
       chatsUrl: getApiUrl('chats'),
       title,
       threadId,
@@ -451,29 +476,18 @@ function ConversationPage() {
       if (quickChatHandoff) {
         localStorage.removeItem(config.storage.quickChatHandoff);
         initialQuickChatHandoffRef.current = null;
-        if (quickChatHandoff.threadId) {
-          setThreadId(quickChatHandoff.threadId);
-          return;
-        }
       }
 
       try {
-        const session = await getSession();
-        // A backend chat may have been selected (e.g. auto-select-on-mount)
-        // while this request was in flight - its detail-load effect already
-        // owns `threadId` at that point, so don't clobber it with the
-        // session's default draft id.
+        const session = await acquireDraftChat(quickChatHandoff?.threadId || null);
+        // A backend chat may have been selected while the draft was loading;
+        // leave its detail request as the owner of the active transcript.
         if (!cancelled && !selectedBackendChatIdRef.current) {
-          setThreadId(session.conversation_id || null);
+          await openBackendChat(session.thread_id);
         }
-      } catch {
-        try {
-          const session = await createSession();
-          if (!cancelled && !selectedBackendChatIdRef.current) {
-            setThreadId(session.conversation_id || null);
-          }
-        } catch (error) {
-          console.warn('[ConversationPage] Failed to initialize session:', error);
+      } catch (error) {
+        if (!cancelled) {
+          console.warn('[ConversationPage] Failed to initialize draft chat:', error);
         }
       }
     };
@@ -482,7 +496,7 @@ function ConversationPage() {
     return () => {
       cancelled = true;
     };
-  }, [config.storage.quickChatHandoff, createSession, getSession]);
+  }, [acquireDraftChat, config.storage.quickChatHandoff, openBackendChat]);
 
   useEffect(() => {
     const handlePromotedQuickChat = (event) => {
@@ -652,18 +666,26 @@ function ConversationPage() {
   }, [show]);
 
   useEffect(() => {
-    if (!lastUiEvent) {
-      return;
-    }
-    if (lastProcessedUiEventIdRef.current === lastUiEvent.id) {
-      return;
-    }
-    lastProcessedUiEventIdRef.current = lastUiEvent.id;
-    handleChatEvent({
-      type: lastUiEvent.type,
-      data: lastUiEvent.payload,
-    });
-  }, [handleChatEvent, lastUiEvent]);
+    lastProcessedUiEventSequenceRef.current = consumeUiEventQueue(
+      uiEventQueue,
+      lastProcessedUiEventSequenceRef.current,
+      ({ event }) => {
+        const payload = event?.payload;
+        if (
+          (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
+          && typeof payload?.request_id === 'string'
+          && typeof payload?.session?.thread_id === 'string'
+        ) {
+          const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
+          if (resolveSession) {
+            pendingDraftSessionsRef.current.delete(payload.request_id);
+            resolveSession(payload.session);
+          }
+        }
+        handleChatEvent({ type: event?.type, data: payload });
+      },
+    );
+  }, [handleChatEvent, uiEventQueue]);
 
   const handleQuickAction = useCallback((message) => {
     handleSend(message);
@@ -704,29 +726,15 @@ function ConversationPage() {
   }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
 
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
-    let draftThreadId = threadId;
-    if (forceFreshSession || !draftThreadId) {
-      const session = await createSession();
-      draftThreadId = session.conversation_id || null;
-    }
+    const session = await acquireDraftChat(forceFreshSession ? null : threadId);
+    const draftThreadId = session.thread_id;
 
     setIsEditingTitle(false);
-    const draftChat = await dispatch(ensureDraftChatSession({
-      chatsUrl: getApiUrl('chats'),
-      threadId: draftThreadId,
-    })).unwrap();
-    if (selectedBackendChatId !== draftChat.thread_id) {
-      await openBackendChat(draftChat.thread_id);
+    if (selectedBackendChatId !== draftThreadId) {
+      await openBackendChat(draftThreadId);
     }
-    return draftChat;
-  }, [
-    createSession,
-    dispatch,
-    getApiUrl,
-    openBackendChat,
-    selectedBackendChatId,
-    threadId,
-  ]);
+    return session;
+  }, [acquireDraftChat, openBackendChat, selectedBackendChatId, threadId]);
 
   const startNewChatSession = useCallback(async ({ archive = false } = {}) => {
     if (selectedBackendChatId && messages.length === 0 && chatTitle === DEFAULT_CHAT_TITLE) {

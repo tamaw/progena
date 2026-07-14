@@ -5,8 +5,10 @@
  * /api/ui/stream; the runtime indicators are also set imperatively by the chat
  * stream hook so route changes do not clear them.
  */
-import { createAsyncThunk, createSelector } from '@reduxjs/toolkit';
-import { requestJson, withQuery } from '../http';
+import { createSelector } from '@reduxjs/toolkit';
+import { createAcknowledgedThunk, requestAcknowledged } from './async';
+import { withQuery } from '../http';
+
 
 const emptyActive = () => ({
   threadId: null,
@@ -28,6 +30,7 @@ export const initialState = {
     loaded: false,
     loading: false,
     error: null,
+    requestId: null,
     requestedAt: null,
     lastRequestTotal: null,
     active: emptyActive(),
@@ -65,13 +68,6 @@ function upsertChat(chats, session) {
     ...(chats.byId[threadId] || {}),
     ...session,
   };
-}
-
-function moveChatToFront(chats, threadId) {
-  if (!threadId || !Array.isArray(chats.order) || !chats.order.includes(threadId)) {
-    return;
-  }
-  chats.order = [threadId, ...chats.order.filter((item) => item !== threadId)];
 }
 
 function addChatIfMissing(chats, session) {
@@ -126,71 +122,48 @@ function removeChatRuntimeId(ids, threadId) {
   return ids.filter((id) => id !== threadId);
 }
 
-export const fetchChatSessions = createAsyncThunk(
-  'uiData/fetchChatSessions',
-  ({ chatsUrl, includeArchived = true }) => requestJson(
+export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
+  return requestAcknowledged(
     withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
-    { errorLabel: 'Failed to load chats' },
-  ),
-);
-
-function unwrapChatMutationSession(response) {
-  if (response?.session && typeof response.session === 'object') {
-    return response.session;
-  }
-  return response;
-}
-
-export const requestChatSessionDetail = createAsyncThunk(
-  'uiData/requestChatSessionDetail',
-  async ({ chatsUrl, threadId, requestId }) => {
-    const session = await requestJson(
-      withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
-      { errorLabel: 'Failed to load chat' },
-    );
-    return { threadId, requestId, session };
-  },
-);
-
-export const createChatSession = createAsyncThunk(
-  'uiData/createChatSession',
-  async ({ chatsUrl, title, threadId }) => unwrapChatMutationSession(await requestJson(chatsUrl, {
+    { requestId },
+  );
+});
+export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    { requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const createChatSession = createAcknowledgedThunk('uiData/createChatSession', async ({ chatsUrl, title, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(chatsUrl, {
     method: 'POST',
     body: { title, thread_id: threadId },
-    errorLabel: 'Failed to create chat card',
-  })),
-);
-
-export const ensureDraftChatSession = createAsyncThunk(
-  'uiData/ensureDraftChatSession',
-  async ({ chatsUrl, threadId }) => unwrapChatMutationSession(await requestJson(
+    requestId,
+  });
+  return { ...acknowledgement, threadId };
+});
+export const ensureDraftChatSession = createAcknowledgedThunk('uiData/ensureDraftChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
     `${chatsUrl.replace(/\/$/, '')}/draft`,
-    {
-      method: 'POST',
-      body: { thread_id: threadId },
-      errorLabel: 'Failed to open draft chat',
-    },
-  )),
-);
-
-export const updateChatSessionMetadata = createAsyncThunk(
-  'uiData/updateChatSessionMetadata',
-  async ({ chatsUrl, threadId, patch }) => unwrapChatMutationSession(await requestJson(
+    { method: 'POST', body: { thread_id: threadId }, requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const updateChatSessionMetadata = createAcknowledgedThunk('uiData/updateChatSessionMetadata', async ({ chatsUrl, threadId, patch }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
     `${chatsUrl}/${encodeURIComponent(threadId)}`,
-    { method: 'PATCH', body: patch, errorLabel: 'Failed to update chat' },
-  )),
-);
-
-export const deleteChatSession = createAsyncThunk(
-  'uiData/deleteChatSession',
-  async ({ chatsUrl, threadId }) => {
-    await requestJson(`${chatsUrl}/${encodeURIComponent(threadId)}`, {
-      method: 'DELETE',
-      errorLabel: 'Failed to delete chat',
-    });
-    return { threadId };
-  },
-);
+    { method: 'PATCH', body: patch, requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const deleteChatSession = createAcknowledgedThunk('uiData/deleteChatSession', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${chatsUrl}/${encodeURIComponent(threadId)}`,
+    { method: 'DELETE', requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
 
 export const reducers = {
   setUnreadChatIds(state, action) {
@@ -242,8 +215,12 @@ export const eventHandlers = {
   'chat.sessions.snapshot': (state, payload) => {
     replaceChatList(state.chats, payload.sessions);
     state.chats.loaded = true;
-    state.chats.loading = false;
-    state.chats.error = null;
+    if (!state.chats.loading || payload.request_id === state.chats.requestId) {
+      state.chats.loading = false;
+      state.chats.error = null;
+      state.chats.requestId = null;
+      state.chats.requestedAt = new Date().toISOString();
+    }
   },
   'chat.session.created': (state, payload) => {
     upsertChat(state.chats, payload.session);
@@ -260,17 +237,17 @@ export const eventHandlers = {
     state.chats.loaded = true;
   },
   'chat.session.selected': (state, payload) => {
-    if (
-      payload.request_id
-      && state.chats.active.requestId
-      && payload.request_id !== state.chats.active.requestId
-    ) {
+    if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) {
       return;
     }
     state.chats.active.detail = payload.session || null;
     state.chats.active.threadId = payload.session?.thread_id || null;
     state.chats.active.loading = false;
     state.chats.active.error = null;
+    // Keep the applied request ID until ConversationPage copies the event-owned
+    // detail into its rendered message list. Clearing it here makes the page's
+    // null-initialized hydration guard treat the new detail as already applied.
+    state.chats.active.requestId = payload.request_id || state.chats.active.requestId;
   },
   'chat.session.deleted': (state, payload) => {
     deleteChatFromList(state.chats, payload.thread_id);
@@ -282,69 +259,29 @@ export const eventHandlers = {
 
 export function buildExtraReducers(builder) {
   builder
-    .addCase(fetchChatSessions.pending, (state) => {
+    .addCase(fetchChatSessions.pending, (state, action) => {
       state.chats.loading = true;
       state.chats.error = null;
-    })
-    .addCase(fetchChatSessions.fulfilled, (state, action) => {
-      state.chats.loading = false;
-      state.chats.requestedAt = new Date().toISOString();
-      state.chats.lastRequestTotal = Number.isFinite(action.payload?.total)
-        ? action.payload.total
-        : state.chats.lastRequestTotal;
+      state.chats.requestId = action.meta.requestId;
     })
     .addCase(fetchChatSessions.rejected, (state, action) => {
+      if (state.chats.requestId !== action.meta.requestId) {
+        return;
+      }
       state.chats.loading = false;
       state.chats.error = action.error?.message || 'Failed to load chats';
+      state.chats.requestId = null;
     })
     .addCase(requestChatSessionDetail.pending, (state, action) => {
       state.chats.active.threadId = action.meta.arg.threadId;
       state.chats.active.loading = true;
       state.chats.active.error = null;
-      state.chats.active.requestId = action.meta.arg.requestId;
-    })
-    .addCase(requestChatSessionDetail.fulfilled, (state, action) => {
-      if (state.chats.active.requestId === action.payload.requestId) {
-        state.chats.active.loading = false;
-        if (action.payload.session?.thread_id === action.payload.threadId) {
-          upsertChat(state.chats, action.payload.session);
-          state.chats.active.detail = action.payload.session;
-          state.chats.active.threadId = action.payload.threadId;
-          state.chats.active.error = null;
-        }
-      }
+      state.chats.active.requestId = action.meta.requestId;
     })
     .addCase(requestChatSessionDetail.rejected, (state, action) => {
-      if (state.chats.active.requestId === action.meta.arg.requestId) {
+      if (state.chats.active.requestId === action.meta.requestId) {
         state.chats.active.loading = false;
         state.chats.active.error = action.error?.message || 'Failed to load chat';
-      }
-    })
-    .addCase(ensureDraftChatSession.fulfilled, (state, action) => {
-      const threadId = action.payload?.thread_id;
-      if (!threadId) {
-        return;
-      }
-      upsertChat(state.chats, action.payload);
-      moveChatToFront(state.chats, threadId);
-      mergeActiveDetail(state.chats.active, action.payload);
-    })
-    .addCase(updateChatSessionMetadata.fulfilled, (state, action) => {
-      const threadId = action.payload?.thread_id;
-      if (!threadId) {
-        return;
-      }
-      upsertChat(state.chats, action.payload);
-      if (action.meta.arg?.patch?.touch === true) {
-        moveChatToFront(state.chats, threadId);
-      }
-      mergeActiveDetail(state.chats.active, action.payload);
-    })
-    .addCase(deleteChatSession.fulfilled, (state, action) => {
-      const threadId = action.payload?.threadId;
-      deleteChatFromList(state.chats, threadId);
-      if (state.chats.active.threadId === threadId) {
-        state.chats.active = emptyActive();
       }
     });
 }

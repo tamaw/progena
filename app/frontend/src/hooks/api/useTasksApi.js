@@ -1,29 +1,33 @@
 import { useCallback } from 'react';
-import { useApiClient } from './useApiClient';
+import { useConfig } from '../../context/ConfigContext';
+import { requestAcknowledged } from '../../store/http';
 
-/** Kanban card mutations + task activity creation (Tasks page). */
+/** Kanban mutations and activity creation acknowledge immediately; state arrives on /api/ui/stream. */
 export function useTasksApi() {
-  const { request } = useApiClient();
+  const { getApiUrl } = useConfig();
 
   const updateKanbanCard = useCallback(
-    (cardId, payload) => request(`/api/ui/kanban/cards/${cardId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    }),
-    [request],
+    ({ cardId, payload }) => requestAcknowledged(
+      `${getApiUrl('kanban')}/cards/${encodeURIComponent(cardId)}`,
+      { method: 'PATCH', body: payload, requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
   const deleteKanbanCard = useCallback(
-    (cardId) => request(`/api/ui/kanban/cards/${cardId}`, { method: 'DELETE' }),
-    [request],
+    ({ cardId }) => requestAcknowledged(
+      `${getApiUrl('kanban')}/cards/${encodeURIComponent(cardId)}`,
+      { method: 'DELETE', requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
   const createTaskActivity = useCallback(
-    (cardId, payload) => request(`/api/ui/tasks/${cardId}/activity`, {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    }),
-    [request],
+    ({ cardId, payload }) => requestAcknowledged(
+      getApiUrl(`/api/ui/tasks/${encodeURIComponent(cardId)}/activity`),
+      { method: 'POST', body: payload, requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
   return { updateKanbanCard, deleteKanbanCard, createTaskActivity };

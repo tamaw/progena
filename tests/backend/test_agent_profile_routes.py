@@ -9,7 +9,8 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from ack_helpers import assert_acknowledged
+from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from app.backend.agent_profile_routes import (
@@ -91,13 +92,23 @@ class FakeAgentStore:
         return payload
 
 
+def _install_request_id_middleware(app: FastAPI) -> None:
+    @app.middleware("http")
+    async def request_id_middleware(request: Request, call_next):
+        request_id = request.headers.get("X-Request-ID") or "test-middleware-request-id"
+        request.state.request_id = request_id
+        response = await call_next(request)
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+
 @pytest.fixture
 def harness(monkeypatch):
     store = FakeAgentStore()
     events: list[tuple[str, dict[str, Any]]] = []
 
-    def broadcast(event_type, payload, **_kwargs):
-        events.append((event_type, payload))
+    def broadcast(event_type, payload, **kwargs):
+        events.append((event_type, payload, kwargs))
         return None
 
     # The list/detail routes read A2A/ACP agents through from Progenitor's
@@ -109,6 +120,7 @@ def harness(monkeypatch):
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
 
     app = FastAPI()
+    _install_request_id_middleware(app)
     app.include_router(
         create_agent_profile_router(get_agent_store=lambda: store, broadcast_ui_event=broadcast),
         prefix="/api/ui",
@@ -116,31 +128,49 @@ def harness(monkeypatch):
     return TestClient(app), events
 
 
-def test_list_publishes_snapshot(harness):
+def test_list_publishes_request_correlated_snapshot(harness):
+    """The accepted client ID resolves on the canonical agents snapshot."""
     client, events = harness
-    response = client.get("/api/ui/agent-profiles")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["total"] == 2
-    assert {a["id"] for a in body["agents"]} == {"alpha", "beta"}
-    assert events[-1][0] == "agents.snapshot"
+    request_id = "b6ae12d0-8c70-4e3d-883d-89c89a1a2049"
+
+    response = client.get(
+        "/api/ui/agent-profiles",
+        headers={"X-Request-ID": request_id},
+    )
+
+    assert_acknowledged(response, ["agents.snapshot"], request_id)
+    snapshot_events = [
+        (payload, kwargs)
+        for event_type, payload, kwargs in events
+        if event_type == "agents.snapshot"
+    ]
+    assert len(snapshot_events) == 1
+    snapshot, event_kwargs = snapshot_events[0]
+    assert event_kwargs["request_id"] == request_id
+    assert snapshot["total"] == 2
+    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta"}
 
 
 def test_list_includes_skills(harness):
-    client, _ = harness
-    body = client.get("/api/ui/agent-profiles").json()
-    alpha = next(a for a in body["agents"] if a["id"] == "alpha")
+    client, events = harness
+    response = client.get("/api/ui/agent-profiles")
+    assert_acknowledged(response, ["agents.snapshot"])
+    snapshot_events = [(t, p) for t, p, _ in events if t == "agents.snapshot"]
+    assert len(snapshot_events) == 1
+    alpha = next(a for a in snapshot_events[0][1]["agents"] if a["id"] == "alpha")
     assert alpha["skills"] == [{"id": "demo", "name": "Demo", "description": "x", "tags": ["t"]}]
 
 
 def test_detail_publishes_upsert_and_selected(harness):
     client, events = harness
-    response = client.get("/api/ui/agent-profiles/alpha?request_id=req-1")
-    assert response.status_code == 200
-    assert response.json()["graph"]["nodes"]
+    response = client.get(
+        "/api/ui/agent-profiles/alpha",
+        headers={"X-Request-ID": "req-1"},
+    )
+    assert_acknowledged(response, ["agent.upserted", "agent.selected"], "req-1")
     types = [e[0] for e in events]
     assert "agent.upserted" in types
-    selected = next(p for t, p in events if t == "agent.selected")
+    selected = next(kwargs for t, p, kwargs in events if t == "agent.selected")
     assert selected["request_id"] == "req-1"
 
 
@@ -150,15 +180,9 @@ def test_detail_unknown_returns_404(harness):
 
 
 def test_graph_schema_published(harness):
+    """Graph schema endpoint was deleted - should return 404."""
     client, _ = harness
-    response = client.get("/api/ui/agent-profiles/graph-schema")
-    assert response.status_code == 200
-    schema = response.json()
-    assert schema["title"] == "AgentGraph"
-    node_props = schema["properties"]["nodes"]["items"]["properties"]
-    kinds = node_props["kind"]["enum"]
-    assert {"start", "ask", "tool", "decision", "end"} <= set(kinds)
-    assert "prompt" in node_props and "tool" in node_props
+    assert client.get("/api/ui/agent-profiles/graph-schema").status_code == 404
 
 
 def test_graph_update_persists_and_broadcasts(harness):
@@ -169,12 +193,16 @@ def test_graph_update_persists_and_broadcasts(harness):
         "status": "Designed",
     }
     response = client.patch("/api/ui/agent-profiles/alpha/graph", json=payload)
-    assert response.status_code == 200
-    assert response.json()["status"] == "Designed"
+    assert_acknowledged(response, ["agent.graph.updated"])
     assert events[-1][0] == "agent.graph.updated"
-    # Persisted: subsequent detail returns the new graph.
-    detail = client.get("/api/ui/agent-profiles/alpha").json()
-    assert detail["graph"]["status"] == "Designed"
+    # Broadcast payload contains updated graph data
+    graph_payload = events[-1][1]
+    assert graph_payload["graph"]["status"] == "Designed"
+    # Persisted: subsequent detail broadcasts the new graph data
+    detail_resp = client.get("/api/ui/agent-profiles/alpha")
+    assert_acknowledged(detail_resp, ["agent.upserted", "agent.selected"])
+    detail_upserted = next(p for t, p, _ in events if t == "agent.upserted")
+    assert detail_upserted["agent"]["graph"]["status"] == "Designed"
 
 
 def test_graph_update_invalid_returns_422(harness):
@@ -210,13 +238,17 @@ def _a2a_profile(agent_id: str = "a2a-observe") -> dict[str, Any]:
 
 
 def test_list_merges_subagents_and_read_through_a2a(harness, monkeypatch):
-    client, _ = harness
+    client, events = harness
     import app.backend.agent_profile_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
-    body = client.get("/api/ui/agent-profiles").json()
-    assert {a["id"] for a in body["agents"]} == {"alpha", "beta", "a2a-observe"}
-    observe = next(a for a in body["agents"] if a["id"] == "a2a-observe")
+    response = client.get("/api/ui/agent-profiles")
+    assert_acknowledged(response, ["agents.snapshot"])
+    snapshot_events = [(t, p) for t, p, _ in events if t == "agents.snapshot"]
+    assert len(snapshot_events) == 1
+    snapshot = snapshot_events[0][1]
+    assert {a["id"] for a in snapshot["agents"]} == {"alpha", "beta", "a2a-observe"}
+    observe = next(a for a in snapshot["agents"] if a["id"] == "a2a-observe")
     assert observe["kind"] == "a2a"
     assert observe["graph"] is None
     assert observe["card"]["protocolVersion"] == "0.3.0"
@@ -228,11 +260,14 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles/a2a-observe?request_id=r2")
-    assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "running"
-    assert [t["id"] for t in body["tasks"]] == ["t1"]
-    assert body["metrics"]["checkpoints"] == "1"
+    assert_acknowledged(
+        response, ["agent.upserted", "agent.selected"], "test-middleware-request-id"
+    )
+    # Agent data is broadcast, not in the response
+    upserted_event = next(p for t, p, _ in events if t == "agent.upserted")
+    assert upserted_event["agent"]["status"] == "running"
+    assert [t["id"] for t in upserted_event["agent"]["tasks"]] == ["t1"]
+    assert upserted_event["agent"]["metrics"]["checkpoints"] == "1"
     assert client.get("/api/ui/agent-profiles/a2a-missing").status_code == 404
 
 
@@ -244,6 +279,7 @@ def test_graph_update_rejected_for_a2a(harness):
 
 def test_store_unavailable_returns_503():
     app = FastAPI()
+    _install_request_id_middleware(app)
     app.include_router(
         create_agent_profile_router(
             get_agent_store=lambda: None, broadcast_ui_event=lambda *a, **k: None

@@ -126,15 +126,19 @@ floor* underneath the hand-rolled semantic validation (cron parsing, timestamp
 parsing, etc.) in each `validate_*_document` function — this exists so the
 schema and the code can't silently drift apart.
 
-## Surface 2: backend HTTP widget CRUD (`app/backend/ui_routes.py`)
+## Surface 2: backend acknowledgement routes (`app/backend/ui_routes.py`)
 
-The frontend's Workspace/Schedules widgets go through
-`patch_widget`/`delete_widget`/`create_*` endpoints, dispatched on a
-`widget_id` prefix (`schedule:`, `event:`, `mcp:`, `mcp_tool:`). Every branch
-follows the same skeleton — read whole doc → find entry by id → mutate fields
-→ write whole doc → invalidate the `StateReader` cache → broadcast an SSE
-event — and three of the four branches (`schedule:`, `event:`, `mcp:`) share
-that skeleton via two small helpers:
+The retained widget, schedule, event-widget, MCP, kanban, and task routes are
+finite command/query routes. Each browser request carries `X-Request-ID`,
+persists its document change or builds its snapshot, enqueues the causal
+canonical `/api/ui/stream` event, and then returns only an HTTP `202 Accepted`
+acknowledgement with exactly `{request_id, event_types}`. No state-document payload is a successful HTTP response
+body.
+
+The document writers still use the same narrow state operation shape: read the
+whole document, locate an entry, mutate it, write the whole document, and
+invalidate the `StateReader` cache. The shared helpers keep that mechanical
+work local without hiding domain validation:
 
 ```python
 def _patch_document_entry(*, entries, entry_id, apply, save, not_found_detail="Widget not found") -> dict:
@@ -153,33 +157,37 @@ def _delete_document_entry(*, entries, entry_id, save) -> bool:
     return True
 ```
 
-Each call site keeps its own `apply` closure (schedule's cron/scheduled_at
-resolution, event's type validation + default summary, mcp's rename guard)
-and its own `save` closure (which document to re-read/write and which cache
-key to invalidate) — those parts are genuinely different per type and are not
-forced into the helper. A third helper, `_widget_or_fallback`, covers the
-"look up the fresh widget via `get_widgets()`, else build a synthetic
-stand-in for cache staleness" pattern that appears identically in all three
-branches, while leaving the fallback dict's fields (which differ per type) to
-the caller.
+Schedule, event-widget, and MCP entries retain their own validation and save
+closures because their document shapes differ. Kanban is deliberately separate:
+it is one document per card and maintains card order and task activity; it is
+not a candidate for dict-entry helper reuse.
 
-**Deliberately excluded from these helpers**, with reasons — don't try to fold
-these in later without re-checking the reasoning still holds:
+### Publish after persistence
 
-- **Kanban** (`create_kanban_card`/`patch_kanban_card`/`delete_kanban_card`)
-  doesn't go through `patch_widget`/`delete_widget` at all. It has its own
-  per-card-document CRUD that also maintains `card_order` and emits
-  task-activity log entries — a different, already-appropriate shape for a
-  one-document-per-entry model.
-- **`mcp_tool:`** is a ~15-line single-field enabled/disabled toggle over a
-  runtime-owned *list* keyed by tool **name**, not id. Routing it through the
-  dict-shaped helpers would save nothing and would require reshaping a list
-  into a dict for no benefit.
+After a document write succeeds, the backend enqueues the complete event data
+required for Redux hydration and includes the request ID in `payload.request_id`.
+Typical event types are `widgets.updated`, `mcp.snapshot`, `schedule.snapshot`,
+`kanban.snapshot`, `task.content.updated`, and `task.activity.updated`.
+The acknowledgement is returned only after those causal event(s) have been
+enqueued. Deletes follow this same `202` acknowledgement pattern; none return
+`204 No Content`.
 
-`state_reader.py` mirrors the same dict-keyed-by-id assumption when reading
-`schedule.json`/`event_widgets` off disk for the read-only `GET` endpoints —
-keep both sides (`ui_routes.py`'s writers, `state_reader.py`'s readers) in
-sync if the shape ever changes again.
+## Frontend state ownership
+
+**Redux is the sole durable frontend application-data owner.** Events from
+`/api/ui/stream` are the only hydration path for application state:
+
+1. `realtimeListener.js` owns the single `EventSource` to `/api/ui/stream`.
+2. `realtimeSlice.js` deduplicates incoming envelope `id` values and records
+   pending finite operations by `request_id`.
+3. Domain reducers in `uiDataSlice.js` apply typed events idempotently.
+4. Components render memoized selectors.
+
+An acknowledgement records acceptance only. A matching event type and
+`payload.request_id` resolve the originating pending operation. Events from
+other tabs/processes still update Redux but must not resolve this tab's
+unrelated operation. There are no legacy response-body hydration paths, direct
+state reads, `/api/ui/events` streams, or `/api/ui/status` streams.
 
 ## Adding a new state document: checklist
 

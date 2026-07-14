@@ -1,26 +1,23 @@
 import { useCallback } from 'react';
-import { useApiClient } from './useApiClient';
+import { useConfig } from '../../context/ConfigContext';
+import { requestAcknowledged } from '../../store/http';
 
-/** Schedule listing, creation and re-trigger (Schedules page, Workspace context). */
+/** Schedule operations acknowledge immediately; state arrives on /api/ui/stream. */
 export function useSchedulesApi() {
-  const { request } = useApiClient();
+  const { getApiUrl } = useConfig();
 
-  const getSchedules = useCallback(() => request('schedules'), [request]);
-
-  const createSchedule = useCallback(
-    (payload) => request('schedules', { method: 'POST', body: JSON.stringify(payload) }),
-    [request],
+  const getSchedules = useCallback(
+    () => requestAcknowledged(getApiUrl('schedules'), { requestId: crypto.randomUUID() }),
+    [getApiUrl],
   );
 
   const retriggerSchedule = useCallback(
-    // Use the full path: getApiUrl only maps exact endpoint keys (e.g.
-    // "schedules"), so a sub-path must include the /api/ui prefix itself.
-    (scheduleId, text) => request(`/api/ui/schedules/${scheduleId}/trigger`, {
-      method: 'POST',
-      body: JSON.stringify({ text }),
-    }),
-    [request],
+    (scheduleId, text) => requestAcknowledged(
+      `${getApiUrl('schedules')}/${encodeURIComponent(scheduleId)}/trigger`,
+      { method: 'POST', body: { text }, requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
-  return { getSchedules, createSchedule, retriggerSchedule };
+  return { getSchedules, retriggerSchedule };
 }

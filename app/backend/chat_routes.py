@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Callable
-from typing import Any, Literal, Protocol
+from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Request
 
 from .chat_sessions import (
     ChatCreateRequest,
     ChatDraftRequest,
-    ChatMutationResponse,
     ChatPatchRequest,
     ChatSessionDetail,
     ChatSessionsResponse,
-    UiEventEnvelope,
+    UiRequestAcknowledgement,
+    acknowledgement_response,
     acquire_reusable_draft,
     create_chat_metadata,
     current_state_chat_detail,
@@ -25,23 +26,27 @@ from .chat_sessions import (
     patch_chat_metadata,
 )
 from .document_store import BackendDocumentStore
+from .request_utils import (
+    BroadcastUiEvent,
+)
+from .request_utils import (
+    request_correlation_id as _strict_request_correlation_id,
+)
 
 
-class BroadcastUiEvent(Protocol):
-    def __call__(
-        self,
-        event_type: str,
-        payload: dict[str, Any],
-        *,
-        scope: Literal["global", "session", "chat"] = "global",
-        session_id: str | None = None,
-    ) -> UiEventEnvelope: ...
+def request_correlation_id(request: Request, header_request_id: str | None) -> str:
+    """Resolve the middleware ID, explicitly falling back for standalone chat use."""
+    try:
+        return _strict_request_correlation_id(request, header_request_id)
+    except RuntimeError:
+        return str(uuid.uuid4())
 
 
 def chat_sessions_response(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     include_archived: bool = False,
+    request_id: str | None = None,
 ) -> ChatSessionsResponse:
     sessions = list_chat_sessions(
         get_document_store(),
@@ -55,6 +60,7 @@ def broadcast_chat_sessions_snapshot(
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
     include_archived: bool = True,
+    request_id: str | None = None,
 ) -> ChatSessionsResponse:
     response = chat_sessions_response(
         get_document_store=get_document_store,
@@ -64,6 +70,7 @@ def broadcast_chat_sessions_snapshot(
         "chat.sessions.snapshot",
         response.model_dump(),
         scope="chat",
+        request_id=request_id,
     )
     return response
 
@@ -76,11 +83,14 @@ def create_chat_router(
 ) -> APIRouter:
     router = APIRouter()
 
-    def broadcast_snapshot(include_archived: bool = True) -> ChatSessionsResponse:
+    def broadcast_snapshot(
+        include_archived: bool = True, request_id: str | None = None
+    ) -> ChatSessionsResponse:
         return broadcast_chat_sessions_snapshot(
             get_document_store=get_document_store,
             broadcast_ui_event=broadcast_ui_event,
             include_archived=include_archived,
+            request_id=request_id,
         )
 
     def current_state_detail(thread_id: str) -> ChatSessionDetail | None:
@@ -120,19 +130,28 @@ def create_chat_router(
             return live
         return persisted
 
-    @router.get("/chats", response_model=ChatSessionsResponse)
-    async def get_chats(include_archived: bool = False):
+    @router.get("/chats", status_code=202, response_model=UiRequestAcknowledgement)
+    async def get_chats(
+        request: Request,
+        include_archived: bool = False,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Acknowledge chat list requests and publish the list on the UI stream."""
-        response = chat_sessions_response(
-            get_document_store=get_document_store,
+        request_id = request_correlation_id(request, x_request_id)
+        broadcast_snapshot(
             include_archived=include_archived,
+            request_id=request_id,
         )
-        broadcast_snapshot()
-        return response
+        return acknowledgement_response(request_id, ["chat.sessions.snapshot"])
 
-    @router.post("/chats", response_model=ChatMutationResponse)
-    async def create_chat(request: ChatCreateRequest):
+    @router.post("/chats", status_code=202, response_model=UiRequestAcknowledgement)
+    async def create_chat(
+        request: ChatCreateRequest,
+        http_request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Create backend-owned chat UI metadata without duplicating transcripts."""
+        request_id = request_correlation_id(http_request, x_request_id)
         store = get_document_store()
         try:
             metadata = create_chat_metadata(store, request)
@@ -141,44 +160,77 @@ def create_chat_router(
         detail = get_chat_detail(store, metadata["thread_id"])
         if detail is None:
             raise HTTPException(status_code=500, detail="Created chat metadata could not be loaded")
-        broadcast_ui_event("chat.session.created", {"session": detail.model_dump()}, scope="chat")
-        broadcast_snapshot()
-        return ChatMutationResponse(session=detail)
+        broadcast_ui_event(
+            "chat.session.created",
+            {"session": detail.model_dump()},
+            scope="chat",
+            request_id=request_id,
+        )
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(
+            request_id, ["chat.session.created", "chat.sessions.snapshot"]
+        )
 
-    @router.post("/chats/draft", response_model=ChatMutationResponse)
-    async def acquire_draft_chat(request: ChatDraftRequest):
+    @router.post("/chats/draft", status_code=202, response_model=UiRequestAcknowledgement)
+    async def acquire_draft_chat(
+        request: ChatDraftRequest,
+        http_request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Reuse the newest empty draft chat or create a new one."""
+        request_id = request_correlation_id(http_request, x_request_id)
         store = get_document_store()
         try:
             detail, created = acquire_reusable_draft(store, request)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         event_type = "chat.session.created" if created else "chat.session.metadata.updated"
-        broadcast_ui_event(event_type, {"session": detail.model_dump()}, scope="chat")
-        broadcast_snapshot()
-        return ChatMutationResponse(session=detail)
+        broadcast_ui_event(
+            event_type, {"session": detail.model_dump()}, scope="chat", request_id=request_id
+        )
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, [event_type, "chat.sessions.snapshot"])
 
-    @router.get("/chats/{thread_id}", response_model=ChatSessionDetail)
-    async def get_chat(thread_id: str, request_id: str | None = None):
+    @router.get("/chats/{thread_id}", status_code=202, response_model=UiRequestAcknowledgement)
+    async def get_chat(
+        thread_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Acknowledge chat detail requests and publish the detail on the UI stream."""
+        request_id = request_correlation_id(request, x_request_id)
         detail = prefer_live_detail(
             get_chat_detail(get_document_store(), thread_id),
             current_state_detail(thread_id),
         )
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
-        broadcast_ui_event("chat.session.upserted", {"session": detail.model_dump()}, scope="chat")
+        broadcast_ui_event(
+            "chat.session.upserted",
+            {"session": detail.model_dump()},
+            scope="chat",
+            request_id=request_id,
+        )
         broadcast_ui_event(
             "chat.session.selected",
-            {"session": detail.model_dump(), "request_id": request_id},
+            {"session": detail.model_dump()},
             scope="chat",
             session_id=thread_id,
+            request_id=request_id,
         )
-        return detail
+        return acknowledgement_response(
+            request_id, ["chat.session.upserted", "chat.session.selected"]
+        )
 
-    @router.patch("/chats/{thread_id}", response_model=ChatMutationResponse)
-    async def patch_chat(thread_id: str, request: ChatPatchRequest):
+    @router.patch("/chats/{thread_id}", status_code=202, response_model=UiRequestAcknowledgement)
+    async def patch_chat(
+        thread_id: str,
+        request: ChatPatchRequest,
+        http_request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Update backend-owned chat UI metadata."""
+        request_id = request_correlation_id(http_request, x_request_id)
         store = get_document_store()
         metadata = patch_chat_metadata(store, thread_id, request)
         if metadata is None:
@@ -198,13 +250,21 @@ def create_chat_router(
             {"session": detail.model_dump()},
             scope="chat",
             session_id=thread_id,
+            request_id=request_id,
         )
-        broadcast_snapshot()
-        return ChatMutationResponse(session=detail)
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(
+            request_id, ["chat.session.metadata.updated", "chat.sessions.snapshot"]
+        )
 
-    @router.delete("/chats/{thread_id}", status_code=204)
-    async def delete_chat(thread_id: str):
+    @router.delete("/chats/{thread_id}", status_code=202, response_model=UiRequestAcknowledgement)
+    async def delete_chat(
+        thread_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
         """Soft-delete backend chat UI metadata."""
+        request_id = request_correlation_id(request, x_request_id)
         store = get_document_store()
         deleted = delete_chat_metadata(store, thread_id)
         if not deleted:
@@ -219,8 +279,11 @@ def create_chat_router(
             {"thread_id": thread_id},
             scope="chat",
             session_id=thread_id,
+            request_id=request_id,
         )
-        broadcast_snapshot()
-        return None
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(
+            request_id, ["chat.session.deleted", "chat.sessions.snapshot"]
+        )
 
     return router

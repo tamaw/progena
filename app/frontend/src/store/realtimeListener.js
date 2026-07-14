@@ -1,13 +1,15 @@
-import { createAction, createListenerMiddleware } from '@reduxjs/toolkit';
+import { createAction, createListenerMiddleware, isFulfilled, isPending, isRejected } from '@reduxjs/toolkit';
 import {
   realtimeConnected,
   realtimeConnecting,
   realtimeDisconnected,
   realtimeErrored,
   uiEventReceived,
+  registerPendingOp,
+  failPendingOp,
+  resolvePendingOp,
 } from './realtimeSlice';
 import { applyUiEvent } from './uiDataSlice';
-
 export const startRealtimeStream = createAction('realtime/startStream');
 export const stopRealtimeStream = createAction('realtime/stopStream');
 
@@ -15,6 +17,44 @@ export const realtimeListenerMiddleware = createListenerMiddleware();
 
 let eventSource = null;
 let activeStreamUrl = null;
+
+function isUiDataThunkLifecycle(action) {
+  return action.type.startsWith('uiData/');
+}
+
+function requestIdFor(action) {
+  return action.meta?.requestId || action.meta?.arg?.requestId || null;
+}
+
+function invalidEnvelopeReason(event) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
+    return 'envelope must be an object';
+  }
+  if (typeof event.id !== 'string' || !event.id) {
+    return 'envelope id is required';
+  }
+  if (typeof event.type !== 'string' || !event.type) {
+    return 'envelope type is required';
+  }
+  if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload)) {
+    return 'envelope payload must be an object';
+  }
+  return null;
+}
+
+function acknowledgementFor(action) {
+  const payload = action.payload;
+  const acknowledgement = payload?.ack || payload;
+  if (
+    acknowledgement?.request_id
+    && Array.isArray(acknowledgement.event_types)
+    && acknowledgement.event_types.length > 0
+    && acknowledgement.event_types.every((eventType) => typeof eventType === 'string' && eventType)
+  ) {
+    return acknowledgement;
+  }
+  return null;
+}
 
 function closeCurrentStream(dispatch) {
   if (eventSource) {
@@ -51,14 +91,19 @@ realtimeListenerMiddleware.startListening({
     source.addEventListener('ui.event', (messageEvent) => {
       try {
         const event = JSON.parse(messageEvent.data);
-        const { realtime } = listenerApi.getState();
-        if (event?.id && realtime.receivedIds.includes(event.id)) {
+        const invalidReason = invalidEnvelopeReason(event);
+        if (invalidReason) {
+          listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${invalidReason}`));
           return;
         }
-        listenerApi.dispatch(uiEventReceived(event));
+        const { realtime } = listenerApi.getState();
+        if (realtime.receivedIds.includes(event.id)) {
+          return;
+        }
         listenerApi.dispatch(applyUiEvent(event));
+        listenerApi.dispatch(uiEventReceived(event));
       } catch (error) {
-        listenerApi.dispatch(realtimeErrored(error.message));
+        listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${error.message}`));
       }
     });
   },
@@ -68,5 +113,45 @@ realtimeListenerMiddleware.startListening({
   actionCreator: stopRealtimeStream,
   effect: async (_action, listenerApi) => {
     closeCurrentStream(listenerApi.dispatch);
+    // Fail all pending operations when the stream disconnects
+    const state = listenerApi.getState();
+    for (const requestId of Object.keys(state.realtime.pendingOps || {})) {
+      listenerApi.dispatch(failPendingOp({ requestId, error: 'Stream disconnected' }));
+    }
+  },
+});
+// Register at thunk dispatch, before its fetch begins. A backend publishes the
+// causal event before responding 202, so waiting for fulfilled would lose the race.
+// Rejected operations fail immediately; fulfilled acknowledgements register the
+// event types that are allowed to resolve the pending request.
+realtimeListenerMiddleware.startListening({
+  matcher: (action) => isUiDataThunkLifecycle(action)
+    && (isPending(action) || isRejected(action) || isFulfilled(action)),
+  effect: (action, listenerApi) => {
+    const requestId = requestIdFor(action);
+    if (isPending(action)) {
+      if (requestId) {
+        listenerApi.dispatch(registerPendingOp({ requestId }));
+      }
+      return;
+    }
+    if (isRejected(action)) {
+      if (requestId) {
+        listenerApi.dispatch(failPendingOp({ requestId, error: action.error?.message }));
+      }
+      return;
+    }
+
+    const acknowledgement = acknowledgementFor(action);
+    if (!acknowledgement) {
+      return;
+    }
+    if (requestId && requestId !== acknowledgement.request_id) {
+      listenerApi.dispatch(resolvePendingOp({ requestId }));
+    }
+    listenerApi.dispatch(registerPendingOp({
+      requestId: acknowledgement.request_id,
+      eventTypes: acknowledgement.event_types,
+    }));
   },
 });

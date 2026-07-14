@@ -1,31 +1,40 @@
 import { useCallback } from 'react';
-import { useApiClient } from './useApiClient';
+import { useConfig } from '../../context/ConfigContext';
+import { requestAcknowledged } from '../../store/http';
 
-/** Widget CRUD + refresh (Tools, Workspace, Schedules pages). */
+/** Widget operations acknowledge immediately; state arrives on /api/ui/stream. */
 export function useWidgetsApi() {
-  const { request } = useApiClient();
+  const { getApiUrl } = useConfig();
 
-  const getWidgets = useCallback(() => request('widgets'), [request]);
+  const getWidgets = useCallback(
+    () => requestAcknowledged(getApiUrl('widgets'), { requestId: crypto.randomUUID() }),
+    [getApiUrl],
+  );
 
-  const getWidgetSchemas = useCallback(() => request('widgetSchemas'), [request]);
 
   const refreshWidget = useCallback(
-    (widgetId) => request(`/api/ui/widgets/${widgetId}/refresh`, { method: 'POST' }),
-    [request],
+    (widgetId) => requestAcknowledged(
+      `${getApiUrl('widgets')}/${encodeURIComponent(widgetId)}/refresh`,
+      { method: 'POST', requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
   const updateWidget = useCallback(
-    (widgetId, updates) => request(`/api/ui/widgets/${widgetId}`, {
-      method: 'PATCH',
-      body: JSON.stringify(updates),
-    }),
-    [request],
+    (widgetId, updates) => requestAcknowledged(
+      `${getApiUrl('widgets')}/${encodeURIComponent(widgetId)}`,
+      { method: 'PATCH', body: updates, requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
   const deleteWidget = useCallback(
-    (widgetId) => request(`/api/ui/widgets/${widgetId}`, { method: 'DELETE' }),
-    [request],
+    (widgetId) => requestAcknowledged(
+      `${getApiUrl('widgets')}/${encodeURIComponent(widgetId)}`,
+      { method: 'DELETE', requestId: crypto.randomUUID() },
+    ),
+    [getApiUrl],
   );
 
-  return { getWidgets, getWidgetSchemas, refreshWidget, updateWidget, deleteWidget };
+  return { getWidgets, refreshWidget, updateWidget, deleteWidget };
 }
