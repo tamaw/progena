@@ -1,7 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { useChromeRuntime } from '../context/ChromeRuntimeContext';
-import { selectUiWidgets } from '../store/uiDataSlice';
+import { selectUiStatus, selectUiWidgets } from '../store/uiDataSlice';
 
 const EMPTY_LIST = [];
 
@@ -60,7 +59,7 @@ function MiniList({ items, emptyLabel, renderItem }) {
 }
 
 export default function DashboardPage() {
-  const { status } = useChromeRuntime();
+  const status = useSelector(selectUiStatus);
   const widgets = useSelector(selectUiWidgets);
   const [widgetFilter, setWidgetFilter] = useState('all');
   const [widgetSearch, setWidgetSearch] = useState('');

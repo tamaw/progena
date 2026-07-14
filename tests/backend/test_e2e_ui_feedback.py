@@ -148,26 +148,9 @@ class TestUIFeedbackIntegration:
     """Integration tests for UI feedback during agent operations."""
 
     def test_status_endpoint_provides_complete_info(self, client):
-        """Test that status endpoint provides all information needed by UI."""
+        """Test status endpoint (deleted - should return 404)."""
         response = client.get("/api/ui/status/snapshot")
-        assert response.status_code == 200
-
-        data = response.json()
-
-        # All critical fields for alien inspection must be present
-        assert "connected" in data
-        assert "server_status" in data
-        assert "progenitor_running" in data
-        assert "version" in data
-
-        # Agent and loop info for real-time feedback
-        assert "agents" in data
-        assert "loops" in data
-        assert "backlog" in data
-        assert "schedule" in data
-
-        # Build status for progress tracking
-        assert "build" in data
+        assert response.status_code == 404
 
     def test_state_reader_with_mock_files(self, mock_state_files):
         """Test StateReader correctly reads simulated state files."""
@@ -451,13 +434,14 @@ class TestErrorFeedbackPath:
         assert build_state == {}
 
     def test_alerts_endpoint_for_errors(self, client):
-        """Test alerts endpoint is available for error notifications."""
-        response = client.get("/api/ui/alerts")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "alerts" in data
-        assert "total" in data
+        """Test alerts endpoint returns the finite UI acknowledgement contract."""
+        request_id = "alerts-error-feedback"
+        response = client.get("/api/ui/alerts", headers={"X-Request-ID": request_id})
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["alerts.updated"],
+        }
 
 
 class TestRealTimeSSEFeedback:
@@ -505,19 +489,14 @@ class TestChatFlowFeedback:
     """Tests for chat flow with UI feedback."""
 
     def test_models_endpoint_accessible(self, client):
-        """Test models endpoint returns available models."""
+        """Test models endpoint (deleted - should return 404)."""
         response = client.get("/v1/models")
-        assert response.status_code == 200
-
-        data = response.json()
-        assert "data" in data
-        # Should have at least one model
-        assert len(data["data"]) >= 1
+        assert response.status_code == 404
 
     def test_responses_endpoint(self, client):
         """Test responses endpoint handles requests."""
         response = client.post(
-            "/v1/responses",
+            "/api/ui/responses",
             json={
                 "model": "progenitor-v1",
                 "input": "Greetings from the Galactic Federation",
@@ -525,8 +504,8 @@ class TestChatFlowFeedback:
             },
         )
 
-        # Endpoint should handle the request (may return error if agent not running)
-        assert response.status_code in [200, 500, 503]
+        # Endpoint should acknowledge dispatch or surface the pre-dispatch failure.
+        assert response.status_code in [202, 500, 503]
 
 
 class TestUIPageContent:
@@ -559,10 +538,10 @@ class TestUIPageContent:
         assert response.status_code == 404
 
     def test_api_ui_routes_still_work(self, client):
-        """Test /api/ui/* routes still work (these are API routes)."""
+        """Test /api/ui/* routes that exist still work."""
+        # /api/ui/status/snapshot was deleted - should return 404
         response = client.get("/api/ui/status/snapshot")
-        # API routes should work
-        assert response.status_code == 200
+        assert response.status_code == 404
 
 
 class TestDataIntegrity:

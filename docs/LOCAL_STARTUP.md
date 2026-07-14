@@ -8,8 +8,8 @@ This is the quickest working local setup for running:
 - Frontend on `127.0.0.1:5173`
 
 The key dependency is Postgres. When `PROGENITOR_DATABASE_URL` points at a dead port, the
-backend can appear to be up while `/health` hangs during startup, and Vite proxy requests
-will hang behind it.
+backend can appear to be up while startup requests hang, and Vite proxy requests will hang
+behind it.
 
 ## Recommended `.env` improvements
 
@@ -143,23 +143,16 @@ under the **A2A agents** group.
 These should all return `200`:
 
 ```bash
-curl http://127.0.0.1:8000/health
-curl http://127.0.0.1:5173/health
 curl http://127.0.0.1:5173/v1/session
 ```
 
 Expected wiring:
 
 - frontend root is served by Vite on `5173`
-- `/health`, `/api/*`, and `/v1/*` go through the Vite proxy to backend `8000`
+- `/api/*` and `/v1/*` go through the Vite proxy to backend `8000`
 - backend talks to progenitor over HTTP + SSE on `9501`
 
 ## If the frontend looks like a proxy problem
 
-Check backend health directly first:
-
-```bash
-curl -i http://127.0.0.1:8000/health
-```
-
-If that hangs, the usual cause is missing Postgres or a bad `PROGENITOR_DATABASE_URL`, not Vite.
+Inspect backend startup output and its `PROGENITOR_DATABASE_URL` first. If backend requests
+hang, the usual cause is missing Postgres or a bad connection URL, not Vite.

@@ -65,16 +65,20 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 ```
 
 ### Health Checks
+Operational health checks are limited to container/process probes. The backend's `/healthz` endpoint is a Docker/container-only liveness exception to the event-stream-only browser API: it returns an empty `200 OK` with no application data. The Progenitor runtime exposes a distinct internal `/health` endpoint on port `9501`.
+
 ```bash
-# Backend health
-curl http://localhost:8000/health
+# Backend liveness through the Nginx frontend container
+curl http://localhost/healthz
 
-# Frontend
-curl http://localhost:5173
+# Frontend static server
+curl http://localhost/
 
-# Progenitor
-curl http://localhost:8000/live
+# Progenitor runtime health (a distinct internal service endpoint)
+curl http://localhost:9501/health
 ```
+
+Do not reintroduce browser-facing `/ready`, `/live`, or response-body health routes; browser application data remains on `/api/ui/stream`.
 
 ## CI/CD Pipeline
 
@@ -185,12 +189,6 @@ grep -c INFO logs/progenitor.log
 - CPU usage
 - Active connections
 - IPC connection and request health
-
-### Health Checks
-Implement health check endpoints:
-- `/health` - Basic health
-- `/ready` - Ready to serve traffic
-- `/live` - Service is alive
 
 ## Backup & Recovery
 

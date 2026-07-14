@@ -16,7 +16,6 @@ Reads real state data from file-backed runtime artifacts plus shared backend-man
 
 import asyncio
 import contextlib
-import csv
 import json
 import logging
 import os
@@ -26,13 +25,12 @@ import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from io import StringIO
 from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
 from croniter import croniter
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
@@ -58,10 +56,7 @@ from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agen
 from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
-    AlertsResponse,
     MarkAlertsViewedRequest,
-    MarkAlertsViewedResponse,
-    alert_summary,
     get_alert,
     get_alerts_response,
     mark_alerts_viewed,
@@ -70,7 +65,7 @@ from .alerts import (
     create_alert as store_alert,
 )
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
-from .chat_sessions import UiEventEnvelope
+from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 from .inbox_routes import (
     INBOX_MESSAGE_KEY_PREFIX,
@@ -79,22 +74,16 @@ from .inbox_routes import (
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .prompt_service import PromptService
+from .request_utils import request_correlation_id as _request_correlation_id
 from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
-from .threads import (
-    ThreadsResponse,
-    complete_thread,
-    fail_thread,
-    list_threads,
-    upsert_thread,
-)
+from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
     build_manual_trigger_event,
     build_user_node_instruction,
     delete_workflow_definition,
-    find_active_workflow_run,
     get_workflow_definition,
     get_workflow_run,
     list_workflow_list_items,
@@ -114,100 +103,6 @@ KANBAN_EVENT_TYPE_LABELS = {
     "kanban.card.status_changed": "Status changed",
 }
 MAX_EVENT_WIDGET_LOGS = 20
-
-
-class BuildInfoResponse(BaseModel):
-    """Build status information."""
-
-    in_progress: bool = False
-    phase: str | None = None  # observe, think, plan, build, execute, verify, learn
-    task_description: str | None = None
-    started_at: str | None = None
-    iteration: int = 0
-    score: float = 0.0
-    message_count: int = 0
-
-
-class UIStatusResponse(BaseModel):
-    """Combined status response for the UI."""
-
-    connected: bool
-    server_status: str
-    progenitor_running: bool
-    progenitor_status: str = "unknown"  # Raw status from the health document
-    uptime_seconds: float
-    version: str
-    memory_mb: float | None = None
-    active_requests: int
-    rate_limit_minute_limit: int
-    rate_limit_hour_limit: int
-    # State data
-    cycle_count: int = 0
-    thread_id: str | None = None
-    messages_count: int = 0
-    pid: int | None = None
-    last_active: str | None = None
-    # Build status
-    build: BuildInfoResponse | None = None
-    # Lists
-    loops: list["LoopInfo"] = []
-    agents: list["SubAgentInfo"] = []
-    tools: list[dict] = []
-    backlog: list["BacklogItemInfo"] = []
-    schedule: list["ScheduleItemInfo"] = []
-    widgets: list[dict] = []
-    sessions: dict = {}
-    alerts: AlertsResponse = Field(default_factory=get_alerts_response)
-
-
-class LoopInfo(BaseModel):
-    """Processing loop information (Planner/Executor)."""
-
-    name: str
-    status: str
-    current_task: str | None = None
-
-
-class LoopsResponse(BaseModel):
-    """Response containing loop status."""
-
-    loops: list[LoopInfo]
-
-
-class SubAgentInfo(BaseModel):
-    """Sub-agent (registered agent) information."""
-
-    name: str
-    status: str
-    kind: str = "a2a_agent"
-    version: str = "0.1.0"
-    description: str = ""
-    transport: str = "stdio"
-    task: str | None = None
-    progress: int | None = None
-
-
-class SubAgentsResponse(BaseModel):
-    """Response containing registered agents."""
-
-    agents: list[SubAgentInfo]
-    total: int
-
-
-class BacklogItemInfo(BaseModel):
-    """Backlog item information."""
-
-    id: str
-    type: str
-    status: str
-    description: str
-
-
-class BacklogResponse(BaseModel):
-    """Response containing backlog items."""
-
-    items: list[BacklogItemInfo]
-    total: int
 
 
 class ScheduleItemInfo(BaseModel):
@@ -273,64 +168,10 @@ def _alerts_payload() -> dict[str, object]:
 
 
 class WidgetFieldOptionResponse(BaseModel):
-    """Selectable option for a widget field."""
+    """Selectable option for a kanban card field."""
 
     value: str
     label: str
-
-
-class WidgetFieldSchemaResponse(BaseModel):
-    """Schema for a single editable or readonly widget field."""
-
-    key: str
-    label: str
-    control: str = "text"
-    editable: bool = False
-    option_source: str | None = None
-    help_text: str | None = None
-    options: list[WidgetFieldOptionResponse] = Field(default_factory=list)
-
-
-class WidgetSectionSchemaResponse(BaseModel):
-    """Schema for a collapsible widget details section."""
-
-    id: str
-    label: str
-    default_expanded: bool = True
-    fields: list[WidgetFieldSchemaResponse] = Field(default_factory=list)
-
-
-class WidgetTabSchemaResponse(BaseModel):
-    """Schema for a widget canvas tab."""
-
-    id: str
-    label: str
-
-
-class WidgetSchemaResponse(BaseModel):
-    """Details-pane schema for a widget type."""
-
-    type: str
-    help_text: str | None = None
-    default_tab: str | None = None
-    tabs: list[WidgetTabSchemaResponse] = Field(default_factory=list)
-    sections: list[WidgetSectionSchemaResponse] = Field(default_factory=list)
-
-
-class WidgetSchemasResponse(BaseModel):
-    """Response containing details-pane schemas by widget type."""
-
-    schemas: list[WidgetSchemaResponse]
-
-
-class WorkspaceResponse(BaseModel):
-    """Workspace bootstrap payload."""
-
-    timestamp: float
-    workspace: dict
-    health: dict
-    sessions: dict
-    widgets: list[WidgetResponse]
 
 
 class PromptFileResponse(BaseModel):
@@ -715,6 +556,13 @@ def _build_action_metadata(
 _workflow_executor: WorkflowExecutor | None = None
 
 
+def _workflow_event_request_id(payload: Mapping[str, Any]) -> str | None:
+    """Recover a finite UI request correlation stored on a workflow trigger."""
+    trigger = payload.get("trigger_event")
+    request_id = trigger.get("request_id") if isinstance(trigger, Mapping) else None
+    return request_id if isinstance(request_id, str) else None
+
+
 async def _workflow_prompt_runner(
     *,
     workflow: WorkflowDefinition,
@@ -761,8 +609,8 @@ async def _workflow_prompt_runner(
             invocation_source=widget_id,
             root_widget_id=root_widget_id,
         )
-    response = await action_run(request)
-    return PromptExecutionResult(response=response.response, thread_id=response.thread_id)
+    thread_id, response_obj, response_text = await _execute_action_run(request)
+    return PromptExecutionResult(response=response_text, thread_id=thread_id)
 
 
 def get_workflow_executor() -> WorkflowExecutor:
@@ -773,221 +621,13 @@ def get_workflow_executor() -> WorkflowExecutor:
         _workflow_executor = WorkflowExecutor(
             store_getter=get_default_document_store,
             prompt_runner=_workflow_prompt_runner,
-            emit_event=lambda event_type, payload: broadcast_ui_event(event_type, payload),
+            emit_event=lambda event_type, payload: broadcast_ui_event(
+                event_type,
+                payload,
+                request_id=_workflow_event_request_id(payload),
+            ),
         )
     return _workflow_executor
-
-
-class TaskInfo(BaseModel):
-    """Active task information."""
-
-    id: str
-    title: str
-    status: str
-    description: str | None = None
-    progress: int | None = None
-    column_id: str | None = None
-    owner: str | None = None
-    agent_name: str | None = None
-    labels: list[str] = Field(default_factory=list)
-    updated_at: str | None = None
-    task_path: str | None = None
-
-
-class TasksResponse(BaseModel):
-    """Response containing active tasks."""
-
-    tasks: list[TaskInfo]
-    total: int
-
-
-@router.get("/status/snapshot", response_model=UIStatusResponse)
-async def get_ui_status_snapshot():
-    """
-    Get a one-shot snapshot of status information.
-
-    Aggregates health, rate limit, and progenitor status into a single response.
-    Uses real data from data/state/ files.
-
-    For continuous updates, use the SSE stream at /status instead.
-    """
-    from . import main as chat_main
-
-    state_reader = get_state_reader()
-
-    try:
-        # Get basic health from backend
-        health = await chat_main.health_check_detailed()
-
-        # Get state snapshot (includes loops, agents, backlog, schedule, build)
-        snapshot = state_reader.get_snapshot()
-
-        # Determine if progenitor is running from state file
-        progenitor_running = snapshot.health.is_running()
-
-        # Build info from snapshot
-        build_info = None
-        if snapshot.build:
-            build_info = BuildInfoResponse(
-                in_progress=snapshot.build.in_progress,
-                phase=snapshot.build.phase,
-                task_description=snapshot.build.task_description,
-                started_at=snapshot.build.started_at,
-                iteration=snapshot.build.iteration,
-                score=snapshot.build.score,
-                message_count=snapshot.build.message_count,
-            )
-
-        # Build response with full data
-        return UIStatusResponse(
-            connected=True,
-            server_status=health.get("status", "unknown"),
-            progenitor_running=progenitor_running,
-            progenitor_status=snapshot.health.status,  # Raw status from the health document
-            uptime_seconds=health.get("uptime_seconds", 0),
-            version=health.get("version", "unknown"),
-            memory_mb=health.get("memory", {}).get("rss_mb"),
-            active_requests=health.get("shutdown", {}).get("active_requests", 0),
-            rate_limit_minute_limit=health.get("rate_limiter", {}).get(
-                "requests_per_minute_limit", 60
-            ),
-            rate_limit_hour_limit=health.get("rate_limiter", {}).get(
-                "requests_per_hour_limit", 500
-            ),
-            # State data
-            cycle_count=snapshot.health.cycle_count,
-            thread_id=snapshot.health.thread_id,
-            messages_count=snapshot.messages_count,
-            pid=snapshot.health.pid,
-            last_active=snapshot.health.last_active,
-            # Build status
-            build=build_info,
-            # Lists
-            loops=[
-                LoopInfo(
-                    name=loop_item.name,
-                    status=loop_item.status,
-                    current_task=loop_item.current_task,
-                )
-                for loop_item in snapshot.loops
-            ],
-            agents=[
-                SubAgentInfo(
-                    name=a.name,
-                    status="ready" if progenitor_running else "offline",
-                    kind=a.kind,
-                    version=a.version,
-                    description=a.description,
-                    transport=a.transport,
-                )
-                for a in snapshot.agents
-            ],
-            tools=[
-                {"name": tool.name, "description": tool.description, "enabled": tool.enabled}
-                for tool in snapshot.tools
-            ],
-            backlog=[
-                BacklogItemInfo(
-                    id=b.id, type=b.item_type, status=b.status, description=b.description
-                )
-                for b in snapshot.backlog
-            ],
-            schedule=[
-                ScheduleItemInfo(
-                    id=s.id,
-                    name=s.name,
-                    schedule=s.schedule,
-                    next_run=s.next_run,
-                    enabled=s.enabled,
-                )
-                for s in snapshot.schedule
-            ],
-            widgets=state_reader.get_widgets(),
-            sessions={
-                "total": snapshot.sessions.total if snapshot.sessions else 0,
-                "latest_session_id": snapshot.sessions.latest_session_id
-                if snapshot.sessions
-                else None,
-                "latest_activity": snapshot.sessions.latest_activity if snapshot.sessions else None,
-            },
-            alerts=get_alerts_response(),
-        )
-    except Exception as e:
-        logger.error("Failed to get UI status: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/loops", response_model=LoopsResponse)
-async def get_loops():
-    """
-    Get status of processing loops (Planner/Executor).
-    """
-    state_reader = get_state_reader()
-    health = state_reader.get_health()
-    loops = state_reader.get_loops(health)
-
-    return LoopsResponse(
-        loops=[
-            LoopInfo(
-                name=loop_item.name, status=loop_item.status, current_task=loop_item.current_task
-            )
-            for loop_item in loops
-        ]
-    )
-
-
-@router.get("/agents", response_model=SubAgentsResponse)
-async def get_sub_agents():
-    """
-    Get registered agents from agents.json.
-
-    Returns information about all registered A2A agents.
-    """
-    state_reader = get_state_reader()
-    agents, _ = state_reader.get_registry()
-    health = state_reader.get_health()
-    progenitor_running = health.is_running()
-
-    # Convert to response format
-    agent_infos = []
-    for agent in agents:
-        if agent.enabled:
-            agent_infos.append(
-                SubAgentInfo(
-                    name=agent.name,
-                    status="ready" if progenitor_running else "offline",
-                    kind=agent.kind,
-                    version=agent.version,
-                    description=agent.description,
-                    transport=agent.transport,
-                    task=None,
-                    progress=None,
-                )
-            )
-
-    return SubAgentsResponse(agents=agent_infos, total=len(agent_infos))
-
-
-@router.get("/backlog", response_model=BacklogResponse)
-async def get_backlog():
-    """
-    Get backlog items from build_state.json.
-    """
-    state_reader = get_state_reader()
-    backlog = state_reader.get_backlog()
-
-    return BacklogResponse(
-        items=[
-            BacklogItemInfo(
-                id=b.id,
-                type=b.item_type,
-                status=b.status,
-                description=b.description,
-            )
-            for b in backlog
-        ],
-        total=len(backlog),
-    )
 
 
 def _schedule_item_to_info(item) -> ScheduleItemInfo:
@@ -1033,20 +673,6 @@ def _schedule_item_to_info(item) -> ScheduleItemInfo:
     )
 
 
-@router.get("/schedule", response_model=ScheduleResponse)
-async def get_schedule():
-    """
-    Get scheduled items from the shared Postgres-backed schedule document.
-    """
-    state_reader = get_state_reader()
-    schedule = state_reader.get_schedule()
-
-    return ScheduleResponse(
-        items=[_schedule_item_to_info(s) for s in schedule],
-        total=len(schedule),
-    )
-
-
 def _widget_to_response(widget: dict) -> WidgetResponse:
     """Normalize state-reader widget payloads for API responses."""
     payload = dict(widget)
@@ -1062,494 +688,6 @@ def _widget_to_response(widget: dict) -> WidgetResponse:
         updated_at=payload.get("updated_at"),
         data=payload,
     )
-
-
-def _kanban_event_type_options() -> list[WidgetFieldOptionResponse]:
-    return [
-        WidgetFieldOptionResponse(value=value, label=label)
-        for value, label in KANBAN_EVENT_TYPE_LABELS.items()
-    ]
-
-
-def _widget_schemas() -> list[WidgetSchemaResponse]:
-    """Return schema definitions for workspace details editing."""
-    return [
-        WidgetSchemaResponse(
-            type="prompt",
-            help_text="Stores prompt text, targets an agent, and runs or generates code from the latest prompt.",
-            default_tab="editor",
-            tabs=[
-                WidgetTabSchemaResponse(id="editor", label="Editor"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="targetAgent",
-                            label="Target Agent",
-                            control="select",
-                            editable=True,
-                            option_source="agents",
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="role",
-                            label="Role",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="user", label="User"),
-                                WidgetFieldOptionResponse(value="system", label="System"),
-                                WidgetFieldOptionResponse(value="assistant", label="Assistant"),
-                            ],
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Content",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="prompt",
-                            label="Prompt",
-                            control="textarea",
-                            editable=True,
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="metadata",
-                    label="Metadata",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="sourcePath", label="Source Path"),
-                        WidgetFieldSchemaResponse(key="primaryAgent", label="Primary Agent"),
-                        WidgetFieldSchemaResponse(
-                            key="associatedAgents", label="Associated Agents", control="list"
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="linkedOutputIds", label="Linked Outputs", control="list"
-                        ),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="code",
-            help_text="Keeps editable code in the workspace and runs it so linked cards can use the latest output.",
-            default_tab="editor",
-            tabs=[
-                WidgetTabSchemaResponse(id="editor", label="Editor"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(key="language", label="Language", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="runtimeProfile", label="Runtime Profile", editable=True
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Content",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="content", label="Code", control="textarea", editable=True
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="execution",
-                    label="Execution",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="lastThreadId", label="Last Thread"),
-                        WidgetFieldSchemaResponse(
-                            key="outputRefs", label="Outputs", control="list"
-                        ),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="webframe",
-            help_text="Renders HTML or a URL inside the canvas so you can preview generated UI without leaving the workspace.",
-            default_tab="preview",
-            tabs=[
-                WidgetTabSchemaResponse(id="preview", label="Preview"),
-                WidgetTabSchemaResponse(id="source", label="Source"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="sourceType",
-                            label="Source Type",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="html", label="HTML"),
-                                WidgetFieldOptionResponse(value="url", label="URL"),
-                            ],
-                        ),
-                        WidgetFieldSchemaResponse(key="url", label="URL", editable=True),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="markup",
-                    label="Markup",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="html", label="HTML", control="textarea", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="css", label="CSS", control="textarea", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="js", label="JavaScript", control="textarea", editable=True
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="updated",
-                    label="Metadata",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="label",
-            help_text="Adds workspace notes and labels so you can annotate the canvas without affecting execution.",
-            default_tab="content",
-            tabs=[
-                WidgetTabSchemaResponse(id="content", label="Content"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Content",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="text", label="Text", control="textarea", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="variant",
-                            label="Variant",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="note", label="Note"),
-                                WidgetFieldOptionResponse(value="warning", label="Warning"),
-                                WidgetFieldOptionResponse(value="info", label="Info"),
-                            ],
-                        ),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="group",
-            help_text="Organizes related cards into a visual group so larger workflows stay easier to scan.",
-            default_tab="content",
-            tabs=[
-                WidgetTabSchemaResponse(id="content", label="Content"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Content",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="description",
-                            label="Description",
-                            control="textarea",
-                            editable=True,
-                        ),
-                        WidgetFieldSchemaResponse(key="childIds", label="Children", control="list"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="schedule",
-            help_text="Creates a timed automation that runs Progenitor once, on an interval, or on a cron schedule.",
-            default_tab="details",
-            tabs=[
-                WidgetTabSchemaResponse(id="details", label="Details"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="enabled", label="Enabled", control="boolean", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="scheduleType",
-                            label="Schedule Type",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="cron", label="Cron"),
-                                WidgetFieldOptionResponse(value="interval", label="Interval"),
-                                WidgetFieldOptionResponse(value="once", label="Once"),
-                            ],
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="expression", label="Expression", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(key="timezone", label="Timezone", editable=True),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Task",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="instruction",
-                            label="Instruction",
-                            control="textarea",
-                            editable=True,
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="status",
-                    label="Status",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="nextRunAt", label="Next Run"),
-                        WidgetFieldSchemaResponse(key="lastRunAt", label="Last Run"),
-                        WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
-                        WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="event",
-            help_text="Listens for a workspace event and triggers linked cards when that event fires.",
-            default_tab="details",
-            tabs=[
-                WidgetTabSchemaResponse(id="details", label="Details"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="enabled", label="Enabled", control="boolean", editable=True
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="eventType",
-                            label="Event Type",
-                            control="select",
-                            editable=True,
-                            options=_kanban_event_type_options(),
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="status",
-                    label="Status",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="triggerCount", label="Trigger Count"),
-                        WidgetFieldSchemaResponse(key="lastTriggeredAt", label="Last Triggered"),
-                        WidgetFieldSchemaResponse(key="lastRunStatus", label="Last Run Status"),
-                        WidgetFieldSchemaResponse(key="saveError", label="Save Error"),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="user",
-            help_text="Configures a user-facing tool call so the current run can send a message, notification, or question.",
-            default_tab="details",
-            tabs=[
-                WidgetTabSchemaResponse(id="details", label="Details"),
-                WidgetTabSchemaResponse(id="output", label="Output"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Name", editable=True),
-                        WidgetFieldSchemaResponse(
-                            key="messageType",
-                            label="Message Type",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="say_to_user", label="say_to_user"),
-                                WidgetFieldOptionResponse(value="notify_user", label="notify_user"),
-                                WidgetFieldOptionResponse(value="ask_user", label="ask_user"),
-                            ],
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="notificationTitle",
-                            label="Notification Title",
-                            editable=True,
-                        ),
-                        WidgetFieldSchemaResponse(
-                            key="level",
-                            label="Notification Level",
-                            control="select",
-                            editable=True,
-                            options=[
-                                WidgetFieldOptionResponse(value="info", label="Info"),
-                                WidgetFieldOptionResponse(value="warning", label="Warning"),
-                                WidgetFieldOptionResponse(value="error", label="Error"),
-                                WidgetFieldOptionResponse(value="success", label="Success"),
-                            ],
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="content",
-                    label="Content",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="message",
-                            label="Message / Body",
-                            control="textarea",
-                            editable=True,
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="status",
-                    label="Status",
-                    default_expanded=False,
-                    fields=[
-                        WidgetFieldSchemaResponse(key="lastSentAt", label="Last Sent"),
-                        WidgetFieldSchemaResponse(
-                            key="summaryState", label="Summary", control="textarea"
-                        ),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="agent",
-            help_text="Shows a linked agent, its recent activity, and the latest thread-linked output for this card.",
-            default_tab="overview",
-            tabs=[
-                WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="details", label="Details"),
-                WidgetTabSchemaResponse(id="capabilities", label="Capabilities"),
-                WidgetTabSchemaResponse(id="skills", label="Skills"),
-                WidgetTabSchemaResponse(id="logs", label="Logs"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title"),
-                        WidgetFieldSchemaResponse(key="agentId", label="Agent"),
-                        WidgetFieldSchemaResponse(key="transport", label="Transport"),
-                        WidgetFieldSchemaResponse(key="url", label="URL"),
-                        WidgetFieldSchemaResponse(key="agent_card_url", label="Agent Card URL"),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="status",
-                    label="Status",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
-                        WidgetFieldSchemaResponse(
-                            key="summaryState", label="Summary", control="textarea"
-                        ),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-        WidgetSchemaResponse(
-            type="mcp",
-            help_text="Shows an MCP integration, its recent activity, and the latest thread-linked output for this card.",
-            default_tab="overview",
-            tabs=[
-                WidgetTabSchemaResponse(id="overview", label="Overview"),
-                WidgetTabSchemaResponse(id="details", label="Details"),
-                WidgetTabSchemaResponse(id="tools", label="Tools"),
-                WidgetTabSchemaResponse(id="resources", label="Resources"),
-                WidgetTabSchemaResponse(id="prompts", label="Prompts"),
-                WidgetTabSchemaResponse(id="logs", label="Logs"),
-            ],
-            sections=[
-                WidgetSectionSchemaResponse(
-                    id="identity",
-                    label="Identity",
-                    fields=[
-                        WidgetFieldSchemaResponse(key="title", label="Title"),
-                        WidgetFieldSchemaResponse(key="agentId", label="Tool"),
-                        WidgetFieldSchemaResponse(key="transport", label="Transport"),
-                        WidgetFieldSchemaResponse(key="url", label="URL", editable=True),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="config",
-                    label="Configuration",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="description",
-                            label="Description",
-                            control="textarea",
-                            editable=True,
-                        ),
-                    ],
-                ),
-                WidgetSectionSchemaResponse(
-                    id="status",
-                    label="Status",
-                    fields=[
-                        WidgetFieldSchemaResponse(
-                            key="enabled",
-                            label="Enabled",
-                            control="boolean",
-                            editable=True,
-                        ),
-                        WidgetFieldSchemaResponse(key="agentStatus", label="Status"),
-                        WidgetFieldSchemaResponse(key="currentThreadId", label="Thread ID"),
-                        WidgetFieldSchemaResponse(
-                            key="summaryState", label="Summary", control="textarea"
-                        ),
-                        WidgetFieldSchemaResponse(key="updatedAt", label="Updated"),
-                    ],
-                ),
-            ],
-        ),
-    ]
 
 
 def _kanban_default_columns() -> list[dict]:
@@ -1968,14 +1106,18 @@ async def _apply_kanban_card_diff_effects(
     previous_card: dict,
     refreshed_card: dict,
     now: str,
+    request_id: str | None = None,
 ) -> None:
     """Fire event-widget triggers, workflow triggers, task-activity entries,
     and the activity broadcast for one card's before/after diff.
     """
     card_id = str(refreshed_card.get("id") or "").strip()
     triggers = _kanban_card_change_triggers(previous_card, refreshed_card, now)
-    _apply_event_widget_triggers(state_reader, triggers)
-    await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers(triggers, now))
+    _apply_event_widget_triggers(state_reader, triggers, request_id=request_id)
+    await _dispatch_workflow_triggers(
+        _enrich_kanban_workflow_triggers(triggers, now),
+        request_id=request_id,
+    )
     if previous_card.get("status") != refreshed_card.get("status"):
         _append_task_activity_entry(
             state_reader,
@@ -2023,7 +1165,7 @@ async def _apply_kanban_card_diff_effects(
         or previous_card.get("column_id") != refreshed_card.get("column_id")
         or previous_card.get("title") != refreshed_card.get("title")
     ):
-        broadcast_task_activity(card_id)
+        broadcast_task_activity(card_id, request_id=request_id)
 
 
 async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
@@ -2642,9 +1784,25 @@ def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
     return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)
 
 
-def _broadcast_widget_refresh(state_reader) -> None:
-    """Notify status listeners that backend-derived widgets changed."""
-    broadcast_ui_event("widgets.updated", {"items": state_reader.get_widgets()})
+def _broadcast_widget_refresh(
+    state_reader: StateReader,
+    *,
+    request_id: str | None = None,
+    refreshed_widget: dict[str, Any] | None = None,
+) -> None:
+    """Notify status listeners that backend-derived widgets changed.
+
+    A live agent inspection is ephemeral: it comes from the agent card rather
+    than a state document.  Merge it into this event's snapshot so the UI can
+    consume the inspection without fabricating a local response body.
+    """
+    items = state_reader.get_widgets()
+    if refreshed_widget is not None:
+        items = [
+            refreshed_widget if item.get("id") == refreshed_widget.get("id") else item
+            for item in items
+        ]
+    broadcast_ui_event("widgets.updated", {"items": items}, request_id=request_id)
 
 
 def _find_widget_payload(state_reader: StateReader, widget_id: str) -> dict[str, Any]:
@@ -2755,7 +1913,12 @@ def _summarize_event_trigger(event_type: str, payload: dict) -> str:
     return f"{label} fired"
 
 
-def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]) -> None:
+def _apply_event_widget_triggers(
+    state_reader: StateReader,
+    triggers: list[dict],
+    *,
+    request_id: str | None = None,
+) -> None:
     if not triggers:
         return
 
@@ -2799,13 +1962,21 @@ def _apply_event_widget_triggers(state_reader: StateReader, triggers: list[dict]
 
     if changed:
         _write_event_widget_records(state_reader, event_widgets)
-        _broadcast_widget_refresh(state_reader)
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
 
 
-async def _dispatch_workflow_triggers(triggers: list[dict]) -> None:
+async def _dispatch_workflow_triggers(
+    triggers: list[dict],
+    *,
+    request_id: str | None = None,
+) -> None:
     if not triggers:
         return
-    await get_workflow_executor().dispatch_triggers(triggers)
+    correlated_triggers = [
+        {**trigger, "request_id": request_id} if request_id is not None else trigger
+        for trigger in triggers
+    ]
+    await get_workflow_executor().dispatch_triggers(correlated_triggers)
 
 
 def _parse_once_datetime(expression: str) -> datetime:
@@ -2921,20 +2092,6 @@ def _build_schedule_entry(
     return entry
 
 
-@router.get("/workspace", response_model=WorkspaceResponse)
-async def get_workspace():
-    """Get browser-workspace bootstrap plus backend-derived widgets."""
-    state_reader = get_state_reader()
-    payload = state_reader.get_workspace_payload()
-    return WorkspaceResponse(
-        timestamp=payload["timestamp"],
-        workspace=payload["workspace"],
-        health=payload["health"],
-        sessions=payload["sessions"],
-        widgets=[_widget_to_response(widget) for widget in payload["widgets"]],
-    )
-
-
 def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowContentResponse:
     return WorkflowContentResponse(
         path=f"/state/workflows/{definition.id}.json",
@@ -2946,22 +2103,30 @@ def _workflow_event_payload(definition: WorkflowDefinition) -> dict[str, Any]:
     return _workflow_content_response(definition).model_dump(mode="json", by_alias=True)
 
 
-@router.get("/workflows", response_model=WorkflowsResponse)
-async def get_workflows():
+@router.get("/workflows", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_workflows(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Return the workflow definition list for the workflows page/sidebar."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     items = list_workflow_list_items(get_default_document_store())
     broadcast_ui_event(
         "workflows.snapshot",
         {"items": [item.model_dump(mode="json") for item in items]},
+        request_id=request_id,
     )
-    return WorkflowsResponse(items=items)
+    return acknowledgement_response(request_id, ["workflows.snapshot"])
 
 
-@router.get("/workflows/content", response_model=WorkflowContentResponse)
-async def get_workflow_content(path: str = Query(...)):
+@router.get("/workflows/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_workflow_content(
+    request: Request,
+    path: str = Query(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Return one stored workflow definition by id or mounted virtual path."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     try:
         definition = get_workflow_definition(get_default_document_store(), path)
     except ValueError as exc:
@@ -2969,14 +2134,20 @@ async def get_workflow_content(path: str = Query(...)):
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
-    return payload
+    broadcast_ui_event(
+        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+    )
+    return acknowledgement_response(request_id, ["workflow.updated"])
 
 
-@router.put("/workflows/content", response_model=WorkflowContentResponse)
-async def put_workflow_content(body: WorkflowContentPutRequest):
+@router.put("/workflows/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def put_workflow_content(
+    body: WorkflowContentPutRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Persist one workflow definition."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     workflow_payload = dict(body.workflow)
     target_path = body.path
     if target_path:
@@ -2992,7 +2163,9 @@ async def put_workflow_content(body: WorkflowContentPutRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
+    broadcast_ui_event(
+        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+    )
     broadcast_ui_event(
         "workflows.snapshot",
         {
@@ -3001,14 +2174,19 @@ async def put_workflow_content(body: WorkflowContentPutRequest):
                 for item in list_workflow_list_items(get_default_document_store())
             ]
         },
+        request_id=request_id,
     )
-    return payload
+    return acknowledgement_response(request_id, ["workflow.updated", "workflows.snapshot"])
 
 
-@router.post("/workflows", response_model=WorkflowContentResponse)
-async def create_workflow(body: WorkflowCreateRequest):
+@router.post("/workflows", status_code=202, response_model=UiRequestAcknowledgement)
+async def create_workflow(
+    body: WorkflowCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Create a new workflow definition with the minimal valid scaffold."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     if body.event_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
         raise HTTPException(status_code=400, detail="Unsupported workflow event type")
     try:
@@ -3023,7 +2201,9 @@ async def create_workflow(body: WorkflowCreateRequest):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     payload = _workflow_content_response(definition)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
+    broadcast_ui_event(
+        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+    )
     broadcast_ui_event(
         "workflows.snapshot",
         {
@@ -3032,14 +2212,19 @@ async def create_workflow(body: WorkflowCreateRequest):
                 for item in list_workflow_list_items(get_default_document_store())
             ]
         },
+        request_id=request_id,
     )
-    return payload
+    return acknowledgement_response(request_id, ["workflow.updated", "workflows.snapshot"])
 
 
-@router.delete("/workflows/{workflow_id}", status_code=204)
-async def delete_workflow(workflow_id: str):
+@router.delete("/workflows/{workflow_id}", status_code=202, response_model=UiRequestAcknowledgement)
+async def delete_workflow(
+    workflow_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Delete one stored workflow definition."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     store = get_default_document_store()
     try:
         definition = get_workflow_definition(store, workflow_id)
@@ -3048,18 +2233,25 @@ async def delete_workflow(workflow_id: str):
     if definition is None:
         raise HTTPException(status_code=404, detail="Workflow not found")
     delete_workflow_definition(store, workflow_id)
-    broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id})
+    broadcast_ui_event("workflow.deleted", {"workflow_id": workflow_id}, request_id=request_id)
     broadcast_ui_event(
         "workflows.snapshot",
         {"items": [item.model_dump(mode="json") for item in list_workflow_list_items(store)]},
+        request_id=request_id,
     )
-    return None
+    return acknowledgement_response(request_id, ["workflow.deleted", "workflows.snapshot"])
 
 
-@router.post("/workflows/{workflow_id}/pause", response_model=WorkflowContentResponse)
-async def pause_workflow(workflow_id: str):
+@router.post(
+    "/workflows/{workflow_id}/pause", status_code=202, response_model=UiRequestAcknowledgement
+)
+async def pause_workflow(
+    workflow_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Pause one workflow definition and any active run."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     store = get_default_document_store()
     try:
         definition = get_workflow_definition(store, workflow_id)
@@ -3075,15 +2267,23 @@ async def pause_workflow(workflow_id: str):
     )
     await get_workflow_executor().pause_workflow(updated.id)
     payload = _workflow_content_response(updated)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
-    broadcast_workflows_snapshot()
-    return payload
+    broadcast_ui_event(
+        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+    )
+    broadcast_workflows_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["workflow.updated", "workflows.snapshot"])
 
 
-@router.post("/workflows/{workflow_id}/resume", response_model=WorkflowContentResponse)
-async def resume_workflow(workflow_id: str):
+@router.post(
+    "/workflows/{workflow_id}/resume", status_code=202, response_model=UiRequestAcknowledgement
+)
+async def resume_workflow(
+    workflow_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Resume one paused workflow definition and its active run, if any."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     store = get_default_document_store()
     try:
         definition = get_workflow_definition(store, workflow_id)
@@ -3099,24 +2299,36 @@ async def resume_workflow(workflow_id: str):
     )
     await get_workflow_executor().resume_workflow(updated.id)
     payload = _workflow_content_response(updated)
-    broadcast_ui_event("workflow.updated", payload.model_dump(mode="json", by_alias=True))
-    broadcast_workflows_snapshot()
-    return payload
+    broadcast_ui_event(
+        "workflow.updated", payload.model_dump(mode="json", by_alias=True), request_id=request_id
+    )
+    broadcast_workflows_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["workflow.updated", "workflows.snapshot"])
 
 
-@router.get("/workflow-runs", response_model=WorkflowRunsResponse)
-async def get_workflow_runs():
+@router.get("/workflow-runs", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_workflow_runs(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Return active and recent workflow runs."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     items = list_workflow_runs(get_default_document_store())
-    broadcast_workflow_runs_snapshot(items)
-    return WorkflowRunsResponse(items=items)
+    broadcast_workflow_runs_snapshot(items, request_id=request_id)
+    return acknowledgement_response(request_id, ["workflow.runs.snapshot"])
 
 
-@router.post("/workflows/{workflow_id}/trigger", response_model=WorkflowTriggerResponse)
-async def trigger_workflow(workflow_id: str, body: WorkflowManualTriggerRequest):
+@router.post(
+    "/workflows/{workflow_id}/trigger", status_code=202, response_model=UiRequestAcknowledgement
+)
+async def trigger_workflow(
+    workflow_id: str,
+    body: WorkflowManualTriggerRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Manually trigger one workflow definition for operator testing."""
-
+    request_id = _request_correlation_id(request, x_request_id)
     store = get_default_document_store()
     try:
         definition = get_workflow_definition(store, workflow_id)
@@ -3132,25 +2344,26 @@ async def trigger_workflow(workflow_id: str, body: WorkflowManualTriggerRequest)
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    active_before = find_active_workflow_run(store, definition.id)
+    trigger = {**trigger, "request_id": request_id}
     run = await get_workflow_executor().trigger_workflow(definition.id, trigger)
     if run is None:
-        # Executor refused (workflow paused or disabled) — not queued
-        refreshed = (
-            get_workflow_run(store, active_before.run_id) if active_before is not None else None
+        raise HTTPException(
+            status_code=409,
+            detail="Workflow trigger refused because the workflow is paused or disabled",
         )
-        return WorkflowTriggerResponse(ok=False, queued=False, run=refreshed or active_before)
-    queued = active_before is not None and run.run_id == active_before.run_id
-    if queued:
-        return WorkflowTriggerResponse(ok=True, queued=True, run=active_before)
-    refreshed = get_workflow_run(store, run.run_id) if run is not None else None
-    return WorkflowTriggerResponse(ok=True, queued=False, run=refreshed or run)
-
-
-@router.get("/database/schema")
-async def get_database_schema():
-    """Return safe table/column metadata for the configured backend document store."""
-    return {"tables": get_default_document_store().inspect_schema()}
+    refreshed = get_workflow_run(store, run.run_id) or run
+    run_payload = refreshed.model_dump(mode="json")
+    broadcast_ui_event(
+        "workflow.run.started",
+        {
+            "workflow_id": workflow_id,
+            "run_id": refreshed.run_id,
+            "status": refreshed.status,
+            "run": run_payload,
+        },
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["workflow.run.started"])
 
 
 def _mcp_widget_items() -> list[WidgetResponse]:
@@ -3163,53 +2376,67 @@ def _mcp_widget_items() -> list[WidgetResponse]:
     ]
 
 
-@router.get("/widgets", response_model=WidgetsResponse)
-async def get_widgets():
+@router.get("/widgets", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_widgets(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Return the unified widget list and publish it on the UI stream.
 
     Mirrors the schedule/agent/mcp pattern: the GET acknowledges and broadcasts
     ``widgets.updated`` so pages render from the realtime store rather than
     holding the HTTP response themselves.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     widgets = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
-    broadcast_widgets_snapshot(widgets)
-    return WidgetsResponse(items=widgets, total=len(widgets))
+    broadcast_widgets_snapshot(widgets, request_id=request_id)
+    return acknowledgement_response(request_id, ["widgets.updated"])
 
 
-@router.get("/mcp", response_model=WidgetsResponse)
-async def get_mcp_servers():
+@router.get("/mcp", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_mcp_servers(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Acknowledge MCP-list requests and publish the snapshot on the UI stream.
 
     Mirrors the schedule/agent pattern: a dedicated typed event (``mcp.snapshot``)
     feeds a dedicated store slice, so the Tools page renders from the realtime
     store instead of filtering the generic widget list.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     items = _mcp_widget_items()
-    broadcast_mcp_snapshot(items)
-    return WidgetsResponse(items=items, total=len(items))
+    broadcast_mcp_snapshot(items, request_id=request_id)
+    return acknowledgement_response(request_id, ["mcp.snapshot"])
 
 
-@router.get("/widget-schemas", response_model=WidgetSchemasResponse)
-async def get_widget_schemas():
-    """Get schema metadata for the workspace details pane."""
-    return WidgetSchemasResponse(schemas=_widget_schemas())
-
-
-@router.post("/widgets/{widget_id}/refresh", response_model=WidgetResponse)
-async def refresh_widget(widget_id: str):
+@router.post(
+    "/widgets/{widget_id}/refresh", status_code=202, response_model=UiRequestAcknowledgement
+)
+async def refresh_widget(
+    widget_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Refresh agent widget metadata from its live protocol surface.
 
     MCP servers are not refreshed here: their tools/capabilities are discovered
     by the Progenitor runtime when it initialises its MCP context (and on
     ``mcp_refresh``), which is the single source of truth the UI reads from.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     widget = _find_widget_payload(state_reader, widget_id)
 
     if widget.get("type") == "agent":
         refreshed = await _inspect_agent_widget(widget, state_reader)
-        return _widget_to_response(refreshed)
+        _broadcast_widget_refresh(
+            state_reader,
+            request_id=request_id,
+            refreshed_widget=refreshed,
+        )
+        return acknowledgement_response(request_id, ["widgets.updated"])
 
     raise HTTPException(
         status_code=400,
@@ -3258,9 +2485,15 @@ def _widget_or_fallback(
     return refreshed if refreshed is not None else build_fallback()
 
 
-@router.patch("/widgets/{widget_id}", response_model=WidgetResponse)
-async def patch_widget(widget_id: str, body: WidgetPatchRequest):
+@router.patch("/widgets/{widget_id}", status_code=202, response_model=UiRequestAcknowledgement)
+async def patch_widget(
+    widget_id: str,
+    body: WidgetPatchRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Patch a backend-owned widget where a matching state file exists."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     if widget_id.startswith("schedule:"):
         schedule_id = widget_id.split(":", 1)[1]
@@ -3314,7 +2547,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             save=_save_schedule,
         )
 
-        refreshed = _widget_or_fallback(
+        _widget_or_fallback(
             widget_id,
             state_reader,
             lambda: {
@@ -3330,9 +2563,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             },
         )
 
-        _broadcast_widget_refresh(state_reader)
-        broadcast_schedule_snapshot()
-        return _widget_to_response(refreshed)
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
+        broadcast_schedule_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["widgets.updated"])
 
     if widget_id.startswith("event:"):
         event_id = widget_id.split(":", 1)[1]
@@ -3362,7 +2595,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             save=_save_event_widgets,
         )
 
-        refreshed = _widget_or_fallback(
+        _widget_or_fallback(
             widget_id,
             state_reader,
             lambda: {
@@ -3384,8 +2617,8 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
             },
         )
 
-        _broadcast_widget_refresh(state_reader)
-        return _widget_to_response(refreshed)
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
+        return acknowledgement_response(request_id, ["widgets.updated"])
 
     if widget_id.startswith("mcp_tool:"):
         tool_name = widget_id.split(":", 1)[1]
@@ -3408,19 +2641,9 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         # runtime re-reads this document on its next MCP refresh and stops/starts
         # exposing the tool to the agent accordingly.
         state_reader.save_mcp_tools(tools_doc)
-        _broadcast_widget_refresh(state_reader)
-        return _widget_to_response(
-            {
-                "id": widget_id,
-                "type": "mcp_tool",
-                "name": tool_name,
-                "title": tool_name,
-                "status": "enabled" if body.enabled else "disabled",
-                "enabled": body.enabled,
-                "server": target.get("server"),
-                "description": target.get("description"),
-            }
-        )
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
+        broadcast_mcp_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
 
     if not widget_id.startswith("mcp:"):
         raise HTTPException(
@@ -3456,7 +2679,7 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         save=lambda: _write_mcp_config(state_reader, mcp_data),
     )
 
-    refreshed = _widget_or_fallback(
+    _widget_or_fallback(
         widget_id,
         state_reader,
         lambda: {
@@ -3475,13 +2698,19 @@ async def patch_widget(widget_id: str, body: WidgetPatchRequest):
         },
     )
 
-    _broadcast_widget_refresh(state_reader)
-    return _widget_to_response(refreshed)
+    _broadcast_widget_refresh(state_reader, request_id=request_id)
+    broadcast_mcp_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
 
 
-@router.delete("/widgets/{widget_id}", response_model=WidgetDeleteResponse)
-async def delete_widget(widget_id: str):
+@router.delete("/widgets/{widget_id}", status_code=202, response_model=UiRequestAcknowledgement)
+async def delete_widget(
+    widget_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Delete a backend-owned widget where a matching state file exists."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
 
     if widget_id.startswith("mcp:"):
@@ -3496,16 +2725,13 @@ async def delete_widget(widget_id: str):
             save=lambda: _write_mcp_config(state_reader, mcp_data),
         )
         if not deleted:
-            warning = f"Widget {widget_id} was already removed."
             logger.warning("MCP widget %s was already removed before delete request", widget_id)
-            return WidgetDeleteResponse(
-                widget_id=widget_id,
-                removed=True,
-                already_removed=True,
-                warning=warning,
-            )
-        _broadcast_widget_refresh(state_reader)
-        return WidgetDeleteResponse(widget_id=widget_id, removed=True)
+            _broadcast_widget_refresh(state_reader, request_id=request_id)
+            broadcast_mcp_snapshot(request_id=request_id)
+            return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
+        broadcast_mcp_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
 
     if not widget_id.startswith("schedule:"):
         raise HTTPException(
@@ -3516,28 +2742,33 @@ async def delete_widget(widget_id: str):
     schedule_id = widget_id.split(":", 1)[1]
     deleted = _delete_schedule_entry(state_reader, schedule_id)
     if not deleted:
-        warning = f"Widget {widget_id} was already removed."
         logger.warning("Schedule widget %s was already removed before delete request", widget_id)
-        return WidgetDeleteResponse(
-            widget_id=widget_id,
-            removed=True,
-            already_removed=True,
-            warning=warning,
-        )
+        _broadcast_widget_refresh(state_reader, request_id=request_id)
+        broadcast_schedule_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["widgets.updated", "schedule.snapshot"])
 
-    _broadcast_widget_refresh(state_reader)
-    broadcast_schedule_snapshot()
-    return WidgetDeleteResponse(widget_id=widget_id, removed=True)
+    _broadcast_widget_refresh(state_reader, request_id=request_id)
+    broadcast_schedule_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["widgets.updated", "schedule.snapshot"])
 
 
-@router.get("/schedules", response_model=ScheduleResponse)
-async def get_schedules():
+@router.get("/schedules", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_schedules(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Alias for schedule data using the requested plural path."""
-    return await get_schedule()
+    request_id = _request_correlation_id(request, x_request_id)
+    broadcast_schedule_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["schedule.snapshot"])
 
 
-@router.post("/schedules", response_model=WidgetResponse)
-async def create_schedule(body: ScheduleCreateRequest):
+@router.post("/schedules", status_code=202, response_model=UiRequestAcknowledgement)
+async def create_schedule(
+    body: ScheduleCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Create a new schedule entry in backend state."""
     name = body.name.strip()
     instruction = body.instruction.strip()
@@ -3545,6 +2776,7 @@ async def create_schedule(body: ScheduleCreateRequest):
         raise HTTPException(status_code=400, detail="Schedule name is required")
     if not instruction:
         raise HTTPException(status_code=400, detail="Schedule task is required")
+    request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
     schedule_path, schedule_data = _read_schedule_config(state_reader)
@@ -3587,13 +2819,20 @@ async def create_schedule(body: ScheduleCreateRequest):
             "data": entry,
         }
 
-    _broadcast_widget_refresh(state_reader)
-    broadcast_schedule_snapshot()
-    return _widget_to_response(refreshed)
+    _broadcast_widget_refresh(state_reader, request_id=request_id)
+    broadcast_schedule_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["schedule.snapshot"])
 
 
-@router.post("/schedules/{schedule_id}/trigger", response_model=WidgetResponse)
-async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
+@router.post(
+    "/schedules/{schedule_id}/trigger", status_code=202, response_model=UiRequestAcknowledgement
+)
+async def retrigger_schedule(
+    schedule_id: str,
+    body: ScheduleTriggerRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Reschedule a task from a natural-language description.
 
     Rather than editing cron fields by hand, the user describes the timing in
@@ -3611,6 +2850,7 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
         raise HTTPException(status_code=400, detail="Trigger description is required")
     if not chat_main.client:
         raise HTTPException(status_code=503, detail="Progenitor client not initialized")
+    request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
     schedule_path, schedule_data = _read_schedule_config(state_reader)
@@ -3667,23 +2907,22 @@ async def retrigger_schedule(schedule_id: str, body: ScheduleTriggerRequest):
         _atomic_write_json(schedule_path, schedule_data, state_reader)
         state_reader.invalidate(schedule_path)
 
-    _broadcast_widget_refresh(state_reader)
-    broadcast_schedule_snapshot()
-    refreshed = next(
-        (w for w in state_reader.get_widgets() if w["id"] == f"schedule:{schedule_id}"),
-        None,
-    )
-    if refreshed is None:
-        raise HTTPException(status_code=404, detail="Schedule not found")
-    return _widget_to_response(refreshed)
+    _broadcast_widget_refresh(state_reader, request_id=request_id)
+    broadcast_schedule_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["schedule.snapshot"])
 
 
-@router.post("/events", response_model=WidgetResponse)
-async def create_event_widget(body: EventWidgetCreateRequest):
+@router.post("/events", status_code=202, response_model=UiRequestAcknowledgement)
+async def create_event_widget(
+    body: EventWidgetCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Create a new persisted event widget trigger."""
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Event widget name is required")
+    request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
     event_widgets = _read_event_widget_records(state_reader)
@@ -3720,26 +2959,35 @@ async def create_event_widget(body: EventWidgetCreateRequest):
             "data": entry,
         }
 
-    _broadcast_widget_refresh(state_reader)
-    return _widget_to_response(refreshed)
+    _broadcast_widget_refresh(state_reader, request_id=request_id)
+    return acknowledgement_response(request_id, ["widgets.updated"])
 
 
-@router.get("/kanban", response_model=KanbanBoardResponse)
-async def get_kanban_board():
+@router.get("/kanban", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_kanban_board(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Get the persisted kanban board used by the frontend."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     response = _kanban_board_response(state_reader, board)
-    broadcast_kanban_snapshot(response)
-    return response
+    broadcast_kanban_snapshot(response, request_id=request_id)
+    return acknowledgement_response(request_id, ["kanban.snapshot"])
 
 
-@router.post("/kanban/cards", response_model=KanbanCardResponse)
-async def create_kanban_card(body: KanbanCardCreateRequest):
+@router.post("/kanban/cards", status_code=202, response_model=UiRequestAcknowledgement)
+async def create_kanban_card(
+    body: KanbanCardCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Create a new kanban card in the backlog column."""
     title = body.title.strip()
     if not title:
         raise HTTPException(status_code=400, detail="Card title is required")
+    request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
@@ -3778,6 +3026,7 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
                 },
             }
         ],
+        request_id=request_id,
     )
     await _dispatch_workflow_triggers(
         [
@@ -3791,18 +3040,24 @@ async def create_kanban_card(body: KanbanCardCreateRequest):
                     "source": "kanban",
                 },
             }
-        ]
+        ],
+        request_id=request_id,
     )
     async with _kanban_card_trigger_lock:
         _remember_kanban_card_state(created["id"], created)
-    response = _kanban_card_response(state_reader, created)
-    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
-    return response
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
+    return acknowledgement_response(request_id, ["kanban.snapshot"])
 
 
-@router.patch("/kanban/cards/{card_id}", response_model=KanbanCardResponse)
-async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
+@router.patch("/kanban/cards/{card_id}", status_code=202, response_model=UiRequestAcknowledgement)
+async def patch_kanban_card(
+    card_id: str,
+    body: KanbanCardPatchRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Patch an existing kanban card."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     column_map = {column["id"]: column for column in board["columns"]}
@@ -3885,18 +3140,26 @@ async def patch_kanban_card(card_id: str, body: KanbanCardPatchRequest):
     refreshed = next((item for item in board["cards"] if item["id"] == card_id), updated_card)
     if previous_card is not None:
         await _apply_kanban_card_diff_effects(
-            state_reader, previous_card=previous_card, refreshed_card=refreshed, now=now
+            state_reader,
+            previous_card=previous_card,
+            refreshed_card=refreshed,
+            now=now,
+            request_id=request_id,
         )
     async with _kanban_card_trigger_lock:
         _remember_kanban_card_state(card_id, refreshed)
-    response = _kanban_card_response(state_reader, refreshed)
-    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
-    return response
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
+    return acknowledgement_response(request_id, ["kanban.snapshot"])
 
 
-@router.delete("/kanban/cards/{card_id}", status_code=204)
-async def delete_kanban_card(card_id: str):
+@router.delete("/kanban/cards/{card_id}", status_code=202, response_model=UiRequestAcknowledgement)
+async def delete_kanban_card(
+    card_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Delete an existing kanban card."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     board = _read_kanban_board(state_reader)
     original_count = len(board["cards"])
@@ -3920,6 +3183,7 @@ async def delete_kanban_card(card_id: str):
                     },
                 }
             ],
+            request_id=request_id,
         )
         await _dispatch_workflow_triggers(
             [
@@ -3933,27 +3197,39 @@ async def delete_kanban_card(card_id: str):
                         "source": "kanban",
                     },
                 }
-            ]
+            ],
+            request_id=request_id,
         )
         async with _kanban_card_trigger_lock:
             _remember_kanban_card_state(card_id, None)
-    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board))
-    return None
+    broadcast_kanban_snapshot(_kanban_board_response(state_reader, board), request_id=request_id)
+    return acknowledgement_response(request_id, ["kanban.snapshot"])
 
 
-@router.get("/tasks/{card_id}/content", response_model=TaskContentResponse)
-async def get_task_content(card_id: str):
-    """Read the markdown body for a single task card."""
+@router.get("/tasks/{card_id}/activity", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_task_activity(
+    card_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a task-activity request and publish its canonical timeline."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
-    card = _find_kanban_card(state_reader, card_id)
-    response = _read_task_content(state_reader, card)
-    broadcast_task_content(card_id, response)
-    return response
+    _find_kanban_card(state_reader, card_id)
+    activity = _task_activity_response(state_reader, card_id)
+    broadcast_task_activity(card_id, activity, request_id=request_id)
+    return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
-@router.put("/tasks/{card_id}/content", response_model=TaskContentResponse)
-async def update_task_content(card_id: str, body: TaskContentUpdateRequest):
+@router.put("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def update_task_content(
+    card_id: str,
+    body: TaskContentUpdateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Persist the markdown body for a single task card."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     _find_kanban_card(state_reader, card_id)
     result = _write_task_content(state_reader, card_id, body.content)
@@ -3966,27 +3242,23 @@ async def update_task_content(card_id: str, body: TaskContentUpdateRequest):
         metadata={"path": result.path},
         created_at=utcnow().isoformat(),
     )
-    broadcast_task_content(card_id, result)
-    broadcast_task_activity(card_id)
-    return result
+    broadcast_task_content(card_id, result, request_id=request_id)
+    broadcast_task_activity(card_id, request_id=request_id)
+    return acknowledgement_response(request_id, ["task.content.updated", "task.activity.updated"])
 
 
-@router.get("/tasks/{card_id}/activity", response_model=TaskActivityResponse)
-async def get_task_activity(card_id: str):
-    """Read the persisted activity timeline for a task card."""
-    state_reader = get_state_reader()
-    _find_kanban_card(state_reader, card_id)
-    response = _task_activity_response(state_reader, card_id)
-    broadcast_task_activity(card_id, response)
-    return response
-
-
-@router.post("/tasks/{card_id}/activity", response_model=TaskActivityEntryResponse)
-async def create_task_activity(card_id: str, body: TaskActivityCreateRequest):
+@router.post("/tasks/{card_id}/activity", status_code=202, response_model=UiRequestAcknowledgement)
+async def create_task_activity(
+    card_id: str,
+    body: TaskActivityCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Append a user-visible activity entry for a task card."""
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     _find_kanban_card(state_reader, card_id)
-    created = _append_task_activity_entry(
+    _append_task_activity_entry(
         state_reader,
         card_id=card_id,
         kind=body.kind,
@@ -3995,17 +3267,19 @@ async def create_task_activity(card_id: str, body: TaskActivityCreateRequest):
         metadata=body.metadata,
         created_at=utcnow().isoformat(),
     )
-    broadcast_task_activity(card_id)
-    return created
+    broadcast_task_activity(card_id, request_id=request_id)
+    return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
-@router.post("/actions/run", response_model=ActionResponse)
-async def action_run(body: ActionRunRequest):
-    """Run a prompt/code action through the existing IPC message flow."""
+async def _execute_action_run(body: ActionRunRequest) -> tuple[str, Any, str]:
+    """Run an action internally and return its thread ID, response, and text.
+
+    Internal callers do not receive an HTTP acknowledgement envelope.
+    """
     from . import main as chat_main
 
     if not chat_main.client:
-        raise HTTPException(status_code=503, detail="Client not initialized")
+        raise RuntimeError("Client not initialized")
 
     code = body.code or body.content
     segments = []
@@ -4021,7 +3295,7 @@ async def action_run(body: ActionRunRequest):
         segments.append(f"Input:\n{body.input}")
 
     if not segments:
-        raise HTTPException(status_code=400, detail="No run payload provided")
+        raise ValueError("No run payload provided")
 
     thread_id = _resolve_action_thread_id(body.thread_id)
     metadata = _build_action_metadata(
@@ -4045,30 +3319,49 @@ async def action_run(body: ActionRunRequest):
     except Exception as exc:
         fail_thread(thread_id, str(exc), widget_id=body.widget_id)
         raise
-
     complete_thread(thread_id, response.response, widget_id=body.widget_id)
+    return (thread_id, response, response.response)
+
+
+@router.post("/actions/run", status_code=202, response_model=UiRequestAcknowledgement)
+async def action_run(
+    body: ActionRunRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Run a prompt/code action through the existing IPC message flow."""
+    request_id = _request_correlation_id(request, x_request_id)
+    try:
+        thread_id, response_obj, response_text = await _execute_action_run(body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Agent action failed: {exc}") from exc
     if body.broadcast_response:
         broadcast_ui_event(
             "agent_message",
             {
-                "content": response.response,
+                "content": response_text,
                 "metadata": {"widget_id": body.widget_id, "action": "run", "thread_id": thread_id},
                 "timestamp": time.time(),
             },
             scope="chat",
+            request_id=request_id,
         )
-    _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(
-        ok=True,
-        widget_id=body.widget_id,
-        thread_id=thread_id,
-        response=response.response,
-    )
+    _broadcast_widget_refresh(get_state_reader(), request_id=request_id)
+    return acknowledgement_response(request_id, ["widgets.updated"])
 
 
-@router.post("/actions/generate", response_model=ActionResponse)
-async def action_generate(body: ActionGenerateRequest):
+@router.post("/actions/generate", status_code=202, response_model=UiRequestAcknowledgement)
+async def action_generate(
+    body: ActionGenerateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Generate output through the existing IPC message flow."""
+    request_id = _request_correlation_id(request, x_request_id)
     from . import main as chat_main
 
     if not chat_main.client:
@@ -4107,6 +3400,15 @@ async def action_generate(body: ActionGenerateRequest):
 
     complete_thread(thread_id, response.response, widget_id=body.widget_id)
     broadcast_ui_event(
+        "action.generate.sent",
+        {
+            "thread_id": thread_id,
+            "widget_id": body.widget_id,
+            "response": response.response,
+        },
+        request_id=request_id,
+    )
+    broadcast_ui_event(
         "agent_message",
         {
             "content": response.response,
@@ -4114,369 +3416,191 @@ async def action_generate(body: ActionGenerateRequest):
             "timestamp": time.time(),
         },
         scope="chat",
+        request_id=request_id,
     )
-    _broadcast_widget_refresh(get_state_reader())
-    return ActionResponse(
-        ok=True,
-        widget_id=body.widget_id,
-        thread_id=thread_id,
-        response=response.response,
-    )
+    _broadcast_widget_refresh(get_state_reader(), request_id=request_id)
+    return acknowledgement_response(request_id, ["action.generate.sent", "widgets.updated"])
 
 
-@router.get("/threads", response_model=ThreadsResponse)
-async def get_threads(
-    invocation_type: Literal["user", "automation", "system"] | None = Query(default=None),
+@router.get("/alerts", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_alerts(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """List tracked conversation/execution threads, optionally filtered by invocation type."""
-
-    items = list_threads(invocation_type=invocation_type)
-    return ThreadsResponse(items=items, total=len(items))
-
-
-class TelegramStatusResponse(BaseModel):
-    """Telegram integration status."""
-
-    enabled: bool
-    connected: bool
-    chat_id: str = ""  # Masked for security
-    web_clients_active: int
-    will_forward_to_telegram: bool
-    rate_limit_per_minute: int
-
-
-@router.get("/telegram/status", response_model=TelegramStatusResponse)
-async def get_telegram_status():
-    """
-    Get Telegram integration status.
-
-    Shows whether Telegram is enabled, connected, and whether
-    messages will be forwarded to Telegram (no web clients connected).
-    """
-    from . import main as chat_main
-    from .telegram_client import get_telegram_client
-
-    telegram = get_telegram_client()
-    subscriber_counts = get_subscriber_counts()
-    config = chat_main.config
-
-    # Mask the chat_id for security
-    chat_id = config.telegram_chat_id
-    masked_chat_id = f"{chat_id[:4]}...{chat_id[-4:]}" if len(chat_id) > 8 else "*" * len(chat_id)
-
-    return TelegramStatusResponse(
-        enabled=config.telegram_enabled,
-        connected=telegram is not None and telegram._started,
-        chat_id=masked_chat_id if config.telegram_enabled else "",
-        web_clients_active=subscriber_counts["stream"],
-        will_forward_to_telegram=(
-            telegram is not None and telegram._started and subscriber_counts["stream"] == 0
-        ),
-        rate_limit_per_minute=config.telegram_rate_limit_per_minute,
-    )
-
-
-class TelegramTestRequest(BaseModel):
-    """Request to test Telegram integration."""
-
-    message: str = "Test message from Progenitor"
-
-
-class TelegramTestResponse(BaseModel):
-    """Response from Telegram test."""
-
-    success: bool
-    message: str
-
-
-@router.post("/telegram/test", response_model=TelegramTestResponse)
-async def test_telegram():
-    """
-    Send a test message to Telegram.
-
-    Used to verify the Telegram integration is working correctly.
-    """
-    from .telegram_client import get_telegram_client
-
-    telegram = get_telegram_client()
-    if not telegram:
-        return TelegramTestResponse(
-            success=False, message="Telegram integration not enabled or not configured"
-        )
-
-    try:
-        success = await telegram.send_message(
-            "🧪 Test message from Progenitor Backend\n\n"
-            "If you see this, Telegram integration is working!"
-        )
-        if success:
-            return TelegramTestResponse(success=True, message="Test message sent successfully")
-        else:
-            return TelegramTestResponse(
-                success=False, message="Failed to send test message - check logs for details"
-            )
-    except Exception as e:
-        logger.error("Telegram test failed: %s", e)
-        return TelegramTestResponse(success=False, message=f"Error: {str(e)}")
-
-
-@router.get("/tasks", response_model=TasksResponse)
-async def get_active_tasks():
-    """
-    Get the current kanban task list for lightweight consumers.
-    """
-    state_reader = get_state_reader()
-    board = _read_kanban_board(state_reader)
-    tasks = [
-        TaskInfo(
-            id=card["id"],
-            title=card["title"],
-            status=card["status"],
-            description=card.get("summary") or card.get("description") or None,
-            progress=100 if card["status"] == "complete" else None,
-            column_id=card["column_id"],
-            owner=card.get("owner"),
-            agent_name=card.get("agent_name"),
-            labels=list(card.get("labels") or []),
-            updated_at=card.get("updated_at"),
-            task_path=_task_content_public_path(card["id"]),
-        )
-        for card in board["cards"]
-        if not bool((card.get("metadata") or {}).get("archived_at"))
-    ]
-    tasks.sort(
-        key=lambda task: (
-            task.status == "complete",
-            task.column_id or "",
-            task.updated_at or "",
-        ),
-        reverse=False,
-    )
-    return TasksResponse(tasks=tasks, total=len(tasks))
-
-
-@router.get("/alerts", response_model=AlertsResponse)
-async def get_alerts():
     """
     Get backend-managed alert history.
 
     Returns alerts generated by the progenitor agent.
     """
-    return AlertsResponse.model_validate(_alerts_payload())
+    request_id = _request_correlation_id(request, x_request_id)
+    broadcast_alerts_state(request_id=request_id)
+    return acknowledgement_response(request_id, ["alerts.updated"])
 
 
-@router.post("/alerts/viewed", response_model=MarkAlertsViewedResponse)
-async def mark_viewed_alerts(body: MarkAlertsViewedRequest | None = None):
+@router.post("/alerts/viewed", status_code=202, response_model=UiRequestAcknowledgement)
+async def mark_viewed_alerts(
+    request: Request,
+    body: MarkAlertsViewedRequest | None = None,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Mark alerts viewed without removing them from history."""
-    updated = mark_alerts_viewed(body.alert_ids if body else None)
-    broadcast_alerts_state()
-    return MarkAlertsViewedResponse(updated=updated, unread=alert_summary()["unread"])
+    request_id = _request_correlation_id(request, x_request_id)
+    mark_alerts_viewed(body.alert_ids if body else None)
+    broadcast_alerts_state(request_id=request_id)
+    return acknowledgement_response(request_id, ["alerts.updated"])
 
 
-@router.post("/alerts/{alert_id}/dismiss")
-async def dismiss_alert(alert_id: str):
+@router.post("/alerts/{alert_id}/dismiss", status_code=202, response_model=UiRequestAcknowledgement)
+async def dismiss_alert(
+    alert_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """
     Dismiss an alert.
 
     Alerts remain in history; dismissing only clears unread state.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     alert = get_alert(alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
     mark_alerts_viewed([alert_id])
-    broadcast_alerts_state()
-    return {"status": "dismissed", "alert_id": alert_id}
+    broadcast_alerts_state(request_id=request_id)
+    return acknowledgement_response(request_id, ["alerts.updated"])
 
 
-@router.post("/alerts/{alert_id}/respond")
-async def respond_to_alert(alert_id: str, response: str = "acknowledged"):
+@router.post("/alerts/{alert_id}/respond", status_code=202, response_model=UiRequestAcknowledgement)
+async def respond_to_alert(
+    request: Request,
+    alert_id: str,
+    response: str = "acknowledged",
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """
     Respond to an alert.
 
     Acknowledges the alert and optionally sends a response back to the agent.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     alert = get_alert(alert_id)
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
     mark_alerts_viewed([alert_id])
-    broadcast_alerts_state()
+    broadcast_alerts_state(request_id=request_id)
     logger.info("Alert %s responded with: %s", alert_id, response)
 
-    return {"status": "responded", "alert_id": alert_id, "response": response}
+    return acknowledgement_response(request_id, ["alerts.updated"])
 
 
-class AgentDetailResponse(BaseModel):
-    """Detailed information about a single agent."""
-
-    name: str
-    status: str
-    kind: str = "a2a_agent"
-    version: str = "0.1.0"
-    description: str = ""
-    transport: str = "stdio"
-    enabled: bool = True
-    # Statistics
-    total_requests: int = 0
-    successful_requests: int = 0
-    failed_requests: int = 0
-    total_tokens_input: int = 0
-    total_tokens_output: int = 0
-    avg_response_time: float = 0.0
-    last_active: str | None = None
-    uptime_seconds: float = 0.0
-    # Recent activity
-    recent_requests: list[dict] = []
-    # Performance
-    success_rate: float = 100.0
-    tokens_per_request_avg: float = 0.0
-
-
-@router.get("/agents/{agent_name}", response_model=AgentDetailResponse)
-async def get_agent_detail(agent_name: str):
-    """
-    Get detailed information about a specific agent.
-
-    Returns agent configuration, statistics, and recent activity.
-    """
-    state_reader = get_state_reader()
-    agents, _ = state_reader.get_registry()
-    health = state_reader.get_health()
-    progenitor_running = health.is_running()
-
-    # Find the agent
-    agent = next((a for a in agents if a.name == agent_name), None)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent '{agent_name}' not found")
-
-    return AgentDetailResponse(
-        name=agent.name,
-        status="ready" if progenitor_running else "offline",
-        kind=agent.kind,
-        version=agent.version,
-        description=agent.description,
-        transport=agent.transport,
-        enabled=agent.enabled,
-        uptime_seconds=getattr(health, "uptime_seconds", 0),
-    )
-
-
-@router.get("/prompts", response_model=PromptsResponse)
-async def get_prompts(agent: str | None = None):
-    """
-    Get available prompt templates from the mounted prompts directory.
-
-    Returns prompt files recursively, including their content and inferred agent
-    associations for the workspace prompt library.
-    """
+@router.get("/prompts", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_prompts(
+    request: Request,
+    agent: str | None = None,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Publish the complete prompt catalogue; consumers filter locally."""
+    request_id = _request_correlation_id(request, x_request_id)
     service = PromptService()
+    # A catalogue snapshot is global canonical state. Never publish a
+    # request-specific subset as a snapshot for all connected clients.
     prompts = [
         PromptFileResponse.model_validate(prompt, from_attributes=True)
-        for prompt in service.list_prompts(agent=agent)
+        for prompt in service.list_prompts()
     ]
-    if agent is None:
-        # Seed every /api/ui/stream subscriber with the full list (the prompts
-        # store slice renders from `prompts.snapshot`). Skip filtered queries so
-        # the broadcast always carries the complete catalogue.
-        broadcast_prompts_snapshot(prompts)
-    return PromptsResponse(prompts=prompts, total=len(prompts))
+    broadcast_prompts_snapshot(prompts, request_id=request_id)
+    return acknowledgement_response(request_id, ["prompts.snapshot"])
 
 
-@router.get("/prompts/content", response_model=PromptFileResponse)
-async def get_prompt_content(path: str = Query(..., min_length=1)):
-    """Get a single prompt file from the mounted prompts directory."""
-    try:
-        return PromptFileResponse.model_validate(
-            PromptService().get_prompt(path), from_attributes=True
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.put("/prompts/content", response_model=PromptFileResponse)
-async def update_prompt_content(request: PromptUpdateRequest):
+@router.put("/prompts/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def update_prompt_content(
+    body: PromptUpdateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Persist edits to an existing prompt file."""
+    request_id = _request_correlation_id(request, x_request_id)
     try:
-        saved = PromptFileResponse.model_validate(
-            PromptService().save_prompt(request.path, request.content),
+        PromptFileResponse.model_validate(
+            PromptService().save_prompt(body.path, body.content),
             from_attributes=True,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Prompt '{request.path}' not found") from exc
+        raise HTTPException(status_code=404, detail=f"Prompt '{body.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_prompts_snapshot()
-    return saved
+    broadcast_prompts_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["prompts.snapshot"])
 
 
-@router.get("/skills", response_model=SkillsResponse)
-async def get_skills(agent: str | None = None):
-    """Get available DeepAgent skills from the mounted skills directory."""
+@router.get("/skills", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_skills(
+    request: Request,
+    agent: str | None = None,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Publish the complete skill catalogue; consumers filter locally."""
+    request_id = _request_correlation_id(request, x_request_id)
     try:
+        # A catalogue snapshot is global canonical state. Never publish a
+        # request-specific subset as a snapshot for all connected clients.
         skills = [
             SkillFileResponse.model_validate(skill, from_attributes=True)
-            for skill in SkillService().list_skills(agent=agent)
+            for skill in SkillService().list_skills()
         ]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if agent is None:
-        # Seed every /api/ui/stream subscriber with the full list (the skills
-        # store slice renders from `skills.snapshot`). Skip filtered queries so
-        # the broadcast always carries the complete catalogue.
-        broadcast_skills_snapshot(skills)
-    return SkillsResponse(skills=skills, total=len(skills))
+    broadcast_skills_snapshot(skills, request_id=request_id)
+    return acknowledgement_response(request_id, ["skills.snapshot"])
 
 
-@router.get("/skills/content", response_model=SkillFileResponse)
-async def get_skill_content(path: str = Query(..., min_length=1)):
-    """Get a single skill file from the mounted skills directory."""
-    try:
-        return SkillFileResponse.model_validate(
-            SkillService().get_skill(path), from_attributes=True
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Skill '{path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.put("/skills/content", response_model=SkillFileResponse)
-async def update_skill_content(request: SkillUpdateRequest):
+@router.put("/skills/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def update_skill_content(
+    body: SkillUpdateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Persist edits to an existing skill file."""
+    request_id = _request_correlation_id(request, x_request_id)
     try:
-        saved = SkillFileResponse.model_validate(
-            SkillService().save_skill(request.path, request.content),
+        SkillFileResponse.model_validate(
+            SkillService().save_skill(body.path, body.content),
             from_attributes=True,
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Skill '{request.path}' not found") from exc
+        raise HTTPException(status_code=404, detail=f"Skill '{body.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_skills_snapshot()
-    return saved
+    broadcast_skills_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["skills.snapshot"])
 
 
-@router.post("/skills", response_model=SkillFileResponse, status_code=201)
-async def create_skill(request: SkillCreateRequest):
+@router.post("/skills", response_model=UiRequestAcknowledgement, status_code=202)
+async def create_skill(
+    body: SkillCreateRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
     """Create a new DeepAgent skill file."""
+    request_id = _request_correlation_id(request, x_request_id)
     try:
-        created = SkillFileResponse.model_validate(
-            SkillService().create_skill(request.agent, request.name, request.content),
+        SkillFileResponse.model_validate(
+            SkillService().create_skill(body.agent, body.name, body.content),
             from_attributes=True,
         )
     except FileExistsError as exc:
         raise HTTPException(status_code=409, detail=f"Skill '{exc}' already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_skills_snapshot()
-    return created
+    broadcast_skills_snapshot(request_id=request_id)
+    return acknowledgement_response(request_id, ["skills.snapshot"])
 
 
-@router.get("/logs")
+@router.get("/logs", status_code=202, response_model=UiRequestAcknowledgement)
 async def get_logs(
+    request: Request,
     level: str | None = None,
     search: str | None = None,
     source: str | None = None,
@@ -4488,6 +3612,7 @@ async def get_logs(
     limit: int = 500,
     format: str = "text",
     search_mode: str = "plain",
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
     """
     Get agent logs with optional filtering.
@@ -4500,6 +3625,7 @@ async def get_logs(
 
     Returns recent logs from the agent.
     """
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     if search_mode not in {"plain", "regex"}:
         raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
@@ -4552,49 +3678,60 @@ async def get_logs(
         )
     except re.error as exc:
         raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
-
-    entries = result["entries"]
-    folders = state_reader.get_log_folders()
-
-    if format == "json":
-        return {
-            "entries": entries,
-            "total": result["total"],
-            "returned": result["returned"],
-            "filtered": any(
-                value is not None
-                for value in (level, search, source, folder, file_path, start_date, end_date)
-            ),
-            "source_groups": source_groups,
-            "folders": folders,
+    page_payload = {
+        **result,
+        "filters": {
+            "level": level,
+            "search": search,
+            "source": source,
+            "folder": folder,
+            "file": file_path,
+            "start": start_date,
+            "end": end_date,
+            "after": after,
+            "limit": limit,
+            "format": format,
+            "search_mode": search_mode,
+        },
+        "active_selection": {
+            "source": source or "",
+            "group": folder or "",
+            "file": file_path or "",
+        },
+        "date_range": {"start": start_date, "end": end_date},
+        "cursor": {
+            "after": after,
             "newest_cursor": result["newest_cursor"],
             "cursor_found": result["cursor_found"],
-            "date_range": {"start": start_date, "end": end_date},
-            "active_selection": {
-                "group": folder,
-                "file": file_path,
-            },
-        }
-
-    content = "\n".join(
-        f"[{entry['time']}] [{entry['level'].upper()}] [{entry['source']}] {entry['message']}"
-        for entry in entries
-    )
-    return {"logs": content, "total": len(entries)}
-
-
-@router.get("/logs/sources")
-async def get_log_sources():
-    """Return available log groups/files without loading log entries."""
-    state_reader = get_state_reader()
-    return {
-        "source_groups": state_reader.get_log_sources(),
+        },
+        "source_groups": source_groups,
         "folders": state_reader.get_log_folders(),
     }
+    broadcast_ui_event("logs.page.loaded", page_payload, request_id=request_id)
+    return acknowledgement_response(request_id, ["logs.page.loaded"])
 
 
-@router.get("/logs/export")
+@router.get("/logs/sources", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_log_sources(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Return available log groups/files without loading log entries."""
+    request_id = _request_correlation_id(request, x_request_id)
+    state_reader = get_state_reader()
+    source_groups = state_reader.get_log_sources()
+    folders = state_reader.get_log_folders()
+    broadcast_ui_event(
+        "logs.sources.loaded",
+        {"source_groups": source_groups, "folders": folders},
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["logs.sources.loaded"])
+
+
+@router.get("/logs/export", status_code=202, response_model=UiRequestAcknowledgement)
 async def export_logs(
+    request: Request,
     level: str | None = None,
     search: str | None = None,
     source: str | None = None,
@@ -4604,8 +3741,14 @@ async def export_logs(
     end_date: str | None = Query(default=None, alias="end"),
     search_mode: str = "plain",
     format: str = "text",
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Export logs using the current filters."""
+    """Export logs using the current filters.
+
+    The export data is broadcast as chunked events (``logs.export.chunk``) on the
+    UI event stream. The frontend reconstructs the download from these chunks.
+    """
+    request_id = _request_correlation_id(request, x_request_id)
     state_reader = get_state_reader()
     if search_mode not in {"plain", "regex"}:
         raise HTTPException(status_code=400, detail="search_mode must be 'plain' or 'regex'")
@@ -4631,58 +3774,31 @@ async def export_logs(
         raise HTTPException(status_code=400, detail=f"Invalid regex: {exc}") from exc
 
     entries = result["entries"]
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
-    base_name = f"progenitor_logs_{timestamp}"
-
-    if format == "json":
-        return Response(
-            content=json.dumps(entries, indent=2),
-            media_type="application/json",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}.json"'},
-        )
-
-    if format == "jsonl":
-        content = "\n".join(json.dumps(entry) for entry in entries)
-        return Response(
-            content=content,
-            media_type="application/x-ndjson",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}.jsonl"'},
-        )
-
-    if format == "csv":
-        output = StringIO()
-        writer = csv.DictWriter(
-            output,
-            fieldnames=["timestamp", "level", "source", "relative_path", "message"],
-            extrasaction="ignore",
-        )
-        writer.writeheader()
-        for entry in entries:
-            writer.writerow(
-                {
-                    "timestamp": entry.get("time") or entry.get("timestamp") or "",
-                    "level": entry.get("level") or "",
-                    "source": entry.get("source") or "",
-                    "relative_path": entry.get("relative_path") or "",
-                    "message": entry.get("message") or "",
-                }
-            )
-        return Response(
-            content=output.getvalue(),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{base_name}.csv"'},
-        )
-
-    content = "\n".join(
-        f"[{entry.get('time') or '--'}] [{str(entry.get('level', 'info')).upper()}] "
-        f"[{entry.get('relative_path') or entry.get('source') or 'system'}] {entry.get('message', '')}"
-        for entry in entries
+    broadcast_ui_event(
+        "logs.export.started", {"format": format, "total": len(entries)}, request_id=request_id
     )
-    return Response(
-        content=content,
-        media_type="text/plain; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{base_name}.log"'},
+
+    # Broadcast entries as chunked events (batches of 100)
+    chunk_size = 100
+    for i in range(0, len(entries), chunk_size):
+        chunk = entries[i : i + chunk_size]
+        broadcast_ui_event(
+            "logs.export.chunk",
+            {"format": format, "index": i // chunk_size, "entries": chunk, "total": len(entries)},
+            request_id=request_id,
+        )
+
+    broadcast_ui_event(
+        "logs.export.completed",
+        {"format": format, "total": len(entries)},
+        request_id=request_id,
     )
+
+    event_types = ["logs.export.started"]
+    if entries:
+        event_types.append("logs.export.chunk")
+    event_types.append("logs.export.completed")
+    return acknowledgement_response(request_id, event_types)
 
 
 def create_alert(
@@ -5254,8 +4370,15 @@ def broadcast_ui_event(
     *,
     scope: Literal["global", "session", "chat"] = "global",
     session_id: str | None = None,
+    request_id: str | None = None,
 ) -> UiEventEnvelope:
-    """Broadcast one typed event envelope to canonical /api/ui/stream subscribers."""
+    """Broadcast one typed event envelope to canonical /api/ui/stream subscribers.
+
+    When *request_id* is provided it is embedded in the envelope payload so the
+    frontend can correlate the event to a pending operation.
+    """
+    if request_id is not None:
+        payload = {**payload, "request_id": request_id}
     envelope = _next_ui_envelope(event_type, payload, scope=scope, session_id=session_id)
     _ui_event_replay.append(envelope)
     del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
@@ -5273,7 +4396,7 @@ def broadcast_ui_event(
     return envelope
 
 
-def broadcast_schedule_snapshot() -> UiEventEnvelope:
+def broadcast_schedule_snapshot(*, request_id: str | None = None) -> UiEventEnvelope:
     """Broadcast the current schedule list to canonical /api/ui/stream subscribers.
 
     Emitted after backend-side schedule mutations and whenever the runtime
@@ -5284,37 +4407,45 @@ def broadcast_schedule_snapshot() -> UiEventEnvelope:
     items = [
         _schedule_item_to_info(item).model_dump(mode="json") for item in state_reader.get_schedule()
     ]
-    return broadcast_ui_event("schedule.snapshot", {"items": items})
+    return broadcast_ui_event("schedule.snapshot", {"items": items}, request_id=request_id)
 
 
-def broadcast_kanban_snapshot(board: KanbanBoardResponse | None = None) -> UiEventEnvelope:
+def broadcast_kanban_snapshot(
+    board: KanbanBoardResponse | None = None, *, request_id: str | None = None
+) -> UiEventEnvelope:
     """Broadcast the current Tasks board to /api/ui/stream subscribers."""
     state_reader = get_state_reader()
     payload = (board or _kanban_board_response(state_reader)).model_dump(mode="json")
-    return broadcast_ui_event("kanban.snapshot", payload)
+    return broadcast_ui_event("kanban.snapshot", payload, request_id=request_id)
 
 
 def broadcast_task_content(
-    card_id: str, content: TaskContentResponse | None = None
+    card_id: str, content: TaskContentResponse | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the canonical task-body payload for one card."""
     state_reader = get_state_reader()
     if content is None:
         card = _find_kanban_card(state_reader, card_id)
         content = _read_task_content(state_reader, card)
-    return broadcast_ui_event("task.content.updated", content.model_dump(mode="json"))
+    return broadcast_ui_event(
+        "task.content.updated", content.model_dump(mode="json"), request_id=request_id
+    )
 
 
 def broadcast_task_activity(
-    card_id: str, activity: TaskActivityResponse | None = None
+    card_id: str, activity: TaskActivityResponse | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the canonical task activity payload for one card."""
     state_reader = get_state_reader()
     payload = activity or _task_activity_response(state_reader, card_id)
-    return broadcast_ui_event("task.activity.updated", payload.model_dump(mode="json"))
+    return broadcast_ui_event(
+        "task.activity.updated", payload.model_dump(mode="json"), request_id=request_id
+    )
 
 
-def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
+def broadcast_mcp_snapshot(
+    items: list[WidgetResponse] | None = None, *, request_id: str | None = None
+) -> UiEventEnvelope:
     """Broadcast the current MCP server list to /api/ui/stream subscribers.
 
     Emitted after the Tools page requests the list and whenever an MCP config
@@ -5326,11 +4457,13 @@ def broadcast_mcp_snapshot(items: list[WidgetResponse] | None = None) -> UiEvent
     """
     source = _mcp_widget_items() if items is None else items
     payload = [item.model_dump(mode="json") for item in source]
-    return broadcast_ui_event("mcp.snapshot", {"items": payload})
+    return broadcast_ui_event("mcp.snapshot", {"items": payload}, request_id=request_id)
 
 
 def broadcast_knowledge_snapshot(
     bases: list[dict[str, Any]] | None = None,
+    *,
+    request_id: str | None = None,
 ) -> UiEventEnvelope:
     """Broadcast the current knowledge-base list to /api/ui/stream subscribers.
 
@@ -5342,11 +4475,11 @@ def broadcast_knowledge_snapshot(
     HTTP response.
     """
     payload = snapshot_knowledge_bases() if bases is None else bases
-    return broadcast_ui_event("knowledge.snapshot", {"bases": payload})
+    return broadcast_ui_event("knowledge.snapshot", {"bases": payload}, request_id=request_id)
 
 
 def broadcast_skills_snapshot(
-    skills: list[SkillFileResponse] | None = None,
+    skills: list[SkillFileResponse] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current skill list to /api/ui/stream subscribers.
 
@@ -5361,11 +4494,11 @@ def broadcast_skills_snapshot(
             for skill in SkillService().list_skills()
         ]
     payload = [item.model_dump(mode="json") for item in skills]
-    return broadcast_ui_event("skills.snapshot", {"skills": payload})
+    return broadcast_ui_event("skills.snapshot", {"skills": payload}, request_id=request_id)
 
 
 def broadcast_prompts_snapshot(
-    prompts: list[PromptFileResponse] | None = None,
+    prompts: list[PromptFileResponse] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current prompt list to /api/ui/stream subscribers.
 
@@ -5380,18 +4513,18 @@ def broadcast_prompts_snapshot(
             for prompt in PromptService().list_prompts()
         ]
     payload = [item.model_dump(mode="json") for item in prompts]
-    return broadcast_ui_event("prompts.snapshot", {"prompts": payload})
+    return broadcast_ui_event("prompts.snapshot", {"prompts": payload}, request_id=request_id)
 
 
 def broadcast_workflows_snapshot(
-    items: list[WorkflowListItem] | None = None,
+    items: list[WorkflowListItem] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current workflow definition list."""
 
     if items is None:
         items = list_workflow_list_items(get_default_document_store())
     payload = [item.model_dump(mode="json") for item in items]
-    return broadcast_ui_event("workflows.snapshot", {"items": payload})
+    return broadcast_ui_event("workflows.snapshot", {"items": payload}, request_id=request_id)
 
 
 def broadcast_workflow_detail(workflow_id: str) -> UiEventEnvelope:
@@ -5405,17 +4538,19 @@ def broadcast_workflow_detail(workflow_id: str) -> UiEventEnvelope:
 
 
 def broadcast_workflow_runs_snapshot(
-    runs: list[WorkflowRun] | None = None,
+    runs: list[WorkflowRun] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current workflow runs list."""
 
     if runs is None:
         runs = list_workflow_runs(get_default_document_store())
     payload = [item.model_dump(mode="json") for item in runs]
-    return broadcast_ui_event("workflow.runs.snapshot", {"items": payload})
+    return broadcast_ui_event("workflow.runs.snapshot", {"items": payload}, request_id=request_id)
 
 
-def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiEventEnvelope:
+def broadcast_widgets_snapshot(
+    items: list[WidgetResponse] | None = None, *, request_id: str | None = None
+) -> UiEventEnvelope:
     """Broadcast the unified widget list (dashboard/cross-cutting views).
 
     Callers holding a freshly built list can pass it in to avoid recomputing
@@ -5425,7 +4560,7 @@ def broadcast_widgets_snapshot(items: list[WidgetResponse] | None = None) -> UiE
         state_reader = get_state_reader()
         items = [_widget_to_response(widget) for widget in state_reader.get_widgets()]
     payload = [item.model_dump(mode="json") for item in items]
-    return broadcast_ui_event("widgets.updated", {"items": payload})
+    return broadcast_ui_event("widgets.updated", {"items": payload}, request_id=request_id)
 
 
 def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
@@ -5490,6 +4625,6 @@ def broadcast_status_change(status: str, details: dict | None = None):
     )
 
 
-def broadcast_alerts_state() -> None:
+def broadcast_alerts_state(*, request_id: str | None = None) -> None:
     """Broadcast full alert payload updates to subscribers."""
-    broadcast_ui_event("alerts.updated", _alerts_payload())
+    broadcast_ui_event("alerts.updated", _alerts_payload(), request_id=request_id)
