@@ -9,12 +9,15 @@ indirect coverage via test_ui_routes.py's TestClient-based tests).
 
 from __future__ import annotations
 
+import json
+
 from app.backend.chat_sessions import (
     ChatCreateRequest,
     ChatDraftRequest,
     ChatPatchRequest,
     ChatSessionSummary,
     _checkpoint_snapshot_for_metadata,
+    _extract_progress_log_from_content,
     _resolve_metadata_key,
     acquire_reusable_draft,
     create_chat_metadata,
@@ -354,3 +357,238 @@ class TestDisplayMetadataNormalization:
         assert detail is not None
         user = next(message for message in detail.messages if message.role == "user")
         assert user.created_at == "2026-07-11T02:29:20Z"
+
+
+class TestPendingToolCallFlush:
+    """A turn can be interrupted (Stop / page reload racing the request /
+    dropped connection) right after its tool call's ToolMessage lands but
+    before the model's follow-up commentary comes back -- leaving a
+    tool-call-only AIMessage with no later text-bearing AIMessage to absorb
+    its tool_calls. `_messages_from_checkpoint` must still surface that tool
+    call as its own (contentless) assistant message instead of silently
+    dropping the entire turn once the reset for the next message fires.
+    """
+
+    def test_second_turns_dangling_tool_call_is_not_dropped_by_the_next_human_message(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_dangling_mid"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_dangling_mid",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-12T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "spawn a subagent"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783736960.0},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    {
+                        "id": "a1b",
+                        "type": "ai",
+                        "content": "Done!",
+                        "response_metadata": {"created_at": 1783736965.0},
+                    },
+                    {"id": "u2", "type": "human", "content": "do it again"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_2",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783737000.0},
+                    },
+                    {
+                        "id": "t2",
+                        "type": "tool",
+                        "tool_call_id": "call_2",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    # Turn 2 cut short here -- no trailing AIMessage before reload.
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_dangling_mid")
+
+        assert detail is not None
+        roles = [message.role for message in detail.messages]
+        assert roles == ["user", "assistant", "user", "assistant"]
+        second_reply = detail.messages[3]
+        assert second_reply.content == ""
+        assert [tc["name"] for tc in second_reply.tool_calls] == ["task"]
+        assert second_reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
+
+    def test_checkpoint_tip_left_as_a_dangling_tool_call_is_flushed_at_the_end(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_dangling_tip"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_dangling_tip",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-12T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "spawn a subagent"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "response_metadata": {"created_at": 1783736960.0},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    # No trailing AIMessage at all -- checkpoint's tip is the tool result.
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_dangling_tip")
+
+        assert detail is not None
+        roles = [message.role for message in detail.messages]
+        assert roles == ["user", "assistant"]
+        reply = detail.messages[1]
+        assert reply.content == ""
+        assert [tc["name"] for tc in reply.tool_calls] == ["task"]
+        assert reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
+
+
+class TestExtractProgressLogFromContent:
+    """agent_name must survive this extraction -- it's what lets a reloaded
+    chat repopulate the A2A card's header (see the matching agent_name param
+    on extract_progress_log in app/progenitor/a2a/payloads.py). Regression
+    coverage for a bug where this function's own {state, message_text}
+    whitelist silently dropped agent_name even though every upstream layer
+    already carried it."""
+
+    def test_preserves_agent_name_alongside_state_and_message_text(self):
+        content = json.dumps(
+            {
+                "progress_log": [
+                    {
+                        "state": "submitted",
+                        "message_text": "Accepted: hi",
+                        "agent_name": "greetings_agent",
+                    },
+                    {
+                        "state": "working",
+                        "message_text": "Working...",
+                        "agent_name": "greetings_agent",
+                    },
+                ],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "greetings_agent",
+                "timestamp": "",
+            },
+            {
+                "state": "working",
+                "message_text": "Working...",
+                "agent_name": "greetings_agent",
+                "timestamp": "",
+            },
+        ]
+
+    def test_defaults_agent_name_to_empty_string_when_absent(self):
+        """Older persisted data (predating this field) must still parse cleanly."""
+        content = json.dumps(
+            {
+                "progress_log": [{"state": "submitted", "message_text": "Accepted: hi"}],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "",
+                "timestamp": "",
+            },
+        ]
+
+    def test_preserves_timestamp_alongside_state_and_message_text(self):
+        """timestamp must survive this extraction too -- it's what lets a
+        reloaded chat show each A2A sub-entry's own real time instead of the
+        parent tool call's single shared timestamp (see extract_progress_log
+        in app/progenitor/a2a/payloads.py)."""
+        content = json.dumps(
+            {
+                "progress_log": [
+                    {
+                        "state": "submitted",
+                        "message_text": "Accepted: hi",
+                        "agent_name": "greetings_agent",
+                        "timestamp": "2026-07-11T02:31:02+00:00",
+                    },
+                ],
+            }
+        )
+        assert _extract_progress_log_from_content(content) == [
+            {
+                "state": "submitted",
+                "message_text": "Accepted: hi",
+                "agent_name": "greetings_agent",
+                "timestamp": "2026-07-11T02:31:02+00:00",
+            },
+        ]
+
+    def test_skips_json_parse_for_content_with_no_progress_log_key(self, monkeypatch):
+        """A cheap substring pre-filter must reject non-call_agent tool
+        results (the overwhelming majority) before paying for json.loads --
+        regression coverage against that pre-filter being too eager and
+        skipping content that actually has a progress_log."""
+        import app.backend.chat_sessions as chat_sessions_module
+
+        def _fail_if_called(*_args, **_kwargs):
+            raise AssertionError("json.loads should not run when 'progress_log' key is absent")
+
+        monkeypatch.setattr(chat_sessions_module.json, "loads", _fail_if_called)
+        assert _extract_progress_log_from_content('{"result": "no progress log here"}') == []
+
+    def test_returns_empty_list_on_recursion_error_instead_of_crashing(self, monkeypatch):
+        """json.loads raises RecursionError (not ValueError) on sufficiently
+        deeply nested JSON -- a malformed/adversarial persisted `task` payload
+        alongside progress_log must not crash chat-session hydration for the
+        whole conversation, only drop this one optional progress log."""
+        import app.backend.chat_sessions as chat_sessions_module
+
+        def _raise_recursion_error(*_args, **_kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(chat_sessions_module.json, "loads", _raise_recursion_error)
+        content = '{"progress_log": [{"state": "submitted"}]}'
+        assert _extract_progress_log_from_content(content) == []

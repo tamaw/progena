@@ -86,6 +86,25 @@ describe('collectMessageImages', () => {
   it('tolerates a missing streamEvents array', () => {
     expect(collectMessageImages({ role: 'assistant', content: 'hi' })).toEqual([]);
   });
+
+  // Regression: a `task` subagent delegation's own images ride on
+  // subagent_result (see _expand_task_subagent_events in
+  // deepagent_stream.py, which fully replaces the raw tool_result event
+  // with this one), not tool_result -- a filter that only recognized
+  // tool_result silently dropped them from both the image strip and the
+  // Images filter count.
+  it('also collects images from subagent_result events', () => {
+    const message = {
+      role: 'assistant',
+      content: 'delegated',
+      streamEvents: [
+        { eventType: 'subagent_result', images: [{ id: 'a', base64: 'AAA', media_type: 'image/png' }] },
+      ],
+    };
+    expect(collectMessageImages(message)).toEqual([
+      { id: 'a', src: 'data:image/png;base64,AAA', alt: 'Image 1' },
+    ]);
+  });
 });
 
 describe('getTimeBucket', () => {

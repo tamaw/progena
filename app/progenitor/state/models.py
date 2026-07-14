@@ -264,6 +264,12 @@ class A2ATaskRecord(BaseModel):
     latest_message: str | None = None
     last_error: str | None = None
     latest_task: dict[str, Any] | None = None
+    # Compact {state, message_text, agent_name} triples, one per intermediate
+    # status update seen while the task ran -- lets a reloaded chat
+    # reconstruct the same progress chain a live viewer saw, instead of only
+    # ever having the final snapshot (see build_task_response /
+    # extract_progress_log).
+    progress_log: list[dict[str, str]] = Field(default_factory=list)
     notify_on_completion: bool = True
     notification_sent_at: datetime | None = None
     created_at: datetime = Field(default_factory=utcnow)

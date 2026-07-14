@@ -4019,6 +4019,13 @@ body,
   border-color: transparent;
 }
 
+/* In-progress state (StatusPill.jsx) -- same base pill, pulsing like the
+   running card badge (subagent-pulse, chat-panel.css) so a card's header
+   status and its own gutter badge read as the same "still going" signal. */
+.tool__status--pending {
+  animation: subagent-pulse 1.4s ease-in-out infinite;
+}
+
 .tool__cmd,
 .tool__body {
   font-family: var(--font-family-mono);

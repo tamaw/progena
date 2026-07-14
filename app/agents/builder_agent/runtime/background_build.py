@@ -17,7 +17,7 @@ import contextlib
 import logging
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -329,6 +329,14 @@ class BackgroundBuildRunner:
 
         # Callback for notifying when build completes
         self._completion_callback: Callable[[BuildResult], None] | None = None
+
+        # Callback for per-node progress within the currently active build
+        # (there is only ever one, per the single-active-build contract
+        # above). Set/cleared per-call by the caller starting a build, not
+        # accumulated like HookManager registrations -- there is no
+        # unregister on HookManager, so a dynamically-registered wildcard
+        # hook per build would leak.
+        self._progress_callback: Callable[[str, Mapping[str, Any]], Awaitable[None]] | None = None
 
     def _get_inner_loop_graph(self):
         """Lazily create the inner loop graph."""
@@ -661,6 +669,17 @@ class BackgroundBuildRunner:
                             build_state.get("build_phase", "unknown"),
                         )
 
+                        if self._progress_callback is not None:
+                            try:
+                                await self._progress_callback(node_name, build_state)
+                            except Exception:
+                                logger.warning(
+                                    "Progress callback failed for build %s node=%s",
+                                    build_id,
+                                    node_name,
+                                    exc_info=True,
+                                )
+
                         # Check for errors
                         if build_state.get("build_error"):
                             raise RuntimeError(build_state["build_error"])
@@ -911,6 +930,17 @@ class BackgroundBuildRunner:
         This can be used to notify users of completion/errors.
         """
         self._completion_callback = callback
+
+    def set_progress_callback(
+        self,
+        callback: Callable[[str, Mapping[str, Any]], Awaitable[None]] | None,
+    ) -> None:
+        """Set (or clear, with None) the per-node progress callback for the
+        build about to start. Invoked once per inner-loop node transition
+        with (node_name, build_state). Callers should clear this once their
+        build finishes so a stale callback isn't invoked for a later build.
+        """
+        self._progress_callback = callback
 
     def get_recent_builds(self, limit: int = 5) -> list[BuildResult]:
         """Get recent build results."""

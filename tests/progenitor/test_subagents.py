@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from app.progenitor.agent.subagents import (
     create_code_review_subagent,
+    create_general_purpose_subagent,
     create_hello_world_async_subagent,
     create_hello_world_subagent,
     create_progenitor_async_subagents,
@@ -56,11 +57,29 @@ class TestResearchSubagent:
         assert "tools" not in result
 
 
+class TestGeneralPurposeSubagent:
+    """Regression: deepagents auto-adds its own default "general-purpose"
+    subagent unless an explicit spec with that name is supplied, and the
+    auto-added default never receives our audit-logging middleware -- so
+    delegations to it emitted no nested tool lifecycle events. Supplying an
+    explicit spec here is how it opts into the same middleware the other
+    subagents get."""
+
+    def test_returns_subagent_named_general_purpose(self):
+        result = create_general_purpose_subagent()
+        assert isinstance(result, dict)
+        assert result["name"] == "general-purpose"
+
+    def test_has_audit_logging_middleware(self):
+        result = create_general_purpose_subagent()
+        assert len(result.get("middleware", [])) > 0
+
+
 class TestCreateProgenitorSubagents:
     def test_creates_sync_subagents(self):
         result = create_progenitor_sync_subagents()
         names = [s["name"] for s in result]
-        assert names == ["hello-world", "code-reviewer", "researcher"]
+        assert names == ["hello-world", "code-reviewer", "researcher", "general-purpose"]
 
     def test_creates_async_subagents(self):
         result = create_progenitor_async_subagents("http://127.0.0.1:9501")
@@ -71,7 +90,13 @@ class TestCreateProgenitorSubagents:
     def test_creates_active_subagents(self):
         result = create_progenitor_subagents("http://127.0.0.1:9501")
         names = [s["name"] for s in result]
-        assert names == ["hello-world", "code-reviewer", "researcher", "hello-world-async"]
+        assert names == [
+            "hello-world",
+            "code-reviewer",
+            "researcher",
+            "general-purpose",
+            "hello-world-async",
+        ]
 
     def test_subagent_names_unique(self):
         result = create_progenitor_subagents("http://127.0.0.1:9501")

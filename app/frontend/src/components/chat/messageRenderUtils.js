@@ -99,7 +99,57 @@ function prettifyLabel(value) {
     .join(' ');
 }
 
-function formatArgsPreview(args) {
+/**
+ * Best-effort extraction of just the `summary` field out of a call_agent
+ * tool result string. That string is the whole result dict, JSON-
+ * stringified -- rendering it raw as a card's fallback (no progress
+ * messages to tell the story instead, e.g. blocking=false, or a reloaded
+ * chat with no persisted progress history) is exactly the "meaningless
+ * JSON blob" experience live A2A cards exist to fix. A plain JSON.parse
+ * handles the common short-result case, but the backend's own preview
+ * truncation (chat_sessions.py) cuts long results off wherever the 400-char
+ * budget runs out -- almost never on a clean closing brace -- so a regex
+ * fallback pulls `summary` out on its own even when the overall string
+ * isn't valid JSON, as long as summary itself wasn't the part truncated.
+ */
+export function extractCallAgentSummary(resultText) {
+  if (!resultText) return '';
+  try {
+    const parsed = JSON.parse(resultText);
+    if (typeof parsed?.summary === 'string') return parsed.summary;
+  } catch {
+    // fall through to regex extraction below
+  }
+  const match = resultText.match(/"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!match) return '';
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * `{ label, tone }` for StatusPill (StatusPill.jsx), shared by every place
+ * that renders the running/success/error vocabulary: SubagentCard's own
+ * card-level status and SubagentChild's per-nested-call status (both use
+ * these exact three values -- see liveAssistantTurnModel.js's item shapes)
+ * -- one mapping instead of two copies of the same ternary chain.
+ *
+ * A2ACallCard's own card-level header deliberately doesn't use this: unlike
+ * a subagent (whose only status signal is this running/success/error
+ * summary), an A2A card's status progression is already fully visible one
+ * level down, as its own chain of submitted/working/completed/... sub-
+ * entries (A2ASubEntry) -- a StatusPill up top would just repeat the last
+ * sub-entry's own label.
+ */
+export function statusPillProps(status) {
+  if (status === 'error') return { label: 'error', tone: 'err' };
+  if (status === 'success') return { label: 'done', tone: 'ok' };
+  return { label: 'running', tone: 'pending' };
+}
+
+export function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
   if (typeof args === 'string') return args;
   try {
@@ -110,7 +160,7 @@ function formatArgsPreview(args) {
   }
 }
 
-function formatDuration(ms) {
+export function formatDuration(ms) {
   if (!Number.isFinite(ms)) return '';
   if (ms < 1000) return `${Math.round(ms)}ms`;
   return `${(ms / 1000).toFixed(2)}s`;
@@ -258,6 +308,108 @@ export function describeStreamEvent(event) {
     };
   }
 
+  // Flat subagent_* events only reach this generic renderer via the reload
+  // fallback (buildDefaultAssistantTimeline groups them into a single card
+  // when it can -- see liveAssistantTurnModel.js) or chats persisted before
+  // grouping shipped. Handled explicitly, setting badge: 'Subagent' directly,
+  // rather than falling into badgeForEventType()'s generic fallback below --
+  // "subagent_start" etc. accidentally contain the substring "agent" and
+  // would otherwise be mislabeled "Agent".
+  if (eventType.startsWith('subagent_')) {
+    const subagentName = typeof metadata.subagent_name === 'string' && metadata.subagent_name
+      ? metadata.subagent_name
+      : 'subagent';
+
+    if (eventType === 'subagent_start') {
+      return { badge: 'Subagent', title: `→ ${subagentName}`, metaDetail: 'started', bodyDetail: '' };
+    }
+
+    if (eventType === 'subagent_result') {
+      const isError = metadata.success === false;
+      const parts = [];
+      if (typeof metadata.duration_ms === 'number') parts.push(formatDuration(metadata.duration_ms));
+      if (isError && typeof metadata.error === 'string' && metadata.error) {
+        parts.push(metadata.error);
+      } else if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
+        parts.push(metadata.result_preview);
+      }
+      return {
+        badge: 'Subagent',
+        title: `${isError ? '✗' : '✓'} ${subagentName}`,
+        metaDetail: parts.join(' • ') || (isError ? 'error' : 'completed'),
+        bodyDetail: '',
+      };
+    }
+
+    if (eventType === 'subagent_message_delta') {
+      return {
+        badge: 'Subagent',
+        title: subagentName,
+        bodyHtml: typeof event?.content === 'string' && event.content ? formatMessage(event.content) : '',
+        metaDetail: '',
+        bodyDetail: '',
+      };
+    }
+
+    const nestedToolName = typeof metadata.nested_tool_name === 'string' && metadata.nested_tool_name
+      ? metadata.nested_tool_name
+      : 'tool';
+
+    if (eventType === 'subagent_tool_start') {
+      return {
+        badge: 'Subagent',
+        title: `${subagentName} → ${prettifyLabel(nestedToolName)}`,
+        metaDetail: formatArgsPreview(metadata.args_preview) || 'invoking…',
+        bodyDetail: '',
+      };
+    }
+
+    if (eventType === 'subagent_tool_result') {
+      const parts = [];
+      if (typeof metadata.duration_ms === 'number') parts.push(formatDuration(metadata.duration_ms));
+      if (typeof metadata.result_preview === 'string' && metadata.result_preview) parts.push(metadata.result_preview);
+      return {
+        badge: 'Subagent',
+        title: `${subagentName} ✓ ${prettifyLabel(nestedToolName)}`,
+        metaDetail: parts.join(' • ') || 'completed',
+        bodyDetail: '',
+      };
+    }
+
+    // subagent_tool_error
+    const errorParts = [];
+    if (typeof metadata.duration_ms === 'number') errorParts.push(formatDuration(metadata.duration_ms));
+    if (typeof metadata.error === 'string' && metadata.error) errorParts.push(metadata.error);
+    return {
+      badge: 'Subagent',
+      title: `${subagentName} ✗ ${prettifyLabel(nestedToolName)}`,
+      metaDetail: errorParts.join(' • ') || 'error',
+      bodyDetail: '',
+    };
+  }
+
+  // a2a_call_progress only reaches this generic renderer via the reload
+  // fallback (buildDefaultAssistantTimeline groups it into the a2a_call card
+  // when it can -- see liveAssistantTurnModel.js) or chats persisted before
+  // grouping shipped. call_agent's own tool_start/tool_result/tool_error
+  // get no equivalent special-casing here -- Progenitor's dispatch/return
+  // for that call is an ordinary tool call and is handled by the plain
+  // tool_start/tool_result/tool_error branches above like any other tool,
+  // with the same 'Tool' badge; only a2a_call_progress is genuinely new
+  // information (the A2A protocol's own status stream) with no tool-call
+  // equivalent, so it alone gets its own badge.
+  if (eventType === 'a2a_call_progress') {
+    const agentName = typeof metadata.agent_name === 'string' && metadata.agent_name
+      ? metadata.agent_name
+      : 'agent';
+    return {
+      badge: 'A2A',
+      title: agentName,
+      metaDetail: typeof metadata.state === 'string' ? metadata.state : '',
+      bodyDetail: typeof metadata.message_text === 'string' ? metadata.message_text : '',
+    };
+  }
+
   const explicitName = [
     metadata.tool_name,
     metadata.name,
@@ -336,7 +488,11 @@ export function todosDetailsForEvent(event) {
 
 export function toolDetailsForEvent(event, description) {
   const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
-  if (!eventType.includes('tool')) return null;
+  // subagent_tool_* events use nested_tool_name/nested_tool_call_id, not
+  // tool_name/tool_call_id -- rendering them through this tool_name-keyed box
+  // would silently produce an empty/generic one. describeStreamEvent's own
+  // subagent_* branch already renders a sensible title/metaDetail for them.
+  if (!eventType.includes('tool') || eventType.startsWith('subagent_')) return null;
 
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';

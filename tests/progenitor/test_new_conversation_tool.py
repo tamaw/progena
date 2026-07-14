@@ -1,5 +1,6 @@
 """Tests for new_conversation system tool integration with DeepAgent + ProgenitorLoop."""
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -25,7 +26,18 @@ async def test_new_conversation_tool_is_exposed_and_mutates_loop_state() -> None
     )
 
     new_conv = next(t for t in tools if t.name == "new_conversation")
-    result = await new_conv.ainvoke({"request": "reset the conversation"})
+    # Every wrapped system tool now carries an InjectedToolCallId parameter
+    # (see adapters.py), so LangChain requires the full ToolCall invocation
+    # shape rather than a plain args dict.
+    message = await new_conv.ainvoke(
+        {
+            "name": "new_conversation",
+            "args": {"request": "reset the conversation"},
+            "id": "call_test",
+            "type": "tool_call",
+        }
+    )
+    result = json.loads(message.content)
 
     assert isinstance(result, dict)
     assert result.get("reset") is True

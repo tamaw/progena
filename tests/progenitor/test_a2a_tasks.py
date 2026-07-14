@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.progenitor.a2a.payloads import extract_progress_log
 from app.progenitor.a2a.tasks import (
     dispatch_tracked_a2a_task,
     enqueue_completion_followup,
@@ -77,6 +78,123 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert "a2a_context_id" not in kwargs["context"]
     assert "task_id" not in kwargs
     assert "context_id" not in kwargs
+
+
+async def test_dispatch_tracked_a2a_task_stamps_agent_name_onto_progress_log(
+    monkeypatch, state_manager
+) -> None:
+    """progress_log entries must carry the caller's own resolved agent_name --
+    it isn't part of the raw TaskStatusUpdateEvent, so a reload has no other
+    source for it once a task auto-routed (see extract_progress_log's
+    docstring in app/progenitor/a2a/payloads.py)."""
+    fake_client = MagicMock()
+    fake_client.call_agent = AsyncMock(
+        return_value={
+            "success": True,
+            "result": {
+                "kind": "task",
+                "id": "builder_task_2",
+                "contextId": "ctx-2",
+                "status": {
+                    "state": "completed",
+                    "message": {"parts": [{"kind": "text", "text": "Done."}]},
+                },
+            },
+            "progress_updates": [
+                {
+                    "status": {
+                        "state": "submitted",
+                        "message": {"parts": [{"kind": "text", "text": "Accepted."}]},
+                    }
+                },
+                {
+                    "status": {
+                        "state": "working",
+                        "message": {"parts": [{"kind": "text", "text": "Working..."}]},
+                    }
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
+
+    _response, tracked_task = await dispatch_tracked_a2a_task(
+        state_manager=state_manager,
+        agent_name="builder_agent",
+        agent_config={"url": "http://localhost:8107", "transport": "http"},
+        request_text="Build a demo",
+        request_metadata={"caller": "progenitor", "dispatch_mode": "blocking"},
+        source="call_agent",
+        timeout=5.0,
+        blocking=True,
+    )
+
+    assert tracked_task is not None
+    assert [entry["agent_name"] for entry in tracked_task.progress_log] == [
+        "builder_agent",
+        "builder_agent",
+    ]
+    assert [entry["state"] for entry in tracked_task.progress_log] == ["submitted", "working"]
+
+
+def test_extract_progress_log_caps_at_the_most_recent_entries() -> None:
+    """A long-running task can produce far more updates than are useful to
+    persist -- without a bound, this log is re-embedded into every future
+    ToolMessage on the thread (build_task_response) and re-parsed on every
+    session load. Only the most recent _MAX_PROGRESS_LOG_ENTRIES survive,
+    since a viewer cares about what's happening now over stale early phases."""
+    updates = [
+        {
+            "status": {
+                "state": "working",
+                "message": {"parts": [{"kind": "text", "text": f"step {i}"}]},
+            }
+        }
+        for i in range(80)
+    ]
+    entries = extract_progress_log(updates, agent_name="builder_agent")
+    assert len(entries) == 50
+    assert entries[0]["message_text"] == "step 30"
+    assert entries[-1]["message_text"] == "step 79"
+
+
+def test_extract_progress_log_truncates_an_oversized_single_message() -> None:
+    huge_text = "x" * 2000
+    updates = [
+        {
+            "status": {
+                "state": "working",
+                "message": {"parts": [{"kind": "text", "text": huge_text}]},
+            }
+        }
+    ]
+    entries = extract_progress_log(updates)
+    assert len(entries[0]["message_text"]) == 501  # 500 chars + the ellipsis marker
+    assert entries[0]["message_text"].endswith("…")
+
+
+def test_extract_progress_log_carries_the_received_at_stamp() -> None:
+    updates = [
+        {
+            "status": {
+                "state": "submitted",
+                "message": {"parts": [{"kind": "text", "text": "hi"}]},
+            },
+            "_progenitor_received_at": "2026-07-11T02:31:02+00:00",
+        }
+    ]
+    entries = extract_progress_log(updates)
+    assert entries[0]["timestamp"] == "2026-07-11T02:31:02+00:00"
+
+
+def test_extract_progress_log_defaults_timestamp_to_empty_string_when_absent() -> None:
+    """Older progress_updates predating the _progenitor_received_at stamp
+    must still parse cleanly."""
+    updates = [
+        {"status": {"state": "submitted", "message": {"parts": [{"kind": "text", "text": "hi"}]}}}
+    ]
+    entries = extract_progress_log(updates)
+    assert entries[0]["timestamp"] == ""
 
 
 async def test_dispatch_tracked_a2a_task_uses_a2a_push_callback_url(

@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from langgraph.config import get_stream_writer
+from langgraph.types import Command
 
 from app.progenitor.ipc.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
@@ -25,7 +26,14 @@ logger = logging.getLogger(__name__)
 
 # Reserved event_type values already used by the loop / service.
 _RESERVED_EVENT_TYPES = frozenset(
-    {"message_delta", "node_update", "reasoning_delta", "reasoning_summary", "todos_update"}
+    {
+        "message_delta",
+        "node_update",
+        "reasoning_delta",
+        "reasoning_summary",
+        "todos_update",
+        "subagent_message_delta",
+    }
 )
 
 # Event types middleware/subagents may emit via get_stream_writer.
@@ -36,10 +44,14 @@ ALLOWED_CUSTOM_EVENT_TYPES = frozenset(
         "tool_error",
         "subagent_start",
         "subagent_result",
+        "subagent_tool_start",
+        "subagent_tool_result",
+        "subagent_tool_error",
         "async_subagent_start",
         "async_subagent_update",
         "async_subagent_result",
         "async_subagent_cancel",
+        "a2a_call_progress",
         "debug_event",
     }
 )
@@ -87,14 +99,24 @@ def build_tool_start_event(
 ) -> dict[str, Any]:
     """Build a ``tool_start`` event payload with redacted+truncated args."""
     redacted = _redact_value(raw_args)
+    metadata: dict[str, Any] = {
+        "tool_name": tool_name,
+        "tool_call_id": tool_call_id,
+        "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
+    }
+    if tool_name == "task" and isinstance(redacted, dict):
+        # A large free-form `description` can push args_preview past the 2KB
+        # budget above, collapsing it from a dict into a truncated string --
+        # _expand_task_subagent_events (deepagent_stream.py) needs
+        # subagent_type to correlate this dispatch with its eventual result,
+        # so stash it separately here where truncation can't reach it.
+        subagent_type = redacted.get("subagent_type")
+        if isinstance(subagent_type, str):
+            metadata["subagent_type"] = subagent_type
     return {
         "event_type": "tool_start",
         "content": tool_name,
-        "metadata": {
-            "tool_name": tool_name,
-            "tool_call_id": tool_call_id,
-            "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
-        },
+        "metadata": metadata,
     }
 
 
@@ -109,6 +131,7 @@ def build_tool_result_event(
     Image content items are extracted to a top-level ``images`` key so they
     bypass the 2 KB metadata truncation applied in ``normalize_custom_event``.
     """
+    result = _unwrap_command_result(result)
     images = _extract_images(result)
     payload: dict[str, Any] = {
         "event_type": "tool_result",
@@ -187,6 +210,26 @@ def build_tool_error_event(
     }
 
 
+def build_a2a_call_progress_event(
+    tool_call_id: str,
+    agent_name: str,
+    state: str,
+    message_text: str,
+) -> dict[str, Any]:
+    """Build an ``a2a_call_progress`` event for an intermediate A2A status update."""
+    safe_text = truncate_text(redact_secrets(message_text), DEFAULT_STREAM_PREVIEW_BYTES)
+    return {
+        "event_type": "a2a_call_progress",
+        "content": safe_text,
+        "metadata": {
+            "tool_call_id": tool_call_id,
+            "agent_name": agent_name,
+            "state": state,
+            "message_text": safe_text,
+        },
+    }
+
+
 def build_reasoning_delta_event(
     content: str,
     *,
@@ -254,6 +297,24 @@ def _redact_value(value: Any) -> Any:
     except Exception:
         rendered = repr(type(value))
     return redact_secrets(rendered)
+
+
+def _unwrap_command_result(value: Any) -> Any:
+    """Pull the underlying tool result out of a ``Command`` state update.
+
+    Subagent (``task``) tool calls -- and any tool that injects private state
+    via ``Command(update=...)`` -- return a ``Command``, not a ``ToolMessage``,
+    so a naive ``str(value)`` preview shows the object's raw repr (e.g.
+    "Command(update={'files': {}, 'messages': [ToolMessage(...)]})") instead
+    of the actual text a user would recognize as the tool's output.
+    """
+    if not isinstance(value, Command):
+        return value
+    update = value.update
+    messages = update.get("messages") if isinstance(update, Mapping) else None
+    if isinstance(messages, list) and messages:
+        return messages[-1]
+    return value
 
 
 def _redact_preview(value: Any) -> str:

@@ -3,6 +3,8 @@ import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
   applyAssistantStreamEvent,
+  applySubagentEvent,
+  applyA2ACallEvent,
   applyAssistantChunk,
   buildDefaultAssistantTimeline,
   finalizeLiveAssistantTurn,
@@ -368,6 +370,532 @@ describe('applyAssistantStreamEvent', () => {
     expect(withReasoning.timelineItems[0].event.eventType).toBe('reasoning_summary');
     expect(withReasoning.timelineItems[1].kind).toBe('assistant_message');
   });
+
+  // Subagent execution events (nested `task` tool delegation) get their own
+  // grouped card rather than a flat stream_event row.
+  it('subagent_start creates a subagent timeline item, not a stream_event row', () => {
+    const turn = baseTurn();
+    const evt = rawStreamEvent('subagent_start', {
+      content: 'researcher',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    });
+    const next = applyAssistantStreamEvent(turn, evt, NOW);
+
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('subagent');
+    expect(next.timelineItems[0].id).toBe('subagent-call_1');
+    expect(next.timelineItems[0].subagentName).toBe('researcher');
+    expect(next.timelineItems[0].status).toBe('running');
+  });
+
+  it('two concurrent subagents update independently with no cross-contamination', () => {
+    const turn = baseTurn();
+    let next = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_start', {
+      metadata: { subagent_name: 'alpha', tool_call_id: 'call_a' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_start', {
+      metadata: { subagent_name: 'beta', tool_call_id: 'call_b' },
+    }), NOW);
+    // Scrambled interleave: beta's events arrive between alpha's.
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'Beta says: ',
+      metadata: { tool_call_id: 'call_b' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'Alpha says: ',
+      metadata: { tool_call_id: 'call_a' },
+    }), NOW);
+    // A nested tool closes alpha's first message, making both entries settled
+    // before a later alpha delta arrives.
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_tool_start', {
+      metadata: {
+        tool_call_id: 'call_a',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_tool_result', {
+      metadata: {
+        tool_call_id: 'call_a',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+        result_preview: 'read complete',
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'hello',
+      metadata: { tool_call_id: 'call_b' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'Alpha concludes: ',
+      metadata: { tool_call_id: 'call_a' },
+    }), NOW);
+    const alphaBeforeFinalDelta = next.timelineItems.find((item) => item.toolCallId === 'call_a');
+    const betaBeforeFinalDelta = next.timelineItems.find((item) => item.toolCallId === 'call_b');
+    const settledAlphaMessage = alphaBeforeFinalDelta.entries[0];
+    const settledAlphaTool = alphaBeforeFinalDelta.entries[1];
+    const alphaTrailingMessage = alphaBeforeFinalDelta.entries[2];
+    const betaMessage = betaBeforeFinalDelta.entries[0];
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'hi',
+      metadata: { tool_call_id: 'call_a' },
+    }), NOW);
+
+    expect(next.timelineItems).toHaveLength(2);
+    const alphaItem = next.timelineItems.find((item) => item.toolCallId === 'call_a');
+    const betaItem = next.timelineItems.find((item) => item.toolCallId === 'call_b');
+    expect(alphaItem).not.toBe(alphaBeforeFinalDelta);
+    expect(alphaItem.entries[0]).toBe(settledAlphaMessage);
+    expect(alphaItem.entries[1]).toBe(settledAlphaTool);
+    expect(alphaItem.entries[2]).not.toBe(alphaTrailingMessage);
+    expect(alphaItem.entries[2].text).toBe('Alpha concludes: hi');
+    expect(betaItem).toBe(betaBeforeFinalDelta);
+    expect(betaItem.entries[0]).toBe(betaMessage);
+    expect(alphaItem.entries.map((entry) => entry.kind)).toEqual(['message', 'tool', 'message']);
+    expect(alphaItem.entries[0].text).toBe('Alpha says: ');
+    expect(betaItem.entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'Beta says: hello' }]);
+  });
+
+  // A2A call_agent invocations get their own grouped card too, but keyed off
+  // metadata.tool_name === 'call_agent' on the generic tool_start/tool_result
+  // events rather than a dedicated event-type prefix -- Progenitor's own
+  // dispatch/return for that call is an ordinary tool call, handled no
+  // differently than search_web or read_file, and reads as one: it falls
+  // through to the generic stream_event push in addition to updating the
+  // card (unlike subagent, whose dispatch has no such "regular tool call"
+  // meaning of its own).
+  it('call_agent tool_start creates an a2a_call timeline item AND a plain stream_event row', () => {
+    const turn = baseTurn();
+    const evt = rawStreamEvent('tool_start', {
+      content: 'call_agent',
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+    });
+    const next = applyAssistantStreamEvent(turn, evt, NOW);
+
+    expect(next.timelineItems).toHaveLength(2);
+    // The plain dispatch row has to read before the card it explains -- the
+    // call itself comes first, same as any other tool_start.
+    expect(next.timelineItems.map((item) => item.kind)).toEqual(['stream_event', 'a2a_call']);
+    const a2aItem = next.timelineItems.find((item) => item.kind === 'a2a_call');
+    expect(a2aItem.id).toBe('a2a-call_1');
+    expect(a2aItem.agentName).toBe('greetings_agent');
+    expect(a2aItem.status).toBe('running');
+    const streamItem = next.timelineItems.find((item) => item.kind === 'stream_event');
+    expect(streamItem.event.eventType).toBe('tool_start');
+    expect(streamItem.event.metadata.tool_call_id).toBe('call_1');
+  });
+
+  it('a tool_start for a different tool is unaffected (falls through to generic stream_event)', () => {
+    const turn = baseTurn();
+    const next = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', {
+      metadata: { tool_name: 'search_web', tool_call_id: 'call_1' },
+    }), NOW);
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('stream_event');
+  });
+
+  it('two concurrent A2A calls update independently with no cross-contamination', () => {
+    const turn = baseTurn();
+    let next = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_a', args_preview: { agent: 'alpha_agent' } },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_b', args_preview: { agent: 'beta_agent' } },
+    }), NOW);
+    // Scrambled interleave: beta's progress arrives between alpha's.
+    next = applyAssistantStreamEvent(next, rawStreamEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_b', state: 'working', message_text: 'beta step 1' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_a', state: 'working', message_text: 'alpha step 1' },
+    }), NOW);
+    const alphaBeforeSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaBeforeSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
+    const alphaFirstMessage = alphaBeforeSecondProgress.messages[0];
+    const betaFirstMessage = betaBeforeSecondProgress.messages[0];
+    next = applyAssistantStreamEvent(next, rawStreamEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_a', state: 'working', message_text: 'alpha step 2' },
+    }), NOW);
+    const alphaAfterSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaAfterSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
+    expect(alphaAfterSecondProgress).not.toBe(alphaBeforeSecondProgress);
+    expect(alphaAfterSecondProgress.messages[0]).toBe(alphaFirstMessage);
+    expect(alphaAfterSecondProgress.messages.map((message) => message.text)).toEqual(['alpha step 1', 'alpha step 2']);
+    expect(betaAfterSecondProgress).toBe(betaBeforeSecondProgress);
+    expect(betaAfterSecondProgress.messages[0]).toBe(betaFirstMessage);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('tool_result', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_a', duration_ms: 5, result_preview: 'alpha done' },
+    }), NOW);
+
+    // 5 items: an a2a_call card per concurrent call (2), plus a plain
+    // stream_event row for each call_agent tool_start/tool_result (3: two
+    // starts + alpha's result) -- progress events update their card in
+    // place and don't get their own row.
+    expect(next.timelineItems).toHaveLength(5);
+    // Each call's dispatch marker reads before its own card, and cards
+    // update in place (no re-append) as progress/result land -- this is the
+    // exact "invoke it twice concurrently" shape that originally regressed:
+    // start_a, card_a, start_b, card_b, then alpha's result appended last.
+    expect(next.timelineItems.map((item) => (
+      item.kind === 'a2a_call' ? ['a2a_call', item.toolCallId] : [item.event.eventType, item.event.metadata.tool_call_id]
+    ))).toEqual([
+      ['tool_start', 'call_a'],
+      ['a2a_call', 'call_a'],
+      ['tool_start', 'call_b'],
+      ['a2a_call', 'call_b'],
+      ['tool_result', 'call_a'],
+    ]);
+    const alphaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
+    expect(alphaItem.status).toBe('success');
+    expect(alphaItem.messages.map((m) => m.text)).toEqual(['alpha step 1', 'alpha step 2']);
+    expect(betaItem.status).toBe('running');
+    expect(betaItem.messages.map((m) => m.text)).toEqual(['beta step 1']);
+
+    const streamRows = next.timelineItems.filter((item) => item.kind === 'stream_event');
+    expect(streamRows.map((item) => [item.event.eventType, item.event.metadata.tool_call_id])).toEqual([
+      ['tool_start', 'call_a'],
+      ['tool_start', 'call_b'],
+      ['tool_result', 'call_a'],
+    ]);
+  });
+
+  // Regression: an a2a_call_progress with no matching card (tool_start frame
+  // lost, or a malformed event with no tool_call_id) used to vanish
+  // entirely -- applyA2ACallEvent returns null (see 'ignores a2a_call_progress
+  // with no prior tool_start' below), but applyAssistantStreamEvent
+  // unconditionally short-circuited on eventType === 'a2a_call_progress'
+  // regardless of whether anything actually consumed it, skipping the
+  // generic stream_event push that every other unhandled event type falls
+  // through to. Must match buildDefaultAssistantTimeline's identical
+  // fallback for the reload path (see 'falls through to a flat stream_event
+  // row for call_agent events with no tool_call_id' below).
+  it('falls through to a flat stream_event row for an orphaned a2a_call_progress with no matching card', () => {
+    const turn = baseTurn();
+    const next = applyAssistantStreamEvent(turn, rawStreamEvent('a2a_call_progress', {
+      content: 'late',
+      metadata: { tool_call_id: 'call_missing', state: 'working', message_text: 'late' },
+    }), NOW);
+
+    expect(next.timelineItems.filter((item) => item.kind === 'a2a_call')).toHaveLength(0);
+    expect(next.timelineItems).toHaveLength(1);
+    expect(next.timelineItems[0].kind).toBe('stream_event');
+    expect(next.timelineItems[0].event.eventType).toBe('a2a_call_progress');
+    expect(next.timelineItems[0].event.metadata.tool_call_id).toBe('call_missing');
+  });
+});
+
+// ─── applySubagentEvent ──────────────────────────────────────────────────
+
+describe('applySubagentEvent', () => {
+  function subagentEvent(type, overrides = {}) {
+    return {
+      id: `evt-${type}`,
+      eventType: type,
+      content: '',
+      timestamp: NOW,
+      metadata: {},
+      ...overrides,
+    };
+  }
+
+  it('returns null for a non-subagent event type', () => {
+    expect(applySubagentEvent([], subagentEvent('tool_start', { metadata: { tool_call_id: 'x' } }))).toBeNull();
+  });
+
+  it('returns null when tool_call_id is missing from metadata', () => {
+    expect(applySubagentEvent([], subagentEvent('subagent_start', { metadata: {} }))).toBeNull();
+  });
+
+  it('creates a new card on subagent_start with running status', () => {
+    const items = applySubagentEvent([], subagentEvent('subagent_start', {
+      content: 'researcher',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: 'subagent',
+      id: 'subagent-call_1',
+      toolCallId: 'call_1',
+      subagentName: 'researcher',
+      status: 'running',
+      entries: [],
+    });
+  });
+
+  it('defensively creates a minimal row for an out-of-order non-start event (no prior subagent_start seen)', () => {
+    const items = applySubagentEvent([], subagentEvent('subagent_message_delta', {
+      content: 'late',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    expect(items).toHaveLength(1);
+    expect(items[0].toolCallId).toBe('call_1');
+    expect(items[0].entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'late' }]);
+  });
+
+  it('accumulates subagent_message_delta text into a single trailing message entry across multiple calls', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'Hello ',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'world',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    expect(items).toHaveLength(1);
+    expect(items[0].entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'Hello world' }]);
+  });
+
+  it('a nested tool call between two bursts of text splits them into separate message entries', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'Let me check that file.',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_start', {
+      metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'read_file' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'Here is the summary.',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    expect(items[0].entries.map((entry) => entry.kind)).toEqual(['message', 'tool', 'message']);
+    expect(items[0].entries[0].text).toBe('Let me check that file.');
+    expect(items[0].entries[2].text).toBe('Here is the summary.');
+  });
+
+  it('find-or-creates nested tool entries keyed by nested_tool_call_id, in place', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_start', {
+      metadata: {
+        tool_call_id: 'call_1',
+        subagent_name: 'researcher',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+        args_preview: { path: 'README.md' },
+      },
+    }));
+    expect(items[0].entries).toHaveLength(1);
+    expect(items[0].entries[0]).toMatchObject({
+      kind: 'tool',
+      id: 'nested_1',
+      toolName: 'read_file',
+      status: 'running',
+      argsPreview: { path: 'README.md' },
+    });
+
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_result', {
+      metadata: {
+        tool_call_id: 'call_1',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+        duration_ms: 4.5,
+        result_preview: '# Title',
+      },
+    }));
+    // Same entry updated in place, not duplicated.
+    expect(items[0].entries).toHaveLength(1);
+    expect(items[0].entries[0]).toMatchObject({
+      kind: 'tool',
+      id: 'nested_1',
+      status: 'success',
+      durationMs: 4.5,
+      resultPreview: '# Title',
+    });
+  });
+
+  it('subagent_tool_error marks the matching tool entry as errored', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_tool_start', {
+      metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'shell_exec' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_error', {
+      metadata: {
+        tool_call_id: 'call_1',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'shell_exec',
+        duration_ms: 2,
+        error: 'boom',
+      },
+    }));
+    expect(items[0].entries[0]).toMatchObject({ status: 'error', error: 'boom', durationMs: 2 });
+  });
+
+  it('subagent_result finalizes status/finishedAt/durationMs/resultPreview on success', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_result', {
+      timestamp: NOW + 500,
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_1',
+        success: true,
+        duration_ms: 120,
+        result_preview: 'done',
+      },
+    }));
+    expect(items[0]).toMatchObject({
+      status: 'success',
+      finishedAt: NOW + 500,
+      durationMs: 120,
+      resultPreview: 'done',
+    });
+  });
+
+  it('subagent_result with success:false finalizes status as error and records the error', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_result', {
+      metadata: { tool_call_id: 'call_1', success: false, error: 'subagent crashed' },
+    }));
+    expect(items[0].status).toBe('error');
+    expect(items[0].error).toBe('subagent crashed');
+  });
+
+  it('never mutates the input array (immutable updates)', () => {
+    const original = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    const snapshot = JSON.parse(JSON.stringify(original));
+    applySubagentEvent(original, subagentEvent('subagent_message_delta', {
+      content: 'more',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    expect(original).toEqual(snapshot);
+  });
+});
+
+// ─── applyA2ACallEvent ───────────────────────────────────────────────────
+
+describe('applyA2ACallEvent', () => {
+  function a2aEvent(type, overrides = {}) {
+    return {
+      id: `evt-${type}`,
+      eventType: type,
+      content: '',
+      timestamp: NOW,
+      metadata: {},
+      ...overrides,
+    };
+  }
+
+  it('returns null for an unrelated tool_start (different tool_name)', () => {
+    expect(applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'search_web', tool_call_id: 'call_1' },
+    }))).toBeNull();
+  });
+
+  it('returns null when tool_call_id is missing from metadata', () => {
+    expect(applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent' },
+    }))).toBeNull();
+  });
+
+  it('creates a new card on call_agent tool_start with running status', () => {
+    const items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+    }));
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: 'a2a_call',
+      id: 'a2a-call_1',
+      toolCallId: 'call_1',
+      agentName: 'greetings_agent',
+      status: 'running',
+      messages: [],
+    });
+  });
+
+  it('does not seed agentName when args_preview.agent is absent (auto-route case)', () => {
+    const items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    expect(items[0].agentName).toBe('');
+  });
+
+  it('seeds agentName from args_preview.agent_name when the LLM used that alias key', () => {
+    const items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent_name: 'greetings_agent' } },
+    }));
+    expect(items[0].agentName).toBe('greetings_agent');
+  });
+
+  it('ignores a2a_call_progress with no prior tool_start (unlike subagent, does not defensively create)', () => {
+    const items = applyA2ACallEvent([], a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', state: 'working', message_text: 'late' },
+    }));
+    expect(items).toBeNull();
+  });
+
+  it('ignores tool_result for a call_agent tool_call_id with no prior card', () => {
+    const items = applyA2ACallEvent([], a2aEvent('tool_result', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', duration_ms: 5 },
+    }));
+    expect(items).toBeNull();
+  });
+
+  it('appends a2a_call_progress messages in order and backfills agentName from metadata.agent_name', () => {
+    let items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 2/3: build...' },
+    }));
+    expect(items[0].agentName).toBe('greetings_agent');
+    expect(items[0].messages.map((m) => m.text)).toEqual(['Step 1/3: prep...', 'Step 2/3: build...']);
+    expect(items[0].messages.map((m) => m.state)).toEqual(['working', 'working']);
+    // Still running -- only tool_result/tool_error finalize status.
+    expect(items[0].status).toBe('running');
+  });
+
+  it('tool_result finalizes status/finishedAt/durationMs/resultPreview on success', () => {
+    let items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('tool_result', {
+      timestamp: NOW + 500,
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', duration_ms: 187, result_preview: 'Hello!' },
+    }));
+    expect(items[0]).toMatchObject({
+      status: 'success',
+      finishedAt: NOW + 500,
+      durationMs: 187,
+      resultPreview: 'Hello!',
+    });
+  });
+
+  it('tool_error finalizes status as error and records the error', () => {
+    let items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('tool_error', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', duration_ms: 12, error: 'agent unreachable' },
+    }));
+    expect(items[0].status).toBe('error');
+    expect(items[0].error).toBe('agent unreachable');
+  });
+
+  it('never mutates the input array (immutable updates)', () => {
+    const original = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    const snapshot = JSON.parse(JSON.stringify(original));
+    applyA2ACallEvent(original, a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', state: 'working', message_text: 'more' },
+    }));
+    expect(original).toEqual(snapshot);
+  });
 });
 
 // ─── applyAssistantChunk ─────────────────────────────────────────────────
@@ -602,6 +1130,227 @@ describe('buildDefaultAssistantTimeline', () => {
     const items = buildDefaultAssistantTimeline({ role: 'assistant', content: 'txt' });
     expect(items[0].id).toBeTruthy();
     expect(items[0].timestamp).toBeUndefined();
+  });
+
+  // Acceptance: flat persisted subagent_* events reconstruct into a single
+  // grouped 'subagent' card (via collectSubagentGroups replaying
+  // applySubagentEvent), spliced in once at the earliest event's timestamp --
+  // not as N separate flat stream_event rows.
+  it('reconstructs flat subagent_* events into a single grouped subagent card', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'All done.',
+      timestamp: 5000,
+      streamEvents: [
+        {
+          id: 'e1',
+          eventType: 'subagent_start',
+          timestamp: 1000,
+          metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+        },
+        {
+          id: 'e2',
+          eventType: 'subagent_tool_start',
+          timestamp: 1100,
+          metadata: {
+            tool_call_id: 'call_1',
+            subagent_name: 'researcher',
+            nested_tool_call_id: 'nested_1',
+            nested_tool_name: 'read_file',
+          },
+        },
+        {
+          id: 'e3',
+          eventType: 'subagent_message_delta',
+          content: 'Findings: ',
+          timestamp: 1150,
+          metadata: { tool_call_id: 'call_1' },
+        },
+        {
+          id: 'e4',
+          eventType: 'subagent_message_delta',
+          content: 'done.',
+          timestamp: 1180,
+          metadata: { tool_call_id: 'call_1' },
+        },
+        {
+          id: 'e5',
+          eventType: 'subagent_result',
+          timestamp: 1200,
+          metadata: { subagent_name: 'researcher', tool_call_id: 'call_1', success: true, duration_ms: 42 },
+        },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+
+    const subagentItems = items.filter((item) => item.kind === 'subagent');
+    expect(subagentItems).toHaveLength(1);
+    expect(subagentItems[0]).toMatchObject({
+      id: 'subagent-call_1',
+      toolCallId: 'call_1',
+      subagentName: 'researcher',
+      status: 'success',
+      durationMs: 42,
+    });
+    expect(subagentItems[0].entries.map((entry) => entry.kind)).toEqual(['tool', 'message']);
+    expect(subagentItems[0].entries[0]).toMatchObject({ id: 'nested_1', toolName: 'read_file' });
+    expect(subagentItems[0].entries[1]).toMatchObject({ text: 'Findings: done.' });
+
+    // Spliced in once, at the earliest event's timestamp (1000) -- before the
+    // assistant_message row (timestamped 5000), not once per flat event.
+    expect(items.map((item) => item.kind)).toEqual(['subagent', 'assistant_message']);
+    expect(subagentItems[0].timestamp).toBe(1000);
+  });
+
+  it('keeps two concurrent subagents as two separate grouped cards on reload', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'done',
+      timestamp: 5000,
+      streamEvents: [
+        { id: 'e1', eventType: 'subagent_start', timestamp: 1000, metadata: { subagent_name: 'alpha', tool_call_id: 'call_a' } },
+        { id: 'e2', eventType: 'subagent_start', timestamp: 1010, metadata: { subagent_name: 'beta', tool_call_id: 'call_b' } },
+        { id: 'e3', eventType: 'subagent_message_delta', content: 'A', timestamp: 1020, metadata: { tool_call_id: 'call_a' } },
+        { id: 'e4', eventType: 'subagent_message_delta', content: 'B', timestamp: 1030, metadata: { tool_call_id: 'call_b' } },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    const subagentItems = items.filter((item) => item.kind === 'subagent');
+    expect(subagentItems).toHaveLength(2);
+    expect(subagentItems.find((item) => item.toolCallId === 'call_a').entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'A' }]);
+    expect(subagentItems.find((item) => item.toolCallId === 'call_b').entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'B' }]);
+  });
+
+  // Acceptance: flat persisted call_agent tool_start/a2a_call_progress/
+  // tool_result events reconstruct into a single grouped 'a2a_call' card
+  // (via collectA2ACallGroups replaying applyA2ACallEvent), spliced in once
+  // at the earliest event's timestamp -- while the tool_start/tool_result
+  // ALSO still appear as their own flat stream_event rows (Progenitor's own
+  // dispatch/return is a regular tool call and reads as one -- see the
+  // matching comment in buildDefaultAssistantTimeline). Only the two
+  // a2a_call_progress updates are consumed into the card alone.
+  it('reconstructs flat call_agent tool events into a single grouped a2a_call card plus plain start/result rows', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'All done.',
+      timestamp: 5000,
+      streamEvents: [
+        {
+          id: 'e1',
+          eventType: 'tool_start',
+          timestamp: 1000,
+          metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+        },
+        {
+          id: 'e2',
+          eventType: 'a2a_call_progress',
+          timestamp: 1100,
+          metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 1/3: prep...' },
+        },
+        {
+          id: 'e3',
+          eventType: 'a2a_call_progress',
+          timestamp: 1150,
+          metadata: { tool_call_id: 'call_1', agent_name: 'greetings_agent', state: 'working', message_text: 'Step 2/3: build...' },
+        },
+        {
+          id: 'e4',
+          eventType: 'tool_result',
+          timestamp: 1200,
+          metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', duration_ms: 187, result_preview: 'Hello!' },
+        },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+
+    const a2aItems = items.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(1);
+    expect(a2aItems[0]).toMatchObject({
+      id: 'a2a-call_1',
+      toolCallId: 'call_1',
+      agentName: 'greetings_agent',
+      status: 'success',
+      durationMs: 187,
+      resultPreview: 'Hello!',
+    });
+    expect(a2aItems[0].messages.map((m) => m.text)).toEqual(['Step 1/3: prep...', 'Step 2/3: build...']);
+
+    // Card spliced in once, right after the tool_start (e1) that seeds it --
+    // not once per flat event, and not ahead of that tool_start either: the
+    // dispatch marker has to read before the progress card it explains. e1/e4
+    // (start/result) each still get their own plain stream_event row; e2/e3
+    // (progress) are fully consumed.
+    expect(items.map((item) => item.kind)).toEqual([
+      'stream_event', 'a2a_call', 'stream_event', 'assistant_message',
+    ]);
+    expect(a2aItems[0].timestamp).toBe(1000);
+
+    const flatIds = items.filter((item) => item.kind === 'stream_event').map((item) => item.id);
+    expect(flatIds).toEqual(['e1', 'e4']);
+  });
+
+  it('keeps two concurrent A2A calls as two separate grouped cards on reload', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'done',
+      timestamp: 5000,
+      streamEvents: [
+        { id: 'e1', eventType: 'tool_start', timestamp: 1000, metadata: { tool_name: 'call_agent', tool_call_id: 'call_a', args_preview: { agent: 'alpha_agent' } } },
+        { id: 'e2', eventType: 'tool_start', timestamp: 1010, metadata: { tool_name: 'call_agent', tool_call_id: 'call_b', args_preview: { agent: 'beta_agent' } } },
+        { id: 'e3', eventType: 'a2a_call_progress', timestamp: 1020, metadata: { tool_call_id: 'call_a', state: 'working', message_text: 'A' } },
+        { id: 'e4', eventType: 'a2a_call_progress', timestamp: 1030, metadata: { tool_call_id: 'call_b', state: 'working', message_text: 'B' } },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    const a2aItems = items.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(2);
+    expect(a2aItems.find((item) => item.toolCallId === 'call_a').messages[0].text).toBe('A');
+    expect(a2aItems.find((item) => item.toolCallId === 'call_b').messages[0].text).toBe('B');
+  });
+
+  // Regression: a call_agent-tagged event with no tool_call_id (malformed
+  // persisted data) can never form a group -- it must fall through to the
+  // generic stream_event row instead of being silently dropped. The
+  // grouping block used to `continue` unconditionally for a2a_call_progress,
+  // group-found-or-not, which would have vanished a malformed progress
+  // event entirely: no card, no fallback row.
+  it('falls through to a flat stream_event row for call_agent events with no tool_call_id, instead of dropping them', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'done',
+      timestamp: 5000,
+      streamEvents: [
+        { id: 'e1', eventType: 'tool_start', timestamp: 1000, metadata: { tool_name: 'call_agent', args_preview: { agent: 'greetings_agent' } } },
+        { id: 'e2', eventType: 'a2a_call_progress', timestamp: 1010, metadata: { state: 'working', message_text: 'orphaned' } },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    expect(items.filter((item) => item.kind === 'a2a_call')).toHaveLength(0);
+    expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e1')).toBeDefined();
+    expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e2')).toBeDefined();
+  });
+
+  // Same regression for the subagent grouping block (identical pre-existing
+  // pattern, fixed the same way).
+  it('falls through to a flat stream_event row for a subagent_start with no tool_call_id, instead of dropping it', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'done',
+      timestamp: 5000,
+      streamEvents: [
+        { id: 'e1', eventType: 'subagent_start', timestamp: 1000, metadata: { subagent_name: 'hello-world' } },
+      ],
+    };
+    const items = buildDefaultAssistantTimeline(message);
+    expect(items.filter((item) => item.kind === 'subagent')).toHaveLength(0);
+    const flatItem = items.find((item) => item.kind === 'stream_event' && item.id === 'e1');
+    expect(flatItem).toBeDefined();
   });
 });
 
