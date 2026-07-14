@@ -186,10 +186,6 @@ export function useChatStream({
       dispatch(touchChatSession(originChatId));
     }
 
-    // Identifies this stream's chat so a later send only aborts it when it
-    // targets the same chat; sending in a different chat leaves this running.
-    const streamKey = originChatId;
-
     // Helper to update the live turn state without stale closures.
     const updateLiveTurn = (updater) => {
       setLiveAssistantTurn(prev => prev ? updater(prev) : prev);
@@ -289,7 +285,6 @@ export function useChatStream({
           updateLiveTurn((prev) => applyAssistantStreamEvent(prev, streamEvent));
         },
         threadMetadata,
-        streamKey,
       );
     } catch (error) {
       show('error', 'Chat Error', error.message);
