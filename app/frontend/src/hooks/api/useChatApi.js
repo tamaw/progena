@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
-import { selectUiEventQueue } from '../../store/realtimeSlice';
+import { subscribeUiEvent } from '../../store/realtimeEvents';
 import { requestAcknowledged } from '../../store/http';
 
 function normalizeInputContent(content) {
@@ -38,12 +37,10 @@ function buildResponsesInput(history, message) {
  */
 export function useChatApi() {
   const { config, getApiUrl } = useConfig();
-  const uiEventQueue = useSelector(selectUiEventQueue);
   const [connectionState, setConnectionState] = useState('disconnected');
   const activeStreamRequestIdRef = useRef(null);
   const activeAcknowledgementRef = useRef(null);
   const pendingStreamsRef = useRef(new Map());
-  const lastConsumedEventSequenceRef = useRef(uiEventQueue.at(-1)?.sequence ?? 0);
   const consumeStreamEvent = useCallback((event) => {
     const type = event?.type;
     const payload = event?.payload || event?.data;
@@ -104,18 +101,7 @@ export function useChatApi() {
     pending.resolve();
   }, []);
 
-  useEffect(() => {
-    for (const { sequence, event } of uiEventQueue) {
-      if (sequence <= lastConsumedEventSequenceRef.current) {
-        continue;
-      }
-      lastConsumedEventSequenceRef.current = sequence;
-      // The canonical Redux queue is an external event source; consuming its
-      // frame deliberately updates the foreground stream state synchronously.
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      consumeStreamEvent(event);
-    }
-  }, [consumeStreamEvent, uiEventQueue]);
+  useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
   const sendMessageStream = useCallback(
     async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {

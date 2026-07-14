@@ -18,7 +18,7 @@
  *     alongside (not instead of) its plain tool_start/tool_result rows above
  */
 
-import { Fragment } from 'react';
+import { Fragment, memo } from 'react';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import {
   formatMessage,
@@ -36,7 +36,7 @@ import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
 
-export default function TimelineItem({ item, itemIndex }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
   }
@@ -157,4 +157,6 @@ export default function TimelineItem({ item, itemIndex }) {
   }
 
   return null;
-}
+});
+
+export default TimelineItem;

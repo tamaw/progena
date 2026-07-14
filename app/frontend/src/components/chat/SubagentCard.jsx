@@ -33,6 +33,7 @@ import {
 import useStickyScroll from './useStickyScroll';
 import StatusPill from './StatusPill';
 import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
+import { memo } from 'react';
 
 // Distinguishes the subagent card's badge from A2ACallCard's at a glance --
 // a branch spinning off the main line, standing in for "delegated sub-work".
@@ -73,7 +74,9 @@ function glyphForChildStatus(status) {
 // the existing .tool block, unchanged -- reused wholesale rather than
 // inventing a new args/result layout, it just moves from a bare flex column
 // (.subagent-card__children) into this gutter/badge shell.
-function SubagentChild({ child, isLast }) {
+// Memoized: entries preserve reference equality for unchanged rows, avoiding
+// repeated markdown parsing for settled nested tool calls during a stream.
+const SubagentChild = memo(function SubagentChild({ child, isLast }) {
   const args = formatArgsPreview(child.argsPreview);
   const body = [
     Number.isFinite(child.durationMs) ? formatDuration(child.durationMs) : '',
@@ -98,9 +101,9 @@ function SubagentChild({ child, isLast }) {
       </div>
     </div>
   );
-}
+});
 
-export default function SubagentCard({ item }) {
+const SubagentCard = memo(function SubagentCard({ item }) {
   // `content` (accumulated subagent_message_delta chunks) is empty for cards
   // reconstructed from persisted history on reload -- deltas are never
   // durably stored, only the final subagent_start/subagent_result pair
@@ -155,4 +158,6 @@ export default function SubagentCard({ item }) {
       </div>
     </div>
   );
-}
+});
+
+export default SubagentCard;

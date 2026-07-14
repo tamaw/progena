@@ -2,13 +2,13 @@ import { useEffect, useRef } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { startRealtimeStream, stopRealtimeStream } from './realtimeListener';
-import { selectRealtime } from './realtimeSlice';
+import { selectRealtimeConnected } from './realtimeSlice';
 import { fetchChatSessions, fetchInbox } from './uiDataSlice';
 
 export default function RealtimeBridge() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const realtime = useSelector(selectRealtime);
+  const realtimeConnected = useSelector(selectRealtimeConnected);
   const requestedChatsUrlRef = useRef(null);
   const requestedInboxUrlRef = useRef(null);
   const streamUrl = getApiUrl('stream');
@@ -23,7 +23,7 @@ export default function RealtimeBridge() {
   }, [dispatch, streamUrl]);
 
   useEffect(() => {
-    if (!realtime.connected) {
+    if (!realtimeConnected) {
       requestedChatsUrlRef.current = null;
       return;
     }
@@ -32,12 +32,12 @@ export default function RealtimeBridge() {
     }
     requestedChatsUrlRef.current = chatsUrl;
     dispatch(fetchChatSessions({ chatsUrl, includeArchived: true }));
-  }, [chatsUrl, dispatch, realtime.connected]);
+  }, [chatsUrl, dispatch, realtimeConnected]);
 
   // Seed the inbox globally so the nav unread badge is correct before the
   // Inbox page is ever visited; SSE snapshots keep it fresh thereafter.
   useEffect(() => {
-    if (!realtime.connected) {
+    if (!realtimeConnected) {
       requestedInboxUrlRef.current = null;
       return;
     }
@@ -46,7 +46,7 @@ export default function RealtimeBridge() {
     }
     requestedInboxUrlRef.current = inboxUrl;
     dispatch(fetchInbox({ inboxUrl }));
-  }, [dispatch, inboxUrl, realtime.connected]);
+  }, [dispatch, inboxUrl, realtimeConnected]);
 
   return null;
 }

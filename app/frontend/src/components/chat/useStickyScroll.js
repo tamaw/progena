@@ -14,12 +14,25 @@ const NEAR_BOTTOM_PX = 24;
 export default function useStickyScroll(dep) {
   const ref = useRef(null);
   const stickyRef = useRef(true);
+  const frameRef = useRef(null);
 
   useEffect(() => {
-    const el = ref.current;
-    if (!el || !stickyRef.current) return;
-    el.scrollTop = el.scrollHeight;
+    if (!ref.current || !stickyRef.current || frameRef.current !== null) return;
+
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      const el = ref.current;
+      if (el && stickyRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
   }, [dep]);
+
+  useEffect(() => () => {
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current);
+    }
+  }, []);
 
   const onScroll = () => {
     const el = ref.current;
