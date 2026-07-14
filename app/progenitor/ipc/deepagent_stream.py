@@ -473,12 +473,16 @@ class DeepAgentIPCStream:
         event_type = str(envelope.get("event_type") or "")
 
         if event_type == "tool_start":
-            args_preview = metadata.get("args_preview")
+            # Read from the dedicated `subagent_type` field (build_tool_start_event,
+            # stream_events.py) rather than args_preview: a large free-form
+            # `description` can push args_preview past its 2KB budget and
+            # collapse it from a dict into a truncated string, which would
+            # otherwise silently drop subagent_type and lose all of this
+            # dispatch's child output.
             subagent_name = ""
-            if isinstance(args_preview, dict):
-                raw_name = args_preview.get("subagent_type")
-                if isinstance(raw_name, str):
-                    subagent_name = raw_name
+            raw_name = metadata.get("subagent_type")
+            if isinstance(raw_name, str):
+                subagent_name = raw_name
             if not subagent_name:
                 return []
             if tool_call_id:

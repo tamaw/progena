@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime
 from unittest.mock import AsyncMock
 
@@ -148,6 +149,62 @@ async def test_call_agent_non_blocking_stops_after_first_event_under_streaming(m
     assert result["success"] is True
     assert result["result"]["status"]["state"] == "submitted"
     assert later_events_touched is False
+    assert getattr(fake_stream, "closed", False) is True
+
+
+@pytest.mark.asyncio
+async def test_call_agent_blocking_times_out_against_endless_non_terminal_stream(
+    monkeypatch,
+) -> None:
+    """Regression: a peer that keeps emitting non-terminal status updates more
+    often than any per-read timeout must not be able to hold a blocking
+    call_agent() open forever -- the whole streamed phase needs its own
+    end-to-end deadline, since _await_terminal_task's deadline only starts
+    after this loop exits."""
+    client = A2AClient()
+    submitted = {"kind": "task", "id": "task-123", "status": {"state": "submitted"}}
+    update = {"kind": "status-update", "status": {"state": "working"}}
+
+    class _FakeStream:
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            # A well-behaved peer keeps the connection alive with frequent
+            # progress pings -- never terminal, never closing the stream.
+            await asyncio.sleep(0.01)
+            return (submitted, update)
+
+        async def aclose(self):
+            self.closed = True
+
+    fake_stream = _FakeStream()
+
+    class _FakeContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        def send_message(self, message, configuration):
+            del message, configuration
+            return fake_stream
+
+    monkeypatch.setattr(client, "_sdk_client", lambda *args, **kwargs: _FakeContext())
+
+    result = await asyncio.wait_for(
+        client.call_agent(
+            {"url": "http://localhost:8109", "transport": "http", "status": "running"},
+            "hello",
+            blocking=True,
+            timeout=0.05,
+        ),
+        timeout=5,
+    )
+
+    assert result["success"] is False
+    assert "timeout" in result["error"].lower()
     assert getattr(fake_stream, "closed", False) is True
 
 

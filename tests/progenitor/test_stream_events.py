@@ -19,7 +19,10 @@ from app.progenitor.ipc.stream_events import (
     build_tool_start_event,
     normalize_custom_event,
 )
-from app.progenitor.ipc.stream_payloads import DEFAULT_STREAM_PREVIEW_BYTES
+from app.progenitor.ipc.stream_payloads import (
+    DEFAULT_STREAM_ARGS_BYTES,
+    DEFAULT_STREAM_PREVIEW_BYTES,
+)
 
 
 def test_allowed_event_types_cover_tool_lifecycle():
@@ -197,6 +200,28 @@ def test_build_tool_start_event_redacts_args():
     serialized = str(args_preview)
     assert api_key not in serialized
     assert "REDACTED" in serialized
+
+
+def test_build_tool_start_event_preserves_subagent_type_when_args_preview_truncates():
+    huge_description = "x" * (DEFAULT_STREAM_ARGS_BYTES * 2)
+    event = build_tool_start_event(
+        tool_name="task",
+        tool_call_id="call_1",
+        raw_args={"subagent_type": "researcher", "description": huge_description},
+    )
+    # args_preview collapses to a truncated string once the dict exceeds the
+    # byte budget -- subagent_type must survive that collapse in its own field.
+    assert isinstance(event["metadata"]["args_preview"], str)
+    assert event["metadata"]["subagent_type"] == "researcher"
+
+
+def test_build_tool_start_event_omits_subagent_type_for_non_task_tools():
+    event = build_tool_start_event(
+        tool_name="search",
+        tool_call_id="call_1",
+        raw_args={"query": "lookup"},
+    )
+    assert "subagent_type" not in event["metadata"]
 
 
 def test_build_tool_result_event_truncates_large_results():

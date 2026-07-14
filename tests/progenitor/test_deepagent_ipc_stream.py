@@ -205,6 +205,7 @@ async def test_task_tool_events_expand_into_subagent_events():
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_1",
+                        "subagent_type": "hello-world",
                         "args_preview": {"subagent_type": "hello-world"},
                     },
                 },
@@ -288,6 +289,7 @@ async def test_task_tool_result_images_survive_subagent_result_translation():
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_1",
+                        "subagent_type": "hello-world",
                         "args_preview": {"subagent_type": "hello-world"},
                     },
                 },
@@ -380,6 +382,7 @@ async def test_call_agent_tool_events_pass_through_unmodified_alongside_task_exp
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_1",
+                        "subagent_type": "hello-world",
                         "args_preview": {"subagent_type": "hello-world"},
                     },
                 },
@@ -481,6 +484,7 @@ async def test_nested_subagent_stream_events_expand_into_subagent_tool_events():
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_1",
+                        "subagent_type": "hello-world",
                         "args_preview": {"subagent_type": "hello-world"},
                     },
                 },
@@ -655,6 +659,7 @@ async def test_parallel_subagent_dispatch_correlates_by_task_id_not_arrival_orde
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_1",
+                        "subagent_type": "code-reviewer",
                         "args_preview": {"subagent_type": "code-reviewer"},
                     },
                 },
@@ -667,6 +672,7 @@ async def test_parallel_subagent_dispatch_correlates_by_task_id_not_arrival_orde
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_2",
+                        "subagent_type": "researcher",
                         "args_preview": {"subagent_type": "researcher"},
                     },
                 },
@@ -822,6 +828,7 @@ async def test_parallel_dispatch_of_same_subagent_type_does_not_cross_contaminat
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_x",
+                        "subagent_type": "researcher",
                         "args_preview": {"subagent_type": "researcher"},
                     },
                 },
@@ -834,6 +841,7 @@ async def test_parallel_dispatch_of_same_subagent_type_does_not_cross_contaminat
                     "metadata": {
                         "tool_name": "task",
                         "tool_call_id": "call_y",
+                        "subagent_type": "researcher",
                         "args_preview": {"subagent_type": "researcher"},
                     },
                 },

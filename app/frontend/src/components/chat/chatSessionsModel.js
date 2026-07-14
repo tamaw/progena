@@ -33,6 +33,7 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
   const subagentName = tc.args && typeof tc.args.subagent_type === 'string' ? tc.args.subagent_type : '';
   const toolCallId = typeof tc.id === 'string' ? tc.id : '';
   const result = typeof tc.result === 'string' ? tc.result : '';
+  const images = Array.isArray(tc.images) && tc.images.length > 0 ? tc.images : null;
 
   const events = [
     {
@@ -47,8 +48,14 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
       },
     },
   ];
-  if (result) {
-    events.push({
+  // An image-only result has empty extracted text -- without also checking
+  // `images`, a subagent that only returns pictures would never get a
+  // terminal event here, leaving its reconstructed card stuck "running"
+  // forever on reload and silently dropping the image (mirrors the same
+  // `result || images` check buildToolStreamEvents uses below for plain
+  // tool_result rows).
+  if (result || images) {
+    const resultEvent = {
       id: `${messageId}-subagent-result-${index}`,
       eventType: 'subagent_result',
       content: subagentName,
@@ -57,10 +64,14 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
         subagent_name: subagentName,
         tool_call_id: toolCallId,
         success: true,
-        result_preview: result,
+        result_preview: images ? `${images.length} image${images.length !== 1 ? 's' : ''}` : result,
         source: 'checkpoint',
       },
-    });
+    };
+    if (images) {
+      resultEvent.images = images;
+    }
+    events.push(resultEvent);
   }
   return events;
 }

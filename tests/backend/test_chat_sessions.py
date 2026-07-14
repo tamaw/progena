@@ -578,3 +578,17 @@ class TestExtractProgressLogFromContent:
 
         monkeypatch.setattr(chat_sessions_module.json, "loads", _fail_if_called)
         assert _extract_progress_log_from_content('{"result": "no progress log here"}') == []
+
+    def test_returns_empty_list_on_recursion_error_instead_of_crashing(self, monkeypatch):
+        """json.loads raises RecursionError (not ValueError) on sufficiently
+        deeply nested JSON -- a malformed/adversarial persisted `task` payload
+        alongside progress_log must not crash chat-session hydration for the
+        whole conversation, only drop this one optional progress log."""
+        import app.backend.chat_sessions as chat_sessions_module
+
+        def _raise_recursion_error(*_args, **_kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(chat_sessions_module.json, "loads", _raise_recursion_error)
+        content = '{"progress_log": [{"state": "submitted"}]}'
+        assert _extract_progress_log_from_content(content) == []
