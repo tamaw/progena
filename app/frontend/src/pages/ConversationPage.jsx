@@ -6,8 +6,7 @@ import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
-import { selectUiEventQueue } from '../store/realtimeSlice';
-import { consumeUiEventQueue } from '../store/uiData/eventQueue';
+import { subscribeUiEvent } from '../store/realtimeEvents';
 import {
   clearChatErrored,
   clearChatGenerating,
@@ -73,11 +72,8 @@ import {
   countReasoningTimelineEntries,
   normalizeStreamEvent,
 } from '../components/chat/streamEventsModel';
-import {
-  buildDefaultAssistantTimeline,
-  toCommittedAssistantMessage,
-} from '../components/chat/liveAssistantTurnModel';
-import PendingAssistantCursor from '../components/chat/PendingAssistantCursor';
+import { buildDefaultAssistantTimeline } from '../components/chat/liveAssistantTurnModel';
+import LiveAssistantTurn from '../components/chat/LiveAssistantTurn';
 import {
   ARCHIVED_CHAT_SESSIONS_KEY,
   CUSTOM_CHAT_TITLE_KEY,
@@ -192,7 +188,6 @@ function ConversationPage() {
   const { config, getApiUrl } = useConfig();
   const { connectionState, sendMessageStream, cancelStream } = useChatApi();
   const { show } = useNotifications();
-  const uiEventQueue = useSelector(selectUiEventQueue);
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
@@ -251,8 +246,8 @@ function ConversationPage() {
   const [titleDraft, setTitleDraft] = useState('');
   const [composerFocusTick, setComposerFocusTick] = useState(0);
   const messagesEndRef = useRef(null);
+  const liveScrollFrameRef = useRef(null);
   const titleInputRef = useRef(null);
-  const lastProcessedUiEventSequenceRef = useRef(uiEventQueue.at(-1)?.sequence ?? 0);
   // Tracks the requestId of the fetch last applied to local `messages` state.
   // Each dispatch of requestChatSessionDetail carries a fresh requestId
   // (chats.js's active.requestId), so this differs across any two distinct
@@ -306,7 +301,7 @@ function ConversationPage() {
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
     activeStreamIdRef,
-    liveAssistantTurn,
+    liveTurnStore,
     setLiveAssistantTurn,
     preserveStreamInBackground,
     handleSend,
@@ -585,12 +580,23 @@ function ConversationPage() {
     }
   }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
 
-  // Scroll to bottom on new messages, and keep following along as the live
-  // assistant turn streams in (liveAssistantTurn only lands in `messages`
-  // once the turn finishes, so without it here we'd only scroll at the end).
+  // Committed message changes and generation transitions still keep the page
+  // at the tail. Per-frame live-turn scrolling is owned by LiveAssistantTurn
+  // so streaming does not redraw this page-wide component tree.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [messages, isGenerating, liveAssistantTurn]);
+    if (liveScrollFrameRef.current !== null) return;
+
+    liveScrollFrameRef.current = requestAnimationFrame(() => {
+      liveScrollFrameRef.current = null;
+      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    });
+  }, [messages, isGenerating]);
+
+  useEffect(() => () => {
+    if (liveScrollFrameRef.current !== null) {
+      cancelAnimationFrame(liveScrollFrameRef.current);
+    }
+  }, []);
 
   // Handle chat events (from /chat SSE stream)
   const handleChatEvent = useCallback((event) => {
@@ -665,27 +671,21 @@ function ConversationPage() {
     }
   }, [show]);
 
-  useEffect(() => {
-    lastProcessedUiEventSequenceRef.current = consumeUiEventQueue(
-      uiEventQueue,
-      lastProcessedUiEventSequenceRef.current,
-      ({ event }) => {
-        const payload = event?.payload;
-        if (
-          (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
-          && typeof payload?.request_id === 'string'
-          && typeof payload?.session?.thread_id === 'string'
-        ) {
-          const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
-          if (resolveSession) {
-            pendingDraftSessionsRef.current.delete(payload.request_id);
-            resolveSession(payload.session);
-          }
-        }
-        handleChatEvent({ type: event?.type, data: payload });
-      },
-    );
-  }, [handleChatEvent, uiEventQueue]);
+  useEffect(() => subscribeUiEvent((event) => {
+    const payload = event?.payload;
+    if (
+      (event?.type === 'chat.session.created' || event?.type === 'chat.session.metadata.updated')
+      && typeof payload?.request_id === 'string'
+      && typeof payload?.session?.thread_id === 'string'
+    ) {
+      const resolveSession = pendingDraftSessionsRef.current.get(payload.request_id);
+      if (resolveSession) {
+        pendingDraftSessionsRef.current.delete(payload.request_id);
+        resolveSession(payload.session);
+      }
+    }
+    handleChatEvent({ type: event?.type, data: payload });
+  }), [handleChatEvent]);
 
   const handleQuickAction = useCallback((message) => {
     handleSend(message);
@@ -1408,17 +1408,13 @@ function ConversationPage() {
                     />
                   );
                 })}
-                {liveAssistantTurn && (
-                  liveAssistantTurn.assistantMessageId === null && liveAssistantTurn.timelineItems.length === 0
-                    ? <PendingAssistantCursor />
-                    : <Message
-                        key={liveAssistantTurn.streamId}
-                        message={toCommittedAssistantMessage(liveAssistantTurn)}
-                        streamEventFilter={streamEventFilter}
-                        hideContent={streamFilters.agent === false}
-                        showImages={streamFilters.images !== false}
-                      />
-                )}
+                <LiveAssistantTurn
+                  store={liveTurnStore}
+                  messagesEndRef={messagesEndRef}
+                  streamEventFilter={streamEventFilter}
+                  hideContent={streamFilters.agent === false}
+                  showImages={streamFilters.images !== false}
+                />
               </>
             )}
             <div ref={messagesEndRef} />

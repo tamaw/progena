@@ -94,7 +94,10 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     timelineItems,
   } = message;
 
+  const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
   const visibleStreamEvents = useMemo(() => {
+    if (hasTimelineItems) return [];
+
     const timelineEvents = buildTimelineStreamEvents(
       streamEvents,
       reasoningText,
@@ -103,7 +106,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     );
     if (typeof streamEventFilter !== 'function') return timelineEvents;
     return timelineEvents.filter(streamEventFilter);
-  }, [messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
+  }, [hasTimelineItems, messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -209,7 +212,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   );
 
   // If the message has explicit timelineItems, render them in array order.
-  if (role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0) {
+  if (hasTimelineItems) {
     const fullTimelineItems = withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId);
     const visibleTimelineItems = fullTimelineItems.filter((item) => {
       if (item.kind === 'stream_event') {

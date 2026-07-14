@@ -173,6 +173,7 @@ export const {
 } = realtimeSlice.actions;
 
 export const selectRealtime = (state) => state.realtime;
+export const selectRealtimeConnected = (state) => state.realtime.connected;
 export const selectLastUiEvent = (state) => state.realtime.lastEvent;
 export const selectUiEventQueue = (state) => state.realtime.eventQueue;
 export const selectPendingOp = (state, requestId) =>

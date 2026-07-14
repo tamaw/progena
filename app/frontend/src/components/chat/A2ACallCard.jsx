@@ -15,6 +15,7 @@
  * nested sub-chain grows.
  */
 
+import { memo } from 'react';
 import {
   formatDuration,
   formatTimestamp,
@@ -90,7 +91,7 @@ function glyphForA2AState(state) {
 // the tag text is the label, and the badge's own glyph/color
 // (glyphForA2AState, chat-panel.css) is the status indicator in place of a
 // pill.
-function A2ASubEntry({ message, isLast }) {
+const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
   const state = message.state || 'update';
   // A per-entry clock time, not just chain position -- shows exactly when
   // each of the remote agent's own reported states occurred.
@@ -111,9 +112,9 @@ function A2ASubEntry({ message, isLast }) {
       </div>
     </div>
   );
-}
+});
 
-export default function A2ACallCard({ item }) {
+const A2ACallCard = memo(function A2ACallCard({ item }) {
   const durationLabel = Number.isFinite(item.durationMs) ? formatDuration(item.durationMs) : '';
   const formattedTime = formatTimestamp(item.finishedAt || item.startedAt);
   const messageCount = item.messages.length;
@@ -169,4 +170,6 @@ export default function A2ACallCard({ item }) {
       </div>
     </div>
   );
-}
+});
+
+export default A2ACallCard;

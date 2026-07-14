@@ -569,18 +569,22 @@
     margin-top: 8px;
 }
 
+.subagent-card__children .entry__head,
 .a2a-call-card__subchain .entry__head {
     margin-bottom: 2px;
 }
 
+.subagent-card__children .entry__tag,
 .a2a-call-card__subchain .entry__tag {
     font-size: 9px;
 }
 
+.subagent-card__children .entry__time,
 .a2a-call-card__subchain .entry__time {
     font-size: 9px;
 }
 
+.subagent-card__children .message-stream-event-body,
 .a2a-sub-entry__text {
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
