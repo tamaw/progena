@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from langgraph.config import get_stream_writer
+from langgraph.types import Command
 
 from app.progenitor.ipc.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
@@ -130,6 +131,7 @@ def build_tool_result_event(
     Image content items are extracted to a top-level ``images`` key so they
     bypass the 2 KB metadata truncation applied in ``normalize_custom_event``.
     """
+    result = _unwrap_command_result(result)
     images = _extract_images(result)
     payload: dict[str, Any] = {
         "event_type": "tool_result",
@@ -295,6 +297,24 @@ def _redact_value(value: Any) -> Any:
     except Exception:
         rendered = repr(type(value))
     return redact_secrets(rendered)
+
+
+def _unwrap_command_result(value: Any) -> Any:
+    """Pull the underlying tool result out of a ``Command`` state update.
+
+    Subagent (``task``) tool calls -- and any tool that injects private state
+    via ``Command(update=...)`` -- return a ``Command``, not a ``ToolMessage``,
+    so a naive ``str(value)`` preview shows the object's raw repr (e.g.
+    "Command(update={'files': {}, 'messages': [ToolMessage(...)]})") instead
+    of the actual text a user would recognize as the tool's output.
+    """
+    if not isinstance(value, Command):
+        return value
+    update = value.update
+    messages = update.get("messages") if isinstance(update, Mapping) else None
+    if isinstance(messages, list) and messages:
+        return messages[-1]
+    return value
 
 
 def _redact_preview(value: Any) -> str:

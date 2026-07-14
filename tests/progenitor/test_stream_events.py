@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
 from app.progenitor.ipc.stream_events import (
@@ -232,6 +233,22 @@ def test_build_tool_result_event_truncates_large_results():
     assert len(preview.encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
     assert event["metadata"]["success"] is True
     assert event["metadata"]["duration_ms"] == 123.45
+
+
+def test_build_tool_result_event_unwraps_command_result():
+    # Subagent (`task`) tool calls return a Command(update=...) rather than a
+    # plain ToolMessage -- without unwrapping it, the preview falls back to
+    # str(Command(...)), a raw Python repr instead of the subagent's own text.
+    command = Command(
+        update={
+            "files": {},
+            "messages": [
+                ToolMessage(content="HELLO_FROM_SUBAGENT", name="task", tool_call_id="call_1")
+            ],
+        }
+    )
+    event = build_tool_result_event("task", "call_1", 42.0, command)
+    assert event["metadata"]["result_preview"] == "HELLO_FROM_SUBAGENT"
 
 
 def test_build_tool_error_event_redacts_and_truncates():

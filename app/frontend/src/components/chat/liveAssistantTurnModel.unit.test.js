@@ -405,10 +405,37 @@ describe('applyAssistantStreamEvent', () => {
       content: 'Alpha says: ',
       metadata: { tool_call_id: 'call_a' },
     }), NOW);
+    // A nested tool closes alpha's first message, making both entries settled
+    // before a later alpha delta arrives.
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_tool_start', {
+      metadata: {
+        tool_call_id: 'call_a',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_tool_result', {
+      metadata: {
+        tool_call_id: 'call_a',
+        nested_tool_call_id: 'nested_1',
+        nested_tool_name: 'read_file',
+        result_preview: 'read complete',
+      },
+    }), NOW);
     next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
       content: 'hello',
       metadata: { tool_call_id: 'call_b' },
     }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
+      content: 'Alpha concludes: ',
+      metadata: { tool_call_id: 'call_a' },
+    }), NOW);
+    const alphaBeforeFinalDelta = next.timelineItems.find((item) => item.toolCallId === 'call_a');
+    const betaBeforeFinalDelta = next.timelineItems.find((item) => item.toolCallId === 'call_b');
+    const settledAlphaMessage = alphaBeforeFinalDelta.entries[0];
+    const settledAlphaTool = alphaBeforeFinalDelta.entries[1];
+    const alphaTrailingMessage = alphaBeforeFinalDelta.entries[2];
+    const betaMessage = betaBeforeFinalDelta.entries[0];
     next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_message_delta', {
       content: 'hi',
       metadata: { tool_call_id: 'call_a' },
@@ -417,8 +444,16 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.timelineItems).toHaveLength(2);
     const alphaItem = next.timelineItems.find((item) => item.toolCallId === 'call_a');
     const betaItem = next.timelineItems.find((item) => item.toolCallId === 'call_b');
-    expect(alphaItem.content).toBe('Alpha says: hi');
-    expect(betaItem.content).toBe('Beta says: hello');
+    expect(alphaItem).not.toBe(alphaBeforeFinalDelta);
+    expect(alphaItem.entries[0]).toBe(settledAlphaMessage);
+    expect(alphaItem.entries[1]).toBe(settledAlphaTool);
+    expect(alphaItem.entries[2]).not.toBe(alphaTrailingMessage);
+    expect(alphaItem.entries[2].text).toBe('Alpha concludes: hi');
+    expect(betaItem).toBe(betaBeforeFinalDelta);
+    expect(betaItem.entries[0]).toBe(betaMessage);
+    expect(alphaItem.entries.map((entry) => entry.kind)).toEqual(['message', 'tool', 'message']);
+    expect(alphaItem.entries[0].text).toBe('Alpha says: ');
+    expect(betaItem.entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'Beta says: hello' }]);
   });
 
   // A2A call_agent invocations get their own grouped card too, but keyed off
@@ -474,6 +509,20 @@ describe('applyAssistantStreamEvent', () => {
     next = applyAssistantStreamEvent(next, rawStreamEvent('a2a_call_progress', {
       metadata: { tool_call_id: 'call_a', state: 'working', message_text: 'alpha step 1' },
     }), NOW);
+    const alphaBeforeSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaBeforeSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
+    const alphaFirstMessage = alphaBeforeSecondProgress.messages[0];
+    const betaFirstMessage = betaBeforeSecondProgress.messages[0];
+    next = applyAssistantStreamEvent(next, rawStreamEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_a', state: 'working', message_text: 'alpha step 2' },
+    }), NOW);
+    const alphaAfterSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
+    const betaAfterSecondProgress = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
+    expect(alphaAfterSecondProgress).not.toBe(alphaBeforeSecondProgress);
+    expect(alphaAfterSecondProgress.messages[0]).toBe(alphaFirstMessage);
+    expect(alphaAfterSecondProgress.messages.map((message) => message.text)).toEqual(['alpha step 1', 'alpha step 2']);
+    expect(betaAfterSecondProgress).toBe(betaBeforeSecondProgress);
+    expect(betaAfterSecondProgress.messages[0]).toBe(betaFirstMessage);
     next = applyAssistantStreamEvent(next, rawStreamEvent('tool_result', {
       metadata: { tool_name: 'call_agent', tool_call_id: 'call_a', duration_ms: 5, result_preview: 'alpha done' },
     }), NOW);
@@ -499,7 +548,7 @@ describe('applyAssistantStreamEvent', () => {
     const alphaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_a');
     const betaItem = next.timelineItems.find((item) => item.kind === 'a2a_call' && item.toolCallId === 'call_b');
     expect(alphaItem.status).toBe('success');
-    expect(alphaItem.messages.map((m) => m.text)).toEqual(['alpha step 1']);
+    expect(alphaItem.messages.map((m) => m.text)).toEqual(['alpha step 1', 'alpha step 2']);
     expect(betaItem.status).toBe('running');
     expect(betaItem.messages.map((m) => m.text)).toEqual(['beta step 1']);
 
@@ -570,8 +619,7 @@ describe('applySubagentEvent', () => {
       toolCallId: 'call_1',
       subagentName: 'researcher',
       status: 'running',
-      content: '',
-      children: [],
+      entries: [],
     });
   });
 
@@ -582,10 +630,10 @@ describe('applySubagentEvent', () => {
     }));
     expect(items).toHaveLength(1);
     expect(items[0].toolCallId).toBe('call_1');
-    expect(items[0].content).toBe('late');
+    expect(items[0].entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'late' }]);
   });
 
-  it('accumulates subagent_message_delta content across multiple calls', () => {
+  it('accumulates subagent_message_delta text into a single trailing message entry across multiple calls', () => {
     let items = applySubagentEvent([], subagentEvent('subagent_start', {
       metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
     }));
@@ -598,10 +646,30 @@ describe('applySubagentEvent', () => {
       metadata: { tool_call_id: 'call_1' },
     }));
     expect(items).toHaveLength(1);
-    expect(items[0].content).toBe('Hello world');
+    expect(items[0].entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'Hello world' }]);
   });
 
-  it('find-or-creates nested tool children keyed by nested_tool_call_id, in place', () => {
+  it('a nested tool call between two bursts of text splits them into separate message entries', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'Let me check that file.',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_tool_start', {
+      metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'read_file' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'Here is the summary.',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+    expect(items[0].entries.map((entry) => entry.kind)).toEqual(['message', 'tool', 'message']);
+    expect(items[0].entries[0].text).toBe('Let me check that file.');
+    expect(items[0].entries[2].text).toBe('Here is the summary.');
+  });
+
+  it('find-or-creates nested tool entries keyed by nested_tool_call_id, in place', () => {
     let items = applySubagentEvent([], subagentEvent('subagent_start', {
       metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
     }));
@@ -614,8 +682,9 @@ describe('applySubagentEvent', () => {
         args_preview: { path: 'README.md' },
       },
     }));
-    expect(items[0].children).toHaveLength(1);
-    expect(items[0].children[0]).toMatchObject({
+    expect(items[0].entries).toHaveLength(1);
+    expect(items[0].entries[0]).toMatchObject({
+      kind: 'tool',
       id: 'nested_1',
       toolName: 'read_file',
       status: 'running',
@@ -631,9 +700,10 @@ describe('applySubagentEvent', () => {
         result_preview: '# Title',
       },
     }));
-    // Same child updated in place, not duplicated.
-    expect(items[0].children).toHaveLength(1);
-    expect(items[0].children[0]).toMatchObject({
+    // Same entry updated in place, not duplicated.
+    expect(items[0].entries).toHaveLength(1);
+    expect(items[0].entries[0]).toMatchObject({
+      kind: 'tool',
       id: 'nested_1',
       status: 'success',
       durationMs: 4.5,
@@ -641,7 +711,7 @@ describe('applySubagentEvent', () => {
     });
   });
 
-  it('subagent_tool_error marks the matching child as errored', () => {
+  it('subagent_tool_error marks the matching tool entry as errored', () => {
     let items = applySubagentEvent([], subagentEvent('subagent_tool_start', {
       metadata: { tool_call_id: 'call_1', nested_tool_call_id: 'nested_1', nested_tool_name: 'shell_exec' },
     }));
@@ -654,7 +724,7 @@ describe('applySubagentEvent', () => {
         error: 'boom',
       },
     }));
-    expect(items[0].children[0]).toMatchObject({ status: 'error', error: 'boom', durationMs: 2 });
+    expect(items[0].entries[0]).toMatchObject({ status: 'error', error: 'boom', durationMs: 2 });
   });
 
   it('subagent_result finalizes status/finishedAt/durationMs/resultPreview on success', () => {
@@ -1122,10 +1192,10 @@ describe('buildDefaultAssistantTimeline', () => {
       subagentName: 'researcher',
       status: 'success',
       durationMs: 42,
-      content: 'Findings: done.',
     });
-    expect(subagentItems[0].children).toHaveLength(1);
-    expect(subagentItems[0].children[0]).toMatchObject({ id: 'nested_1', toolName: 'read_file' });
+    expect(subagentItems[0].entries.map((entry) => entry.kind)).toEqual(['tool', 'message']);
+    expect(subagentItems[0].entries[0]).toMatchObject({ id: 'nested_1', toolName: 'read_file' });
+    expect(subagentItems[0].entries[1]).toMatchObject({ text: 'Findings: done.' });
 
     // Spliced in once, at the earliest event's timestamp (1000) -- before the
     // assistant_message row (timestamped 5000), not once per flat event.
@@ -1149,8 +1219,8 @@ describe('buildDefaultAssistantTimeline', () => {
     const items = buildDefaultAssistantTimeline(message);
     const subagentItems = items.filter((item) => item.kind === 'subagent');
     expect(subagentItems).toHaveLength(2);
-    expect(subagentItems.find((item) => item.toolCallId === 'call_a').content).toBe('A');
-    expect(subagentItems.find((item) => item.toolCallId === 'call_b').content).toBe('B');
+    expect(subagentItems.find((item) => item.toolCallId === 'call_a').entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'A' }]);
+    expect(subagentItems.find((item) => item.toolCallId === 'call_b').entries).toEqual([{ kind: 'message', id: 'msg-0', text: 'B' }]);
   });
 
   // Acceptance: flat persisted call_agent tool_start/a2a_call_progress/
