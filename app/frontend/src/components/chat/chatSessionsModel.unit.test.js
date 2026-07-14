@@ -117,12 +117,15 @@ describe('normalizeBackendChatMessage', () => {
   });
 
   // Regression: reloaded chats routed `task` calls through the generic
-  // tool_start/tool_result path, which buildDefaultAssistantTimeline's
+  // tool_start/tool_result path only, which buildDefaultAssistantTimeline's
   // collectSubagentGroups doesn't recognize -- so subagent cards rendered
   // live during the session vanished entirely on refresh. task calls must
-  // synthesize subagent_start/subagent_result, mirroring the backend's own
-  // live _expand_task_subagent_events.
-  it('expands a task tool_call into subagent_start + subagent_result, not tool_start/tool_result', () => {
+  // ALSO synthesize subagent_start/subagent_result, mirroring the backend's
+  // own live _expand_task_subagent_events -- alongside, not instead of, the
+  // plain tool_start/tool_result pair every other tool call gets (the same
+  // "plain row + rich card" pairing call_agent gets via its own
+  // tool_start/tool_result plus a2a_call_progress).
+  it('expands a task tool_call into tool_start + subagent_start + subagent_result + tool_result', () => {
     const m = normalizeBackendChatMessage({
       id: 'm6',
       role: 'assistant',
@@ -135,12 +138,18 @@ describe('normalizeBackendChatMessage', () => {
       }],
     }, 1);
     const types = m.streamEvents.map((e) => e.eventType);
-    expect(types).toEqual(['subagent_start', 'subagent_result']);
-    expect(m.streamEvents[0].metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
-    expect(m.streamEvents[1].metadata).toMatchObject({
+    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
+    expect(m.streamEvents[0].metadata).toMatchObject({ tool_name: 'task', tool_call_id: 'call_1' });
+    expect(m.streamEvents[1].metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
+    expect(m.streamEvents[2].metadata).toMatchObject({
       subagent_name: 'researcher',
       tool_call_id: 'call_1',
       success: true,
+      result_preview: 'Here is what I found.',
+    });
+    expect(m.streamEvents[3].metadata).toMatchObject({
+      tool_name: 'task',
+      tool_call_id: 'call_1',
       result_preview: 'Here is what I found.',
     });
   });
@@ -163,14 +172,14 @@ describe('normalizeBackendChatMessage', () => {
       }],
     }, 1);
     const types = m.streamEvents.map((e) => e.eventType);
-    expect(types).toEqual(['subagent_start', 'subagent_result']);
-    expect(m.streamEvents[1].metadata).toMatchObject({
+    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
+    expect(m.streamEvents[2].metadata).toMatchObject({
       subagent_name: 'researcher',
       tool_call_id: 'call_1',
       success: true,
       result_preview: '1 image',
     });
-    expect(m.streamEvents[1].images).toEqual([{ url: 'data:image/png;base64,abc' }]);
+    expect(m.streamEvents[2].images).toEqual([{ url: 'data:image/png;base64,abc' }]);
   });
 
   it('reconstructs a grouped subagent timeline card from the reloaded task call', () => {
@@ -202,7 +211,11 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{ id: 'call_1', name: 'task', args: { subagent_type: 'researcher' } }],
     }, 1);
-    expect(m.streamEvents.map((e) => e.eventType)).toEqual(['subagent_start']);
+    // No `result` and no images means the generic tool_result (which requires
+    // one or the other, same as every other tool) is withheld too -- just the
+    // dispatch-time pair: the plain tool_start row and the subagent_start
+    // that seeds the still-running card.
+    expect(m.streamEvents.map((e) => e.eventType)).toEqual(['tool_start', 'subagent_start']);
     const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
     expect(subagentItems[0].status).toBe('running');
   });

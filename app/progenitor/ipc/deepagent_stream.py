@@ -234,33 +234,18 @@ class DeepAgentIPCStream:
             if isinstance(images, list) and images:
                 item["images"] = images
 
+        # The top-level `task` tool's own generic tool_start/tool_result/
+        # tool_error goes out *alongside* its richer subagent_* translation,
+        # not instead of it -- the same "plain row + rich card" pairing
+        # call_agent already gets (its own tool_start/tool_result render
+        # unmodified right next to the a2a_call card; see TimelineItem.jsx).
+        # Both the live frontend's grouping logic (applySubagentEvent) and
+        # reload reconstruction (buildToolStreamEvents in
+        # chatSessionsModel.js) consume the raw pair into an ordinary "Tool:
+        # task" row and independently fold the subagent_* events into the
+        # SubagentCard, so neither is redundant.
         expanded = self._expand_task_subagent_events(envelope, images=item.get("images"))
-        if expanded:
-            # This is the top-level `task` tool's own generic tool_start/
-            # tool_result/tool_error -- fully superseded by its richer
-            # subagent_* translation (that's the whole point of
-            # _expand_task_subagent_events: a subagent's own internal
-            # streaming has no other way to reach the UI). The raw generic
-            # pair must not go out *as well* -- neither the live frontend's
-            # grouping logic nor reload reconstruction (chatSessionsModel.js,
-            # which never even constructs it for a `task` tool call)
-            # recognizes it, so left in, it would surface as a redundant,
-            # ungrouped "Tool: Task" row sitting right next to the
-            # SubagentCard built from this very same event. call_agent (A2A)
-            # is unaffected: _expand_task_subagent_events guards on
-            # `tool_name == "task"` specifically, so it always returns []
-            # for call_agent's own tool_start/tool_result, which fall
-            # through to the plain `return [item]` below exactly as before.
-            # call_agent gets no equivalent translation, deliberately:
-            # Progenitor's own act of dispatching/receiving that tool call is
-            # an ordinary tool call, same as search_web or read_file, and is
-            # meant to be indistinguishable from one in the stream -- only
-            # a2a_call_progress (the A2A protocol's own status updates, with
-            # no tool-call equivalent) is a dedicated type, emitted directly
-            # from call_agent.py rather than translated after the fact.
-            return expanded
-
-        return [item]
+        return [item, *expanded]
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():

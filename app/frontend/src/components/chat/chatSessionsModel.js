@@ -85,11 +85,6 @@ function buildToolStreamEvents(toolCalls, messageId) {
     const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
     const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
 
-    if (toolName === 'task') {
-      events.push(...buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp));
-      return;
-    }
-
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
     const rawResult = typeof tc.result === 'string' ? tc.result : '';
     const result = toolName === 'call_agent'
@@ -113,6 +108,15 @@ function buildToolStreamEvents(toolCalls, messageId) {
         source: 'checkpoint',
       },
     });
+    // `task` (subagent delegation) gets the same "plain row + rich card"
+    // pairing call_agent gets below via progress_log -- the SubagentCard is
+    // built from these subagent_start/subagent_result events by
+    // collectSubagentGroups (liveAssistantTurnModel.js) and spliced in right
+    // after this tool_start, mirroring the live order (see
+    // _handle_custom_stream_event in deepagent_stream.py).
+    if (toolName === 'task') {
+      events.push(...buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp));
+    }
     // Replays the same submitted/working/completed/... sequence a live
     // viewer saw as synthetic a2a_call_progress events (progress_log comes
     // from build_task_response on the backend, populated from

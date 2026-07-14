@@ -88,21 +88,41 @@ function createSubagentItem(toolCallId, subagentName, startedAt) {
     durationMs: null,
     resultPreview: '',
     error: null,
-    content: '',
-    children: [],
+    // Single ordered chain of the subagent's own output, mirroring how
+    // A2ACallCard renders `item.messages` as a chain of A2ASubEntry nodes:
+    // each entry is either a `{ kind: 'message', ... }` block of streamed
+    // text or a `{ kind: 'tool', ... }` nested tool call, in true arrival
+    // order. A tool call closes out whatever message entry preceded it, so
+    // the next delta opens a fresh entry -- text either side of a nested
+    // tool call renders as two distinct cards instead of one blob with the
+    // tool calls glued on underneath (the old `content` + `children` split).
+    entries: [],
   };
 }
 
-// Find-or-create-or-update a nested tool call within a subagent card's
-// children, keyed by the nested tool's own call id (distinct from the
+// Extends the trailing entry if it's still an open text block, otherwise
+// opens a new one. `upsertSubagentToolEntry` below never extends an
+// existing message entry, so any nested tool call ends the current run and
+// the next delta always starts a fresh message entry.
+function appendSubagentMessageDelta(entries, deltaText) {
+  const last = entries.length > 0 ? entries[entries.length - 1] : null;
+  if (last && last.kind === 'message') {
+    return [...entries.slice(0, -1), { ...last, text: last.text + deltaText }];
+  }
+  return [...entries, { kind: 'message', id: `msg-${entries.length}`, text: deltaText }];
+}
+
+// Find-or-create-or-update a nested tool call entry within the same
+// unified chain, keyed by the nested tool's own call id (distinct from the
 // subagent card's own toolCallId, which is the *parent* task call).
-function upsertSubagentChild(children, nestedToolCallId, patch) {
-  if (!nestedToolCallId) return children;
-  const index = children.findIndex((child) => child.id === nestedToolCallId);
+function upsertSubagentToolEntry(entries, nestedToolCallId, patch) {
+  if (!nestedToolCallId) return entries;
+  const index = entries.findIndex((entry) => entry.kind === 'tool' && entry.id === nestedToolCallId);
   if (index === -1) {
     return [
-      ...children,
+      ...entries,
       {
+        kind: 'tool',
         id: nestedToolCallId,
         toolName: '',
         status: 'running',
@@ -114,7 +134,7 @@ function upsertSubagentChild(children, nestedToolCallId, patch) {
       },
     ];
   }
-  return children.map((child, idx) => (idx === index ? { ...child, ...patch } : child));
+  return entries.map((entry, idx) => (idx === index ? { ...entry, ...patch } : entry));
 }
 
 function applySubagentEventToItem(item, nextEvent) {
@@ -130,13 +150,13 @@ function applySubagentEventToItem(item, nextEvent) {
       };
 
     case 'subagent_message_delta':
-      return { ...item, content: item.content + (nextEvent.content || '') };
+      return { ...item, entries: appendSubagentMessageDelta(item.entries, nextEvent.content || '') };
 
     case 'subagent_tool_start':
       return {
         ...item,
         subagentName: metadata.subagent_name || item.subagentName,
-        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+        entries: upsertSubagentToolEntry(item.entries, metadata.nested_tool_call_id, {
           toolName: metadata.nested_tool_name || '',
           status: 'running',
           argsPreview: metadata.args_preview ?? null,
@@ -146,7 +166,7 @@ function applySubagentEventToItem(item, nextEvent) {
     case 'subagent_tool_result':
       return {
         ...item,
-        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+        entries: upsertSubagentToolEntry(item.entries, metadata.nested_tool_call_id, {
           toolName: metadata.nested_tool_name || '',
           status: 'success',
           resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
@@ -157,7 +177,7 @@ function applySubagentEventToItem(item, nextEvent) {
     case 'subagent_tool_error':
       return {
         ...item,
-        children: upsertSubagentChild(item.children, metadata.nested_tool_call_id, {
+        entries: upsertSubagentToolEntry(item.entries, metadata.nested_tool_call_id, {
           toolName: metadata.nested_tool_name || '',
           status: 'error',
           error: typeof metadata.error === 'string' ? metadata.error : '',

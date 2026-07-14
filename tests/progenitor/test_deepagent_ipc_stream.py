@@ -254,21 +254,22 @@ async def test_task_tool_events_expand_into_subagent_events():
     } in items
     assert {"type": "stream_chunk", "content": "HELLO_FROM_SUBAGENT", "is_final": False} in items
 
-    # Regression: the raw generic tool_start/tool_result for the top-level
-    # `task` call itself must NOT also go out once it's been successfully
-    # translated into subagent_start/subagent_result above -- neither the
-    # live frontend's grouping logic nor reload reconstruction recognizes
-    # that raw pair, so it used to surface as a redundant, ungrouped
-    # "Tool: Task" row sitting right next to the SubagentCard built from the
-    # very same event.
-    raw_task_events = [
-        item
+    # The raw generic tool_start/tool_result for the top-level `task` call
+    # itself must ALSO go out, alongside its subagent_start/subagent_result
+    # translation -- the same "plain row + rich card" pairing call_agent
+    # already gets (see test_call_agent_tool_events_pass_through_unmodified_
+    # alongside_task_expansion below). Both the live frontend's grouping
+    # logic and reload reconstruction fold the raw pair into an ordinary
+    # "Tool: Task" row independently of the SubagentCard built from the
+    # subagent_* events.
+    raw_task_event_types = [
+        item.get("event_type")
         for item in items
         if item.get("type") == "stream_event"
         and item.get("event_type") in {"tool_start", "tool_result", "tool_error"}
         and item.get("metadata", {}).get("tool_name") == "task"
     ]
-    assert raw_task_events == []
+    assert raw_task_event_types == ["tool_start", "tool_result"]
 
 
 @pytest.mark.asyncio
