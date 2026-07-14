@@ -100,10 +100,9 @@ def create_general_purpose_subagent(*, log_sink: Any | None = None) -> SubAgent:
     (deepagents' catch-all, used whenever no more specific subagent fits)
     would be the one subagent to emit no nested tool lifecycle events.
     """
-    return SubAgent(
-        **GENERAL_PURPOSE_SUBAGENT,
-        middleware=_subagent_middleware(log_sink),
-    )
+    spec: SubAgent = {**GENERAL_PURPOSE_SUBAGENT}
+    spec["middleware"] = _subagent_middleware(log_sink)
+    return spec
 
 
 def create_hello_world_async_subagent(http_base_url: str) -> AsyncSubAgent:
