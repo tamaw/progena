@@ -194,6 +194,104 @@ class TestAsyncResponseHandling:
         assert "".join(event["payload"]["delta"] for event in events[1:3]) == "Hello world"
         assert events[-1]["payload"]["id"] == events[1]["payload"]["id"]
 
+    def test_streaming_response_forwards_structured_stream_events(self, monkeypatch):
+        """Structured runtime stream events ride the canonical stream intact.
+
+        The subagent/A2A live cards are built entirely from ``stream_event``
+        items (tool lifecycle, nested subagent events, A2A progress), so the
+        ``chat.response.event`` frames must preserve ``event_type``,
+        ``content``, full ``metadata`` (including ``subagent_type``), and
+        ``images`` -- and must omit ``images`` when the runtime item has none.
+        """
+        import app.backend.main as backend_main
+
+        request_id = "3d1a6c1e-59cb-45cf-88e2-b6f5f7f1a001"
+        image_block = {
+            "type": "image",
+            "source_type": "base64",
+            "mime_type": "image/png",
+            "data": "aGk=",
+        }
+
+        class _MockClient:
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                yield {
+                    "type": "stream_event",
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call-1",
+                        "subagent_type": "researcher",
+                        "args_preview": {"description": "look things up"},
+                    },
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "a2a_call_progress",
+                    "content": "Working on your greeting...",
+                    "metadata": {"tool_call_id": "call-2", "state": "working"},
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "subagent_result",
+                    "content": "researcher",
+                    "metadata": {
+                        "subagent_name": "researcher",
+                        "tool_call_id": "call-1",
+                        "success": True,
+                    },
+                    "images": [image_block],
+                }
+                yield {"type": "stream_chunk", "content": "done"}
+
+        monkeypatch.setattr(backend_main, "client", _MockClient())
+        with (
+            _live_backend() as base_url,
+            httpx.Client(base_url=base_url, timeout=5) as live_client,
+            live_client.stream("GET", "/api/ui/stream") as stream,
+        ):
+            lines = stream.iter_lines()
+            _next_sse_frame(lines)
+            response = live_client.post(
+                "/api/ui/responses",
+                json={"model": "progenitor-v1", "input": "delegate", "stream": True},
+                headers={"X-Request-ID": request_id},
+            )
+            frames = [_next_sse_frame(lines) for _ in range(6)]
+
+        assert response.status_code == 202
+        events = [event for _, event in frames]
+        assert [event["type"] for event in events] == [
+            "chat.response.started",
+            "chat.response.event",
+            "chat.response.event",
+            "chat.response.event",
+            "chat.response.delta",
+            "chat.response.completed",
+        ]
+        assert all(event["payload"]["request_id"] == request_id for event in events)
+
+        tool_start, progress, subagent_result = (event["payload"] for event in events[1:4])
+        assert tool_start["event_type"] == "tool_start"
+        assert tool_start["content"] == "task"
+        assert tool_start["metadata"]["subagent_type"] == "researcher"
+        assert tool_start["metadata"]["args_preview"] == {"description": "look things up"}
+        assert "images" not in tool_start
+
+        assert progress["event_type"] == "a2a_call_progress"
+        assert progress["content"] == "Working on your greeting..."
+        assert progress["metadata"] == {"tool_call_id": "call-2", "state": "working"}
+        assert "images" not in progress
+
+        assert subagent_result["event_type"] == "subagent_result"
+        assert subagent_result["metadata"] == {
+            "subagent_name": "researcher",
+            "tool_call_id": "call-1",
+            "success": True,
+        }
+        assert subagent_result["images"] == [image_block]
+
     def test_failed_generation_emits_post_acknowledgement_causal_event(self, monkeypatch):
         """An acknowledged generation publishes a correlated failure rather than success."""
         import app.backend.main as backend_main
