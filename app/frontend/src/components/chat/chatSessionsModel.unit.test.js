@@ -115,6 +115,298 @@ describe('normalizeBackendChatMessage', () => {
     }, 1);
     expect(m.streamEvents[0].timestamp).toBeUndefined();
   });
+
+  // Regression: reloaded chats routed `task` calls through the generic
+  // tool_start/tool_result path only, which buildDefaultAssistantTimeline's
+  // collectSubagentGroups doesn't recognize -- so subagent cards rendered
+  // live during the session vanished entirely on refresh. task calls must
+  // ALSO synthesize subagent_start/subagent_result, mirroring the backend's
+  // own live _expand_task_subagent_events -- alongside, not instead of, the
+  // plain tool_start/tool_result pair every other tool call gets (the same
+  // "plain row + rich card" pairing call_agent gets via its own
+  // tool_start/tool_result plus a2a_call_progress).
+  it('expands a task tool_call into tool_start + subagent_start + subagent_result + tool_result', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm6',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'researcher', description: 'look into it' },
+        result: 'Here is what I found.',
+      }],
+    }, 1);
+    const types = m.streamEvents.map((e) => e.eventType);
+    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
+    expect(m.streamEvents[0].metadata).toMatchObject({ tool_name: 'task', tool_call_id: 'call_1' });
+    expect(m.streamEvents[1].metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
+    expect(m.streamEvents[2].metadata).toMatchObject({
+      subagent_name: 'researcher',
+      tool_call_id: 'call_1',
+      success: true,
+      result_preview: 'Here is what I found.',
+    });
+    expect(m.streamEvents[3].metadata).toMatchObject({
+      tool_name: 'task',
+      tool_call_id: 'call_1',
+      result_preview: 'Here is what I found.',
+    });
+  });
+
+  // Regression: an image-only subagent result has empty extracted text, so
+  // checking only `result` for truthiness never emitted a terminal
+  // subagent_result event, leaving the reconstructed card stuck "running"
+  // forever on reload and silently dropping the image.
+  it('still emits a terminal subagent_result for an image-only task result', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm6b',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'researcher', description: 'render a chart' },
+        result: '',
+        images: [{ url: 'data:image/png;base64,abc' }],
+      }],
+    }, 1);
+    const types = m.streamEvents.map((e) => e.eventType);
+    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
+    expect(m.streamEvents[2].metadata).toMatchObject({
+      subagent_name: 'researcher',
+      tool_call_id: 'call_1',
+      success: true,
+      result_preview: '1 image',
+    });
+    expect(m.streamEvents[2].images).toEqual([{ url: 'data:image/png;base64,abc' }]);
+  });
+
+  it('reconstructs a grouped subagent timeline card from the reloaded task call', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm7',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'task',
+        args: { subagent_type: 'hello-world' },
+        result: 'hello!',
+      }],
+    }, 1);
+    const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
+    expect(subagentItems).toHaveLength(1);
+    expect(subagentItems[0]).toMatchObject({
+      toolCallId: 'call_1',
+      subagentName: 'hello-world',
+      status: 'success',
+      resultPreview: 'hello!',
+    });
+  });
+
+  it('leaves a task call with no result as a running subagent_start only', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm8',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'task', args: { subagent_type: 'researcher' } }],
+    }, 1);
+    // No `result` and no images means the generic tool_result (which requires
+    // one or the other, same as every other tool) is withheld too -- just the
+    // dispatch-time pair: the plain tool_start row and the subagent_start
+    // that seeds the still-running card.
+    expect(m.streamEvents.map((e) => e.eventType)).toEqual(['tool_start', 'subagent_start']);
+    const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
+    expect(subagentItems[0].status).toBe('running');
+  });
+
+  // Covers the fallback for a persisted tool_calls entry with no
+  // progress_log (older data predating that field, or a call that never
+  // streamed intermediate updates) -- the reconstructed card has an empty
+  // message log and falls back to this result_preview instead (see
+  // A2ACallCard.jsx and extractCallAgentSummary in chatSessionsModel.js).
+  // The raw result is the whole call_agent result dict, JSON-stringified --
+  // showing that verbatim is exactly the "meaningless JSON blob" experience
+  // this feature exists to fix, so just `summary` is pulled out of it when
+  // the JSON is intact. See 'reconstructs the a2a_call sub-chain from a
+  // persisted progress_log' below for the case where progress_log *is*
+  // present.
+  it('reconstructs an a2a_call timeline card and uses summary (not raw JSON) as its reload result_preview', () => {
+    const resultJson = JSON.stringify({
+      task_id: 'task-123',
+      agent: 'greetings_agent',
+      status: 'completed',
+      summary: 'Hello! Completed a 3-step task.',
+      task: { history: [{ role: 'agent', parts: [{ text: 'Accepted' }] }] },
+    });
+    const m = normalizeBackendChatMessage({
+      id: 'm9',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(1);
+    expect(a2aItems[0]).toMatchObject({
+      toolCallId: 'call_1',
+      status: 'success',
+      resultPreview: 'Hello! Completed a 3-step task.',
+      messages: [],
+    });
+  });
+
+  // The fix for the above: build_task_response persists a compact
+  // {state, message_text} log per intermediate status update (see
+  // extract_progress_log in app/progenitor/a2a/payloads.py); the backend
+  // extracts it onto tool_calls[].progress_log ahead of the 400-char result
+  // truncation (chat_sessions.py). Reload should now replay it as
+  // a2a_call_progress events, the same shape a live viewer saw, and end up
+  // with the same chained sub-entries instead of an empty message log.
+  it('reconstructs the a2a_call sub-chain from a persisted progress_log', () => {
+    const resultJson = JSON.stringify({
+      task_id: 'task-123',
+      agent: 'greetings_agent',
+      status: 'completed',
+      summary: "Hello! Irish-style right back at you: Top o' the mornin'!",
+    });
+    const m = normalizeBackendChatMessage({
+      id: 'm9b',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted: hi' },
+          { state: 'working', message_text: 'Working on your greeting...' },
+          { state: 'completed', message_text: "Hello! Irish-style right back at you: Top o' the mornin'!" },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems).toHaveLength(1);
+    expect(a2aItems[0].status).toBe('success');
+    expect(a2aItems[0].toolCallId).toBe('call_1');
+    expect(a2aItems[0].messages.map((msg) => msg.state)).toEqual(['submitted', 'working', 'completed']);
+    expect(a2aItems[0].messages.map((msg) => msg.text)).toEqual([
+      'Accepted: hi',
+      'Working on your greeting...',
+      "Hello! Irish-style right back at you: Top o' the mornin'!",
+    ]);
+  });
+
+  // Each progress_log entry carries its own real arrival time (stamped by
+  // A2AClient.call_agent(), see extract_progress_log in
+  // app/progenitor/a2a/payloads.py) -- reload must use that per-entry time
+  // rather than reusing the parent tool call's single created_at for every
+  // sub-entry, or a viewer sees every update stamped at the exact same
+  // moment regardless of how long the task actually ran.
+  it('uses each progress_log entry\'s own timestamp, not the parent tool call\'s shared one', () => {
+    const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });
+    const m = normalizeBackendChatMessage({
+      id: 'm9d',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        created_at: '2026-07-11T02:31:00+00:00',
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted', timestamp: '2026-07-11T02:31:02+00:00' },
+          { state: 'working', message_text: 'Working...', timestamp: '2026-07-11T02:31:09+00:00' },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].messages.map((msg) => msg.timestamp)).toEqual([
+      new Date('2026-07-11T02:31:02+00:00').getTime(),
+      new Date('2026-07-11T02:31:09+00:00').getTime(),
+    ]);
+  });
+
+  it('falls back to the parent tool call\'s timestamp for older progress_log entries with no timestamp of their own', () => {
+    const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });
+    const m = normalizeBackendChatMessage({
+      id: 'm9e',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: resultJson,
+        created_at: '2026-07-11T02:31:00+00:00',
+        progress_log: [{ state: 'submitted', message_text: 'Accepted' }],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].messages[0].timestamp).toBe(new Date('2026-07-11T02:31:00+00:00').getTime());
+  });
+
+  // Regression: an auto-routed call never names its target agent in the raw
+  // tool-call args (the LLM omits `agent`/`agent_name` entirely and lets
+  // call_agent pick one internally, after tool_start has already fired), so
+  // reload has no seed to fall back on -- progress_log's own agent_name (see
+  // extract_progress_log) must be the one source of truth here, not args.
+  it('recovers agentName from progress_log entries when args never named an agent (auto-route case)', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm9c',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call_1',
+        name: 'call_agent',
+        args: { request: 'hi' },
+        result: JSON.stringify({ task_id: 'task-123', agent: 'greetings_agent', status: 'completed' }),
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted: hi', agent_name: 'greetings_agent' },
+          { state: 'completed', message_text: 'Hello!', agent_name: 'greetings_agent' },
+        ],
+      }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].agentName).toBe('greetings_agent');
+  });
+
+  it('pulls summary out via regex when the JSON is truncated after it (the realistic case)', () => {
+    // Matches the shape of the backend's actual 400-char preview truncation
+    // (chat_sessions.py) -- cut off well past a short "summary" field, mid
+    // way through a later key, never on a clean closing brace. A naive
+    // JSON.parse-or-nothing approach fails this case entirely even though
+    // summary itself is fully intact.
+    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "status": "completed", '
+      + '"summary": "Hello! Completed a 3-step task:\\n1. prep done", '
+      + '"latest_message": "Hello! Completed a 3-step task:\\n1. prep done", "last_error": null, "no…';
+    const m = normalizeBackendChatMessage({
+      id: 'm10',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].resultPreview).toBe('Hello! Completed a 3-step task:\n1. prep done');
+  });
+
+  it('falls back to the raw result string when even the summary field itself was truncated', () => {
+    const truncated = '{"task_id": "task-123", "agent": "greetings_agent", "summary": "Hello! Comp…';
+    const m = normalizeBackendChatMessage({
+      id: 'm11',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{ id: 'call_1', name: 'call_agent', args: {}, result: truncated }],
+    }, 1);
+    const a2aItems = m.timelineItems.filter((item) => item.kind === 'a2a_call');
+    expect(a2aItems[0].resultPreview).toBe(truncated);
+  });
 });
 
 describe('buildChatSessionItems', () => {

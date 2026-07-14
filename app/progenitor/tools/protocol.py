@@ -26,6 +26,7 @@ class ToolContext:
     state_manager: Any = None
     user_input: str = ""
     tool_args: dict[str, Any] | None = None
+    tool_call_id: str = ""
 
 
 @dataclass

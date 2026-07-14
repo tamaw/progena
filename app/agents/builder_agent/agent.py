@@ -17,6 +17,7 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -42,7 +43,7 @@ from a2a.types import (
 
 from .config import get_config, setup_logging
 from .llm.mock_client import create_llm_client
-from .queue_worker import BuilderTaskQueue, _QueuedTask
+from .queue_worker import BuilderTaskQueue
 from .runtime.background_build import BackgroundBuildRunner, BuildResult, BuildStatus
 from .runtime.copilot_acp import CopilotACPManager
 from .runtime.time_utils import utcnow_isoformat
@@ -230,7 +231,6 @@ def _get_or_create_task_queue() -> BuilderTaskQueue:
         if _runner is None:
             raise RuntimeError("Builder task queue unavailable: runner is not initialized")
         _task_queue = BuilderTaskQueue(_run_build_request)
-        _task_queue.start()
     return _task_queue
 
 
@@ -242,13 +242,62 @@ def _extract_context(message: Message | None) -> dict[str, Any]:
     return dict(metadata) if isinstance(metadata, dict) else {}
 
 
+# Human-readable phase text per inner-loop node, keyed to the real node
+# names registered in graph.py's create_inner_loop_graph (observe -> think ->
+# plan -> build -> merge -> execute -> verify -> publish -> learn).
+_NODE_PHASE_MESSAGES: dict[str, str] = {
+    "observe": "Observing current repository state...",
+    "think": "Reasoning about the request...",
+    "plan": "Planning implementation steps...",
+    "build": "Invoking GitHub Copilot CLI to write code...",
+    "merge": "Merging changes into the integration branch...",
+    "execute": "Running tools and checking output...",
+    "verify": "Running verification tests...",
+    "publish": "Opening pull request...",
+    "learn": "Recording lessons learned...",
+}
+
+
+def _push_node_progress_callback(
+    task_id: str, context_id: str, event_queue: Any
+) -> Callable[[str, Mapping[str, Any]], Awaitable[None]]:
+    """Build a BackgroundBuildRunner progress callback that relays each inner-loop
+    node transition as a `working` TaskStatusUpdateEvent on the given A2A
+    event_queue. Bound to one task_id/event_queue pair per build."""
+
+    async def _push(node_name: str, _build_state: Mapping[str, Any]) -> None:
+        phase_text = _NODE_PHASE_MESSAGES.get(node_name, f"Running {node_name}...")
+        await event_queue.enqueue_event(
+            TaskStatusUpdateEvent(
+                task_id=task_id,
+                context_id=context_id,
+                final=False,
+                status=TaskStatus(
+                    state=TaskState.working,
+                    message=_text_message(phase_text, role=Role.agent),
+                    timestamp=_utc_now_iso(),
+                ),
+            )
+        )
+
+    return _push
+
+
 async def _run_build_request(
     task_id: str,
     context_id: str,
     request_text: str,
     request_ctx: dict[str, Any],
+    event_queue: Any | None = None,
 ) -> BuildResult:
-    """Execute a builder request and return the recorded build result."""
+    """Execute a builder request and return the recorded build result.
+
+    When `event_queue` is given, registers a per-node progress callback on
+    the (single-flight) BackgroundBuildRunner for the duration of this build,
+    relaying real inner-loop node transitions (observe/think/plan/... )
+    as A2A TaskStatusUpdateEvents -- always cleared afterwards since it's a
+    single mutable slot on a long-lived runner, not a per-build registration.
+    """
     del request_ctx  # Reserved for future correlation/context expansion.
 
     await _ensure_initialized()
@@ -296,6 +345,10 @@ async def _run_build_request(
     target_capabilities = decide_mod._infer_target_capabilities(request_text)
     task_description = f"{action}: {build_settings.project_name}"
     build_id: str | None = None
+    if event_queue is not None:
+        _runner.set_progress_callback(
+            _push_node_progress_callback(task_id, context_id, event_queue)
+        )
     try:
         build_id, _ack_message = await _runner.start_build(
             user_input=request_text,
@@ -319,6 +372,9 @@ async def _run_build_request(
         if build_id is not None:
             await _runner.cancel_build(build_id)
         raise
+    finally:
+        if event_queue is not None:
+            _runner.set_progress_callback(None)
 
     return BuildResult(
         build_id=build_id or f"cancelled_{task_id}",
@@ -336,7 +392,20 @@ async def _run_build_request(
 
 
 class BuilderAgentExecutor(AgentExecutor):
-    """Accept build tasks immediately and execute them in the background."""
+    """Runs one build per execute() call, awaited to completion.
+
+    execute() must not return until the build is done: the A2A framework
+    closes `event_queue` the instant execute() returns
+    (DefaultRequestHandler._run_event_stream), so a previous design that
+    enqueued work onto a separately-detached background task and returned
+    immediately silently dropped every event that task tried to push,
+    including the terminal completion event -- tasks/get polling never saw
+    anything past the first synchronously-pushed event. The framework
+    already provides "don't make a non-blocking caller wait" on its own
+    (ResultAggregator.consume_and_break_on_interrupt continues consuming in
+    a background task after returning an early response), so execute()
+    running the whole build inline is both necessary and sufficient.
+    """
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         request_ctx = _extract_context(context.message)
@@ -381,16 +450,6 @@ class BuilderAgentExecutor(AgentExecutor):
             ctx_id,
             request_text,
         )
-        await task_queue.enqueue(
-            _QueuedTask(
-                task_id=task_id,
-                context_id=ctx_id,
-                request_text=request_text,
-                request_ctx=request_ctx,
-                event_queue=event_queue,
-            )
-        )
-
         await event_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id,
@@ -407,29 +466,39 @@ class BuilderAgentExecutor(AgentExecutor):
             )
         )
 
+        # Awaited: a non-blocking caller already got its fast response above
+        # from the framework's own break-on-interrupt continuation, not from
+        # execute() returning -- see the class docstring.
+        await task_queue.run(task_id, ctx_id, request_text, request_ctx, event_queue)
+
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """Cancel a running build task."""
+        """Cancel a running build task.
+
+        Only pushes its own terminal event when there was nothing to cancel;
+        when a genuinely in-flight build is interrupted, BuilderTaskQueue's
+        own CancelledError handling pushes the terminal `canceled` event (it
+        also records the JSONL task-log entry, which this method has no way
+        to do) -- pushing here too would double-deliver the same event.
+        """
         task_id = context.task_id or ""
         ctx_id = context.context_id or ""
         cancelled = False
         if _task_queue is not None and task_id:
-            cancelled = await _task_queue.cancel(task_id)
+            cancelled = _task_queue.cancel(task_id)
 
-        await event_queue.enqueue_event(
-            TaskStatusUpdateEvent(
-                task_id=task_id,
-                context_id=ctx_id,
-                status=TaskStatus(
-                    state=TaskState.canceled,
-                    message=_text_message(
-                        "Build task cancelled." if cancelled else "No active task to cancel.",
-                        role=Role.agent,
+        if not cancelled:
+            await event_queue.enqueue_event(
+                TaskStatusUpdateEvent(
+                    task_id=task_id,
+                    context_id=ctx_id,
+                    status=TaskStatus(
+                        state=TaskState.canceled,
+                        message=_text_message("No active task to cancel.", role=Role.agent),
+                        timestamp=utcnow_isoformat(),
                     ),
-                    timestamp=utcnow_isoformat(),
-                ),
-                final=True,
+                    final=True,
+                )
             )
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -471,7 +540,7 @@ AGENT_CARD = AgentCard(
     ),
     version="0.2.0",
     url=f"http://{_PUBLIC_HOST}:{_PORT}",
-    capabilities=AgentCapabilities(streaming=False, state_transition_history=True),
+    capabilities=AgentCapabilities(streaming=True, state_transition_history=True),
     default_input_modes=["text/plain"],
     default_output_modes=["text/plain"],
     skills=[
@@ -555,7 +624,7 @@ async def _lifespan(_app: Any):
 async def _shutdown() -> None:
     global _task_queue
     if _task_queue is not None:
-        await _task_queue.stop()
+        await _task_queue.shutdown()
         _task_queue = None
 
 

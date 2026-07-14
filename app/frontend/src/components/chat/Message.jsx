@@ -94,7 +94,10 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     timelineItems,
   } = message;
 
+  const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
   const visibleStreamEvents = useMemo(() => {
+    if (hasTimelineItems) return [];
+
     const timelineEvents = buildTimelineStreamEvents(
       streamEvents,
       reasoningText,
@@ -103,7 +106,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     );
     if (typeof streamEventFilter !== 'function') return timelineEvents;
     return timelineEvents.filter(streamEventFilter);
-  }, [messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
+  }, [hasTimelineItems, messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -209,7 +212,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   );
 
   // If the message has explicit timelineItems, render them in array order.
-  if (role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0) {
+  if (hasTimelineItems) {
     const fullTimelineItems = withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId);
     const visibleTimelineItems = fullTimelineItems.filter((item) => {
       if (item.kind === 'stream_event') {
@@ -217,6 +220,28 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
       }
       if (item.kind === 'assistant_message') {
         return !hideContent;
+      }
+      if (item.kind === 'subagent') {
+        // Subagent cards aren't a single event, so gate on the same
+        // "subagents" category the underlying subagent_* events belong to
+        // (see categoryForEventType in streamFilters.js) rather than a
+        // per-event check.
+        return typeof streamEventFilter !== 'function' || streamEventFilter({ eventType: 'subagent_start' });
+      }
+      if (item.kind === 'a2a_call') {
+        // Same reasoning as 'subagent' above -- gate on the dedicated "a2a"
+        // category (see categoryForEventType in streamFilters.js). call_agent
+        // has no dedicated start event of its own (Progenitor's dispatch of
+        // it is a plain tool_start, tagged via metadata.tool_name, same as
+        // any other tool -- see applyA2ACallEvent in liveAssistantTurnModel.js),
+        // so the synthetic sentinel event needs that metadata too or it would
+        // fall into the generic 'tools' category instead of 'a2a'. The
+        // card's own tool_start/tool_result rows also render their own plain
+        // stream_event rows (see TimelineItem.jsx) gated independently by
+        // the same filter via their own real metadata, so this only needs
+        // to gate the card itself.
+        return typeof streamEventFilter !== 'function'
+          || streamEventFilter({ eventType: 'tool_start', metadata: { tool_name: 'call_agent' } });
       }
       return true;
     });

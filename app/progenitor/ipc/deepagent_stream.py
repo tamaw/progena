@@ -35,6 +35,39 @@ from .stream_payloads import (
 
 logger = logging.getLogger(__name__)
 
+# Nested (subgraph-namespaced) custom event_type -> the subagent_-prefixed
+# type surfaced to the UI. Any inner custom event not in this map (e.g. a
+# subagent's own debug_event) is dropped in v1 rather than surfaced generically.
+_NESTED_TOOL_EVENT_REMAP = {
+    "tool_start": "subagent_tool_start",
+    "tool_result": "subagent_tool_result",
+    "tool_error": "subagent_tool_error",
+}
+
+
+def _extract_tool_call_id_from_task_input(payload: Any) -> str | None:
+    """Pull a triggering tool_call_id out of a ``tasks``-mode start payload's ``input``.
+
+    LangGraph schedules each parallel tool call as its own Pregel push task whose
+    ``input`` is a ``tool_call_with_context`` dict (current shape) or a list of
+    tool-call dicts (legacy shape) -- mirrors langchain's own
+    ``_TasksLifecycleBase._record_pending_tool_calls``.
+    """
+    if isinstance(payload, dict):
+        tool_call = payload.get("tool_call")
+        if isinstance(tool_call, dict):
+            candidate = tool_call.get("id")
+            if isinstance(candidate, str):
+                return candidate
+        return None
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict):
+                candidate = item.get("id")
+                if isinstance(candidate, str):
+                    return candidate
+    return None
+
 
 class DeepAgentIPCStream:
     """Run a DeepAgent graph stream and expose IPC-friendly items."""
@@ -56,6 +89,18 @@ class DeepAgentIPCStream:
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
+        # Pregel push-task id -> triggering tool_call_id, harvested from
+        # stream_mode="tasks" start events at the outer namespace. A nested
+        # subgraph's own namespace segment is "<node_name>:<task_id>", so this
+        # is a causally-exact join, unlike namespace arrival/first-seen order --
+        # empirically confirmed unreliable (~50% mismatch) under genuine
+        # concurrent async subagent dispatch, since ToolNode races parallel
+        # tool calls via asyncio.gather.
+        self._pending_dispatch_task_ids: dict[str, str] = {}
+        # namespace -> (tool_call_id, subagent_name) bindings resolved from the
+        # join above. Scoped to one DeepAgentIPCStream instance, i.e. one chat
+        # turn -- no cross-turn leakage, so no eviction is needed.
+        self._subagent_namespace_bindings: dict[tuple[Any, ...], tuple[str, str]] = {}
         self._last_emitted_assistant_metadata: dict[str, Any] | None = None
 
     async def stream(
@@ -79,14 +124,22 @@ class DeepAgentIPCStream:
         astream_kwargs: dict[str, Any] = {
             "config": {"configurable": {"thread_id": thread_id}},
         }
-        if self._graph_accepts_stream_mode():
-            astream_kwargs["stream_mode"] = ["messages", "updates", "custom"]
+        if self._graph_accepts_kwarg("stream_mode"):
+            astream_kwargs["stream_mode"] = ["messages", "updates", "custom", "tasks"]
+        if self._graph_accepts_kwarg("subgraphs"):
+            astream_kwargs["subgraphs"] = True
 
         async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
-            mode = "updates"
-            event = stream_item
-            if isinstance(stream_item, tuple) and len(stream_item) == 2:
-                mode, event = stream_item
+            namespace, mode, event = self._unpack_stream_item(stream_item)
+
+            if mode == "tasks":
+                self._record_pending_dispatch_task_id(namespace, event)
+                continue
+
+            if namespace:
+                async for item in self._handle_namespaced_stream_item(namespace, mode, event):
+                    yield item
+                continue
 
             if mode == "messages":
                 async for item in self._handle_message_stream_event(event):
@@ -180,9 +233,19 @@ class DeepAgentIPCStream:
             images = event.get("images")
             if isinstance(images, list) and images:
                 item["images"] = images
-        items = [item]
-        items.extend(self._expand_task_subagent_events(envelope))
-        return items
+
+        # The top-level `task` tool's own generic tool_start/tool_result/
+        # tool_error goes out *alongside* its richer subagent_* translation,
+        # not instead of it -- the same "plain row + rich card" pairing
+        # call_agent already gets (its own tool_start/tool_result render
+        # unmodified right next to the a2a_call card; see TimelineItem.jsx).
+        # Both the live frontend's grouping logic (applySubagentEvent) and
+        # reload reconstruction (buildToolStreamEvents in
+        # chatSessionsModel.js) consume the raw pair into an ordinary "Tool:
+        # task" row and independently fold the subagent_* events into the
+        # SubagentCard, so neither is redundant.
+        expanded = self._expand_task_subagent_events(envelope, images=item.get("images"))
+        return [item, *expanded]
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
@@ -380,7 +443,9 @@ class DeepAgentIPCStream:
                     summaries.append(text.strip())
         return "\n\n".join(summaries) if summaries else None
 
-    def _expand_task_subagent_events(self, envelope: dict[str, Any]) -> list[dict[str, Any]]:
+    def _expand_task_subagent_events(
+        self, envelope: dict[str, Any], images: list[Any] | None = None
+    ) -> list[dict[str, Any]]:
         metadata = envelope.get("metadata")
         if not isinstance(metadata, dict):
             return []
@@ -393,12 +458,16 @@ class DeepAgentIPCStream:
         event_type = str(envelope.get("event_type") or "")
 
         if event_type == "tool_start":
-            args_preview = metadata.get("args_preview")
+            # Read from the dedicated `subagent_type` field (build_tool_start_event,
+            # stream_events.py) rather than args_preview: a large free-form
+            # `description` can push args_preview past its 2KB budget and
+            # collapse it from a dict into a truncated string, which would
+            # otherwise silently drop subagent_type and lose all of this
+            # dispatch's child output.
             subagent_name = ""
-            if isinstance(args_preview, dict):
-                raw_name = args_preview.get("subagent_type")
-                if isinstance(raw_name, str):
-                    subagent_name = raw_name
+            raw_name = metadata.get("subagent_type")
+            if isinstance(raw_name, str):
+                subagent_name = raw_name
             if not subagent_name:
                 return []
             if tool_call_id:
@@ -420,20 +489,27 @@ class DeepAgentIPCStream:
             return []
 
         if event_type == "tool_result":
-            return [
-                {
-                    "type": "stream_event",
-                    "event_type": "subagent_result",
-                    "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                        "success": bool(metadata.get("success", True)),
-                        "duration_ms": metadata.get("duration_ms"),
-                        "result_preview": metadata.get("result_preview"),
-                    },
-                }
-            ]
+            result_item: dict[str, Any] = {
+                "type": "stream_event",
+                "event_type": "subagent_result",
+                "content": subagent_name,
+                "metadata": {
+                    "subagent_name": subagent_name,
+                    "tool_call_id": tool_call_id,
+                    "success": bool(metadata.get("success", True)),
+                    "duration_ms": metadata.get("duration_ms"),
+                    "result_preview": metadata.get("result_preview"),
+                },
+            }
+            # The raw tool_result's own top-level images (see
+            # _handle_custom_stream_event) would otherwise be lost entirely --
+            # this subagent_result dict fully replaces that raw event rather
+            # than supplementing it (see the caller's comment), and it's the
+            # only field the raw item carried that this metadata dict doesn't
+            # already have room for.
+            if images:
+                result_item["images"] = images
+            return [result_item]
 
         if event_type == "tool_error":
             return [
@@ -469,15 +545,165 @@ class DeepAgentIPCStream:
         self._streamed_response_content += text
         yield {"type": "stream_chunk", "content": text, "is_final": False}
 
-    def _graph_accepts_stream_mode(self) -> bool:
+    def _graph_accepts_kwarg(self, name: str) -> bool:
         astream = getattr(self.graph, "astream", None)
         if not callable(astream):
             return False
         try:
             parameters = inspect.signature(astream).parameters.values()
             return any(
-                parameter.name == "stream_mode" or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                parameter.name == name or parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in parameters
             )
         except (TypeError, ValueError):
             return False
+
+    def _unpack_stream_item(self, stream_item: Any) -> tuple[tuple[Any, ...], str, Any]:
+        """Normalize one graph.astream() item to (namespace, mode, event).
+
+        LangGraph yields 2-tuples ``(mode, event)`` normally, and 3-tuples
+        ``(namespace, mode, event)`` once ``subgraphs=True`` is set -- without
+        this normalization a 3-tuple would silently fall through the old
+        2-tuple unpack (mode becomes the raw tuple, the isinstance(event, dict)
+        guard drops it), dropping every event, not just the new ones.
+        """
+        if isinstance(stream_item, tuple) and len(stream_item) == 3:
+            return stream_item[0], stream_item[1], stream_item[2]
+        if isinstance(stream_item, tuple) and len(stream_item) == 2:
+            return (), stream_item[0], stream_item[1]
+        return (), "updates", stream_item
+
+    def _record_pending_dispatch_task_id(self, namespace: tuple[Any, ...], event: Any) -> None:
+        """Harvest task_id -> tool_call_id from an outer-level tasks-mode start event.
+
+        Only start events (no "result" key) at the outer namespace matter: a
+        nested subgraph's own namespace segment is "<node_name>:<task_id>",
+        where <task_id> is exactly this Pregel push task's own id, letting
+        _resolve_subagent_binding join back to the exact triggering tool call.
+        """
+        if namespace or not isinstance(event, dict) or "result" in event:
+            return
+        task_id = event.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            return
+        tool_call_id = _extract_tool_call_id_from_task_input(event.get("input"))
+        if tool_call_id:
+            self._pending_dispatch_task_ids[task_id] = tool_call_id
+
+    def _resolve_subagent_binding(self, namespace: tuple[Any, ...]) -> tuple[str, str] | None:
+        """Bind a subgraph namespace to the (tool_call_id, subagent_name) that spawned it.
+
+        Namespaces are opaque LangGraph-internal ids, not the task tool_call_id --
+        joined via the task_id embedded in the namespace's own last segment
+        ("<node_name>:<task_id>") against tasks-mode dispatch bookkeeping. This is
+        causally exact (harvested from the dispatching task's own input), unlike
+        namespace first-seen order, which does not reliably track dispatch order
+        under genuine concurrent async subagent execution.
+        """
+        bound = self._subagent_namespace_bindings.get(namespace)
+        if bound is not None:
+            return bound
+
+        _, _, task_id = str(namespace[-1]).partition(":")
+        if not task_id:
+            return None
+        tool_call_id = self._pending_dispatch_task_ids.get(task_id)
+        if not tool_call_id:
+            return None
+        subagent_name = self._task_subagent_calls.get(tool_call_id, "")
+        if not subagent_name:
+            return None
+
+        binding = (tool_call_id, subagent_name)
+        self._subagent_namespace_bindings[namespace] = binding
+        return binding
+
+    async def _handle_namespaced_stream_item(
+        self, namespace: tuple[Any, ...], mode: str, event: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        binding = self._resolve_subagent_binding(namespace)
+        if binding is None:
+            logger.debug(
+                "Dropping namespaced stream item with no pending subagent binding: ns=%r mode=%s",
+                namespace,
+                mode,
+            )
+            return
+
+        tool_call_id, subagent_name = binding
+
+        if mode == "messages":
+            async for item in self._handle_nested_message_stream_event(
+                tool_call_id, subagent_name, event
+            ):
+                yield item
+            return
+
+        if mode == "custom":
+            for item in self._handle_nested_custom_stream_event(tool_call_id, subagent_name, event):
+                yield item
+            return
+
+        # `updates` mode from inside a nested subagent graph is a no-op in v1.
+
+    async def _handle_nested_message_stream_event(
+        self, tool_call_id: str, subagent_name: str, event: Any
+    ) -> AsyncIterator[dict[str, Any]]:
+        if not isinstance(event, tuple) or len(event) != 2:
+            logger.debug("Ignoring unexpected nested messages stream payload: %r", event)
+            return
+
+        message_chunk, _metadata = event
+        if not isinstance(message_chunk, AIMessageChunk):
+            return
+
+        chunk_text = extract_stream_chunk_text(message_chunk)
+        if not chunk_text:
+            return
+
+        yield {
+            "type": "stream_event",
+            "event_type": "subagent_message_delta",
+            "content": chunk_text,
+            "metadata": {
+                "tool_call_id": tool_call_id,
+                "subagent_name": subagent_name,
+                "text_length": len(chunk_text),
+            },
+        }
+
+    def _handle_nested_custom_stream_event(
+        self, tool_call_id: str, subagent_name: str, event: Any
+    ) -> list[dict[str, Any]]:
+        envelope = normalize_custom_event(event)
+        if envelope is None:
+            return []
+
+        inner_event_type = envelope["event_type"]
+        remapped_type = _NESTED_TOOL_EVENT_REMAP.get(inner_event_type)
+        if remapped_type is None:
+            return []
+
+        inner_metadata = envelope.get("metadata")
+        inner_metadata = dict(inner_metadata) if isinstance(inner_metadata, dict) else {}
+        nested_tool_call_id = inner_metadata.pop("tool_call_id", None)
+        nested_tool_name = inner_metadata.pop("tool_name", None)
+        inner_metadata["tool_call_id"] = tool_call_id
+        inner_metadata["subagent_name"] = subagent_name
+        inner_metadata["nested_tool_call_id"] = nested_tool_call_id
+        inner_metadata["nested_tool_name"] = nested_tool_name
+
+        item: dict[str, Any] = {
+            "type": "stream_event",
+            "event_type": remapped_type,
+            "content": envelope["content"],
+            "metadata": inner_metadata,
+        }
+        # Images are kept at the top level of the payload to bypass the 2 KB
+        # metadata truncation in normalize_custom_event, mirroring
+        # _handle_custom_stream_event's top-level tool_result handling.
+        if isinstance(event, dict) and inner_event_type == "tool_result":
+            images = event.get("images")
+            if isinstance(images, list) and images:
+                item["images"] = images
+        return [item]

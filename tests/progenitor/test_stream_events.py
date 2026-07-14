@@ -6,11 +6,13 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langgraph.types import Command
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
 from app.progenitor.ipc.stream_events import (
     ALLOWED_CUSTOM_EVENT_TYPES,
     CUSTOM_EVENT_FALLBACK_TYPE,
+    build_a2a_call_progress_event,
     build_reasoning_delta_event,
     build_reasoning_summary_event,
     build_tool_error_event,
@@ -18,7 +20,10 @@ from app.progenitor.ipc.stream_events import (
     build_tool_start_event,
     normalize_custom_event,
 )
-from app.progenitor.ipc.stream_payloads import DEFAULT_STREAM_PREVIEW_BYTES
+from app.progenitor.ipc.stream_payloads import (
+    DEFAULT_STREAM_ARGS_BYTES,
+    DEFAULT_STREAM_PREVIEW_BYTES,
+)
 
 
 def test_allowed_event_types_cover_tool_lifecycle():
@@ -34,6 +39,15 @@ def test_allowed_event_types_cover_async_subagent_lifecycle():
         "async_subagent_cancel",
     ):
         assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
+def test_allowed_event_types_cover_nested_subagent_tool_lifecycle():
+    for name in ("subagent_tool_start", "subagent_tool_result", "subagent_tool_error"):
+        assert name in ALLOWED_CUSTOM_EVENT_TYPES
+
+
+def test_allowed_event_types_cover_a2a_call_progress():
+    assert "a2a_call_progress" in ALLOWED_CUSTOM_EVENT_TYPES
 
 
 def test_normalize_custom_event_passes_known_type_unchanged():
@@ -62,6 +76,18 @@ def test_normalize_custom_event_blocks_reserved_types():
     envelope = normalize_custom_event({"event_type": "node_update"})
     assert envelope is not None
     assert envelope["event_type"] == CUSTOM_EVENT_FALLBACK_TYPE
+
+
+def test_normalize_custom_event_blocks_subagent_message_delta_spoofing():
+    # subagent_message_delta is synthesized directly in deepagent_stream.py from
+    # nested `messages`-mode chunks, never via get_stream_writer -- it must not
+    # be spoofable through the general custom-event channel, same as message_delta.
+    envelope = normalize_custom_event(
+        {"event_type": "subagent_message_delta", "content": "spoofed"}
+    )
+    assert envelope is not None
+    assert envelope["event_type"] == CUSTOM_EVENT_FALLBACK_TYPE
+    assert envelope["metadata"]["original_event_type"] == "subagent_message_delta"
 
 
 def test_normalize_custom_event_handles_non_dict_payload():
@@ -177,6 +203,28 @@ def test_build_tool_start_event_redacts_args():
     assert "REDACTED" in serialized
 
 
+def test_build_tool_start_event_preserves_subagent_type_when_args_preview_truncates():
+    huge_description = "x" * (DEFAULT_STREAM_ARGS_BYTES * 2)
+    event = build_tool_start_event(
+        tool_name="task",
+        tool_call_id="call_1",
+        raw_args={"subagent_type": "researcher", "description": huge_description},
+    )
+    # args_preview collapses to a truncated string once the dict exceeds the
+    # byte budget -- subagent_type must survive that collapse in its own field.
+    assert isinstance(event["metadata"]["args_preview"], str)
+    assert event["metadata"]["subagent_type"] == "researcher"
+
+
+def test_build_tool_start_event_omits_subagent_type_for_non_task_tools():
+    event = build_tool_start_event(
+        tool_name="search",
+        tool_call_id="call_1",
+        raw_args={"query": "lookup"},
+    )
+    assert "subagent_type" not in event["metadata"]
+
+
 def test_build_tool_result_event_truncates_large_results():
     big = "x" * (DEFAULT_STREAM_PREVIEW_BYTES * 4)
     event = build_tool_result_event("search", "call_1", 123.45, big)
@@ -185,6 +233,22 @@ def test_build_tool_result_event_truncates_large_results():
     assert len(preview.encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
     assert event["metadata"]["success"] is True
     assert event["metadata"]["duration_ms"] == 123.45
+
+
+def test_build_tool_result_event_unwraps_command_result():
+    # Subagent (`task`) tool calls return a Command(update=...) rather than a
+    # plain ToolMessage -- without unwrapping it, the preview falls back to
+    # str(Command(...)), a raw Python repr instead of the subagent's own text.
+    command = Command(
+        update={
+            "files": {},
+            "messages": [
+                ToolMessage(content="HELLO_FROM_SUBAGENT", name="task", tool_call_id="call_1")
+            ],
+        }
+    )
+    event = build_tool_result_event("task", "call_1", 42.0, command)
+    assert event["metadata"]["result_preview"] == "HELLO_FROM_SUBAGENT"
 
 
 def test_build_tool_error_event_redacts_and_truncates():
@@ -198,6 +262,30 @@ def test_build_tool_error_event_redacts_and_truncates():
     err_text = event["metadata"]["error"]
     assert api_key not in err_text
     assert event["metadata"]["success"] is False
+
+
+def test_build_a2a_call_progress_event_shape():
+    event = build_a2a_call_progress_event(
+        "call_1", "greetings_agent", "working", "Step 1/3: prep..."
+    )
+    assert event["event_type"] == "a2a_call_progress"
+    assert event["content"] == "Step 1/3: prep..."
+    assert event["metadata"] == {
+        "tool_call_id": "call_1",
+        "agent_name": "greetings_agent",
+        "state": "working",
+        "message_text": "Step 1/3: prep...",
+    }
+    assert normalize_custom_event(event)["event_type"] == "a2a_call_progress"
+
+
+def test_build_a2a_call_progress_event_redacts_and_truncates():
+    api_key = "sk-" + "c" * 48
+    big = f"{api_key} " + "x" * (DEFAULT_STREAM_PREVIEW_BYTES * 4)
+    event = build_a2a_call_progress_event("call_1", "greetings_agent", "working", big)
+    assert api_key not in event["content"]
+    assert api_key not in event["metadata"]["message_text"]
+    assert len(event["content"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
 
 
 def test_build_reasoning_delta_event_tracks_text_length():

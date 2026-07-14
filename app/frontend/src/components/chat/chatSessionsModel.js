@@ -6,6 +6,7 @@ import {
   toValidTimestamp,
 } from './conversationModel';
 import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
+import { extractCallAgentSummary } from './messageRenderUtils';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -20,6 +21,61 @@ export function compareSessionItems(left, right) {
   return String(left.id || '').localeCompare(String(right.id || ''));
 }
 
+// `task` tool calls are subagent dispatches, not plain tool calls -- mirrors
+// _expand_task_subagent_events on the backend's live SSE path (deepagent_stream.py)
+// so a reloaded chat produces the same subagent_start/subagent_result shape
+// applySubagentEvent already knows how to group, instead of falling through to
+// generic tool_start/tool_result rows (which is what made subagent cards vanish
+// on refresh -- the checkpoint has no record of the subagent's own nested tool
+// calls or streamed deltas, only the task call's args and final result, so the
+// reconstructed card carries no `children` and no incremental `content`).
+function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
+  const subagentName = tc.args && typeof tc.args.subagent_type === 'string' ? tc.args.subagent_type : '';
+  const toolCallId = typeof tc.id === 'string' ? tc.id : '';
+  const result = typeof tc.result === 'string' ? tc.result : '';
+  const images = Array.isArray(tc.images) && tc.images.length > 0 ? tc.images : null;
+
+  const events = [
+    {
+      id: `${messageId}-subagent-start-${index}`,
+      eventType: 'subagent_start',
+      content: subagentName,
+      timestamp,
+      metadata: {
+        subagent_name: subagentName,
+        tool_call_id: toolCallId,
+        source: 'checkpoint',
+      },
+    },
+  ];
+  // An image-only result has empty extracted text -- without also checking
+  // `images`, a subagent that only returns pictures would never get a
+  // terminal event here, leaving its reconstructed card stuck "running"
+  // forever on reload and silently dropping the image (mirrors the same
+  // `result || images` check buildToolStreamEvents uses below for plain
+  // tool_result rows).
+  if (result || images) {
+    const resultEvent = {
+      id: `${messageId}-subagent-result-${index}`,
+      eventType: 'subagent_result',
+      content: subagentName,
+      timestamp,
+      metadata: {
+        subagent_name: subagentName,
+        tool_call_id: toolCallId,
+        success: true,
+        result_preview: images ? `${images.length} image${images.length !== 1 ? 's' : ''}` : result,
+        source: 'checkpoint',
+      },
+    };
+    if (images) {
+      resultEvent.images = images;
+    }
+    events.push(resultEvent);
+  }
+  return events;
+}
+
 function buildToolStreamEvents(toolCalls, messageId) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
     return [];
@@ -27,14 +83,19 @@ function buildToolStreamEvents(toolCalls, messageId) {
   const events = [];
   toolCalls.forEach((tc, index) => {
     const toolName = typeof tc.name === 'string' ? tc.name : 'tool';
+    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
+
     const args = tc.args && typeof tc.args === 'object' && !Array.isArray(tc.args) ? tc.args : {};
-    const result = typeof tc.result === 'string' ? tc.result : '';
+    const rawResult = typeof tc.result === 'string' ? tc.result : '';
+    const result = toolName === 'call_agent'
+      ? (extractCallAgentSummary(rawResult) || rawResult)
+      : rawResult;
+    const toolCallId = typeof tc.id === 'string' ? tc.id : '';
     // The backend stamps the declaring AIMessage's created_at onto each tool
     // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
     // history reloads can sort tool calls against the answer text by real
     // time instead of guessing an order. No separate timestamp exists for
     // the result, so it reuses the call's.
-    const timestamp = toValidTimestamp(tc.created_at) ?? undefined;
     events.push({
       id: `${messageId}-tool-start-${index}`,
       eventType: 'tool_start',
@@ -43,10 +104,53 @@ function buildToolStreamEvents(toolCalls, messageId) {
       metadata: {
         tool_name: toolName,
         args_preview: args,
-        tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+        tool_call_id: toolCallId,
         source: 'checkpoint',
       },
     });
+    // `task` (subagent delegation) gets the same "plain row + rich card"
+    // pairing call_agent gets below via progress_log -- the SubagentCard is
+    // built from these subagent_start/subagent_result events by
+    // collectSubagentGroups (liveAssistantTurnModel.js) and spliced in right
+    // after this tool_start, mirroring the live order (see
+    // _handle_custom_stream_event in deepagent_stream.py).
+    if (toolName === 'task') {
+      events.push(...buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp));
+    }
+    // Replays the same submitted/working/completed/... sequence a live
+    // viewer saw as synthetic a2a_call_progress events (progress_log comes
+    // from build_task_response on the backend, populated from
+    // A2AClient.call_agent()'s own progress_updates -- see
+    // app/progenitor/a2a/payloads.py's extract_progress_log). Without this,
+    // applyA2ACallEvent has nothing to group on reload, and the card falls
+    // back to a single result blob instead of the chained sub-entries the
+    // live path shows.
+    if (toolName === 'call_agent' && Array.isArray(tc.progress_log)) {
+      tc.progress_log.forEach((entry, progressIndex) => {
+        if (!entry || typeof entry !== 'object') return;
+        const messageText = typeof entry.message_text === 'string' ? entry.message_text : '';
+        // Each entry carries its own real arrival time (stamped by
+        // A2AClient.call_agent(), see extract_progress_log in
+        // app/progenitor/a2a/payloads.py) -- falls back to the parent tool
+        // call's shared timestamp only for older persisted data from before
+        // that field existed, rather than showing every sub-entry at the
+        // exact same clock time.
+        const entryTimestamp = toValidTimestamp(entry.timestamp) ?? timestamp;
+        events.push({
+          id: `${messageId}-a2a-progress-${index}-${progressIndex}`,
+          eventType: 'a2a_call_progress',
+          content: messageText,
+          timestamp: entryTimestamp,
+          metadata: {
+            tool_call_id: toolCallId,
+            state: typeof entry.state === 'string' ? entry.state : '',
+            message_text: messageText,
+            agent_name: typeof entry.agent_name === 'string' ? entry.agent_name : '',
+            source: 'checkpoint',
+          },
+        });
+      });
+    }
     if (result || (Array.isArray(tc.images) && tc.images.length > 0)) {
       const resultEvent = {
         id: `${messageId}-tool-result-${index}`,
@@ -58,7 +162,7 @@ function buildToolStreamEvents(toolCalls, messageId) {
           result_preview: Array.isArray(tc.images) && tc.images.length > 0
             ? `${tc.images.length} image${tc.images.length !== 1 ? 's' : ''}`
             : result,
-          tool_call_id: typeof tc.id === 'string' ? tc.id : '',
+          tool_call_id: toolCallId,
           source: 'checkpoint',
         },
       };

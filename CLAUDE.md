@@ -108,9 +108,11 @@ FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 - `document_store.py` — Postgres-backed document store
 - `state_reader.py` — reads `data/state/`, `data/config/`, `logs/` for UI routes
 
-**SSE / realtime pattern**: `GET /api/ui/stream` emits `UiEventEnvelope` frames (`event: ui.event`). Use `broadcast_ui_event()` for new backend-owned state changes. The frontend consumes this through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`; reducers in `uiDataSlice.js` apply domain updates. Pages should use selectors, not open their own streams.
+**SSE / realtime pattern (event-stream-only)**: `GET /api/ui/stream` is the single browser data transport, emitting `UiEventEnvelope` frames (`event: ui.event`). Every other retained `/api/ui/*` route returns `202` with a `UiRequestAcknowledgement` body (`request_id` + `event_types`) and never carries application data; the causal `ui.event` (correlated by the `X-Request-ID` header the frontend sends) is the only source of result data. Use `broadcast_ui_event()` for backend-owned state changes; pass the caller's `request_id`. The frontend consumes the stream through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`; reducers in `uiDataSlice.js` apply domain updates. Pages should use selectors, not open their own streams. See `EVENT_STREAM_REFACTOR_PLAN.md` and `docs/BACKEND.md` for the full contract.
 
-**Chat session loading**: `GET /api/ui/chats` returns HTTP 200 and emits `chat.sessions.snapshot` on the stream. `GET /api/ui/chats/{id}?request_id=...` emits `chat.session.upserted` and `chat.session.selected` (matched by `request_id` so multiple tabs don't interfere).
+**Chat session loading**: `GET /api/ui/chats` returns a `202` acknowledgement and emits `chat.sessions.snapshot` on the stream. `GET /api/ui/chats/{id}` emits `chat.session.upserted` and `chat.session.selected` (matched by `request_id` so multiple tabs don't interfere).
+
+**Chat generation**: `POST /api/ui/responses` returns a `202` acknowledgement; tokens and structured runtime stream events arrive as `chat.response.started|delta|event|completed|failed|cancelled` frames on `/api/ui/stream`. Live subagent/A2A/tool lifecycle events ride `chat.response.event` payloads (`event_type`, `content`, `metadata`, optional `images`).
 
 ### Frontend (`app/frontend/`)
 

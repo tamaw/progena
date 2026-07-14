@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -425,6 +426,54 @@ def _extract_images_from_content(content: Any) -> list[dict[str, str]]:
     return images
 
 
+def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
+    """Pull call_agent's compact progress-update log (build_task_response's
+    `progress_log` key, see app/progenitor/a2a/payloads.py) out of a
+    ToolMessage's raw string content, before result_text below truncates it
+    away -- it's the last key in that JSON object, so a naive 400-char slice
+    always cuts if off first."""
+    if not isinstance(content, str) or not content.strip():
+        return []
+    # Every tool result flows through here on every session load, but only
+    # call_agent's ever carries this key -- a cheap substring check skips the
+    # json.loads (and the risk of parsing an arbitrarily large/deeply nested
+    # blob) for every other tool's result instead of paying that cost only to
+    # find no progress_log at the end of it.
+    if '"progress_log"' not in content:
+        return []
+    try:
+        parsed = json.loads(content)
+    except (ValueError, RecursionError):
+        # A deeply nested (but otherwise valid) raw `task` payload alongside
+        # progress_log makes json.loads raise RecursionError, not ValueError
+        # -- one such persisted tool result must not break chat-session
+        # hydration entirely, only this optional progress log.
+        return []
+    if not isinstance(parsed, dict):
+        return []
+    raw_log = parsed.get("progress_log")
+    if not isinstance(raw_log, list):
+        return []
+    entries: list[dict[str, str]] = []
+    for item in raw_log:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or "")
+        message_text = str(item.get("message_text") or "")
+        agent_name = str(item.get("agent_name") or "")
+        timestamp = str(item.get("timestamp") or "")
+        if state or message_text:
+            entries.append(
+                {
+                    "state": state,
+                    "message_text": message_text,
+                    "agent_name": agent_name,
+                    "timestamp": timestamp,
+                }
+            )
+    return entries
+
+
 def _raw_message_id(raw: Any, index: int) -> str:
     raw_id = raw.get("id") if isinstance(raw, dict) else getattr(raw, "id", None)
     return str(raw_id or f"message_{index}")
@@ -585,6 +634,28 @@ def _messages_from_state(state: dict[str, Any]) -> list[ChatMessage]:
     return messages
 
 
+def _synthetic_pending_tool_call_message(
+    tool_calls: list[dict[str, Any]], index: int
+) -> ChatMessage:
+    """A placeholder ChatMessage for tool calls whose owning turn never produced
+    trailing text -- e.g. the turn was interrupted (Stop / page reload racing
+    the request / dropped connection) right after a tool result landed but
+    before the model's follow-up commentary came back. Without this, such tool
+    calls (a subagent dispatch, an A2A call, any tool) would be silently
+    discarded by `_messages_from_checkpoint` below and the whole turn would
+    vanish from history on reload even though it genuinely ran and, usually,
+    already has a real result attached.
+    """
+    created_at = tool_calls[-1].get("created_at") if tool_calls else None
+    return ChatMessage(
+        id=f"message_{index}_pending_tools",
+        role="assistant",
+        content="",
+        created_at=created_at,
+        tool_calls=tool_calls,
+    )
+
+
 def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list[ChatMessage]:
     if snapshot is None:
         return []
@@ -603,12 +674,15 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
             raw.get("content", "") if isinstance(raw, dict) else getattr(raw, "content", "")
         )
         images = _extract_images_from_content(raw_content)
+        progress_log = _extract_progress_log_from_content(raw_content)
         result_text = _message_text(raw_content)
         result_entry: dict[str, Any] = {
             "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
         }
         if images:
             result_entry["images"] = images
+        if progress_log:
+            result_entry["progress_log"] = progress_log
         tool_results[str(call_id)] = result_entry
 
     # Second pass: build messages, accumulating tool calls from tool-only AIMessages
@@ -621,12 +695,22 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
         if role == "tool":
             continue
 
+        if role == "user" and pending_tool_calls:
+            # A new human turn is starting but the previous turn's tool calls
+            # were never claimed by a text-bearing AIMessage. Flush them now,
+            # ahead of the new question, instead of letting the reset just
+            # below silently drop them.
+            messages.append(_synthetic_pending_tool_call_message(pending_tool_calls, index))
+            pending_tool_calls = []
+
         if role == "assistant":
             for tc in _extract_raw_tool_calls(raw):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
                 if "images" in entry:
                     tc_with_result["images"] = entry["images"]
+                if "progress_log" in entry:
+                    tc_with_result["progress_log"] = entry["progress_log"]
                 pending_tool_calls.append(tc_with_result)
 
         tool_calls_to_attach = list(pending_tool_calls) if role == "assistant" else None
@@ -635,6 +719,14 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
+
+    if pending_tool_calls:
+        # The checkpoint's tip is itself a dangling tool-call-only AIMessage --
+        # same flush, just past the end of the loop instead of ahead of the
+        # next human turn.
+        messages.append(
+            _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
+        )
 
     return messages
 

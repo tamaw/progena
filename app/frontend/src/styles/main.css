@@ -24,6 +24,10 @@
     --color-error: #ff7770;
     --color-info: #6f96ff;
     --color-accent-soft: rgba(111, 150, 255, 0.16);
+    /* Second accent hue, distinct from --color-success, used to tell apart
+       families of like-shaped UI (e.g. delegation cards in chat-panel.css)
+       that would otherwise share the same green. */
+    --color-accent-secondary: #14b8a6;
 
     /* User message colors */
     --color-user-bg: #2f6ff6;

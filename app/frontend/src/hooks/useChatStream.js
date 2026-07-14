@@ -19,6 +19,7 @@ import {
   applyAssistantChunk,
   finalizeLiveAssistantTurn,
 } from '../components/chat/liveAssistantTurnModel';
+import { createLiveAssistantTurnStore } from '../components/chat/liveAssistantTurnStore';
 import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
 
 function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
@@ -59,7 +60,7 @@ export function useChatStream({
   reloadOpenChat,
 }) {
   const [isGenerating, setIsGenerating] = useState(false);
-  const [liveAssistantTurn, setLiveAssistantTurn] = useState(null);
+  const [liveTurnStore] = useState(createLiveAssistantTurnStore);
   const unreadChatIdList = useSelector(selectUnreadChatIds);
   const generatingChatIdList = useSelector(selectGeneratingChatIds);
   const erroredChatIdList = useSelector(selectErroredChatIds);
@@ -70,12 +71,58 @@ export function useChatStream({
   const backgroundOriginChatIdRef = useRef(null);
   const liveTurnRef = useRef(null);
 
-  // Keep the ref in sync with state so callbacks (onComplete, onError)
-  // created inside handleSend can read the latest turn without a stale
-  // closure — the ref is never passed as a useCallback dependency.
-  useEffect(() => {
-    liveTurnRef.current = liveAssistantTurn;
-  }, [liveAssistantTurn]);
+  const liveTurnFrameRef = useRef(null);
+  const pendingLiveTurnUpdatesRef = useRef([]);
+
+  const discardPendingLiveTurnUpdates = useCallback(() => {
+    if (liveTurnFrameRef.current !== null) {
+      cancelAnimationFrame(liveTurnFrameRef.current);
+      liveTurnFrameRef.current = null;
+    }
+    pendingLiveTurnUpdatesRef.current = [];
+  }, []);
+
+  // Keep the ref and external store synchronous so terminal callbacks can
+  // finalize every received frame even when visual commits are delayed.
+  const setLiveAssistantTurn = useCallback((nextTurn) => {
+    const resolvedTurn = typeof nextTurn === 'function'
+      ? nextTurn(liveTurnRef.current)
+      : nextTurn;
+    if (resolvedTurn === null) {
+      discardPendingLiveTurnUpdates();
+    }
+    liveTurnRef.current = resolvedTurn;
+    liveTurnStore.set(resolvedTurn);
+  }, [discardPendingLiveTurnUpdates, liveTurnStore]);
+
+  const flushLiveTurnUpdates = useCallback(() => {
+    if (liveTurnFrameRef.current !== null) {
+      cancelAnimationFrame(liveTurnFrameRef.current);
+      liveTurnFrameRef.current = null;
+    }
+
+    const updates = pendingLiveTurnUpdatesRef.current;
+    pendingLiveTurnUpdatesRef.current = [];
+    if (updates.length === 0 || !liveTurnRef.current) {
+      return liveTurnRef.current;
+    }
+
+    const nextTurn = updates.reduce((turn, update) => update(turn), liveTurnRef.current);
+    setLiveAssistantTurn(nextTurn);
+    return nextTurn;
+  }, [setLiveAssistantTurn]);
+
+  const queueLiveTurnUpdate = useCallback((update) => {
+    pendingLiveTurnUpdatesRef.current.push(update);
+    if (liveTurnFrameRef.current !== null) {
+      return;
+    }
+
+    liveTurnFrameRef.current = requestAnimationFrame(() => {
+      liveTurnFrameRef.current = null;
+      flushLiveTurnUpdates();
+    });
+  }, [flushLiveTurnUpdates]);
 
   // Marks the chat currently streaming (if any) as generating-in-background.
   // Called whenever the caller is about to stop treating that stream as the
@@ -98,9 +145,10 @@ export function useChatStream({
   useEffect(() => {
     return () => {
       preserveStreamInBackground();
+      discardPendingLiveTurnUpdates();
       activeStreamIdRef.current = null;
     };
-  }, [preserveStreamInBackground]);
+  }, [discardPendingLiveTurnUpdates, preserveStreamInBackground]);
 
   // Dispatches the redux side effects for a resolveBackgroundStreamOutcome()
   // result whose action isn't 'foreground' (that case is handled inline by
@@ -146,8 +194,8 @@ export function useChatStream({
     const initialTurnWithMetadata = directAgentName
       ? applyAssistantMetadata(initialTurn, { display_agent_name: directAgentName })
       : initialTurn;
+    discardPendingLiveTurnUpdates();
     setLiveAssistantTurn(initialTurnWithMetadata);
-    liveTurnRef.current = initialTurnWithMetadata;
 
     const history = messages.slice(-10).map(m => ({
       role: m.role,
@@ -186,13 +234,11 @@ export function useChatStream({
       dispatch(touchChatSession(originChatId));
     }
 
-    // Identifies this stream's chat so a later send only aborts it when it
-    // targets the same chat; sending in a different chat leaves this running.
-    const streamKey = originChatId;
-
-    // Helper to update the live turn state without stale closures.
+    // Apply stream frames in FIFO order at paint cadence. This keeps the
+    // displayed state current while preventing an SSE burst from scheduling a
+    // page render for every individual token or subagent event.
     const updateLiveTurn = (updater) => {
-      setLiveAssistantTurn(prev => prev ? updater(prev) : prev);
+      queueLiveTurnUpdate((turn) => (turn ? updater(turn) : turn));
     };
 
     try {
@@ -224,6 +270,7 @@ export function useChatStream({
           }
           // Foreground stream finished — finalise the live turn.
           backgroundOriginChatIdRef.current = null;
+          flushLiveTurnUpdates();
           const turn = liveTurnRef.current;
           if (turn) {
             const committed = finalizeLiveAssistantTurn(turn, {
@@ -259,6 +306,7 @@ export function useChatStream({
             return;
           }
           show('error', 'Chat Error', error.message);
+          flushLiveTurnUpdates();
           const turn = liveTurnRef.current;
           if (turn) {
             const committed = finalizeLiveAssistantTurn(turn, {
@@ -289,7 +337,6 @@ export function useChatStream({
           updateLiveTurn((prev) => applyAssistantStreamEvent(prev, streamEvent));
         },
         threadMetadata,
-        streamKey,
       );
     } catch (error) {
       show('error', 'Chat Error', error.message);
@@ -297,6 +344,8 @@ export function useChatStream({
       setLiveAssistantTurn(null);
     }
   }, [
+    discardPendingLiveTurnUpdates,
+    flushLiveTurnUpdates,
     activeBackendChat,
     applyBackgroundStreamOutcome,
     dispatch,
@@ -306,8 +355,10 @@ export function useChatStream({
     selectedBackendChatIdRef,
     sendMessageStream,
     threadId,
+    setLiveAssistantTurn,
     setMessages,
     show,
+    queueLiveTurnUpdate,
   ]);
 
   const handleStop = useCallback(() => {
@@ -325,7 +376,7 @@ export function useChatStream({
     preserveStreamInBackground,
     handleSend,
     handleStop,
-    liveAssistantTurn,
+    liveTurnStore,
     setLiveAssistantTurn,
   };
 }

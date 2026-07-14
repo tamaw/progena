@@ -13,12 +13,12 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Any, cast
+from typing import Annotated, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ToolCallRequest
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool, StructuredTool
+from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langchain_openai import ChatOpenAI
 from langgraph.types import Command
 from pydantic import SecretStr
@@ -269,7 +269,10 @@ def create_deepagent_tools(
     """
 
     def _wrap(system_tool: Any) -> StructuredTool:
-        async def _run(**kwargs: Any) -> dict[str, Any]:
+        async def _run(
+            tool_call_id: Annotated[str, InjectedToolCallId] = "",
+            **kwargs: Any,
+        ) -> dict[str, Any]:
             await _maybe_reload(tool_registry)
             state = await _resolve_state(state_manager, live_state_provider)
 
@@ -280,6 +283,7 @@ def create_deepagent_tools(
                 state_manager=state_manager,
                 user_input=str(kwargs.get("request") or ""),
                 tool_args=dict(kwargs),
+                tool_call_id=tool_call_id,
             )
             result = await system_tool.execute(ctx)
             if not result.success:

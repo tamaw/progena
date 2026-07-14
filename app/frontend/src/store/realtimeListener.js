@@ -10,6 +10,7 @@ import {
   resolvePendingOp,
 } from './realtimeSlice';
 import { applyUiEvent } from './uiDataSlice';
+import { publishUiEvent } from './realtimeEvents';
 export const startRealtimeStream = createAction('realtime/startStream');
 export const stopRealtimeStream = createAction('realtime/stopStream');
 
@@ -102,6 +103,7 @@ realtimeListenerMiddleware.startListening({
         }
         listenerApi.dispatch(applyUiEvent(event));
         listenerApi.dispatch(uiEventReceived(event));
+        publishUiEvent(event);
       } catch (error) {
         listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${error.message}`));
       }

@@ -18,6 +18,21 @@ def _tool_by_name(tools, name: str):
     return next(t for t in tools if t.name == name)
 
 
+async def _invoke(tool, args: dict[str, Any], *, tool_call_id: str = "call_test"):
+    """Invoke a wrapped system tool the way LangGraph's real ToolNode does --
+    a full ToolCall dict, not a plain args dict. Every wrapped tool now
+    carries an InjectedToolCallId parameter (see adapters.py), and LangChain
+    requires the full ToolCall shape whenever that's present. Unwraps the
+    resulting ToolMessage back into a plain dict so callers can keep
+    asserting on it directly."""
+    import json
+
+    message = await tool.ainvoke(
+        {"name": tool.name, "args": args, "id": tool_call_id, "type": "tool_call"}
+    )
+    return json.loads(message.content)
+
+
 def _tracked_task(agent_name: str = "Builder Agent") -> A2ATaskRecord:
     return A2ATaskRecord(
         task_id="task-123",
@@ -141,7 +156,7 @@ async def test_list_agents_returns_registry_entries() -> None:
     tools = create_deepagent_tools(tool_registry=registry)
     t = _tool_by_name(tools, "list_agents")
 
-    result = await t.ainvoke({"request": "list agents"})
+    result = await _invoke(t, {"request": "list agents"})
     assert result["total_count"] == 1
     assert result["agents"][0]["name"] == "Hello World Agent"
 
@@ -167,7 +182,9 @@ async def test_call_agent_uses_registry_and_a2a(monkeypatch) -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0})
+    result = await _invoke(
+        t, {"agent": "Builder Agent", "request": "hello", "timeout_seconds": 1.0}
+    )
 
     assert result["task_id"] == "task-123"
     assert result["agent"] == "Builder Agent"
@@ -194,7 +211,7 @@ async def test_call_agent_uses_card_url_when_endpoint_missing(monkeypatch) -> No
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello"})
+    result = await _invoke(t, {"agent": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     assert dispatch_mock.await_args.kwargs["agent_config"]["status"] == "running"
 
@@ -219,7 +236,7 @@ async def test_call_agent_supports_url_only_registry_entry(monkeypatch) -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "Builder Agent", "request": "hello"})
+    result = await _invoke(t, {"agent": "Builder Agent", "request": "hello"})
     assert result["task_id"] == "task-123"
     assert dispatch_mock.await_args.kwargs["agent_config"]["url"] == "http://localhost:9200"
 
@@ -233,7 +250,7 @@ async def test_call_agent_unknown_agent_returns_error() -> None:
     tools = create_deepagent_tools(tool_registry=registry, state_manager=MagicMock())
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"agent": "does-not-exist", "request": "hello"})
+    result = await _invoke(t, {"agent": "does-not-exist", "request": "hello"})
     assert result.get("success") is False
     assert "Unknown agent" in str(result.get("error"))
 
@@ -280,7 +297,7 @@ async def test_call_agent_without_agent_routes_via_tool_llm(monkeypatch) -> None
     )
     t = _tool_by_name(tools, "call_agent")
 
-    result = await t.ainvoke({"request": "hello"})
+    result = await _invoke(t, {"request": "hello"})
     assert result["task_id"] == "task-123"
     dispatch_mock.assert_awaited_once()
     llm_client.chat_structured.assert_awaited_once()
@@ -335,7 +352,9 @@ async def test_shell_exec_receives_structured_kwargs(monkeypatch) -> None:
         "app.progenitor.tools.shell.ShellExecTool.execute", _fake_execute, raising=True
     )
 
-    result = await shell_tool.ainvoke({"command": "ls -la", "timeout_seconds": 60.0, "cwd": "/tmp"})
+    result = await _invoke(
+        shell_tool, {"command": "ls -la", "timeout_seconds": 60.0, "cwd": "/tmp"}
+    )
     assert result == {"ok": True}
     assert captured["user_input"] == ""
     assert captured["tool_args"] == {
@@ -366,7 +385,7 @@ async def test_get_a2a_task_kwargs_populate_tool_args(monkeypatch) -> None:
         raising=True,
     )
 
-    await tool.ainvoke({"task_id": "task-xyz", "refresh": False, "history_length": 7})
+    await _invoke(tool, {"task_id": "task-xyz", "refresh": False, "history_length": 7})
 
     assert captured["user_input"] == ""
     assert captured["tool_args"] == {
@@ -374,3 +393,33 @@ async def test_get_a2a_task_kwargs_populate_tool_args(monkeypatch) -> None:
         "history_length": 7,
         "refresh": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_tool_call_id_reaches_tool_context(monkeypatch) -> None:
+    """Every wrapped system tool now carries an InjectedToolCallId parameter
+    (see adapters.py) so it can tag its own live-progress stream events (e.g.
+    call_agent's a2a_call_progress). Confirms the real id LangGraph's ToolNode
+    supplies at invocation time actually reaches ToolContext.tool_call_id --
+    this is the regression test for the empirical check done while building
+    that wiring."""
+    tools = create_deepagent_tools(state_manager=MagicMock())
+    tool = _tool_by_name(tools, "get_a2a_task")
+
+    captured: dict[str, Any] = {}
+
+    async def _fake_execute(self, context):  # type: ignore[no-untyped-def]
+        from app.progenitor.tools.protocol import ToolResult
+
+        captured["tool_call_id"] = context.tool_call_id
+        return ToolResult.ok({"status": "ok"})
+
+    monkeypatch.setattr(
+        "app.progenitor.tools.get_a2a_task.GetA2ATaskTool.execute",
+        _fake_execute,
+        raising=True,
+    )
+
+    await _invoke(tool, {"task_id": "task-xyz"}, tool_call_id="call_specific_id_789")
+
+    assert captured["tool_call_id"] == "call_specific_id_789"
