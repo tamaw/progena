@@ -139,7 +139,7 @@ export default function InboxPage() {
       }
       // The linked message doesn't exist (deleted, or never real) - fall
       // back to auto-selecting the top card below.
-      setSelectedId(null);
+      Promise.resolve().then(() => setSelectedId(null));
       navigate('/inbox', { replace: true });
     }
     if (visibleMessages.length === 0) {
