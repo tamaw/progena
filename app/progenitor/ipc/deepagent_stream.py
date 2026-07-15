@@ -234,17 +234,17 @@ class DeepAgentIPCStream:
             if isinstance(images, list) and images:
                 item["images"] = images
 
-        # The top-level `task` tool's own generic tool_start/tool_result/
-        # tool_error goes out *alongside* its richer subagent_* translation,
-        # not instead of it -- the same "plain row + rich card" pairing
-        # call_agent already gets (its own tool_start/tool_result render
-        # unmodified right next to the a2a_call card; see TimelineItem.jsx).
-        # Both the live frontend's grouping logic (applySubagentEvent) and
-        # reload reconstruction (buildToolStreamEvents in
-        # chatSessionsModel.js) consume the raw pair into an ordinary "Tool:
-        # task" row and independently fold the subagent_* events into the
-        # SubagentCard, so neither is redundant.
+        # Valid top-level ``task`` lifecycle events fan out as both the normal
+        # readable tool event and the richer subagent_* translation. Keeping
+        # the raw item preserves the outer task row while the expanded event
+        # drives the grouped subagent card.
         expanded = self._expand_task_subagent_events(envelope, images=item.get("images"))
+        metadata = envelope.get("metadata")
+        tool_name = metadata.get("tool_name") if isinstance(metadata, dict) else None
+        if str(tool_name or envelope.get("content") or "") == "task":
+            # Malformed task events with no valid expansion must not leak the
+            # generic raw item either.
+            return [item, *expanded] if expanded else []
         return [item, *expanded]
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
@@ -456,6 +456,8 @@ class DeepAgentIPCStream:
 
         tool_call_id = str(metadata.get("tool_call_id") or "")
         event_type = str(envelope.get("event_type") or "")
+        if not tool_call_id:
+            return []
 
         if event_type == "tool_start":
             # Read from the dedicated `subagent_type` field (build_tool_start_event,

@@ -125,9 +125,8 @@ const SubagentChild = memo(function SubagentChild({ child, isLast }) {
 });
 
 // One burst of the subagent's own streamed text = one mini entry in the
-// chain, the text-entry counterpart to SubagentChild above. `isStreaming`
-// only ever applies to the chain's own trailing entry (see SubagentCard),
-// mirroring the top-level assistant row's cursor-while-streaming treatment.
+// chain, rendered in the same compact header row as an A2A progress update.
+// `isStreaming` only ever applies to the chain's trailing entry.
 //
 // Memoized for the same reason as SubagentChild above -- this is the
 // component that actually does the expensive work (markdown parse +
@@ -145,10 +144,12 @@ const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast,
       </div>
       <div className="entry__main">
         {formattedBody && (
-          <div
-            className="message-stream-event-body"
-            dangerouslySetInnerHTML={{ __html: formattedBody }}
-          />
+          <div className="entry__head">
+            <div
+              className="message-stream-event-body"
+              dangerouslySetInnerHTML={{ __html: formattedBody }}
+            />
+          </div>
         )}
       </div>
     </div>

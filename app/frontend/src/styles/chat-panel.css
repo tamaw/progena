@@ -586,18 +586,25 @@
 
 .subagent-card__children .message-stream-event-body,
 .a2a-sub-entry__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
     line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subagent-card__children .message-stream-event-body {
+    height: 1.45em;
+    margin-top: 0;
 }
 
 /* Each sub-entry's badge glyph and color are keyed off its own status (see
    glyphForA2AState in A2ACallCard.jsx) so submitted/working/completed/failed
-   read as distinct visual events instead of one repeated icon -- the label
-   text is already the raw state string (.a2a-call-card__subchain .entry__role
-   above), this is just the graphic/color half of "styled individually".
+   read as distinct visual events instead of one repeated icon. The status
+   text is intentionally omitted because the gutter badge already conveys it.
    Compounded with .entry__badge.a2a-call-card__badge (not a bare modifier
    class) for the same specificity-tie-then-source-order reason as
    .entry__badge.a2a-call-card__badge--error above -- both are two classes,
@@ -1736,10 +1743,12 @@
 }
 
 .chat-session-id {
-    max-width: 220px;
+    max-width: 260px;
     overflow: hidden;
     color: var(--color-text-muted);
     font-family: var(--font-family-mono);
+    font-size: 11px;
+    letter-spacing: -0.015em;
     text-overflow: ellipsis;
     white-space: nowrap;
 }

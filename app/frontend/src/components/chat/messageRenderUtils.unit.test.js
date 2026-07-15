@@ -246,3 +246,115 @@ describe('extractCallAgentSummary', () => {
     expect(extractCallAgentSummary('not json at all')).toBe('');
   });
 });
+
+describe('normal tool detail rendering', () => {
+  it('separates a tool_start human summary from raw args and duration', () => {
+    const event = {
+      eventType: 'tool_start',
+      metadata: {
+        tool_name: 'read_file',
+        args_preview: JSON.stringify({ path: 'src/main.py', include_line_numbers: true }),
+        duration_ms: 12,
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('path: src/main.py');
+    expect(details.duration).toBe('12ms');
+    expect(details.command).toBe('{"path":"src/main.py","include_line_numbers":true}');
+    expect(details.body).toBe('');
+    expect(details.summary).not.toContain(details.command);
+  });
+
+  it('treats task outer lifecycle rows as normal tool disclosures', () => {
+    const start = {
+      eventType: 'tool_start',
+      metadata: {
+        tool_name: 'task',
+        args_preview: { subagent_type: 'researcher', description: 'look into it' },
+      },
+    };
+    const result = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'task',
+        duration_ms: 42,
+        result_preview: 'Found it',
+      },
+    };
+
+    const startDetails = toolDetailsForEvent(start, describeStreamEvent(start));
+    const resultDetails = toolDetailsForEvent(result, describeStreamEvent(result));
+
+    expect(startDetails).toMatchObject({
+      kind: 'task',
+      isNormal: true,
+      summary: 'subagent_type: researcher',
+      command: '{"subagent_type":"researcher","description":"look into it"}',
+      body: '',
+    });
+    expect(resultDetails).toMatchObject({
+      kind: 'task',
+      isNormal: true,
+      summary: 'Found it',
+      duration: '42ms',
+      command: '',
+      body: 'Found it',
+    });
+    expect(startDetails.summary).not.toContain(startDetails.command);
+  });
+
+  it('prefers artifact.summary for result summaries while preserving raw output and duration', () => {
+    const event = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'read_file',
+        duration_ms: 1250,
+        artifact: { summary: '12 lines read' },
+        result_preview: '{"content":"raw result"}',
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('12 lines read');
+    expect(details.duration).toBe('1.25s');
+    expect(details.command).toBe('');
+    expect(details.body).toBe('{"content":"raw result"}');
+    expect(details.summary).not.toContain(details.body);
+  });
+
+  it('keeps serialized todo results out of the human-readable summary', () => {
+    const rawResult = '{"todos":[{"content":"Ship feature","status":"completed"},{"content":"Add tests","status":"in_progress"},{"content":"Deploy","status":"pending"}]}';
+    const event = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'write_todos',
+        result_preview: rawResult,
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('Updated todo list · 3 items');
+    expect(details.summary).not.toContain('Ship feature');
+    expect(details.command).toBe('');
+    expect(details.body).toBe(rawResult);
+  });
+
+  it('keeps raw error text separate from the human-readable error summary', () => {
+    const event = {
+      eventType: 'tool_error',
+      metadata: {
+        tool_name: 'deploy',
+        duration_ms: 125,
+        artifact: { summary: 'Deployment denied' },
+        error: '{"message":"permission denied","request_id":"r-1"}',
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('Deployment denied');
+    expect(details.duration).toBe('125ms');
+    expect(details.command).toBe('');
+    expect(details.body).toBe('{"message":"permission denied","request_id":"r-1"}');
+  });
+});

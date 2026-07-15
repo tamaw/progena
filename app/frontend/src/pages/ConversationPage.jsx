@@ -49,6 +49,9 @@ import {
   deriveChatTitle,
   formatStartedTime,
   groupSessionItems,
+  shouldShowChatContentLoading,
+  getActiveRouteThreadId,
+  shouldShowNewChatEmptyState,
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
@@ -56,6 +59,7 @@ import {
   findAdjacentSessionItem,
   normalizeBackendChatMessage,
   shouldMaterializeBeforeSwitching,
+  shouldLoadSelectedBackendChat,
   sidebarEmptyMessage,
   visibleGroupsForFilter,
 } from '../components/chat/chatSessionsModel';
@@ -99,6 +103,59 @@ function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
 }
 
+function filterSupportedPersistedStreamEvents(streamEvents) {
+  const startedSubagentIds = new Set();
+  const startedTaskIds = new Set();
+  const supportedSubagentEventTypes = new Set([
+    'subagent_start',
+    'subagent_result',
+    'subagent_message_delta',
+    'subagent_tool_start',
+    'subagent_tool_result',
+    'subagent_tool_error',
+  ]);
+  return streamEvents.filter((event) => {
+    const eventType = typeof event?.eventType === 'string' ? event.eventType : '';
+    const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+    const toolName = typeof metadata.tool_name === 'string'
+      ? metadata.tool_name.trim()
+      : (typeof event?.content === 'string' ? event.content.trim() : '');
+    const isTaskEvent = (
+      (eventType === 'tool_start' || eventType === 'tool_result' || eventType === 'tool_error')
+      && toolName === 'task'
+    );
+    if (isTaskEvent) {
+      const toolCallId = typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id.trim() : '';
+      if (!toolCallId) return false;
+      if (eventType === 'tool_start') {
+        const args = metadata.args_preview && typeof metadata.args_preview === 'object'
+          && !Array.isArray(metadata.args_preview) ? metadata.args_preview : {};
+        const subagentName = typeof metadata.subagent_type === 'string'
+          ? metadata.subagent_type.trim()
+          : (typeof args.subagent_type === 'string' ? args.subagent_type.trim() : '');
+        if (!subagentName) return false;
+        startedTaskIds.add(toolCallId);
+        return true;
+      }
+      return startedTaskIds.has(toolCallId);
+    }
+    if (!eventType.startsWith('subagent_')) return true;
+    if (!supportedSubagentEventTypes.has(eventType)) return false;
+    const toolCallId = typeof metadata.tool_call_id === 'string'
+      ? metadata.tool_call_id.trim()
+      : '';
+    if (!toolCallId) return false;
+    if (eventType === 'subagent_start') {
+      const subagentName = typeof metadata.subagent_name === 'string'
+        ? metadata.subagent_name.trim()
+        : '';
+      if (!subagentName) return false;
+      startedSubagentIds.add(toolCallId);
+      return true;
+    }
+    return startedSubagentIds.has(toolCallId);
+  });
+}
 function normalizeStoredMessage(message, index) {
   if (!message || typeof message !== 'object') {
     return null;
@@ -120,8 +177,11 @@ function normalizeStoredMessage(message, index) {
     }
   }
 
+  const messageWithoutTimelineItems = { ...message };
+  delete messageWithoutTimelineItems.timelineItems;
+
   const base = {
-    ...message,
+    ...messageWithoutTimelineItems,
     id: typeof message.id === 'string' ? message.id : `msg_restored_${index}_${timestamp}`,
     role,
     content,
@@ -131,24 +191,23 @@ function normalizeStoredMessage(message, index) {
       : 0,
     reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
     model: typeof message.model === 'string' ? message.model : '',
-    streamEvents: Array.isArray(message.streamEvents)
-      ? message.streamEvents.reduce((events, event, eventIndex) => {
-        const normalizedEvent = normalizeStreamEvent(event, eventIndex);
-        if (!normalizedEvent) {
-          return events;
-        }
-        return appendStreamEvent(events, normalizedEvent);
-      }, [])
-      : [],
+    streamEvents: filterSupportedPersistedStreamEvents(
+      Array.isArray(message.streamEvents)
+        ? message.streamEvents.reduce((events, event, eventIndex) => {
+          const normalizedEvent = normalizeStreamEvent(event, eventIndex);
+          if (!normalizedEvent) {
+            return events;
+          }
+          return appendStreamEvent(events, normalizedEvent);
+        }, [])
+        : [],
+    ),
     timestamp,
   };
 
-  // Preserve existing timelineItems from stored history. For old history
-  // entries with no timelineItems, build a fallback order so the frontend
-  // does not reintroduce "tool rows above agent row" on reload.
-  if (Array.isArray(message.timelineItems)) {
-    base.timelineItems = message.timelineItems;
-  } else if (role === 'assistant') {
+  // Stored timelineItems are legacy denormalized data. Always rebuild the
+  // assistant timeline from the normalized streamEvents instead.
+  if (role === 'assistant') {
     base.timelineItems = buildDefaultAssistantTimeline(base);
   }
 
@@ -245,8 +304,14 @@ function ConversationPage() {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [composerFocusTick, setComposerFocusTick] = useState(0);
-  const messagesEndRef = useRef(null);
-  const liveScrollFrameRef = useRef(null);
+  const messagesContainerRef = useRef(null);
+  const isPinnedToBottomRef = useRef(true);
+  const messagesScrollFrameRef = useRef(null);
+  const handleMessagesScroll = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    isPinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 24;
+  }, []);
   const titleInputRef = useRef(null);
   // Tracks the requestId of the fetch last applied to local `messages` state.
   // Each dispatch of requestChatSessionDetail carries a fresh requestId
@@ -561,6 +626,7 @@ function ConversationPage() {
 
     activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
+    isPinnedToBottomRef.current = true;
     setMessages(backendMessages);
     setIsGenerating(false);
     // The chat being displayed just changed identity -- a live turn still
@@ -580,21 +646,29 @@ function ConversationPage() {
     }
   }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
 
-  // Committed message changes and generation transitions still keep the page
-  // at the tail. Per-frame live-turn scrolling is owned by LiveAssistantTurn
-  // so streaming does not redraw this page-wide component tree.
+  // Committed message changes and generation transitions keep the page at the
+  // tail only while the user remains near the bottom. Per-frame live-turn
+  // scrolling is owned by LiveAssistantTurn so streaming does not redraw this
+  // page-wide component tree.
   useEffect(() => {
-    if (liveScrollFrameRef.current !== null) return;
+    if (!isPinnedToBottomRef.current || messagesScrollFrameRef.current !== null) return;
 
-    liveScrollFrameRef.current = requestAnimationFrame(() => {
-      liveScrollFrameRef.current = null;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    messagesScrollFrameRef.current = requestAnimationFrame(() => {
+      messagesScrollFrameRef.current = null;
+      const currentContainer = messagesContainerRef.current;
+      if (currentContainer && isPinnedToBottomRef.current) {
+        currentContainer.scrollTop = currentContainer.scrollHeight;
+      }
     });
   }, [messages, isGenerating]);
 
   useEffect(() => () => {
-    if (liveScrollFrameRef.current !== null) {
-      cancelAnimationFrame(liveScrollFrameRef.current);
+    if (messagesScrollFrameRef.current !== null) {
+      cancelAnimationFrame(messagesScrollFrameRef.current);
+      messagesScrollFrameRef.current = null;
     }
   }, []);
 
@@ -826,11 +900,12 @@ function ConversationPage() {
     if (!sessionItem) {
       return;
     }
-    const shouldReloadSelectedBackendChat =
-      sessionItem.selected
-      && sessionItem.source === 'backend'
-      && sessionItem.threadId
-      && messages.length === 0;
+    const shouldReloadSelectedBackendChat = shouldLoadSelectedBackendChat({
+      sessionItem,
+      activeBackendChat,
+      activeBackendChatState,
+      lastAppliedRequestId: lastAppliedBackendChatRequestIdRef.current,
+    });
     if (sessionItem.selected && !shouldReloadSelectedBackendChat) {
       return;
     }
@@ -859,6 +934,8 @@ function ConversationPage() {
       show('error', 'Chat load failed', error.message);
     }
   }, [
+    activeBackendChat,
+    activeBackendChatState,
     clearBackendSelection,
     chatTitle,
     materializeCurrentChatCard,
@@ -903,13 +980,25 @@ function ConversationPage() {
     () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
     [messages],
   );
-  const isContentLoading =
-    !backendChatSessionsState.loaded && messages.length === 0 && !selectedBackendChatId;
+  const isContentLoading = shouldShowChatContentLoading({
+    backendChatsLoaded: backendChatSessionsState.loaded,
+    messages,
+    selectedBackendChatId,
+    activeChatLoading: activeBackendChatState.loading,
+    activeChatThreadId: activeBackendChatState.threadId,
+    activeChatDetailThreadId: activeBackendChat?.thread_id,
+    urlThreadId,
+    initialSelectionPending: !hasAutoSelectedOnMountRef.current,
+  });
   const isEmptyConversationPane =
     backendChatSessionsState.loaded
     && backendChatSessions.length === 0
     && !selectedBackendChatId
     && messages.length === 0;
+  const isNewChatEmpty =
+    !isContentLoading
+    && !isEmptyConversationPane
+    && shouldShowNewChatEmptyState({ messages, selectedBackendChatId, threadId });
   const sessionItems = useMemo(
     () => buildChatSessionItems({
       messages,
@@ -1012,6 +1101,11 @@ function ConversationPage() {
   // selectedBackendChatId stays null.
   useEffect(() => {
     if (hasAutoSelectedOnMountRef.current) return;
+    // The realtime listener is established before the roster becomes loaded.
+    // Wait for that synchronization point before requesting a URL-selected
+    // chat, otherwise its chat.session.selected event can arrive before the
+    // listener is ready and leave the page loading forever.
+    if (!backendChatSessionsState.loaded) return;
     if (urlThreadId) {
       hasAutoSelectedOnMountRef.current = true;
       openBackendChat(urlThreadId).catch(() => {
@@ -1022,7 +1116,6 @@ function ConversationPage() {
       });
       return;
     }
-    if (!backendChatSessionsState.loaded) return;
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
@@ -1033,7 +1126,13 @@ function ConversationPage() {
   // Keep the URL in sync with whichever session is actually selected (either
   // a backend chat, or a local draft that already has messages). The title
   // slug is cosmetic; only the id segment is ever read back.
-  const activeRouteThreadId = selectedBackendChatId || (messages.length > 0 ? threadId : null);
+  const activeRouteThreadId = getActiveRouteThreadId({
+    selectedBackendChatId,
+    messages,
+    threadId,
+    urlThreadId,
+    initialSelectionPending: !hasAutoSelectedOnMountRef.current,
+  });
   useEntityUrlSync('/chat', activeRouteThreadId, chatTitle);
 
   const archiveSession = useCallback(async (sessionItem) => {
@@ -1365,8 +1464,6 @@ function ConversationPage() {
               {CHAT_AGENT_NAME}
             </span>,
             <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
-            <span key="msgs" className="muted">{messages.length} messages</span>,
-            <span key="tools" className="muted">{totalToolCount} tools</span>,
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
@@ -1380,7 +1477,11 @@ function ConversationPage() {
           />
         )}
 
-        <div className="chat-messages sess-detail__body chat-detail-body">
+        <div
+          className="chat-messages sess-detail__body chat-detail-body"
+          ref={messagesContainerRef}
+          onScroll={handleMessagesScroll}
+        >
           <div className="chat-messages__inner">
             {isContentLoading ? (
               <div className="chat-loading">Loading...</div>
@@ -1389,7 +1490,7 @@ function ConversationPage() {
                 <h2>No conversations yet</h2>
                 <p className="muted">Click <strong>+ New</strong> to start a conversation.</p>
               </div>
-            ) : messages.length === 0 ? (
+            ) : isNewChatEmpty ? (
               <div className="welcome-message">
                 <h2>{welcomeMessage}</h2>
                 <QuickActions onAction={handleQuickAction} />
@@ -1410,14 +1511,14 @@ function ConversationPage() {
                 })}
                 <LiveAssistantTurn
                   store={liveTurnStore}
-                  messagesEndRef={messagesEndRef}
+                  messagesContainerRef={messagesContainerRef}
+                  isPinnedToBottomRef={isPinnedToBottomRef}
                   streamEventFilter={streamEventFilter}
                   hideContent={streamFilters.agent === false}
                   showImages={streamFilters.images !== false}
                 />
               </>
             )}
-            <div ref={messagesEndRef} />
           </div>
         </div>
 

@@ -21,14 +21,10 @@ export function compareSessionItems(left, right) {
   return String(left.id || '').localeCompare(String(right.id || ''));
 }
 
-// `task` tool calls are subagent dispatches, not plain tool calls -- mirrors
-// _expand_task_subagent_events on the backend's live SSE path (deepagent_stream.py)
-// so a reloaded chat produces the same subagent_start/subagent_result shape
-// applySubagentEvent already knows how to group, instead of falling through to
-// generic tool_start/tool_result rows (which is what made subagent cards vanish
-// on refresh -- the checkpoint has no record of the subagent's own nested tool
-// calls or streamed deltas, only the task call's args and final result, so the
-// reconstructed card carries no `children` and no incremental `content`).
+// `task` calls replay both the normal outer tool disclosure and the grouped
+// subagent lifecycle. The outer rows preserve the dispatch/return markers,
+// while the synthesized subagent events rebuild the readable card from the
+// compact checkpoint record (which has no nested stream deltas).
 function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
   const subagentName = tc.args && typeof tc.args.subagent_type === 'string' ? tc.args.subagent_type : '';
   const toolCallId = typeof tc.id === 'string' ? tc.id : '';
@@ -76,6 +72,29 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
   return events;
 }
 
+function sanitizePersistedArtifact(value, depth = 0) {
+  if (depth > 2 || value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return value.length > 512 ? `${value.slice(0, 511)}…` : value;
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.slice(0, 24)
+      .map((entry) => sanitizePersistedArtifact(entry, depth + 1))
+      .filter((entry) => entry !== undefined);
+  }
+  if (typeof value !== 'object') return undefined;
+  const result = {};
+  Object.keys(value)
+    .filter((key) => ['summary', 'count', 'kind', 'status'].includes(key))
+    .filter((key) => !/token|secret|password|api[_-]?key|authorization/i.test(key))
+    .sort()
+    .slice(0, 24)
+    .forEach((key) => {
+      const sanitized = sanitizePersistedArtifact(value[key], depth + 1);
+      if (sanitized !== undefined) result[key] = sanitized;
+    });
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function buildToolStreamEvents(toolCalls, messageId) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
     return [];
@@ -90,7 +109,54 @@ function buildToolStreamEvents(toolCalls, messageId) {
     const result = toolName === 'call_agent'
       ? (extractCallAgentSummary(rawResult) || rawResult)
       : rawResult;
-    const toolCallId = typeof tc.id === 'string' ? tc.id : '';
+    const toolCallId = typeof tc.id === 'string' ? tc.id.trim() : '';
+
+    // A valid task dispatch keeps its normal outer tool rows while also
+    // synthesizing the grouped subagent lifecycle used by the card.
+    if (toolName === 'task') {
+      const subagentName = typeof args.subagent_type === 'string' ? args.subagent_type.trim() : '';
+      if (!toolCallId || !subagentName) {
+        return;
+      }
+      events.push({
+        id: `${messageId}-tool-start-${index}`,
+        eventType: 'tool_start',
+        content: '',
+        timestamp,
+        metadata: {
+          tool_name: 'task',
+          args_preview: { ...args, subagent_type: subagentName },
+          tool_call_id: toolCallId,
+          source: 'checkpoint',
+        },
+      });
+      events.push(...buildSubagentDispatchStreamEvents(
+        { ...tc, id: toolCallId, args: { ...args, subagent_type: subagentName } },
+        messageId,
+        index,
+        timestamp,
+      ));
+      const hasImages = Array.isArray(tc.images) && tc.images.length > 0;
+      if (result || hasImages) {
+        const resultEvent = {
+          id: `${messageId}-tool-result-${index}`,
+          eventType: 'tool_result',
+          content: '',
+          timestamp,
+          metadata: {
+            tool_name: 'task',
+            result_preview: result || `${tc.images.length} image${tc.images.length !== 1 ? 's' : ''}`,
+            tool_call_id: toolCallId,
+            source: 'checkpoint',
+          },
+        };
+        if (Number.isFinite(tc.duration_ms)) resultEvent.metadata.duration_ms = tc.duration_ms;
+        events.push(resultEvent);
+      }
+      return;
+    }
+
+
     // The backend stamps the declaring AIMessage's created_at onto each tool
     // call (see _extract_raw_tool_calls in chat_sessions.py) specifically so
     // history reloads can sort tool calls against the answer text by real
@@ -108,15 +174,6 @@ function buildToolStreamEvents(toolCalls, messageId) {
         source: 'checkpoint',
       },
     });
-    // `task` (subagent delegation) gets the same "plain row + rich card"
-    // pairing call_agent gets below via progress_log -- the SubagentCard is
-    // built from these subagent_start/subagent_result events by
-    // collectSubagentGroups (liveAssistantTurnModel.js) and spliced in right
-    // after this tool_start, mirroring the live order (see
-    // _handle_custom_stream_event in deepagent_stream.py).
-    if (toolName === 'task') {
-      events.push(...buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp));
-    }
     // Replays the same submitted/working/completed/... sequence a live
     // viewer saw as synthetic a2a_call_progress events (progress_log comes
     // from build_task_response on the backend, populated from
@@ -151,7 +208,10 @@ function buildToolStreamEvents(toolCalls, messageId) {
         });
       });
     }
-    if (result || (Array.isArray(tc.images) && tc.images.length > 0)) {
+    const isNormalToolCall = toolName !== 'call_agent';
+    const artifact = isNormalToolCall ? sanitizePersistedArtifact(tc.artifact) : undefined;
+    const hasArtifact = artifact && typeof artifact === 'object' && !Array.isArray(artifact);
+    if (result || (Array.isArray(tc.images) && tc.images.length > 0) || hasArtifact) {
       const resultEvent = {
         id: `${messageId}-tool-result-${index}`,
         eventType: 'tool_result',
@@ -166,6 +226,12 @@ function buildToolStreamEvents(toolCalls, messageId) {
           source: 'checkpoint',
         },
       };
+      if (isNormalToolCall && Number.isFinite(tc.duration_ms)) {
+        resultEvent.metadata.duration_ms = tc.duration_ms;
+      }
+      if (hasArtifact) {
+        resultEvent.metadata.artifact = artifact;
+      }
       if (Array.isArray(tc.images) && tc.images.length > 0) {
         resultEvent.images = tc.images;
       }
@@ -268,6 +334,30 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     toolCount: Number.isFinite(chat.tool_count) ? chat.tool_count : 0,
     errorCount: Number.isFinite(chat.error_count) ? chat.error_count : 0,
   };
+}
+
+export function shouldLoadSelectedBackendChat({
+  sessionItem,
+  activeBackendChat,
+  activeBackendChatState,
+  lastAppliedRequestId,
+}) {
+  if (
+    !sessionItem?.selected
+    || sessionItem.source !== 'backend'
+    || !sessionItem.threadId
+  ) {
+    return false;
+  }
+  if (activeBackendChatState?.loading) {
+    return false;
+  }
+
+  return (
+    activeBackendChat?.thread_id !== sessionItem.threadId
+    || activeBackendChatState?.requestId == null
+    || lastAppliedRequestId !== activeBackendChatState.requestId
+  );
 }
 
 export function buildChatSessionItems({

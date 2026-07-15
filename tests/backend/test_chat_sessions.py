@@ -26,7 +26,11 @@ from app.backend.chat_sessions import (
     materialize_chat_metadata,
     patch_chat_metadata,
 )
-from app.backend.document_store import CheckpointThreadSnapshot, InMemoryDocumentStore
+from app.backend.document_store import (
+    PROGENITOR_LOG_PREFIX,
+    CheckpointThreadSnapshot,
+    InMemoryDocumentStore,
+)
 
 
 class _CountingDocumentStore(InMemoryDocumentStore):
@@ -592,3 +596,81 @@ class TestExtractProgressLogFromContent:
         monkeypatch.setattr(chat_sessions_module.json, "loads", _raise_recursion_error)
         content = '{"progress_log": [{"state": "submitted"}]}'
         assert _extract_progress_log_from_content(content) == []
+
+
+def test_hydrates_normal_tool_duration_and_artifact_by_tool_id():
+    store = InMemoryDocumentStore()
+    create_chat_metadata(store, ChatCreateRequest(thread_id="thread-tool-metadata"))
+    store.save_document(
+        f"{PROGENITOR_LOG_PREFIX}.tool_calls",
+        "audit-1",
+        {
+            "payload": {
+                "tool_id": "call-1",
+                "duration_ms": 123.4,
+                "timestamp": "2026-07-14T12:00:00Z",
+            }
+        },
+    )
+    store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="thread-tool-metadata",
+            checkpoint_id="checkpoint-1",
+            checkpoint_ts="2026-07-14T12:00:00Z",
+            messages=[
+                {"id": "u1", "type": "human", "content": "read the file"},
+                {
+                    "id": "a1",
+                    "type": "ai",
+                    "content": "Here is the file.",
+                    "tool_calls": [
+                        {"id": "call-1", "name": "read_file", "args": {"path": "README.md"}}
+                    ],
+                },
+                {
+                    "id": "t1",
+                    "type": "tool",
+                    "tool_call_id": "call-1",
+                    "content": "file contents",
+                    "artifact": {"summary": "README.md: 12 lines", "count": 12, "raw": "discard"},
+                },
+            ],
+        )
+    )
+
+    detail = get_chat_detail(store, "thread-tool-metadata")
+
+    assert detail is not None
+    tool_call = detail.messages[1].tool_calls[0]
+    assert tool_call["id"] == "call-1"
+    assert tool_call["duration_ms"] == 123.4
+    assert tool_call["artifact"] == {"summary": "README.md: 12 lines", "count": 12}
+
+
+def test_normal_tool_history_falls_back_when_audit_duration_is_missing():
+    store = InMemoryDocumentStore()
+    create_chat_metadata(store, ChatCreateRequest(thread_id="thread-tool-no-log"))
+    store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="thread-tool-no-log",
+            checkpoint_id="checkpoint-1",
+            checkpoint_ts="2026-07-14T12:00:00Z",
+            messages=[
+                {
+                    "id": "a1",
+                    "type": "ai",
+                    "content": "Done.",
+                    "tool_calls": [{"id": "call-2", "name": "glob", "args": {"pattern": "*.py"}}],
+                },
+                {"id": "t1", "type": "tool", "tool_call_id": "call-2", "content": "a.py\nb.py"},
+            ],
+        )
+    )
+
+    detail = get_chat_detail(store, "thread-tool-no-log")
+
+    assert detail is not None
+    tool_call = detail.messages[0].tool_calls[0]
+    assert tool_call["result"] == "a.py\nb.py"
+    assert "duration_ms" not in tool_call
+    assert "artifact" not in tool_call

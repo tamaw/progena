@@ -3,6 +3,57 @@ import { extractMarkdownImages } from '../../lib/markdown';
 export const CHAT_AGENT_NAME = 'Progenitor';
 export const DEFAULT_CHAT_TITLE = 'New chat';
 
+export function shouldShowChatContentLoading({
+  backendChatsLoaded,
+  messages,
+  selectedBackendChatId,
+  activeChatLoading,
+  activeChatThreadId,
+  activeChatDetailThreadId,
+  urlThreadId,
+  initialSelectionPending = false,
+}) {
+  const hasMessages = Array.isArray(messages) && messages.length > 0;
+  const urlChatLoading = Boolean(urlThreadId && initialSelectionPending);
+  const selectedChatLoading = Boolean(selectedBackendChatId) && (
+    activeChatLoading
+    || activeChatThreadId !== selectedBackendChatId
+    || activeChatDetailThreadId !== selectedBackendChatId
+  );
+
+  return urlChatLoading || selectedChatLoading || (
+    !backendChatsLoaded
+    && !hasMessages
+    && !selectedBackendChatId
+  );
+}
+
+export function shouldShowNewChatEmptyState({
+  messages,
+  selectedBackendChatId,
+  threadId,
+}) {
+  return (
+    Array.isArray(messages)
+    && messages.length === 0
+    && Boolean(selectedBackendChatId || threadId)
+  );
+}
+
+export function getActiveRouteThreadId({
+  selectedBackendChatId,
+  messages,
+  threadId,
+  urlThreadId,
+  initialSelectionPending,
+}) {
+  return (
+    selectedBackendChatId
+    || (Array.isArray(messages) && messages.length > 0 ? threadId : null)
+    || (initialSelectionPending ? urlThreadId : null)
+  );
+}
+
 const SIDEBAR_GROUPS = [
   { key: 'pinned', label: 'Pinned' },
   { key: 'today', label: 'Today' },

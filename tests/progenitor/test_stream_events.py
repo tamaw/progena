@@ -390,3 +390,39 @@ async def test_audit_middleware_swallows_writer_failure():
     ):
         result = await middleware.awrap_tool_call(request, handler)
     assert isinstance(result, ToolMessage)
+
+
+def test_build_tool_result_event_omits_artifact_when_result_has_none():
+    event = build_tool_result_event("read_file", "call-no-artifact", 4.0, "plain result")
+
+    assert "artifact" not in event["metadata"]
+    assert event["metadata"]["result_preview"] == "plain result"
+
+
+def test_build_tool_result_event_projects_bounded_redacted_artifact():
+    api_key = "sk-" + "f" * 48
+    event = build_tool_result_event(
+        "read_file",
+        "call-artifact",
+        8.0,
+        ToolMessage(
+            content="raw result",
+            name="read_file",
+            tool_call_id="call-artifact",
+            artifact={
+                "summary": f"{api_key} " + ("x" * (DEFAULT_STREAM_PREVIEW_BYTES * 3)),
+                "count": 3,
+                "kind": "file",
+                "status": "ok",
+                "raw": {"secret": api_key, "nested": ["discard me"]},
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert set(artifact) <= {"summary", "count", "kind", "status"}
+    assert artifact["count"] == 3
+    assert artifact["kind"] == "file"
+    assert artifact["status"] == "ok"
+    assert api_key not in repr(artifact)
+    assert len(artifact["summary"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES

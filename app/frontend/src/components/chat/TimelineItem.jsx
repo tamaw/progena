@@ -36,6 +36,30 @@ import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
 
+function NormalToolContent({ tool }) {
+  const hasPayload = Boolean(tool?.command || tool?.body);
+  const payload = (
+    <div className="tool chat-event-tool">
+      {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
+      {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
+    </div>
+  );
+  const summary = <span className={`tool__summary${hasPayload ? ' tool-event-disclosure__summary' : ''}`}>{tool.summary}</span>;
+
+  if (!hasPayload) return summary;
+  return (
+    <details className="tool-event-disclosure">
+      <summary>
+        {summary}
+        <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+        <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+        <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+      </summary>
+      {payload}
+    </details>
+  );
+}
+
 const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
@@ -116,7 +140,9 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
               <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
               <span className="entry__role">{description.title}</span>
               <span className="msg__head-trailing">
-                {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
+                {tool?.isNormal
+                  ? (tool.duration && <span className="muted">{tool.duration}</span>)
+                  : (description.metaDetail && <span className="muted">{description.metaDetail}</span>)}
                 {eventTokenMetaItems.map((meta, mi) => (
                   <Fragment key={`${event.id}-${meta}-${mi}`}>
                     {mi > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
@@ -135,7 +161,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
             {description.bodyDetail && !tool && !description.bodyHtml && (
               <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
             )}
-            {tool && (
+            {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
               <div className="tool chat-event-tool">
                 <div className="tool__head">
                   <span className="tool__kind">{tool.kind}</span>

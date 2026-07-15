@@ -243,6 +243,7 @@ function isCallAgentToolEvent(event) {
   );
 }
 
+
 function a2aCallItemId(toolCallId) {
   return `a2a-${toolCallId}`;
 }
@@ -529,14 +530,26 @@ function collectTodosByToolCallId(streamEvents) {
 }
 
 // Reconstructs grouped subagent cards from a flat, persisted stream_events
-// array (e.g. backend-loaded history). Rather than a hand-written parallel
-// reconstruction algorithm, this replays applySubagentEvent over the flat
-// events in order, so the live and reload code paths structurally can't
-// drift apart. Keyed by tool_call_id (the same key applySubagentEvent uses).
+// array. Only events attached to a valid dispatch are consumed; orphaned or
+// malformed subagent events are intentionally dropped.
 function collectSubagentGroups(streamEvents) {
   let items = [];
+  const startedToolCallIds = new Set();
   for (const event of streamEvents) {
     if (typeof event?.eventType !== 'string' || !event.eventType.startsWith('subagent_')) {
+      continue;
+    }
+    const toolCallId = typeof event.metadata?.tool_call_id === 'string'
+      ? event.metadata.tool_call_id.trim()
+      : '';
+    if (!toolCallId) continue;
+    if (event.eventType === 'subagent_start') {
+      const subagentName = typeof event.metadata?.subagent_name === 'string'
+        ? event.metadata.subagent_name.trim()
+        : '';
+      if (!subagentName) continue;
+      startedToolCallIds.add(toolCallId);
+    } else if (!startedToolCallIds.has(toolCallId)) {
       continue;
     }
     const updated = applySubagentEvent(items, event);
@@ -594,25 +607,21 @@ export function buildDefaultAssistantTimeline(message) {
   const insertedA2ACallIds = new Set();
   let todosSeq = 0;
   for (const event of streamEvents) {
-    // Grouped subagent cards replace their flat subagent_* events entirely --
-    // spliced in once, at the earliest event's timestamp, rather than once
-    // per underlying event. Only skip the flat event when a group was
-    // actually found: a missing/empty tool_call_id (malformed persisted
-    // data) means no group could ever be built for it, and it must fall
-    // through to the generic stream_event push below instead of silently
-    // vanishing -- unconditionally `continue`-ing group-or-not used to drop
-    // it entirely, with no card and no fallback row.
+    // Grouped subagent cards replace their flat subagent_* events entirely.
+    // Orphaned or malformed subagent events are dropped rather than exposed
+    // as generic stream-event rows.
     if (typeof event?.eventType === 'string' && event.eventType.startsWith('subagent_')) {
-      const toolCallId = event.metadata?.tool_call_id;
+      const toolCallId = typeof event.metadata?.tool_call_id === 'string'
+        ? event.metadata.tool_call_id.trim()
+        : '';
       const group = toolCallId ? subagentGroups.get(toolCallId) : undefined;
-      if (group) {
-        if (!insertedSubagentIds.has(group.id)) {
-          insertedSubagentIds.add(group.id);
-          items.push({ ...group, timestamp: event.timestamp });
-        }
-        continue;
+      if (event.eventType === 'subagent_start' && group && !insertedSubagentIds.has(group.id)) {
+        insertedSubagentIds.add(group.id);
+        items.push({ ...group, timestamp: event.timestamp });
       }
+      continue;
     }
+
 
     // The grouped A2A call card splices in once, right after the earliest
     // call_agent tool_start/tool_result/tool_error event carrying its
