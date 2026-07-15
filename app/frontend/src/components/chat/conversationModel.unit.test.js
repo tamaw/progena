@@ -8,6 +8,8 @@ import {
   deriveChatTitle,
   collectMessageImages,
   countToolInvocations,
+  countReasoningTokens,
+  countTokens,
   getTimeBucket,
   groupSessionItems,
   getActiveRouteThreadId,
@@ -204,6 +206,42 @@ describe('countToolInvocations', () => {
   });
 });
 
+describe('countTokens', () => {
+  it('sums finite token counts from every message and ignores invalid values', () => {
+    const messages = [
+      { role: 'assistant', tokenCount: 4 },
+      { role: 'assistant', tokenCount: 9 },
+      { role: 'assistant', tokenCount: 0 },
+      { role: 'assistant', tokenCount: '3' },
+      {},
+      { role: 'assistant', tokenCount: NaN },
+      { role: 'assistant', tokenCount: Infinity },
+      { role: 'assistant', tokenCount: -Infinity },
+      { role: 'assistant', tokenCount: 2 },
+    ];
+
+    expect(countTokens(messages)).toBe(15);
+  });
+});
+
+describe('countReasoningTokens', () => {
+  it('sums distinct finite reasoning totals across assistant messages', () => {
+    const messages = [
+      { role: 'assistant', reasoningTokenCount: 4 },
+      { role: 'assistant', reasoningTokenCount: 9 },
+      { role: 'assistant', reasoningTokenCount: 0 },
+      { role: 'assistant', reasoningTokenCount: '3' },
+      {},
+      { role: 'assistant', reasoningTokenCount: NaN },
+      { role: 'assistant', reasoningTokenCount: Infinity },
+      { role: 'assistant', reasoningTokenCount: -Infinity },
+      { role: 'assistant', reasoningTokenCount: 2 },
+    ];
+
+    expect(countReasoningTokens(messages)).toBe(15);
+  });
+});
+
 describe('collectMessageImages', () => {
   it('collects tool-result images only from assistant messages', () => {
     const userMessage = {
@@ -257,6 +295,28 @@ describe('collectMessageImages', () => {
       { id: 'a', src: 'data:image/png;base64,AAA', alt: 'Image 1' },
     ]);
   });
+  it('prefers a persisted image URL over an absent or stale base64 payload', () => {
+    const image = collectMessageImages({
+      role: 'assistant',
+      content: 'generated image',
+      streamEvents: [{
+        eventType: 'tool_result',
+        images: [{
+          id: 'remote-image',
+          url: 'https://cdn.example.test/generated.png',
+          base64: 'stale-or-empty',
+          media_type: 'image/png',
+        }],
+      }],
+    });
+
+    expect(image).toEqual([{
+      id: 'remote-image',
+      src: 'https://cdn.example.test/generated.png',
+      alt: 'Image 1',
+    }]);
+  });
+
 });
 
 describe('getTimeBucket', () => {

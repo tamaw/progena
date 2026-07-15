@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -45,6 +45,8 @@ import {
   CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
   collectMessageImages,
+  countReasoningTokens,
+  countTokens,
   countToolInvocations,
   deriveChatTitle,
   formatStartedTime,
@@ -239,7 +241,6 @@ function stripEphemeralStreamEvents(message) {
 
 function ConversationPage() {
   const dispatch = useDispatch();
-  const navigate = useNavigate();
   // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
   // session selection is driven entirely by the id, never by the slug.
   const { threadId: urlThreadId } = useParams();
@@ -300,7 +301,7 @@ function ConversationPage() {
   const [sidebarFilter, setSidebarFilter] = useState('all');
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
-  const [selectedBackendChatId, setSelectedBackendChatId] = useState(null);
+  const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [composerFocusTick, setComposerFocusTick] = useState(0);
@@ -398,11 +399,11 @@ function ConversationPage() {
     dispatch(clearChatUnread(threadId));
     dispatch(clearChatErrored(threadId));
     lastAppliedBackendChatRequestIdRef.current = null;
-    dispatch(requestChatSessionDetail({
+    return dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
       requestId: crypto.randomUUID(),
-    }));
+    })).unwrap();
   }, [activeStreamIdRef, dispatch, getApiUrl, setIsGenerating]);
 
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
@@ -529,6 +530,12 @@ function ConversationPage() {
   }, [cancelTitleEdit, derivedChatTitle, threadId, titleDraft]);
 
   useEffect(() => {
+    // A routed detail owns initialization. Do not create an unrelated draft
+    // while the requested chat is loading (or after its detail fails).
+    if (urlThreadId) {
+      return undefined;
+    }
+
     let cancelled = false;
 
     const ensureSession = async () => {
@@ -556,7 +563,7 @@ function ConversationPage() {
     return () => {
       cancelled = true;
     };
-  }, [acquireDraftChat, config.storage.quickChatHandoff, openBackendChat]);
+  }, [acquireDraftChat, config.storage.quickChatHandoff, openBackendChat, urlThreadId]);
 
   useEffect(() => {
     const handlePromotedQuickChat = (event) => {
@@ -793,11 +800,11 @@ function ConversationPage() {
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
-    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat) {
+    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat || activeBackendChatState.error) {
       return;
     }
     dismissCurrentSession();
-  }, [activeBackendChat, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+  }, [activeBackendChat, activeBackendChatState.error, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
 
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
     const session = await acquireDraftChat(forceFreshSession ? null : threadId);
@@ -955,10 +962,8 @@ function ConversationPage() {
     await startNewChatSession();
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
-  const totalTokenCount = useMemo(
-    () => messages.reduce((total, message) => total + (Number.isFinite(message.tokenCount) ? message.tokenCount : 0), 0),
-    [messages],
-  );
+  const totalTokenCount = useMemo(() => countTokens(messages), [messages]);
+  const totalReasoningTokenCount = useMemo(() => countReasoningTokens(messages), [messages]);
   const totalToolCount = useMemo(() => countToolInvocations(messages), [messages]);
   const eventCounts = useMemo(() => {
     const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
@@ -980,7 +985,10 @@ function ConversationPage() {
     () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
     [messages],
   );
-  const isContentLoading = shouldShowChatContentLoading({
+  const chatDetailError = activeBackendChatState.threadId === selectedBackendChatId
+    ? activeBackendChatState.error
+    : null;
+  const isContentLoading = !chatDetailError && shouldShowChatContentLoading({
     backendChatsLoaded: backendChatSessionsState.loaded,
     messages,
     selectedBackendChatId,
@@ -990,6 +998,7 @@ function ConversationPage() {
     urlThreadId,
     initialSelectionPending: !hasAutoSelectedOnMountRef.current,
   });
+  const isRouteDetailError = Boolean(chatDetailError && selectedBackendChatId);
   const isEmptyConversationPane =
     backendChatSessionsState.loaded
     && backendChatSessions.length === 0
@@ -1109,10 +1118,9 @@ function ConversationPage() {
     if (urlThreadId) {
       hasAutoSelectedOnMountRef.current = true;
       openBackendChat(urlThreadId).catch(() => {
-        // The linked thread doesn't exist (deleted, or never a real backend
-        // chat) - fall back to auto-selecting the top card once loaded.
-        hasAutoSelectedOnMountRef.current = false;
-        navigate('/chat', { replace: true });
+        // Keep the routed id and let the active detail error render in place.
+        // Falling back to a new chat here would hide the actual route failure
+        // and create an unrelated draft through the initialization effect.
       });
       return;
     }
@@ -1121,7 +1129,7 @@ function ConversationPage() {
     if (topItem?.source === 'backend') {
       selectSessionItem(topItem);
     }
-  }, [urlThreadId, backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem, openBackendChat, navigate]);
+  }, [urlThreadId, backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem, openBackendChat]);
 
   // Keep the URL in sync with whichever session is actually selected (either
   // a backend chat, or a local draft that already has messages). The title
@@ -1393,6 +1401,7 @@ function ConversationPage() {
         <DetailHeader
           className="chat-detail-header"
           titleClassName="chat-detail-header__title"
+
           title={(
             <>
               {isEditingTitle ? (
@@ -1417,7 +1426,7 @@ function ConversationPage() {
                 />
               ) : (
                 <span className="chat-detail-header__title-text">
-                  {isContentLoading ? '' : (isEmptyConversationPane ? 'No conversation selected' : chatTitle)}
+                  {isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : chatTitle)}
                 </span>
               )}
               <button
@@ -1465,6 +1474,7 @@ function ConversationPage() {
             </span>,
             <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
+            <span key="reasoning-tokens" className="muted">{new Intl.NumberFormat().format(totalReasoningTokenCount)} reasoning tokens</span>,
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
         />
@@ -1483,7 +1493,12 @@ function ConversationPage() {
           onScroll={handleMessagesScroll}
         >
           <div className="chat-messages__inner">
-            {isContentLoading ? (
+            {isRouteDetailError ? (
+              <div className="chat-load-error" role="alert">
+                <h2>Unable to load conversation</h2>
+                <p>{chatDetailError}</p>
+              </div>
+            ) : isContentLoading ? (
               <div className="chat-loading">Loading...</div>
             ) : isEmptyConversationPane ? (
               <div className="welcome-message">
