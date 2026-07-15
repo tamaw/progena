@@ -57,8 +57,8 @@ class TestLangChainAdapter:
         model = create_langchain_model(config)
         assert str(model.openai_api_base) == "https://example.openai.azure.com/openai/v1"
 
-    def test_reasoning_uses_effort_with_summary_extra_body(self):
-        """Reasoning config requests summary text via extra_body with the resolved effort."""
+    def test_reasoning_uses_native_reasoning_payload(self):
+        """Reasoning config is passed as one native payload with effort and summary."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
@@ -72,8 +72,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
+        assert kwargs["reasoning"] == {"effort": "medium", "summary": "detailed"}
 
     def test_reasoning_defaults_to_low_effort(self):
         """Reasoning defaults to low effort for standard models."""
@@ -88,8 +87,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning_effort"] == "low"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
+        assert kwargs["reasoning"] == {"effort": "low", "summary": "detailed"}
 
     def test_reasoning_effort_respects_config_for_gpt_5_3_chat(self):
         """gpt-5.3-chat uses the configured reasoning effort."""
@@ -105,8 +103,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
+        assert kwargs["reasoning"] == {"effort": "medium", "summary": "detailed"}
 
     def test_reasoning_summary_defaults_to_detailed(self):
         """Reasoning summary defaults to detailed when not overridden."""
@@ -121,7 +118,7 @@ class TestLangChainAdapter:
             create_langchain_model(config)
 
         _, kwargs = mock_chat_openai.call_args
-        assert kwargs["extra_body"] == {"reasoning": {"summary": "detailed"}}
+        assert kwargs["reasoning"] == {"effort": "low", "summary": "detailed"}
 
 
 class TestDeepAgentFactory:
