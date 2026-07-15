@@ -124,6 +124,12 @@ class DeepAgentIPCStream:
         # turn -- no cross-turn leakage, so no eviction is needed.
         self._subagent_namespace_bindings: dict[tuple[Any, ...], tuple[str, str]] = {}
         self._last_emitted_assistant_metadata: dict[str, Any] | None = None
+        # Per-turn reasoning-token accumulator. A multi-step turn runs the
+        # model once per tool round-trip; each call reports its own usage on
+        # its own AIMessage. The finalize summary must carry the SUM across
+        # calls, not just the last call's count (the UI header totals it).
+        self._turn_reasoning_tokens = 0
+        self._counted_usage_message_ids: set[str] = set()
 
     async def stream(
         self,
@@ -269,6 +275,28 @@ class DeepAgentIPCStream:
             return [item, *expanded] if expanded else []
         return [item, *expanded]
 
+    def _accumulate_reasoning_usage(self, messages: Any) -> None:
+        """Add each unseen AI message's reasoning-token usage to the turn total."""
+        if not isinstance(messages, list):
+            return
+        for msg in messages:
+            msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if msg_type != "ai" and role != "assistant":
+                continue
+            msg_id = msg.get("id") if isinstance(msg, dict) else getattr(msg, "id", None)
+            # Dedupe by provider message id; id-less messages (some direct/A2A
+            # replies, unit fixtures) fall back to object identity — the state
+            # dict holds the coerced objects for the whole turn, so identity is
+            # stable between the update event and finalize.
+            key = msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
+            if key in self._counted_usage_message_ids:
+                continue
+            self._counted_usage_message_ids.add(key)
+            count = extract_reasoning_token_count(msg)
+            if isinstance(count, int) and count > 0:
+                self._turn_reasoning_tokens += count
+
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
             output_info = (
@@ -283,6 +311,7 @@ class DeepAgentIPCStream:
                     **node_output,
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
+                self._accumulate_reasoning_usage(node_output["messages"])
             self.state.update(node_output)
 
             if "todos" in node_output:
@@ -357,6 +386,12 @@ class DeepAgentIPCStream:
         reasoning_tokens = (
             extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
+        # Some paths (e.g. a pending_response short-circuit) bypass update
+        # events; count the final message here too — the id dedupe makes this
+        # a no-op when its usage was already accumulated.
+        if last_ai_msg is not None:
+            self._accumulate_reasoning_usage([last_ai_msg])
+        turn_reasoning_tokens = self._turn_reasoning_tokens or reasoning_tokens
         reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
         if not reasoning_trace and self._streamed_reasoning_content:
             reasoning_trace = self._streamed_reasoning_content
@@ -378,7 +413,7 @@ class DeepAgentIPCStream:
         if last_ai_msg is not None and bool(reasoning_trace) and not self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or "",
-                metadata={"reasoning_tokens": reasoning_tokens},
+                metadata={"reasoning_tokens": turn_reasoning_tokens},
             )
             yield {
                 "type": "stream_event",
@@ -389,7 +424,7 @@ class DeepAgentIPCStream:
         elif last_ai_msg is not None and self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or self._streamed_reasoning_content,
-                metadata={"reasoning_tokens": reasoning_tokens},
+                metadata={"reasoning_tokens": turn_reasoning_tokens},
             )
             yield {
                 "type": "stream_event",
