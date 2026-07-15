@@ -50,14 +50,15 @@ function buildTimelineStreamEvents(
   reasoningTokenCount,
   reasoningTimestamp,
   messageId,
+  isStreaming = false,
 ) {
-  const timelineEvents = streamEvents.filter(isTimelineStreamEvent);
+  const timelineEvents = streamEvents.filter((event) => isTimelineStreamEvent(event));
   const hasReasoningEntry = timelineEvents.some((event) =>
     isReasoningEvent(event) && hasReasoningContent(event)
   );
   const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
 
-  if (hasReasoningEntry || !fallbackReasoningText) {
+  if (isStreaming || hasReasoningEntry || !fallbackReasoningText) {
     return timelineEvents;
   }
 
@@ -76,12 +77,13 @@ function withReasoningFallback(
   reasoningTokenCount,
   reasoningTimestamp,
   messageId,
+  isStreaming = false,
 ) {
   const hasReasoningEntry = timelineItems.some((item) =>
     item.kind === 'stream_event' && isReasoningEvent(item.event) && hasReasoningContent(item.event)
   );
   const fallbackReasoningText = typeof reasoningText === 'string' ? reasoningText.trim() : '';
-  if (hasReasoningEntry || !fallbackReasoningText) {
+  if (isStreaming || hasReasoningEntry || !fallbackReasoningText) {
     return timelineItems;
   }
   const event = buildSyntheticReasoningEvent(
@@ -155,10 +157,11 @@ function MessageView({
       reasoningTokenCount,
       reasoningTimestamp,
       messageId,
+      isStreaming,
     );
     if (typeof streamEventFilter !== 'function') return timelineEvents;
     return timelineEvents.filter(streamEventFilter);
-  }, [hasTimelineItems, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
+  }, [hasTimelineItems, isStreaming, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -261,6 +264,7 @@ function MessageView({
       reasoningTokenCount,
       reasoningTimestamp,
       messageId,
+      isStreaming,
     );
     const visibleTimelineItems = fullTimelineItems.filter((item) => {
       if (item.kind === 'stream_event') {
@@ -297,7 +301,9 @@ function MessageView({
       <div className="chat-entry-chain chat-entry-chain--connected">
         {visibleTimelineItems.map((item, idx) => (
           <TimelineItem
-            key={item.id || `tl-${idx}`}
+            key={item.kind === 'stream_event' && isReasoningEvent(item.event)
+              ? `${item.id}-${item.event.eventType}`
+              : (item.id || `tl-${idx}`)}
             item={item}
             itemIndex={idx}
             onRegenerate={onRegenerate}

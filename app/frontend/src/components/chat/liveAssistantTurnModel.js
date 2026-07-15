@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -33,6 +33,7 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     tokenCount: 0,
     reasoningText: '',
     reasoningTokenCount: 0,
+    reasoningSummaryReceived: false,
     streamEvents: [],
     displayAgentName: '',
     displayModelName: '',
@@ -411,8 +412,18 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
   }
 
   const next = { ...turn };
+  const summaryAlreadyReceived = next.reasoningSummaryReceived
+    || next.streamEvents.some((event) => event?.eventType === 'reasoning_summary');
+  if (nextEvent.eventType === 'reasoning_delta' && summaryAlreadyReceived) {
+    return next;
+  }
   next.streamEvents = appendLiveStreamEvent(next.streamEvents, nextEvent);
-  next.reasoningText = appendReasoningText(next.reasoningText, nextEvent);
+  if (nextEvent.eventType === 'reasoning_summary') {
+    next.reasoningSummaryReceived = true;
+    next.reasoningText = nextEvent.content || next.reasoningText;
+  } else {
+    next.reasoningText = appendReasoningText(next.reasoningText, nextEvent);
+  }
   const rt = extractReasoningTokenCount(nextEvent);
   if (rt !== null) next.reasoningTokenCount = rt;
   if (
@@ -462,36 +473,44 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
     return next;
   }
 
-  // Reasoning events (reasoning_delta / reasoning_summary) share a single slot
-  // in the timeline: the first delta seeds the row (so live reasoning is
-  // visible while it streams, not just once a terminal summary lands), and
-  // later deltas/summaries merge into that same row instead of replacing it
-  // outright or creating duplicates. Since the backend can emit the final
-  // reasoning_summary after the answer text has already started streaming,
-  // a freshly-seeded row is inserted ahead of the assistant_message row
-  // (reasoning belongs above the answer) rather than appended after it.
+  // Keep one reasoning row live: each delta updates the accumulated content,
+  // and the terminal summary replaces that same row without duplication.
   const isReasoningKind = nextEvent.eventType === 'reasoning_delta' || nextEvent.eventType === 'reasoning_summary';
   if (isReasoningKind) {
-    const reasoningIndex = next.timelineItems.findIndex((entry) =>
-      entry.kind === 'stream_event'
-      && (entry.event.eventType === 'reasoning_delta' || entry.event.eventType === 'reasoning_summary')
+
+    const reasoningEvent = next.streamEvents.find((event) => isReasoningEvent(event) && hasReasoningContent(event));
+    const reasoningTimestamp = Number.isFinite(reasoningEvent?.timestamp)
+      ? reasoningEvent.timestamp
+      : Date.parse(reasoningEvent?.timestamp || '');
+    const existingReasoningIndex = next.timelineItems.findIndex((entry) =>
+      entry.kind === 'stream_event' && isReasoningEvent(entry.event)
     );
-    if (reasoningIndex >= 0) {
-      const merged = mergeReasoningEvents(next.timelineItems[reasoningIndex].event, nextEvent);
-      next.timelineItems = next.timelineItems.map((entry, idx) => (
-        idx === reasoningIndex ? { kind: 'stream_event', id: merged.id, event: merged } : entry
-      ));
-    } else {
-      const reasoningItem = { kind: 'stream_event', id: nextEvent.id, event: nextEvent };
-      const assistantIndex = next.timelineItems.findIndex((entry) => entry.kind === 'assistant_message');
-      next.timelineItems = assistantIndex >= 0
-        ? [
-          ...next.timelineItems.slice(0, assistantIndex),
-          reasoningItem,
-          ...next.timelineItems.slice(assistantIndex),
-        ]
-        : [...next.timelineItems, reasoningItem];
-    }
+    const timelineWithoutReasoning = existingReasoningIndex >= 0
+      ? next.timelineItems.filter((_, index) => index !== existingReasoningIndex)
+      : next.timelineItems;
+    const chronologicalIndex = Number.isFinite(reasoningTimestamp)
+      ? timelineWithoutReasoning.findIndex((entry) => {
+        const timestamp = entry.timestamp ?? entry.event?.timestamp;
+        const itemTimestamp = Number.isFinite(timestamp) ? timestamp : Date.parse(timestamp || '');
+        return Number.isFinite(itemTimestamp) && itemTimestamp >= reasoningTimestamp;
+      })
+      : -1;
+    const assistantIndex = timelineWithoutReasoning.findIndex((entry) => entry.kind === 'assistant_message');
+    const insertAt = chronologicalIndex >= 0
+      ? chronologicalIndex
+      : (assistantIndex >= 0 ? assistantIndex : timelineWithoutReasoning.length);
+    const reasoningItem = {
+      kind: 'stream_event',
+      id: existingReasoningIndex >= 0 ? next.timelineItems[existingReasoningIndex].id : (reasoningEvent?.id || nextEvent.id),
+      event: existingReasoningIndex >= 0
+        ? mergeReasoningEvents(next.timelineItems[existingReasoningIndex].event, nextEvent)
+        : (reasoningEvent || nextEvent),
+    };
+    next.timelineItems = [
+      ...timelineWithoutReasoning.slice(0, insertAt),
+      reasoningItem,
+      ...timelineWithoutReasoning.slice(insertAt),
+    ];
     return next;
   }
 

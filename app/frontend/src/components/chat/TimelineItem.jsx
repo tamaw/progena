@@ -138,21 +138,23 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
               <details className="tool-event-disclosure reasoning-event-disclosure">
                 <summary>
                   <div
-                    className="message-stream-event-body reasoning-event-disclosure__summary"
+                    className="message-content reasoning-event-disclosure__summary"
                     dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
                   />
                   <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
                   <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
                   <span className="tool-event-disclosure__chevron" aria-hidden="true" />
                 </summary>
-                <div
-                  className="message-stream-event-body reasoning-event-disclosure__detail"
-                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
-                />
+                <div className="reasoning-event-disclosure__detail">
+                  <div
+                    className="message-content"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
+                  />
+                </div>
               </details>
             ) : (
               <div
-                className="message-stream-event-body entry__content"
+                className="message-content reasoning-event-content entry__content"
                 dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
               />
             ))}
