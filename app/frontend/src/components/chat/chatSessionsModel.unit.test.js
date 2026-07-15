@@ -380,6 +380,48 @@ describe('normalizeBackendChatMessage', () => {
       new Date('2026-07-11T02:31:09+00:00').getTime(),
     ]);
   });
+  it('derives call_agent result duration from the progress timestamp span', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm9-duration-derived',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call-duration-derived',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted', timestamp: '2026-07-11T02:31:02.000Z' },
+          { state: 'completed', message_text: 'Done', timestamp: '2026-07-11T02:31:09.500Z' },
+        ],
+      }],
+    }, 1);
+
+    const result = m.streamEvents.find((event) => event.eventType === 'tool_result');
+    expect(result.metadata.duration_ms).toBe(7500);
+  });
+
+  it('preserves explicit call_agent duration over the progress timestamp span', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm9-duration-explicit',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call-duration-explicit',
+        name: 'call_agent',
+        args: { agent: 'greetings_agent', request: 'hi' },
+        result: JSON.stringify({ task_id: 'task-123', status: 'completed' }),
+        duration_ms: 42,
+        progress_log: [
+          { state: 'submitted', message_text: 'Accepted', timestamp: '2026-07-11T02:31:02.000Z' },
+          { state: 'completed', message_text: 'Done', timestamp: '2026-07-11T02:31:09.500Z' },
+        ],
+      }],
+    }, 1);
+
+    const result = m.streamEvents.find((event) => event.eventType === 'tool_result');
+    expect(result.metadata.duration_ms).toBe(42);
+  });
 
   it('falls back to the parent tool call\'s timestamp for older progress_log entries with no timestamp of their own', () => {
     const resultJson = JSON.stringify({ task_id: 'task-123', status: 'completed' });

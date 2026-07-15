@@ -304,6 +304,43 @@ describe('normal tool detail rendering', () => {
     expect(startDetails.summary).not.toContain(startDetails.command);
   });
 
+  it('treats call_agent outer lifecycle rows as normal tool disclosures', () => {
+    const start = {
+      eventType: 'tool_start',
+      metadata: {
+        tool_name: 'call_agent',
+        args_preview: { agent: 'greetings_agent', request: 'hi' },
+      },
+    };
+    const result = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'call_agent',
+        duration_ms: 187,
+        result_preview: 'Hello! Completed the request.',
+      },
+    };
+
+    const startDetails = toolDetailsForEvent(start, describeStreamEvent(start));
+    const resultDetails = toolDetailsForEvent(result, describeStreamEvent(result));
+
+    expect(startDetails).toMatchObject({
+      kind: 'call_agent',
+      isNormal: true,
+      summary: 'agent: greetings_agent • request: hi',
+      command: '{"agent":"greetings_agent","request":"hi"}',
+      body: '',
+    });
+    expect(resultDetails).toMatchObject({
+      kind: 'call_agent',
+      isNormal: true,
+      summary: 'Hello! Completed the request.',
+      duration: '187ms',
+      command: '',
+      body: 'Hello! Completed the request.',
+    });
+  });
+
   it('prefers artifact.summary for result summaries while preserving raw output and duration', () => {
     const event = {
       eventType: 'tool_result',
