@@ -295,6 +295,55 @@ async def test_task_tool_events_emit_outer_rows_and_subagent_events():
 
 
 @pytest.mark.asyncio
+async def test_task_tool_start_uses_fallback_summary_when_args_preview_is_truncated():
+    """A dedicated summary field keeps task cards readable after args collapse."""
+    summary_source = "  Review   the README\n and report findings " + ("x" * 200)
+    normalized = "Review the README and report findings " + ("x" * 200)
+    expected_summary = normalized[:139] + "…"
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_fallback-summary",
+                        "subagent_type": "researcher",
+                        "args_preview": '{"description":"... [truncated]"}',
+                        "task_summary": summary_source,
+                    },
+                },
+            ),
+            (
+                "custom",
+                {
+                    "event_type": "tool_result",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "tool_call_id": "call_fallback-summary",
+                        "duration_ms": 7.0,
+                        "success": True,
+                        "result_preview": "done",
+                    },
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    subagent_start = next(item for item in items if item.get("event_type") == "subagent_start")
+    subagent_result = next(item for item in items if item.get("event_type") == "subagent_result")
+    assert subagent_start["metadata"]["task_summary"] == expected_summary
+    assert subagent_result["metadata"]["task_summary"] == expected_summary
+    assert len(subagent_start["metadata"]["task_summary"]) == 140
+
+
+@pytest.mark.asyncio
 async def test_task_tool_result_images_survive_subagent_result_translation():
     """Both the outer task result and the expanded subagent result retain
     top-level images for their respective readable row/card renderers."""

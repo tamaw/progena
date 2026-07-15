@@ -100,14 +100,15 @@ def build_tool_start_event(
         "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
     }
     if tool_name == "task" and isinstance(redacted, dict):
-        # A large free-form `description` can push args_preview past the 2KB
-        # budget above, collapsing it from a dict into a truncated string --
-        # _expand_task_subagent_events (deepagent_stream.py) needs
-        # subagent_type to correlate this dispatch with its eventual result,
-        # so stash it separately here where truncation can't reach it.
+        # Keep correlation and a compact task summary outside the args budget.
+        # Large descriptions can turn args_preview into a truncated string,
+        # which would otherwise hide the fields needed to rebuild the card.
         subagent_type = redacted.get("subagent_type")
         if isinstance(subagent_type, str):
             metadata["subagent_type"] = subagent_type
+        description = redacted.get("description")
+        if isinstance(description, str):
+            metadata["task_summary"] = truncate_text(description, 140)
     return {
         "event_type": "tool_start",
         "content": tool_name,
@@ -378,7 +379,7 @@ def _redact_preview(value: Any) -> str:
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
 
 
-_CORRELATION_METADATA_FIELDS = ("tool_call_id", "subagent_type")
+_CORRELATION_METADATA_FIELDS = ("tool_call_id", "subagent_type", "task_summary")
 
 
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -387,17 +388,16 @@ def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
     Tool dispatch metadata can contain a large ``args_preview`` (especially for
     ``task`` calls). Keep the fields used to join tool and subagent lifecycle
     events outside the general metadata byte budget so truncating the payload
-    cannot break that correlation. All remaining fields retain the existing
-    ``truncate_json_safe`` behavior and budget.
+    cannot break that correlation or discard the bounded task summary. All
+    remaining fields retain the existing ``truncate_json_safe`` behavior and
+    budget.
     """
     redacted = _redact_value(dict(metadata) if metadata is not None else {})
     if not isinstance(redacted, dict):
         return {"value": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES)}
 
     correlation = {
-        field: redacted[field]
-        for field in _CORRELATION_METADATA_FIELDS
-        if field in redacted
+        field: redacted[field] for field in _CORRELATION_METADATA_FIELDS if field in redacted
     }
     payload = {
         field: value

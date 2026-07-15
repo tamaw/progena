@@ -406,13 +406,14 @@ export function describeStreamEvent(event) {
   if (eventType === 'tool_result') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
     const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
-    const output = isNormalTool(toolName)
-      ? toolOutputLabel(metadata, 'result_preview', toolName)
+    const normalTool = isNormalTool(toolName);
+    const output = normalTool
+      ? ''
       : (typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '');
     return {
       badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
-      metaDetail: isNormalTool(toolName) ? duration : [duration, output].filter(Boolean).join(' • ') || 'completed',
+      metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'completed',
       bodyDetail: '',
     };
   }
@@ -420,13 +421,14 @@ export function describeStreamEvent(event) {
   if (eventType === 'tool_error') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
     const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
-    const output = isNormalTool(toolName)
-      ? toolOutputLabel(metadata, 'error', toolName)
+    const normalTool = isNormalTool(toolName);
+    const output = normalTool
+      ? ''
       : (typeof metadata.error === 'string' ? metadata.error.trim() : '');
     return {
       badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
-      metaDetail: isNormalTool(toolName) ? duration : [duration, output].filter(Boolean).join(' • ') || 'error',
+      metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'error',
       bodyDetail: '',
     };
   }
