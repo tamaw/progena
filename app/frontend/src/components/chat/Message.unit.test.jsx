@@ -398,9 +398,20 @@ describe('Message with timelineItems', () => {
     expect(payload).toContain(rawResult.replaceAll('"', '&quot;'));
   });
 
-  it('renders assistant_message with agent header, displayAgentName, and model details', () => {
+  it('renders reasoning-token metadata only on its reasoning timeline event', () => {
     const message = baseMessage({
       timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'reasoning-1',
+          event: {
+            id: 'reasoning-1',
+            eventType: 'reasoning_delta',
+            timestamp: MS_EPOCH,
+            content: 'Checking the result before responding',
+            metadata: { reasoning_tokens: 3 },
+          },
+        },
         {
           kind: 'assistant_message',
           id: 'a1',
@@ -419,15 +430,20 @@ describe('Message with timelineItems', () => {
     });
 
     const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const reasoningRowStart = html.indexOf('<article class="message-stream-event');
+    const assistantRowStart = html.indexOf('<article class="message-wrapper assistant');
+    const reasoningRow = html.slice(reasoningRowStart, assistantRowStart);
+    const assistantRow = html.slice(assistantRowStart);
 
-    expect(html).toContain('entry__tag--assistant');
-    expect(html).toContain('agent');
-    expect(html).toContain('CodeReviewer');
-    expect(html).toContain('gpt-4');
-    expect(html).toContain('review');
-    expect(html).toContain('Response from agent');
-    expect(html).toContain('5 tokens');
-    expect(html).toContain('3 reasoning tokens');
+    expect(reasoningRowStart).toBeGreaterThan(-1);
+    expect(assistantRowStart).toBeGreaterThan(reasoningRowStart);
+    expect(reasoningRow).toContain('3 reasoning tokens');
+    expect(assistantRow).not.toContain('3 reasoning tokens');
+    expect(assistantRow).toContain('5 tokens');
+    expect(assistantRow).toContain('CodeReviewer');
+    expect(assistantRow).toContain('gpt-4');
+    expect(assistantRow).toContain('review');
+    expect(assistantRow).toContain('Response from agent');
   });
 
   it('renders stream_event kind as a stream event row', () => {
@@ -499,6 +515,67 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('chat-event-badge--reason');
     expect(html).toContain('chat-event-tag--reason');
     expect(html).toContain('Reasoning');
+  });
+  it('collapses multi-paragraph reasoning behind its visible summary', () => {
+    const summaryText = 'I will inspect the existing behavior first.';
+    const firstDetail = 'Then I will implement the smallest safe change.';
+    const secondDetail = 'Finally I will verify the affected flow.';
+    const message = baseMessage({
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'reasoning-disclosure',
+          event: {
+            id: 'reasoning-disclosure',
+            eventType: 'reasoning_delta',
+            content: `${summaryText}\n\n${firstDetail}\n\n${secondDetail}`,
+            metadata: { reasoning_tokens: 11 },
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosureMatch = html.match(/<details class="tool-event-disclosure reasoning-event-disclosure">[\s\S]*?<\/details>/);
+    const disclosure = disclosureMatch?.[0] || '';
+    const summaryMatch = disclosure.match(/<summary>([\s\S]*?)<\/summary>/);
+    const summary = summaryMatch?.[1] || '';
+    const summaryEnd = disclosure.indexOf('</summary>');
+
+    expect(disclosure).toContain('<details class="tool-event-disclosure reasoning-event-disclosure">');
+    expect(summary).toContain(summaryText);
+    expect(summary).not.toContain(firstDetail);
+    expect(summary).not.toContain(secondDetail);
+    expect(disclosure.indexOf(firstDetail)).toBeGreaterThan(summaryEnd);
+    expect(disclosure.indexOf(secondDetail)).toBeGreaterThan(summaryEnd);
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    expect(html).toContain('11 reasoning tokens');
+  });
+
+  it('renders single-paragraph reasoning as a non-disclosure body', () => {
+    const reasoningText = 'This reasoning remains directly visible.';
+    const message = baseMessage({
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'single-paragraph-reasoning',
+          event: {
+            id: 'single-paragraph-reasoning',
+            eventType: 'reasoning_delta',
+            content: reasoningText,
+            metadata: {},
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('class="message-stream-event-body entry__content"');
+    expect(html).toContain(reasoningText);
+    expect(html).not.toContain('reasoning-event-disclosure');
   });
 
   it('reconstructs earlier reasoning ahead of a later tool timeline item with its timestamp', () => {

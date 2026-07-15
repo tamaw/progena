@@ -772,6 +772,27 @@ function ConversationPage() {
     handleSend(message);
   }, [handleSend]);
 
+  const handleRegenerate = useCallback((assistantMessageId) => {
+    if (isGenerating) return false;
+    const assistantIndex = messages.findIndex((message) => message.id === assistantMessageId);
+    const prompt = assistantIndex > 0
+      ? messages
+        .slice(0, assistantIndex)
+        .reverse()
+        .find((message) => (
+          message.role === 'user'
+          && typeof message.content === 'string'
+          && message.content.trim()
+        ))
+      : null;
+    if (!prompt) {
+      show('error', 'Regeneration unavailable', 'The original user message is no longer available.');
+      return false;
+    }
+    void handleSend(prompt.content);
+    return true;
+  }, [handleSend, isGenerating, messages, show]);
+
   const clearBackendSelection = useCallback(() => {
     setSelectedBackendChatId(null);
     dispatch(clearActiveChatSession());
@@ -1521,6 +1542,10 @@ function ConversationPage() {
                       streamEventFilter={streamEventFilter}
                       hideContent={msg.role === 'assistant' && streamFilters.agent === false}
                       showImages={streamFilters.images !== false}
+                      onRegenerate={msg.role === 'assistant'
+                        ? () => handleRegenerate(msg.id)
+                        : undefined}
+                      regenerateDisabled={isGenerating}
                     />
                   );
                 })}
