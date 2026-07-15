@@ -20,7 +20,7 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
@@ -80,6 +80,19 @@ config = ChatServerConfig.from_env()
 client: ProgenitorClient | SSEProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
 _response_request_ids: dict[str, str] = {}
+# The event loop only holds weak references to tasks: an unreferenced
+# fire-and-forget task can be garbage-collected mid-await and die silently.
+# Observed in production: a dispatched generation vanished between its 202
+# acknowledgement and the runtime POST, losing the user's message.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+    """``asyncio.create_task`` with a strong reference held until completion."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def get_progenitor_liveness() -> bool:
@@ -680,7 +693,7 @@ async def lifespan(app: FastAPI):
             urgent = bool(metadata.get("urgent")) or level in {"warning", "error"}
             requires_response = bool(metadata.get("requires_response"))
 
-            asyncio.create_task(
+            _spawn_background_task(
                 _handle_alert_request(
                     client,
                     title=title,
@@ -722,7 +735,7 @@ async def lifespan(app: FastAPI):
                 content = data.get("content", "")
                 if content:
                     # Fire and forget - don't block SSE broadcast
-                    asyncio.create_task(_send_telegram_message(telegram, content, event_type))
+                    _spawn_background_task(_send_telegram_message(telegram, content, event_type))
 
     client = get_sse_client(config, event_callback=combined_event_callback)
 
@@ -785,7 +798,7 @@ async def lifespan(app: FastAPI):
         logger.info("Telegram polling started with message handler")
 
         # Send a one-time agent-generated greeting now that Telegram + IPC are wired.
-        asyncio.create_task(_send_telegram_connected_message(telegram_client, client))
+        _spawn_background_task(_send_telegram_connected_message(telegram_client, client))
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
@@ -1017,7 +1030,7 @@ async def responses(
 
     # Task creation is the generation dispatch. Enqueue the causal started
     # event only after that dispatch and before acknowledging it.
-    asyncio.create_task(
+    _spawn_background_task(
         _run_response_event_stream(
             message=last_user_msg,
             model=body.model,

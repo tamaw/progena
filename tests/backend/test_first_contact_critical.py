@@ -300,7 +300,7 @@ class TestRealTimeFeedbackConsistency:
         # Create multiple subscriber queues (like multiple alien terminals)
         queues = [asyncio.Queue() for _ in range(5)]
         for q in queues:
-            _ui_stream_subscribers.add(q)
+            _ui_stream_subscribers[q] = None
 
         try:
             # Broadcast an important message
@@ -324,13 +324,13 @@ class TestRealTimeFeedbackConsistency:
                 assert envelope.payload["status"] == "initiated"
         finally:
             for q in queues:
-                _ui_stream_subscribers.discard(q)
+                _ui_stream_subscribers.pop(q, None)
 
     def test_multiple_broadcasts_in_sequence(self):
         """Multiple events must arrive in order."""
         _ui_stream_subscribers.clear()
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             events = [
@@ -354,7 +354,7 @@ class TestRealTimeFeedbackConsistency:
             assert received[2]["envelope"].type == "signal_decoded"
             assert received[3]["envelope"].type == "response_sent"
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""
