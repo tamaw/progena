@@ -7,13 +7,60 @@
  */
 
 import { renderMarkdownToHtml } from '../../lib/markdown';
-import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
+import { isReasoningEvent } from './streamEventsModel';
 
 // ─── Markdown / HTML ──────────────────────────────────────────────────────
 
 export function formatMessage(content) {
   return renderMarkdownToHtml(content);
 }
+// Reasoning events are merged into fresh objects as deltas arrive, so a WeakMap
+// keyed only by object identity misses the cache on every update. Keep a small
+// ID-keyed cache as well; source strings still invalidate entries when a merged
+// event changes, and the bound prevents retained reasoning text from growing
+// without limit. Sanitized HTML remains uncached because it depends on the live
+// DOM policy.
+const reasoningMarkdownCache = new WeakMap();
+const reasoningMarkdownById = new Map();
+const MAX_REASONING_MARKDOWN_ENTRIES = 128;
+
+function renderReasoningHtml(event, presentation) {
+  const summary = presentation.summary || '';
+  const detail = presentation.detail || '';
+  if (!event || (typeof event !== 'object' && typeof event !== 'function')) {
+    return {
+      summaryHtml: summary ? formatMessage(summary) : '',
+      detailHtml: detail ? formatMessage(detail) : '',
+    };
+  }
+
+  const eventId = typeof event.id === 'string' && event.id ? event.id : null;
+  let cached = eventId ? reasoningMarkdownById.get(eventId) : reasoningMarkdownCache.get(event);
+  if (!cached) {
+    cached = { summarySource: undefined, detailSource: undefined, summaryHtml: '', detailHtml: '' };
+  }
+
+  if (cached.summarySource !== summary) {
+    cached.summarySource = summary;
+    cached.summaryHtml = summary ? formatMessage(summary) : '';
+  }
+  if (cached.detailSource !== detail) {
+    cached.detailSource = detail;
+    cached.detailHtml = detail ? formatMessage(detail) : '';
+  }
+
+  if (eventId) {
+    reasoningMarkdownById.delete(eventId);
+    reasoningMarkdownById.set(eventId, cached);
+    while (reasoningMarkdownById.size > MAX_REASONING_MARKDOWN_ENTRIES) {
+      reasoningMarkdownById.delete(reasoningMarkdownById.keys().next().value);
+    }
+  } else {
+    reasoningMarkdownCache.set(event, cached);
+  }
+  return { summaryHtml: cached.summaryHtml, detailHtml: cached.detailHtml };
+}
+ 
 
 const ALLOWED_TAGS = new Set([
   'p', 'br', 'b', 'i', 'em', 'strong', 'code', 'pre', 'blockquote',
@@ -75,18 +122,16 @@ export function appendStreamingCursor(html) {
   cursor.className = 'stream-cursor';
   cursor.textContent = '▋';
 
-  const template = document.createElement('template');
-  template.innerHTML = html || '';
+  const container = document.createElement('div');
+  container.innerHTML = html || '';
 
-  let host = template.content;
+  let host = container;
   while (host.lastElementChild) {
     host = host.lastElementChild;
   }
   host.appendChild(cursor);
 
-  const div = document.createElement('div');
-  div.appendChild(template.content.cloneNode(true));
-  return div.innerHTML;
+  return container.innerHTML;
 }
 
 // ─── Label / display helpers ─────────────────────────────────────────────
@@ -468,11 +513,12 @@ export function describeStreamEvent(event) {
 
   if (isReasoningEvent(event)) {
     const presentation = reasoningPresentation(event);
+    const reasoningHtml = renderReasoningHtml(event, presentation);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
-      bodyHtml: presentation.summary ? formatMessage(presentation.summary) : '',
-      reasoningDetailHtml: presentation.detail ? formatMessage(presentation.detail) : '',
+      bodyHtml: reasoningHtml.summaryHtml,
+      reasoningDetailHtml: reasoningHtml.detailHtml,
       metaDetail: '',
       bodyDetail: '',
     };

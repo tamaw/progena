@@ -561,19 +561,27 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
       },
     ];
   } else {
-    // Update existing assistant row in timelineItems.
-    next.timelineItems = next.timelineItems.map((item) => {
+    // Update existing assistant row in timelineItems without rebuilding every item.
+    const timelineItems = next.timelineItems.slice();
+    let assistantIndex = -1;
+    for (let index = 0; index < timelineItems.length; index += 1) {
+      const item = timelineItems[index];
       if (item.kind === 'assistant_message' && item.id === next.assistantMessageId) {
-        return {
-          ...item,
-          content: next.content,
-          tokenCount: next.tokenCount,
-          reasoningTokenCount: next.reasoningTokenCount,
-          reasoningText: next.reasoningText,
-        };
+        assistantIndex = index;
+        break;
       }
-      return item;
-    });
+    }
+    if (assistantIndex >= 0) {
+      const item = timelineItems[assistantIndex];
+      timelineItems[assistantIndex] = {
+        ...item,
+        content: next.content,
+        tokenCount: next.tokenCount,
+        reasoningTokenCount: next.reasoningTokenCount,
+        reasoningText: next.reasoningText,
+      };
+    }
+    next.timelineItems = timelineItems;
   }
 
   return next;

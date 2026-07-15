@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { memo, useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
@@ -45,12 +45,14 @@ import {
   CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
   collectMessageImages,
-  countReasoningTokens,
+  committedReasoningTokenCounts,
+  committedReasoningTokenDisplay,
   countTokens,
   countToolInvocations,
   deriveChatTitle,
   formatStartedTime,
   groupSessionItems,
+  liveReasoningTokenAdjustment,
   shouldShowChatContentLoading,
   getActiveRouteThreadId,
   shouldShowNewChatEmptyState,
@@ -105,47 +107,6 @@ function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
 }
 
-function estimateReasoningTokens(reasoningText) {
-  const length = typeof reasoningText === 'string' ? reasoningText.trim().length : 0;
-  return length > 0 ? Math.round(length / 4) : 0;
-}
-
-function reasoningTokenDisplay(messages, liveAssistantTurn) {
-  let total = countReasoningTokens(messages);
-  let estimated = false;
-  for (const message of messages) {
-    if (message?.role !== 'assistant' && message?.role !== 'ai') continue;
-    if (Number.isFinite(message.reasoningTokenCount) && message.reasoningTokenCount > 0) continue;
-    const estimate = estimateReasoningTokens(message.reasoningText);
-    if (estimate > 0) {
-      total += estimate;
-      estimated = true;
-    }
-  }
-
-  if (liveAssistantTurn) {
-    const committed = liveAssistantTurn.assistantMessageId
-      ? messages.find((message) => message.id === liveAssistantTurn.assistantMessageId)
-      : null;
-    const liveCount = Number.isFinite(liveAssistantTurn.reasoningTokenCount)
-      ? liveAssistantTurn.reasoningTokenCount
-      : 0;
-    const committedCount = Number.isFinite(committed?.reasoningTokenCount)
-      ? committed.reasoningTokenCount
-      : 0;
-    if (liveCount > committedCount) {
-      total += liveCount - committedCount;
-    } else if (!committed) {
-      const estimate = estimateReasoningTokens(liveAssistantTurn.reasoningText);
-      if (estimate > 0) {
-        total += estimate;
-        estimated = true;
-      }
-    }
-  }
-
-  return { total, estimated };
-}
 
 function filterSupportedPersistedStreamEvents(streamEvents) {
   const startedSubagentIds = new Set();
@@ -280,6 +241,197 @@ function stripEphemeralStreamEvents(message) {
   }
   return { ...message, streamEvents: persistable };
 }
+
+const HistoricalMessage = memo(function HistoricalMessage({
+  message,
+  streamEventFilter,
+  hideContent,
+  showImages,
+  onRegenerate,
+  regenerateDisabled,
+}) {
+  const handleMessageRegenerate = useCallback(
+    () => onRegenerate?.(message.id),
+    [message.id, onRegenerate],
+  );
+
+  return (
+    <Message
+      message={message}
+      streamEventFilter={streamEventFilter}
+      hideContent={hideContent}
+      showImages={showImages}
+      onRegenerate={message.role === 'assistant' ? handleMessageRegenerate : undefined}
+      regenerateDisabled={regenerateDisabled}
+    />
+  );
+});
+
+const LiveConversationHeader = memo(function LiveConversationHeader({
+  liveTurnStore,
+  isRouteDetailError,
+  messages,
+  totalTokenCount,
+  firstMessageTime,
+  isContentLoading,
+  isEmptyConversationPane,
+  showEventFilters,
+  streamFilters,
+  streamFiltersStorageKey,
+  updateStreamFilters,
+  threadId,
+  isEditingTitle,
+  titleInputRef,
+  titleDraft,
+  setTitleDraft,
+  saveTitleEdit,
+  cancelTitleEdit,
+  startTitleEdit,
+  chatActions,
+  title,
+}) {
+  const liveAssistantTurn = useSyncExternalStore(
+    liveTurnStore.subscribe,
+    liveTurnStore.getSnapshot,
+    liveTurnStore.getSnapshot,
+  );
+  const committedReasoningMeta = useMemo(
+    () => committedReasoningTokenDisplay(messages),
+    [messages],
+  );
+  const committedReasoningCounts = useMemo(
+    () => committedReasoningTokenCounts(messages),
+    [messages],
+  );
+  const liveReasoningMeta = useMemo(
+    () => liveReasoningTokenAdjustment(liveAssistantTurn, committedReasoningCounts),
+    [committedReasoningCounts, liveAssistantTurn],
+  );
+  const reasoningTokenMeta = useMemo(() => ({
+    total: committedReasoningMeta.total + liveReasoningMeta.total,
+    estimated: committedReasoningMeta.estimated || liveReasoningMeta.estimated,
+  }), [committedReasoningMeta, liveReasoningMeta]);
+  const committedEventCounts = useMemo(() => {
+    const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
+    for (const message of messages) {
+      if (message.role === 'user') { counts.user++; continue; }
+      if (message.role === 'assistant') {
+        counts.agent++;
+        counts.reasoning += countReasoningTimelineEntries(
+          message.streamEvents,
+          message.reasoningText,
+        );
+      }
+      counts.images += collectMessageImages(message).length;
+      countCategorizedEvents(message.streamEvents, counts);
+    }
+    return counts;
+  }, [messages]);
+  const liveReasoningEventCount = useMemo(() => (
+    liveAssistantTurn
+      ? countReasoningTimelineEntries(
+        liveAssistantTurn.timelineItems?.map((item) => item.event),
+        '',
+      )
+      : 0
+  ), [liveAssistantTurn]);
+  const eventCounts = useMemo(() => ({
+    ...committedEventCounts,
+    reasoning: committedEventCounts.reasoning + liveReasoningEventCount,
+  }), [committedEventCounts, liveReasoningEventCount]);
+
+  return (
+    <>
+      <DetailHeader
+        className="chat-detail-header"
+        titleClassName="chat-detail-header__title"
+        title={(
+          <>
+            {isEditingTitle ? (
+              <input
+                ref={titleInputRef}
+                type="text"
+                className="chat-page-header__title-input"
+                value={titleDraft}
+                maxLength={120}
+                aria-label="Conversation title"
+                onChange={(event) => setTitleDraft(event.target.value)}
+                onBlur={cancelTitleEdit}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveTitleEdit();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelTitleEdit();
+                  }
+                }}
+              />
+            ) : (
+              <span className="chat-detail-header__title-text">
+                {isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : title)}
+              </span>
+            )}
+            <button
+              type="button"
+              className="chat-icon-button chat-detail-header__rename"
+              data-tooltip={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+              aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
+              onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
+              onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
+            >
+              {isEditingTitle ? (
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                </svg>
+              )}
+            </button>
+          </>
+        )}
+        actions={(
+          <DetailHeaderActions menuLabel="Conversation actions">
+            {chatActions.map((action) => (
+              <DetailHeaderAction
+                key={action.key}
+                icon={action.icon}
+                label={action.label}
+                tooltip={action.label}
+                ariaLabel={action.label}
+                variant={action.danger ? 'danger' : 'default'}
+                className={action.active ? 'is-active' : ''}
+                disabled={action.disabled}
+                aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
+                onClick={action.onClick}
+              />
+            ))}
+          </DetailHeaderActions>
+        )}
+        meta={isContentLoading || isEmptyConversationPane ? [] : [
+          <span key="model" className="chat-page-header__model">
+            <span className="agent-dot agent-dot--purple" />
+            {CHAT_AGENT_NAME}
+          </span>,
+          <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
+          <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
+          <span key="reasoning-tokens" className="muted">{reasoningTokenMeta.estimated ? '~' : ''}{new Intl.NumberFormat().format(reasoningTokenMeta.total)} reasoning tokens</span>,
+          threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
+        ]}
+      />
+      {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
+        <StreamFilterMenu
+          storageKey={streamFiltersStorageKey}
+          filters={streamFilters}
+          onChange={updateStreamFilters}
+          eventCounts={eventCounts}
+        />
+      )}
+    </>
+  );
+});
 
 function ConversationPage() {
   const dispatch = useDispatch();
@@ -428,11 +580,6 @@ function ConversationPage() {
     selectedBackendChatIdRef,
     reloadOpenChat,
   });
-  const liveAssistantTurn = useSyncExternalStore(
-    liveTurnStore.subscribe,
-    liveTurnStore.getSnapshot,
-    liveTurnStore.getSnapshot,
-  );
 
   const openBackendChat = useCallback(async (threadId) => {
     if (!threadId) {
@@ -1031,33 +1178,7 @@ function ConversationPage() {
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
   const totalTokenCount = useMemo(() => countTokens(messages), [messages]);
-  const reasoningTokenMeta = useMemo(
-    () => reasoningTokenDisplay(messages, liveAssistantTurn),
-    [liveAssistantTurn, messages],
-  );
   const totalToolCount = useMemo(() => countToolInvocations(messages), [messages]);
-  const eventCounts = useMemo(() => {
-    const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
-    for (const message of messages) {
-      if (message.role === 'user') { counts.user++; continue; }
-      if (message.role === 'assistant') {
-        counts.agent++;
-        counts.reasoning += countReasoningTimelineEntries(
-          message.streamEvents,
-          message.reasoningText,
-        );
-      }
-      counts.images += collectMessageImages(message).length;
-      countCategorizedEvents(message.streamEvents, counts);
-    }
-    if (liveAssistantTurn) {
-      counts.reasoning += countReasoningTimelineEntries(
-        liveAssistantTurn.timelineItems?.map((item) => item.event),
-        '',
-      );
-    }
-    return counts;
-  }, [liveAssistantTurn, messages]);
   const firstMessageTime = useMemo(
     () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
     [messages],
@@ -1475,94 +1596,29 @@ function ConversationPage() {
       </PaneSection>
 
       <DetailPane flush className="chat-detail" label="Chat conversation">
-        <DetailHeader
-          className="chat-detail-header"
-          titleClassName="chat-detail-header__title"
-
-          title={(
-            <>
-              {isEditingTitle ? (
-                <input
-                  ref={titleInputRef}
-                  type="text"
-                  className="chat-page-header__title-input"
-                  value={titleDraft}
-                  maxLength={120}
-                  aria-label="Conversation title"
-                  onChange={(event) => setTitleDraft(event.target.value)}
-                  onBlur={cancelTitleEdit}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      saveTitleEdit();
-                    } else if (event.key === 'Escape') {
-                      event.preventDefault();
-                      cancelTitleEdit();
-                    }
-                  }}
-                />
-              ) : (
-                <span className="chat-detail-header__title-text">
-                  {isContentLoading ? '' : isRouteDetailError ? 'Conversation unavailable' : (isEmptyConversationPane ? 'No conversation selected' : chatTitle)}
-                </span>
-              )}
-              <button
-                type="button"
-                className="chat-icon-button chat-detail-header__rename"
-                data-tooltip={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
-                aria-label={isEditingTitle ? 'Save conversation name' : 'Rename conversation'}
-                onMouseDown={isEditingTitle ? (event) => event.preventDefault() : undefined}
-                onClick={isEditingTitle ? saveTitleEdit : startTitleEdit}
-              >
-                {isEditingTitle ? (
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                    <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-                    <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-                  </svg>
-                )}
-              </button>
-            </>
-          )}
-          actions={(
-            <DetailHeaderActions menuLabel="Conversation actions">
-              {chatActions.map((action) => (
-                <DetailHeaderAction
-                  key={action.key}
-                  icon={action.icon}
-                  label={action.label}
-                  tooltip={action.label}
-                  ariaLabel={action.label}
-                  variant={action.danger ? 'danger' : 'default'}
-                  className={action.active ? 'is-active' : ''}
-                  disabled={action.disabled}
-                  aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
-                  onClick={action.onClick}
-                />
-              ))}
-            </DetailHeaderActions>
-          )}
-          meta={isContentLoading || isEmptyConversationPane ? [] : [
-            <span key="model" className="chat-page-header__model">
-              <span className="agent-dot agent-dot--purple" />
-              {CHAT_AGENT_NAME}
-            </span>,
-            <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
-            <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
-            <span key="reasoning-tokens" className="muted">{reasoningTokenMeta.estimated ? '~' : ''}{new Intl.NumberFormat().format(reasoningTokenMeta.total)} reasoning tokens</span>,
-            threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
-          ]}
+        <LiveConversationHeader
+          liveTurnStore={liveTurnStore}
+          messages={messages}
+          totalTokenCount={totalTokenCount}
+          firstMessageTime={firstMessageTime}
+          isContentLoading={isContentLoading}
+          isEmptyConversationPane={isEmptyConversationPane}
+          isRouteDetailError={isRouteDetailError}
+          showEventFilters={showEventFilters}
+          streamFilters={streamFilters}
+          streamFiltersStorageKey={config.storage.streamFilters}
+          updateStreamFilters={updateStreamFilters}
+          threadId={threadId}
+          isEditingTitle={isEditingTitle}
+          titleInputRef={titleInputRef}
+          titleDraft={titleDraft}
+          setTitleDraft={setTitleDraft}
+          saveTitleEdit={saveTitleEdit}
+          cancelTitleEdit={cancelTitleEdit}
+          startTitleEdit={startTitleEdit}
+          chatActions={chatActions}
+          title={chatTitle}
         />
-        {!isContentLoading && !isEmptyConversationPane && showEventFilters && (
-          <StreamFilterMenu
-            storageKey={config.storage.streamFilters}
-            filters={streamFilters}
-            onChange={updateStreamFilters}
-            eventCounts={eventCounts}
-          />
-        )}
 
         <div
           className="chat-messages sess-detail__body chat-detail-body"
@@ -1592,15 +1648,13 @@ function ConversationPage() {
                 {messages.map((msg) => {
                   if (msg.role === 'user' && streamFilters.user === false) return null;
                   return (
-                    <Message
+                    <HistoricalMessage
                       key={msg.id}
                       message={msg}
                       streamEventFilter={streamEventFilter}
                       hideContent={msg.role === 'assistant' && streamFilters.agent === false}
                       showImages={streamFilters.images !== false}
-                      onRegenerate={msg.role === 'assistant'
-                        ? () => handleRegenerate(msg.id)
-                        : undefined}
+                      onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
                       regenerateDisabled={isGenerating}
                     />
                   );

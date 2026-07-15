@@ -1133,6 +1133,33 @@ describe('applyAssistantChunk', () => {
     expect(second.timelineItems[0].tokenCount).toBe(2);
   });
 
+  it('on subsequent chunks: preserves stream-event identity while replacing the assistant row immutably', () => {
+    const turn = baseTurn();
+    const withEvent = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
+    const first = applyAssistantChunk(withEvent, 'Answer', NOW + 100);
+    const priorTimelineItems = first.timelineItems;
+    const priorStreamEvent = priorTimelineItems.find((item) => item.kind === 'stream_event');
+    const priorAssistant = priorTimelineItems.find((item) => item.kind === 'assistant_message');
+
+    const second = applyAssistantChunk(first, ' more', NOW + 200);
+    const nextStreamEvent = second.timelineItems.find((item) => item.kind === 'stream_event');
+    const nextAssistant = second.timelineItems.find((item) => item.kind === 'assistant_message');
+
+    expect(second.content).toBe('Answer more');
+    expect(second.tokenCount).toBe(2);
+    expect(second.timelineItems).not.toBe(priorTimelineItems);
+    expect(nextStreamEvent).toBe(priorStreamEvent);
+    expect(nextAssistant).not.toBe(priorAssistant);
+    expect(nextAssistant.content).toBe('Answer more');
+    expect(nextAssistant.tokenCount).toBe(2);
+
+    expect(first.content).toBe('Answer');
+    expect(first.tokenCount).toBe(1);
+    expect(first.timelineItems).toBe(priorTimelineItems);
+    expect(priorAssistant.content).toBe('Answer');
+    expect(priorAssistant.tokenCount).toBe(1);
+  });
+
   it('does NOT overwrite assistantMessageId or assistantTimestamp on subsequent chunks', () => {
     const turn = baseTurn();
     const first = applyAssistantChunk(turn, 'A', NOW);

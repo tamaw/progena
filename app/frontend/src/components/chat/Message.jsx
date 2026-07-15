@@ -164,10 +164,10 @@ function MessageView({
   }, [hasTimelineItems, isStreaming, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
-    if (!content) return '';
+    if (!content || hasTimelineItems) return '';
     const sanitized = sanitizeHtmlFragment(formatMessage(content));
     return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
-  }, [content, isStreaming]);
+  }, [content, hasTimelineItems, isStreaming]);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
@@ -196,8 +196,8 @@ function MessageView({
   // collectMessageImages() -- see its doc comment for why this must stay one function
   // rather than duplicated logic here and in the Images filter count.
   const messageImages = useMemo(
-    () => collectMessageImages({ role, content, streamEvents }),
-    [role, content, streamEvents],
+    () => (showImages && !hideContent ? collectMessageImages({ role, content, streamEvents }) : []),
+    [content, hideContent, role, showImages, streamEvents],
   );
 
   const messageEntry = (
@@ -343,6 +343,7 @@ function StreamEvents({ events }) {
     <>
       {events.map((event) => {
         const description = describeStreamEvent(event);
+        const isReasoning = isReasoningEvent(event);
         const badge = badgeForEvent(event.eventType || 'stream_event');
         const tool = toolDetailsForEvent(event, description);
         const tokenMetaItems = tokenMetaItemsForEvent(event);
@@ -373,14 +374,29 @@ function StreamEvents({ events }) {
                   {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
                 </span>
               </div>
-              {description.bodyHtml && (
+              {isReasoning && description.reasoningDetailHtml ? (
+                <details className="tool-event-disclosure reasoning-event-disclosure">
+                  <summary>
+                    <div
+                      className="message-content reasoning-event-disclosure__summary"
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml || '') }}
+                    />
+                    <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+                    <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+                    <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+                  </summary>
+                  <div className="reasoning-event-disclosure__detail">
+                    <div
+                      className="message-content"
+                      dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
+                    />
+                  </div>
+                </details>
+              ) : description.bodyHtml && (
                 <div
                   className="message-stream-event-body entry__content"
                   dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
                 />
-              )}
-              {description.bodyDetail && !tool && !description.bodyHtml && (
-                <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
               )}
               {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
                 <div className="tool chat-event-tool">
