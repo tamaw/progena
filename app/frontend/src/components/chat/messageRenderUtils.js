@@ -323,8 +323,11 @@ export function formatDuration(ms) {
 }
 
 export function formatTimestamp(value) {
-  if (!Number.isFinite(value)) return '';
-  return new Date(value).toLocaleTimeString([], {
+  const timestamp = Number.isFinite(value)
+    ? value
+    : (typeof value === 'string' ? Date.parse(value) : NaN);
+  if (!Number.isFinite(timestamp)) return '';
+  return new Date(timestamp).toLocaleTimeString([], {
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
 }

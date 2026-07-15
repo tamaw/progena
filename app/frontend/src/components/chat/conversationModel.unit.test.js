@@ -240,6 +240,26 @@ describe('countReasoningTokens', () => {
 
     expect(countReasoningTokens(messages)).toBe(15);
   });
+  it('ignores missing, zero, invalid, and non-assistant reasoning counts', () => {
+    const messages = [
+      { role: 'assistant', reasoningTokenCount: 0 },
+      { role: 'assistant' },
+      { role: 'assistant', reasoningTokenCount: NaN },
+      { role: 'user', reasoningTokenCount: 99 },
+    ];
+
+    expect(countReasoningTokens(messages)).toBe(0);
+  });
+
+  it('sums provider reasoning counts across assistant messages', () => {
+    const messages = [
+      { role: 'assistant', reasoningTokenCount: 64 },
+      { role: 'user', reasoningTokenCount: 99 },
+      { role: 'assistant', reasoningTokenCount: 128 },
+    ];
+
+    expect(countReasoningTokens(messages)).toBe(192);
+  });
 });
 
 describe('collectMessageImages', () => {

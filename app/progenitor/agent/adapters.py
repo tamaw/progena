@@ -64,15 +64,22 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
-    # ChatOpenAI's Responses API adapter accepts the complete reasoning
-    # configuration through its native ``reasoning`` parameter. Passing the
-    # summary through ``extra_body`` alongside ``reasoning_effort`` produces a
-    # reasoning block but can leave output_token_details.reasoning at zero.
-    reasoning: dict[str, str] | None = None
+    # Azure's Responses-compatible endpoint returns reliable reasoning usage
+    # when effort is passed through ChatOpenAI's legacy reasoning_effort option
+    # and the summary is supplied in the request body. The OpenAI SDK shallowly
+    # merges extra_body into its generated request, so extra_body must repeat
+    # effort or it replaces the generated {"effort": ...} reasoning object.
+    # Keep this shape because the native reasoning parameter produced summaries
+    # with zero usage counts.
+    reasoning_effort: str | None = None
+    extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
-        reasoning = {
-            "effort": config.reasoning_effort,
-            "summary": config.reasoning_summary,
+        reasoning_effort = config.reasoning_effort
+        extra_body = {
+            "reasoning": {
+                "effort": config.reasoning_effort,
+                "summary": config.reasoning_summary,
+            }
         }
         logger.info(
             "Reasoning enabled for model %s (effort=%s, summary=%s)",
@@ -91,7 +98,8 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
-        reasoning=reasoning,
+        reasoning_effort=reasoning_effort,
+        extra_body=extra_body,
     )
 
     logger.info(

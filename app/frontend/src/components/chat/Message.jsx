@@ -21,11 +21,17 @@ function isTimelineStreamEvent(event) {
   return event?.eventType !== 'message_delta';
 }
 
-function buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId) {
+function buildSyntheticReasoningEvent(
+  reasoningText,
+  reasoningTokenCount,
+  reasoningTimestamp,
+  messageId,
+) {
   const trimmed = reasoningText.trim();
   return {
     id: `${messageId}-reasoning`,
     eventType: 'reasoning_summary',
+    timestamp: reasoningTimestamp || undefined,
     content: reasoningText,
     metadata: {
       source: 'message_reasoning',
@@ -37,7 +43,13 @@ function buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messag
   };
 }
 
-function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCount, messageId) {
+function buildTimelineStreamEvents(
+  streamEvents,
+  reasoningText,
+  reasoningTokenCount,
+  reasoningTimestamp,
+  messageId,
+) {
   const timelineEvents = streamEvents.filter(isTimelineStreamEvent);
   const hasReasoningEntry = timelineEvents.some((event) =>
     isReasoningEvent(event) && hasReasoningContent(event)
@@ -48,7 +60,7 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
     return timelineEvents;
   }
 
-  return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId), ...timelineEvents];
+  return [buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, reasoningTimestamp, messageId), ...timelineEvents];
 }
 
 // Backend-loaded (non-live) assistant messages carry reasoningText as a plain
@@ -57,7 +69,13 @@ function buildTimelineStreamEvents(streamEvents, reasoningText, reasoningTokenCo
 // one. Inject a synthetic reasoning row here, ahead of the assistant_message
 // row, so history reloads don't silently lose the reasoning trace that live
 // streaming shows via liveAssistantTurnModel.js.
-function withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId) {
+function withReasoningFallback(
+  timelineItems,
+  reasoningText,
+  reasoningTokenCount,
+  reasoningTimestamp,
+  messageId,
+) {
   const hasReasoningEntry = timelineItems.some((item) =>
     item.kind === 'stream_event' && isReasoningEvent(item.event) && hasReasoningContent(item.event)
   );
@@ -65,10 +83,32 @@ function withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount
   if (hasReasoningEntry || !fallbackReasoningText) {
     return timelineItems;
   }
-  const event = buildSyntheticReasoningEvent(reasoningText, reasoningTokenCount, messageId);
-  const reasoningItem = { kind: 'stream_event', id: event.id, event };
+  const event = buildSyntheticReasoningEvent(
+    reasoningText,
+    reasoningTokenCount,
+    reasoningTimestamp,
+    messageId,
+  );
+  const reasoningItem = { kind: 'stream_event', id: event.id, event, timestamp: reasoningTimestamp };
   const assistantIndex = timelineItems.findIndex((item) => item.kind === 'assistant_message');
   if (assistantIndex < 0) return [reasoningItem, ...timelineItems];
+
+  const reasoningTime = Date.parse(reasoningTimestamp || '');
+  if (Number.isFinite(reasoningTime)) {
+    const chronologicalIndex = timelineItems.findIndex((item) => {
+      const timestamp = item.timestamp ?? item.event?.timestamp;
+      const itemTime = typeof timestamp === 'number' ? timestamp : Date.parse(timestamp || '');
+      return Number.isFinite(itemTime) && itemTime >= reasoningTime;
+    });
+    if (chronologicalIndex >= 0) {
+      return [
+        ...timelineItems.slice(0, chronologicalIndex),
+        reasoningItem,
+        ...timelineItems.slice(chronologicalIndex),
+      ];
+    }
+  }
+
   return [
     ...timelineItems.slice(0, assistantIndex),
     reasoningItem,
@@ -89,6 +129,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     tokenCount = 0,
     reasoningTokenCount = 0,
     reasoningText = '',
+    reasoningTimestamp = null,
     model = '',
     displayAgentName = '',
     displayModelName = '',
@@ -104,11 +145,12 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
       streamEvents,
       reasoningText,
       reasoningTokenCount,
+      reasoningTimestamp,
       messageId,
     );
     if (typeof streamEventFilter !== 'function') return timelineEvents;
     return timelineEvents.filter(streamEventFilter);
-  }, [hasTimelineItems, messageId, reasoningText, reasoningTokenCount, streamEvents, streamEventFilter]);
+  }, [hasTimelineItems, messageId, reasoningText, reasoningTimestamp, reasoningTokenCount, streamEvents, streamEventFilter]);
 
   const formattedContent = useMemo(() => {
     if (!content) return '';
@@ -215,7 +257,13 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
 
   // If the message has explicit timelineItems, render them in array order.
   if (hasTimelineItems) {
-    const fullTimelineItems = withReasoningFallback(timelineItems, reasoningText, reasoningTokenCount, messageId);
+    const fullTimelineItems = withReasoningFallback(
+      timelineItems,
+      reasoningText,
+      reasoningTokenCount,
+      reasoningTimestamp,
+      messageId,
+    );
     const visibleTimelineItems = fullTimelineItems.filter((item) => {
       if (item.kind === 'stream_event') {
         return typeof streamEventFilter !== 'function' || streamEventFilter(item.event);

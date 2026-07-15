@@ -575,6 +575,7 @@ class TestTurnTokenAccounting:
                             "output_tokens": 81,
                             "output_token_details": {"reasoning": 30},
                         },
+                        "response_metadata": {"created_at": "2026-07-14T00:00:01Z"},
                     },
                     {
                         "id": "t1",
@@ -606,6 +607,7 @@ class TestTurnTokenAccounting:
         assert reply.tool_calls[0]["result"] == "result text"
         assert reply.reasoning_text.strip()
         assert "Need to search before answering." in reply.reasoning_text
+        assert reply.reasoning_timestamp == "2026-07-14T00:00:01Z"
         assert reply.token_count == 81 + 57
         assert reply.reasoning_token_count == 30 + 10
 

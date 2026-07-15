@@ -216,10 +216,10 @@ export function countTokens(messages) {
 }
 
 export function countReasoningTokens(messages) {
-  return messages.reduce(
-    (total, message) => total + (Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0),
-    0,
-  );
+  return messages.reduce((total, message) => {
+    if (message?.role !== 'assistant' && message?.role !== 'ai') return total;
+    return total + (Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0);
+  }, 0);
 }
 
 function getFirstMessageTimestamp(messages) {
