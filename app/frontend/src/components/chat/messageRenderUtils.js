@@ -262,6 +262,33 @@ function todoItemCount(value) {
   }
 }
 
+function structuredResultSummary(raw, toolName) {
+  if (!raw || typeof raw !== 'string') return '';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    if (!raw.startsWith('{') && !raw.startsWith('[')) return '';
+    if (toolName === 'list_agents') {
+      return 'Listed available agents';
+    }
+    return 'Returned structured data';
+  }
+  if (toolName === 'list_agents' && parsed && Array.isArray(parsed.agents)) {
+    const count = parsed.agents.length;
+    return `Found ${count} agent${count === 1 ? '' : 's'}`;
+  }
+  if (Array.isArray(parsed)) {
+    return `Returned ${parsed.length} item${parsed.length === 1 ? '' : 's'}`;
+  }
+  if (parsed && typeof parsed === 'object') {
+    const keys = Object.keys(parsed);
+    return keys.length > 0
+      ? `Returned structured data · ${keys.length} field${keys.length === 1 ? '' : 's'}`
+      : 'Completed with no structured output';
+  }
+  return '';
+}
 function toolOutputLabel(metadata, fallbackKey, toolName = '') {
   const artifact = artifactSummary(metadata);
   if (artifact) return artifact;
@@ -270,11 +297,11 @@ function toolOutputLabel(metadata, fallbackKey, toolName = '') {
     const count = todoItemCount(fallback);
     if (count !== null) return `Updated todo list · ${count} item${count === 1 ? '' : 's'}`;
   }
-  return fallback;
+  return structuredResultSummary(fallback, toolName) || fallback;
 }
 
 function isNormalTool(toolName) {
-  return toolName !== 'call_agent';
+  return Boolean(toolName);
 }
 
 

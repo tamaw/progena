@@ -511,6 +511,55 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure.indexOf(rawArgs.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
     expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
   });
+
+  it('renders call_agent outer start and result rows as closed readable disclosures', () => {
+    const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
+    const rawResult = 'Agent finished successfully';
+    const message = baseMessage({
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'call-agent-start-1',
+          event: {
+            id: 'call-agent-start-1',
+            eventType: 'tool_start',
+            timestamp: MS_EPOCH,
+            metadata: {
+              tool_name: 'call_agent',
+              args_preview: rawArgs,
+            },
+          },
+        },
+        {
+          kind: 'stream_event',
+          id: 'call-agent-result-1',
+          event: {
+            id: 'call-agent-result-1',
+            eventType: 'tool_result',
+            timestamp: MS_EPOCH,
+            metadata: {
+              tool_name: 'call_agent',
+              duration_ms: 187,
+              result_preview: rawResult,
+            },
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
+
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
+    expect(disclosures[0]).toContain('agent: greetings_agent • request: hi');
+    expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
+    expect(disclosures[1]).toContain('Agent finished successfully');
+    expect(html).toContain('187ms');
+    expect(disclosures[1]).toContain(rawResult);
+    expect(disclosures.every((disclosure) => disclosure.includes('class="tool chat-event-tool"'))).toBe(true);
+  });
+
   it('renders artifact result summary as content, raw JSON inside closed Payload, and duration before timestamp', () => {
     const rawResult = '{"content":"raw result"}';
     const message = baseMessage({
@@ -584,6 +633,43 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
   });
 
+  it('renders legacy call_agent stream events as closed readable disclosures', () => {
+    const rawArgs = '{"agent":"greetings_agent","request":"hi"}';
+    const rawResult = 'Legacy route completed';
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [
+        {
+          id: 'legacy-call-agent-start-1',
+          eventType: 'tool_start',
+          metadata: {
+            tool_name: 'call_agent',
+            args_preview: rawArgs,
+          },
+        },
+        {
+          id: 'legacy-call-agent-result-1',
+          eventType: 'tool_result',
+          metadata: {
+            tool_name: 'call_agent',
+            duration_ms: 91,
+            result_preview: rawResult,
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
+
+    expect(disclosures).toHaveLength(2);
+    expect(disclosures.every((disclosure) => !/<details[^>]*\bopen(?:=|\s|>)/.test(disclosure))).toBe(true);
+    expect(disclosures[0]).toContain('agent: greetings_agent • request: hi');
+    expect(disclosures[0]).toContain(rawArgs.replaceAll('"', '&quot;'));
+    expect(disclosures[1]).toContain('Legacy route completed');
+    expect(html).toContain('91ms');
+  });
+
   it('keeps fallback result summaries out of the header while retaining raw output', () => {
     const rawResult = '{"content":"fallback raw result"}';
     const message = baseMessage({
@@ -621,5 +707,47 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
     expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
     expect(disclosure).toContain(rawResult.replaceAll('"', '&quot;'));
+  });
+  it('renders a concise list_agents summary while retaining structured raw output', () => {
+    const rawResult = JSON.stringify({ agents: [{ name: 'alpha' }, { name: 'beta' }] });
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'list-agents-result-1',
+        event: {
+          id: 'list-agents-result-1',
+          eventType: 'tool_result',
+          timestamp: MS_EPOCH,
+          metadata: {
+            tool_name: 'list_agents',
+            duration_ms: 240,
+            result_preview: rawResult,
+          },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const headerStart = html.indexOf('message-stream-event-header');
+    const headerEnd = html.indexOf('</div>', headerStart);
+    const header = html.slice(headerStart, headerEnd);
+    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
+    expect(disclosureStart).toBeGreaterThan(-1);
+    const disclosure = html.slice(disclosureStart);
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    const escapedResult = rawResult.replaceAll('"', '&quot;');
+
+    expect(html).toContain('Found 2 agents');
+    expect(header).not.toContain('Found 2 agents');
+    expect(header).not.toContain(rawResult);
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    expect(disclosure).toContain('tool-event-disclosure__summary');
+    expect(disclosure).toContain('class="tool__summary tool-event-disclosure__summary">Found 2 agents</span>');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(payloadStart).toBeGreaterThan(-1);
+    expect(disclosure.indexOf('class="tool__summary')).toBeLessThan(payloadStart);
+    expect(disclosure.indexOf(escapedResult)).toBeGreaterThan(payloadStart);
+    expect(disclosure).toContain(escapedResult);
+    expect(disclosure).not.toContain(rawResult);
   });
 });

@@ -95,6 +95,16 @@ function sanitizePersistedArtifact(value, depth = 0) {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function progressDurationMs(progressLog) {
+  if (!Array.isArray(progressLog)) return null;
+  const timestamps = progressLog
+    .map((entry) => (entry && typeof entry === 'object' ? Date.parse(entry.timestamp || '') : NaN))
+    .filter(Number.isFinite);
+  if (timestamps.length < 2) return null;
+  const duration = Math.max(...timestamps) - Math.min(...timestamps);
+  return duration >= 0 ? duration : null;
+}
+
 function buildToolStreamEvents(toolCalls, messageId) {
   if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
     return [];
@@ -208,7 +218,10 @@ function buildToolStreamEvents(toolCalls, messageId) {
         });
       });
     }
-    const isNormalToolCall = toolName !== 'call_agent';
+    const isNormalToolCall = Boolean(toolName);
+    const durationMs = Number.isFinite(tc.duration_ms)
+      ? tc.duration_ms
+      : progressDurationMs(tc.progress_log);
     const artifact = isNormalToolCall ? sanitizePersistedArtifact(tc.artifact) : undefined;
     const hasArtifact = artifact && typeof artifact === 'object' && !Array.isArray(artifact);
     if (result || (Array.isArray(tc.images) && tc.images.length > 0) || hasArtifact) {
@@ -226,8 +239,8 @@ function buildToolStreamEvents(toolCalls, messageId) {
           source: 'checkpoint',
         },
       };
-      if (isNormalToolCall && Number.isFinite(tc.duration_ms)) {
-        resultEvent.metadata.duration_ms = tc.duration_ms;
+      if (isNormalToolCall && Number.isFinite(durationMs)) {
+        resultEvent.metadata.duration_ms = durationMs;
       }
       if (hasArtifact) {
         resultEvent.metadata.artifact = artifact;
