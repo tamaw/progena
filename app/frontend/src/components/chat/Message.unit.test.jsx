@@ -501,6 +501,54 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('Reasoning');
   });
 
+  it('reconstructs earlier reasoning ahead of a later tool timeline item with its timestamp', () => {
+    const reasoningTimestamp = '2026-07-15T02:31:08.000Z';
+    const toolTimestamp = new Date('2026-07-15T02:31:09.000Z').getTime();
+    const message = baseMessage({
+      reasoningText: 'Thinking before the tool call',
+      reasoningTimestamp,
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'tool-later',
+          event: {
+            id: 'tool-later',
+            eventType: 'tool_start',
+            timestamp: toolTimestamp,
+            content: '',
+            metadata: { tool_name: 'search_web' },
+          },
+        },
+        {
+          kind: 'assistant_message',
+          id: 'assistant-after-tool',
+          content: 'The tool result is ready.',
+          timestamp: toolTimestamp + 1000,
+          displayAgentName: '',
+          displayModelName: '',
+          displayToolCalls: [],
+          tokenCount: 0,
+          reasoningTokenCount: 0,
+          reasoningText: '',
+          isStreaming: false,
+          error: false,
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const reasoningRowPos = html.indexOf('reasoning_summary');
+    const toolRowPos = html.indexOf('tool_start');
+    const formattedReasoningTimestamp = new Date(reasoningTimestamp).toLocaleTimeString([], {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+
+    expect(reasoningRowPos).toBeGreaterThan(-1);
+    expect(toolRowPos).toBeGreaterThan(reasoningRowPos);
+    expect(html.slice(reasoningRowPos, toolRowPos)).toContain('Thinking before the tool call');
+    expect(html.slice(reasoningRowPos, toolRowPos)).toContain(formattedReasoningTimestamp);
+  });
+
   it('renders tool_error stream event with error styling', () => {
     const message = baseMessage({
       timelineItems: [

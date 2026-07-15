@@ -286,6 +286,9 @@ export function normalizeBackendChatMessage(message, index) {
       ? message.reasoning_token_count
       : 0,
     reasoningText: typeof message.reasoning_text === 'string' ? message.reasoning_text : '',
+    reasoningTimestamp: typeof message.reasoning_timestamp === 'string'
+      ? message.reasoning_timestamp
+      : null,
     displayAgentName: typeof message.display_agent_name === 'string' ? message.display_agent_name : '',
     displayModelName: typeof message.display_model_name === 'string' ? message.display_model_name : '',
     displayToolCalls: Array.isArray(message.display_tool_calls) ? message.display_tool_calls : [],

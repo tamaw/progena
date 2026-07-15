@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary } from './messageRenderUtils';
+import { describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary, formatTimestamp } from './messageRenderUtils';
 
 function todosEvent(todos) {
   return { eventType: 'todos_update', metadata: { todos } };
@@ -425,5 +425,16 @@ describe('describeStreamEvent normal tool metadata', () => {
     };
 
     expect(describeStreamEvent(event).metaDetail).toBe('125ms');
+  });
+});
+
+describe('formatTimestamp', () => {
+  it('formats an ISO timestamp string as a local time with seconds', () => {
+    const isoTimestamp = '2026-07-15T02:31:08.000Z';
+    const expected = new Date(isoTimestamp).toLocaleTimeString([], {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+
+    expect(formatTimestamp(isoTimestamp)).toBe(expected);
   });
 });

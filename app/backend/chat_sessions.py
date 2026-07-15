@@ -116,6 +116,7 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     created_at: str | None = None
+    reasoning_timestamp: str | None = None
     token_count: int = 0
     reasoning_token_count: int = 0
     reasoning_text: str = ""
@@ -686,14 +687,16 @@ def _chat_message_from_raw(
         content = extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
     if not content and role == "assistant":
         return None
+    reasoning_text = extract_reasoning_trace(raw) or ""
     return ChatMessage(
         id=_raw_message_id(raw, index),
         role=role,
         content=content,
         created_at=_raw_message_created_at(raw),
+        reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
-        reasoning_text=extract_reasoning_trace(raw) or "",
+        reasoning_text=reasoning_text,
         display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
@@ -789,6 +792,7 @@ def _messages_from_checkpoint(
     pending_token_count = 0
     pending_reasoning_token_count = 0
     pending_reasoning_parts: list[str] = []
+    pending_reasoning_timestamp: str | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -802,6 +806,7 @@ def _messages_from_checkpoint(
                 # instead of dropping it with the unmaterialized AIMessage.
                 synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
                 synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                synthetic.reasoning_timestamp = pending_reasoning_timestamp
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
                 messages.append(synthetic)
@@ -809,6 +814,7 @@ def _messages_from_checkpoint(
             pending_reasoning_parts = []
             pending_token_count = 0
             pending_reasoning_token_count = 0
+            pending_reasoning_timestamp = None
 
         if role == "assistant":
             pending_token_count += _raw_message_token_count(raw)
@@ -816,6 +822,8 @@ def _messages_from_checkpoint(
             reasoning_text = extract_reasoning_trace(raw)
             if reasoning_text:
                 pending_reasoning_parts.append(reasoning_text)
+                if pending_reasoning_timestamp is None:
+                    pending_reasoning_timestamp = _raw_message_created_at(raw)
             for tc in _extract_raw_tool_calls(raw):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
@@ -837,9 +845,11 @@ def _messages_from_checkpoint(
                 message.reasoning_text = "\n\n".join(pending_reasoning_parts)
                 message.token_count = pending_token_count
                 message.reasoning_token_count = pending_reasoning_token_count
+                message.reasoning_timestamp = pending_reasoning_timestamp
                 pending_reasoning_parts = []
                 pending_token_count = 0
                 pending_reasoning_token_count = 0
+                pending_reasoning_timestamp = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
@@ -852,6 +862,7 @@ def _messages_from_checkpoint(
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
         synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+        synthetic.reasoning_timestamp = pending_reasoning_timestamp
         messages.append(synthetic)
 
     return messages
