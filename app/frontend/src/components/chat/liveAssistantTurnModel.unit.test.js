@@ -1622,6 +1622,27 @@ describe('finalizeLiveAssistantTurn', () => {
     });
   });
 
+    it('retains the streamed timeline before appending the terminal error row', () => {
+      const turn = applyAssistantStreamEvent(
+        baseTurn(),
+        rawStreamEvent('tool_start', { content: 'searching' }),
+        NOW,
+      );
+      const result = finalizeLiveAssistantTurn(turn, {
+        status: 'error',
+        now: NOW + 100,
+        errorMessage: 'backend unavailable',
+      });
+
+      expect(result.error).toBe(true);
+      expect(result.timelineItems.map((item) => item.kind)).toEqual([
+        'stream_event',
+        'assistant_message',
+      ]);
+      expect(result.timelineItems[0].event.eventType).toBe('tool_start');
+      expect(result.timelineItems[1].content).toBe('Error: backend unavailable');
+    });
+
   // Integration: full lifecycle — metadata, then events, then chunks, then finalize.
   it('full lifecycle: metadata → events → chunks → complete materializes correctly', () => {
     let turn = baseTurn();

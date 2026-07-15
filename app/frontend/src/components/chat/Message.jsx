@@ -204,7 +204,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
         </div>
         <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
           <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
-          {showImages && messageImages.length > 0 && (
+          {showImages && !hideContent && messageImages.length > 0 && (
             <MessageImageStrip images={messageImages} />
           )}
         </div>
@@ -251,7 +251,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
         {visibleTimelineItems.map((item, idx) => (
           <TimelineItem key={item.id || `tl-${idx}`} item={item} itemIndex={idx} />
         ))}
-        {showImages && messageImages.length > 0 && (
+        {showImages && !hideContent && messageImages.length > 0 && (
           <div className="chat-entry-chain__images">
             <MessageImageStrip images={messageImages} />
           </div>

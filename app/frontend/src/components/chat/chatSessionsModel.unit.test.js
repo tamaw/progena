@@ -654,6 +654,15 @@ describe('shouldLoadSelectedBackendChat', () => {
     })).toBe(false);
   });
 
+  it('reloads a selected chat when a stale request result was applied', () => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem: selectedBackendCard,
+      activeBackendChat: { thread_id: 'chat-1' },
+      activeBackendChatState: { loading: false, requestId: 'request-new' },
+      lastAppliedRequestId: 'request-old',
+    })).toBe(true);
+  });
+
   it.each([
     ['a local selected card', { selected: true, source: 'local', threadId: 'chat-1' }],
     ['an unselected backend card', { selected: false, source: 'backend', threadId: 'chat-1' }],

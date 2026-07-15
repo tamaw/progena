@@ -79,6 +79,7 @@ config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
 client: ProgenitorClient | SSEProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
+_response_request_ids: dict[str, str] = {}
 
 
 def get_progenitor_liveness() -> bool:
@@ -909,7 +910,7 @@ async def rate_limit_middleware(request: Request, call_next):
     documentation_paths = ("/docs", "/openapi.json")
     if not config.rate_limit_enabled:
         return await call_next(request)
-    if request.url.path in documentation_paths:
+    if request.url.path in documentation_paths or request.url.path == "/healthz":
         return await call_next(request)
     if request.url.path.startswith("/api/ui/") and not (
         request.url.path == "/api/ui/responses" or request.url.path.startswith("/api/ui/responses/")
@@ -1012,6 +1013,7 @@ async def responses(
 
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
     _active_response_streams[request_id] = asyncio.Event()
+    _response_request_ids[response_id] = request_id
 
     # Task creation is the generation dispatch. Enqueue the causal started
     # event only after that dispatch and before acknowledging it.
@@ -1057,12 +1059,14 @@ async def cancel_response(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Cancel a generation without conflating its ID with this cancellation request."""
+    """Cancel a generation using either its browser response or request ID."""
     request_id = _request_correlation_id(request, x_request_id)
-    target_request_id = generation_id.strip()
-    if not target_request_id:
+    target_id = generation_id.strip()
+    if not target_id:
         raise HTTPException(status_code=400, detail="generation_id is required")
 
+    target_request_id = _response_request_ids.get(target_id, target_id)
+    target_response_id = target_id if target_id in _response_request_ids else None
     cancel_event = _active_response_streams.get(target_request_id)
     if cancel_event is not None:
         cancel_event.set()
@@ -1083,13 +1087,16 @@ async def cancel_response(
 
     # This event resolves the cancellation operation. The generation runner
     # separately emits its terminal event with the target request ID.
+    cancellation_payload = {
+        "target_request_id": target_request_id,
+        "cancel_request_id": request_id,
+        "cancelled": True,
+    }
+    if target_response_id is not None:
+        cancellation_payload["target_response_id"] = target_response_id
     broadcast_ui_event(
         "chat.response.cancelled",
-        {
-            "target_request_id": target_request_id,
-            "cancel_request_id": request_id,
-            "cancelled": True,
-        },
+        cancellation_payload,
         scope="chat",
         request_id=request_id,
     )
@@ -1098,11 +1105,7 @@ async def cancel_response(
         # to emit the target terminal event after a successful remote cancel.
         broadcast_ui_event(
             "chat.response.cancelled",
-            {
-                "target_request_id": target_request_id,
-                "cancel_request_id": request_id,
-                "cancelled": True,
-            },
+            cancellation_payload,
             scope="chat",
             request_id=target_request_id,
         )
@@ -1289,6 +1292,8 @@ async def _run_response_event_stream(
     finally:
         if _active_response_streams.get(request_id) is cancel_event:
             _active_response_streams.pop(request_id, None)
+        if _response_request_ids.get(response_id) == request_id:
+            _response_request_ids.pop(response_id, None)
 
 
 async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:

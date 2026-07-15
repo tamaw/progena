@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { slugifyTitle, buildEntityPath } from './routes';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { slugifyTitle, buildEntityPath, useEntityUrlSync } from './routes';
+
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, useEffect: vi.fn((effect) => effect()) };
+});
+
+vi.mock('react-router-dom', () => ({
+  useLocation: vi.fn(),
+  useNavigate: vi.fn(),
+}));
 
 describe('slugifyTitle', () => {
   it('lowercases and hyphenates', () => {
@@ -42,5 +53,31 @@ describe('buildEntityPath', () => {
   });
   it('encodes ids that need it', () => {
     expect(buildEntityPath('/inbox', 'weird/id here', 'Title')).toBe('/inbox/weird%2Fid%20here/title');
+  });
+});
+
+describe('useEntityUrlSync hydration race', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not erase a deep-link detail path before the collection hydrates', () => {
+    const navigate = vi.fn();
+    useNavigate.mockReturnValue(navigate);
+    useLocation.mockReturnValue({ pathname: '/chat/thread-42/old-title' });
+
+    useEntityUrlSync('/chat', null, null);
+
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('hydrates a selected entity by syncing its canonical path once an id exists', () => {
+    const navigate = vi.fn();
+    useNavigate.mockReturnValue(navigate);
+    useLocation.mockReturnValue({ pathname: '/chat' });
+
+    useEntityUrlSync('/chat', 'thread-42', 'Loaded title');
+
+    expect(navigate).toHaveBeenCalledWith('/chat/thread-42/loaded-title', { replace: true });
   });
 });

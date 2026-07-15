@@ -30,6 +30,20 @@ function buildResponsesInput(history, message) {
     .filter((entry) => entry.content);
 }
 
+function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
+  const pending = [...pendingStreams.values()];
+  if (pending.length === 0) {
+    return emptyState;
+  }
+  if (pending.some((stream) => stream.cancelRequested)) {
+    return 'cancelling';
+  }
+  if (pending.some((stream) => stream.acknowledged || stream.streamObserved)) {
+    return 'connected';
+  }
+  return 'connecting';
+}
+
 /**
  * Foreground Responses API lifecycle shared by the conversation page and
  * runtime shell. Dispatch receives a 202 acknowledgement; authoritative
@@ -55,14 +69,17 @@ export function useChatApi() {
     }
 
     if (type === 'chat.response.started') {
+      pending.streamObserved = true;
       if (!pending.cancelRequested) {
-        setConnectionState('connected');
+        setConnectionState(deriveConnectionState(pendingStreamsRef.current));
       }
       return;
     }
 
     if (type === 'chat.response.delta') {
+      pending.streamObserved = true;
       const delta = typeof payload.delta === 'string' ? payload.delta : '';
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
       if (delta && !pending.cancelRequested) {
         pending.onChunk?.(delta);
       }
@@ -70,6 +87,8 @@ export function useChatApi() {
     }
 
     if (type === 'chat.response.event') {
+      pending.streamObserved = true;
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
       if (!pending.cancelRequested) {
         pending.onStreamEvent?.(payload);
       }
@@ -80,6 +99,7 @@ export function useChatApi() {
       return;
     }
 
+    pending.streamObserved = true;
     pendingStreamsRef.current.delete(requestId);
     if (activeAcknowledgementRef.current?.requestId === requestId) {
       activeAcknowledgementRef.current = null;
@@ -93,10 +113,10 @@ export function useChatApi() {
         ? payload.error
         : 'Response generation failed';
       pending.onError?.(new Error(message));
-      setConnectionState('error');
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     } else {
       pending.onComplete?.(type === 'chat.response.cancelled' ? 'cancelled' : '');
-      setConnectionState('disconnected');
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
     pending.resolve();
   }, []);
@@ -120,6 +140,8 @@ export function useChatApi() {
         onStreamEvent,
         resolve: resolveTerminal,
         cancelRequested: false,
+        acknowledged: false,
+        streamObserved: false,
       };
 
       // Register before dispatch: the backend can broadcast `started` before
@@ -127,7 +149,7 @@ export function useChatApi() {
       pendingStreamsRef.current.set(requestId, pending);
       activeStreamRequestIdRef.current = requestId;
       activeAcknowledgementRef.current = { requestId, controller: acknowledgementController };
-      setConnectionState('connecting');
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
       const body = { model: config.chat.defaultModel, input, stream: true };
       if (metadata && typeof metadata === 'object') {
@@ -146,20 +168,26 @@ export function useChatApi() {
           activeAcknowledgementRef.current = null;
         }
         if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested) {
-          setConnectionState('connected');
+          pending.acknowledged = true;
+          setConnectionState(deriveConnectionState(pendingStreamsRef.current));
         }
       } catch (error) {
         if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
-        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested) {
+        const currentPending = pendingStreamsRef.current.get(requestId);
+        if (currentPending === pending && !pending.cancelRequested && !pending.streamObserved) {
           pendingStreamsRef.current.delete(requestId);
           if (activeStreamRequestIdRef.current === requestId) {
             activeStreamRequestIdRef.current = null;
           }
-          setConnectionState('error');
+          setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
           onError?.(error);
           resolveTerminal();
+        } else if (currentPending === pending) {
+          // A stream event already correlated this request. Keep it pending so
+          // its terminal SSE event still owns completion and cleanup.
+          setConnectionState(deriveConnectionState(pendingStreamsRef.current));
         }
       }
 

@@ -44,4 +44,15 @@ describe('requestAcknowledged', () => {
 
     await expect(requestAcknowledged('/api/ui/widgets', { requestId })).rejects.toThrow(error);
   });
+  it('rejects a 202 acknowledgement correlated to a different request', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(202, {
+      request_id: '11111111-2222-4333-8444-555555555555',
+      event_types: ['chat.response.started'],
+    })));
+
+    await expect(requestAcknowledged('/api/ui/responses', {
+      method: 'POST',
+      requestId,
+    })).rejects.toThrow(/request_id mismatch/);
+  });
 });

@@ -1,5 +1,8 @@
 import { createSlice } from '@reduxjs/toolkit';
 
+const MAX_RECEIVED_EVENTS_PER_REQUEST = 100;
+
+
 const initialState = {
   connected: false,
   status: 'idle',
@@ -99,6 +102,9 @@ const realtimeSlice = createSlice({
         const received = state.receivedRequestEvents[requestId] || [];
         if (!received.some((receivedEvent) => receivedEvent.id === event.id)) {
           received.push({ id: event.id, type: event.type });
+        }
+        if (received.length > MAX_RECEIVED_EVENTS_PER_REQUEST) {
+          received.splice(0, received.length - MAX_RECEIVED_EVENTS_PER_REQUEST);
         }
         state.receivedRequestEvents[requestId] = received;
         const requestIds = Object.keys(state.receivedRequestEvents);

@@ -60,6 +60,28 @@ function NormalToolContent({ tool }) {
   );
 }
 
+function AssistantMessageActions({ content }) {
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(content);
+    } catch (e) {
+      console.error('Failed to copy:', e);
+    }
+  };
+
+  return (
+    <span className="message-actions msg__actions">
+      <button className="msg-action-btn copy-btn" onClick={handleCopy} title="Copy" aria-label="Copy message">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
+          <rect x="4" y="4" width="9" height="9" rx="1.5"></rect>
+          <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"></path>
+        </svg>
+        <span>Copy</span>
+      </button>
+    </span>
+  );
+}
+
 const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
@@ -105,6 +127,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
                 {Array.isArray(item.displayToolCalls) && item.displayToolCalls.length > 0 && (
                   <span className="msg__model">{formatDisplayToolCalls(item.displayToolCalls)}</span>
                 )}
+                <AssistantMessageActions content={item.content || ''} />
                 {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
               </span>
             </div>

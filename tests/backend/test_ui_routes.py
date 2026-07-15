@@ -734,6 +734,56 @@ class TestUIRoutes:
             "request_id": request_id,
         }
 
+
+    def test_task_content_update_acknowledges_and_persists_body(
+        self, client, tasks_state_reader
+    ):
+        """Task body writes return an ack while stream state carries the saved content."""
+        from app.backend import ui_routes
+
+        created = client.post(
+            "/api/ui/kanban/cards",
+            json={"title": "Persisted task", "summary": "Keep the brief"},
+        )
+        assert created.status_code == 202
+        board = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, "kanban_board", None
+        )
+        assert board is not None
+        card_id = board.payload["card_order"][-1]
+        request_id = "task-content-save-42"
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers.add(queue)
+        try:
+            response = client.put(
+                f"/api/ui/tasks/{card_id}/content",
+                json={"content": "## Acceptance\n\nKeep this body\n\n"},
+                headers={"X-Request-ID": request_id},
+            )
+            emitted = [queue.get_nowait() for _ in range(queue.qsize())]
+        finally:
+            ui_routes._ui_stream_subscribers.discard(queue)
+
+        assert_acknowledged(
+            response,
+            ["task.content.updated", "task.activity.updated"],
+            request_id=request_id,
+            check_request_id_header=True,
+        )
+        content_event = next(
+            item["envelope"] for item in emitted if item["envelope"].type == "task.content.updated"
+        )
+        assert content_event.payload["card_id"] == card_id
+        assert content_event.payload["path"] == f"tasks/{card_id}.md"
+        assert content_event.payload["content"] == "## Acceptance\n\nKeep this body"
+        assert content_event.payload["request_id"] == request_id
+
+        stored = tasks_state_reader.document_store.get_document(
+            PROGENITOR_STATE_PREFIX, f"kanban_task_content:{card_id}", None
+        )
+        assert stored is not None
+        assert stored.payload == {"content": "## Acceptance\n\nKeep this body"}
+
     def test_kanban_card_create_and_patch_persist(self, client, tasks_state_reader):
         create_response = client.post(
             "/api/ui/kanban/cards",

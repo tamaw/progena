@@ -381,6 +381,70 @@ class TestAsyncResponseHandling:
         assert streamed.payload["cancel_request_id"] == request_id
         assert streamed.payload["target_request_id"] == "req-cancel-test"
 
+
+    def test_cancel_response_resolves_browser_response_id_to_request_id(self, client):
+        """The cancel URL receives the started event's response id, not its request id."""
+        import app.backend.main as backend_main
+        from app.backend import ui_routes
+
+        original_client = backend_main.client
+        request_id = "generation-request-42"
+        response_id = "resp-browser-42"
+        cancel_event = asyncio.Event()
+        captured: dict[str, object] = {}
+
+        class _MockClient:
+            async def cancel_request(self, target_request_id: str) -> bool:
+                captured["target_request_id"] = target_request_id
+                return True
+
+        backend_main.client = _MockClient()
+        backend_main._active_response_streams[request_id] = cancel_event
+        backend_main._response_request_ids[response_id] = request_id
+        event_start = len(ui_routes._ui_event_replay)
+        try:
+            response = client.put(
+                f"/api/ui/responses/{response_id}/cancel",
+                headers={"X-Request-ID": "cancel-operation-42"},
+            )
+            streamed = next(
+                event
+                for event in ui_routes._ui_event_replay[event_start:]
+                if event.type == "chat.response.cancelled"
+                and event.payload.get("target_response_id") == response_id
+            )
+        finally:
+            backend_main._active_response_streams.pop(request_id, None)
+            backend_main._response_request_ids.pop(response_id, None)
+            backend_main.client = original_client
+
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": "cancel-operation-42",
+            "event_types": ["chat.response.cancelled"],
+        }
+        assert cancel_event.is_set()
+        assert captured["target_request_id"] == request_id
+        assert streamed.payload["target_request_id"] == request_id
+        assert streamed.payload["target_response_id"] == response_id
+        assert streamed.payload["cancel_request_id"] == "cancel-operation-42"
+
+
+    def test_healthz_bypasses_rate_limiter_when_api_quota_is_exhausted(self, client, monkeypatch):
+        """Container liveness must remain probeable after an API rate-limit decision."""
+        import app.backend.main as backend_main
+
+        class _RejectingLimiter:
+            def is_allowed(self, _client_id: str):
+                raise AssertionError("healthz must not consult the API rate limiter")
+
+        monkeypatch.setattr(backend_main, "rate_limiter", _RejectingLimiter())
+        monkeypatch.setattr(backend_main.config, "rate_limit_enabled", True)
+
+        response = client.get("/healthz")
+
+        assert response.status_code == 200
+        assert response.content == b""
     def test_cancel_response_returns_404_for_unknown_request(self, client):
         """Unknown cancellation IDs should not be reported as successful."""
         import app.backend.main as backend_main
