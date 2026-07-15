@@ -26,6 +26,27 @@ let activeStreamUrl = null;
 const HEARTBEAT_STALE_MS = 45000;
 const WATCHDOG_POLL_MS = 15000;
 
+// Response frames are consumed synchronously by request-local subscribers.
+// Sending each token through the Redux event queue makes unrelated shell
+// consumers reprocess the queue for every delta and starves chat rendering.
+const MAX_RECEIVED_STREAM_FRAME_IDS = 1000;
+const receivedStreamFrameIds = new Set();
+
+function isStreamFrame(event) {
+  return event?.type === 'chat.response.delta' || event?.type === 'chat.response.event';
+}
+
+function hasReceivedStreamFrame(eventId) {
+  if (receivedStreamFrameIds.has(eventId)) {
+    return true;
+  }
+  receivedStreamFrameIds.add(eventId);
+  if (receivedStreamFrameIds.size > MAX_RECEIVED_STREAM_FRAME_IDS) {
+    receivedStreamFrameIds.delete(receivedStreamFrameIds.values().next().value);
+  }
+  return false;
+}
+
 function isUiDataThunkLifecycle(action) {
   return action.type.startsWith('uiData/');
 }
@@ -119,6 +140,7 @@ realtimeListenerMiddleware.startListening({
       if (eventSource !== source) {
         return;
       }
+      receivedStreamFrameIds.clear();
       lastEventAt = Date.now();
       listenerApi.dispatch(realtimeConnected());
     };
@@ -141,6 +163,13 @@ realtimeListenerMiddleware.startListening({
         const invalidReason = invalidEnvelopeReason(event);
         if (invalidReason) {
           listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${invalidReason}`));
+          return;
+        }
+        if (isStreamFrame(event)) {
+          if (hasReceivedStreamFrame(event.id)) {
+            return;
+          }
+          publishUiEvent(event);
           return;
         }
         const { realtime } = listenerApi.getState();
