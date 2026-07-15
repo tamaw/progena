@@ -788,6 +788,7 @@ def _messages_from_checkpoint(
     pending_tool_calls: list[dict[str, Any]] = []
     pending_token_count = 0
     pending_reasoning_token_count = 0
+    pending_reasoning_parts: list[str] = []
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
@@ -795,24 +796,26 @@ def _messages_from_checkpoint(
             continue
 
         if role == "user":
-            if pending_tool_calls:
-                # A new human turn is starting but the previous turn's tool calls
-                # were never claimed by a text-bearing AIMessage. Flush them now,
-                # ahead of the new question, instead of letting the reset just
-                # below silently drop them.
+            if pending_tool_calls or pending_reasoning_parts:
+                # A new human turn ends the previous assistant turn. Preserve
+                # reasoning emitted before an interrupted/tool-only turn
+                # instead of dropping it with the unmaterialized AIMessage.
                 synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
+                synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
                 messages.append(synthetic)
                 pending_tool_calls = []
-            # A human message ends the prior turn either way; usage from an
-            # unclaimed, tool-less assistant fragment must not leak forward.
+            pending_reasoning_parts = []
             pending_token_count = 0
             pending_reasoning_token_count = 0
 
         if role == "assistant":
             pending_token_count += _raw_message_token_count(raw)
             pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
+            reasoning_text = extract_reasoning_trace(raw)
+            if reasoning_text:
+                pending_reasoning_parts.append(reasoning_text)
             for tc in _extract_raw_tool_calls(raw):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
@@ -831,8 +834,10 @@ def _messages_from_checkpoint(
         message = _chat_message_from_raw(raw, index, tool_calls=tool_calls_to_attach)
         if message is not None:
             if role == "assistant":
+                message.reasoning_text = "\n\n".join(pending_reasoning_parts)
                 message.token_count = pending_token_count
                 message.reasoning_token_count = pending_reasoning_token_count
+                pending_reasoning_parts = []
                 pending_token_count = 0
                 pending_reasoning_token_count = 0
             if role in ("assistant", "user"):
@@ -843,11 +848,10 @@ def _messages_from_checkpoint(
         # The checkpoint's tip is itself a dangling tool-call-only AIMessage --
         # same flush, just past the end of the loop instead of ahead of the
         # next human turn.
-        synthetic = _synthetic_pending_tool_call_message(
-            pending_tool_calls, len(snapshot.messages)
-        )
+        synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
+        synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
         messages.append(synthetic)
 
     return messages
