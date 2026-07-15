@@ -49,11 +49,6 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _resolve_reasoning_effort(config: LLMConfig) -> str:
-    """Return the configured reasoning effort for the active model."""
-    return config.reasoning_effort
-
-
 def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance routed through Azure.
 
@@ -69,18 +64,20 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
-    # Azure's ChatOpenAI adapter exposes the final reasoning summary reliably
-    # when effort is passed via `reasoning_effort` and summary mode rides
-    # through `extra_body.reasoning.summary`.
-    reasoning_effort: str | None = None
-    extra_body: dict[str, dict[str, str]] | None = None
+    # ChatOpenAI's Responses API adapter accepts the complete reasoning
+    # configuration through its native ``reasoning`` parameter. Passing the
+    # summary through ``extra_body`` alongside ``reasoning_effort`` produces a
+    # reasoning block but can leave output_token_details.reasoning at zero.
+    reasoning: dict[str, str] | None = None
     if config.reasoning_enabled:
-        reasoning_effort = _resolve_reasoning_effort(config)
-        extra_body = {"reasoning": {"summary": config.reasoning_summary}}
+        reasoning = {
+            "effort": config.reasoning_effort,
+            "summary": config.reasoning_summary,
+        }
         logger.info(
             "Reasoning enabled for model %s (effort=%s, summary=%s)",
             model_name,
-            reasoning_effort,
+            config.reasoning_effort,
             config.reasoning_summary,
         )
 
@@ -94,8 +91,7 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
         use_responses_api=True,
         output_version="responses/v1",
         streaming=True,
-        reasoning_effort=reasoning_effort,
-        extra_body=extra_body,
+        reasoning=reasoning,
     )
 
     logger.info(
