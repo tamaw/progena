@@ -139,6 +139,53 @@ body,
   box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
+.app-shell__search--ai {
+  width: min(380px, 34vw);
+  gap: 8px;
+  padding: 5px 10px;
+  background:
+    linear-gradient(var(--color-bg-secondary), var(--color-bg-secondary)) padding-box,
+    linear-gradient(120deg, color-mix(in oklab, var(--color-accent) 65%, var(--color-border)), var(--color-border), color-mix(in oklab, var(--color-accent) 35%, var(--color-border))) border-box;
+  border-color: transparent;
+}
+
+.app-shell__search--ai:hover {
+  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+}
+
+.app-shell__search--ai:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 4px var(--color-accent-soft), 0 0 20px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+
+.app-shell__search-ai-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--color-accent);
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--color-accent) 35%, transparent));
+}
+
+.app-shell__search-ai-icon svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+}
+
+.app-shell__search-hint {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border-light);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .app-shell__search > svg {
   flex: 0 0 auto;
 }
