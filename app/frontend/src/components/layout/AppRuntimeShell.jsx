@@ -560,7 +560,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
                     <span className="app-shell__nav-label">{item.label}</span>
                     {showDot ? (
                       <span
-                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}${item.unreadDot ? ' app-shell__nav-dot--notification' : ''}`}
                         aria-hidden="true"
                       />
                     ) : null}
