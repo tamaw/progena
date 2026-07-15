@@ -210,7 +210,6 @@ def test_normalize_custom_event_preserves_correlation_fields_when_metadata_is_ov
     assert len(str(metadata["value"]).encode("utf-8")) <= DEFAULT_STREAM_ARGS_BYTES
 
 
-
 def test_build_tool_start_event_redacts_args():
     api_key = "sk-" + "a" * 48
     event = build_tool_start_event(
@@ -237,6 +236,27 @@ def test_build_tool_start_event_preserves_subagent_type_when_args_preview_trunca
     # byte budget -- subagent_type must survive that collapse in its own field.
     assert isinstance(event["metadata"]["args_preview"], str)
     assert event["metadata"]["subagent_type"] == "researcher"
+
+
+def test_build_tool_start_event_preserves_bounded_redacted_task_summary_when_args_truncate():
+    """Task identity and its readable summary must outlive args-preview truncation."""
+    api_key = "sk-" + "z" * 48
+    description = f"  Review deployment with {api_key} " + ("x" * (DEFAULT_STREAM_ARGS_BYTES * 2))
+
+    event = build_tool_start_event(
+        tool_name="task",
+        tool_call_id="call_long-task",
+        raw_args={"subagent_type": "researcher", "description": description},
+    )
+
+    metadata = event["metadata"]
+    assert isinstance(metadata["args_preview"], str)
+    assert metadata["subagent_type"] == "researcher"
+    task_summary = metadata["task_summary"]
+    assert isinstance(task_summary, str)
+    assert len(task_summary) <= 140
+    assert api_key not in task_summary
+    assert "REDACTED" in task_summary
 
 
 def test_build_tool_start_event_omits_subagent_type_for_non_task_tools():

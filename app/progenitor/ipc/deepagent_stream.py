@@ -59,7 +59,10 @@ def _normalize_task_summary(value: Any) -> str | None:
 
 
 def _extract_task_summary(metadata: dict[str, Any]) -> str | None:
-    """Extract a bounded summary only from structured task args previews."""
+    """Extract a bounded summary from dedicated or structured task metadata."""
+    task_summary = metadata.get("task_summary")
+    if isinstance(task_summary, str):
+        return _normalize_task_summary(task_summary)
     args_preview = metadata.get("args_preview")
     if not isinstance(args_preview, dict):
         return None

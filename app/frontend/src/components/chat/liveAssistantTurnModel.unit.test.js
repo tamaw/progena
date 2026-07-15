@@ -480,6 +480,27 @@ describe('applyAssistantStreamEvent', () => {
       resultPreview: 'Found it',
     });
   });
+  it('keeps identical adjacent subagent deltas as distinct persisted events while accumulating grouped text', () => {
+    const turn = baseTurn();
+    const delta = rawStreamEvent('subagent_message_delta', {
+      content: 'same',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_duplicate' },
+    });
+    const first = applyAssistantStreamEvent(turn, delta, NOW);
+    const next = applyAssistantStreamEvent(first, delta, NOW);
+
+    expect(next.streamEvents).toHaveLength(2);
+    expect(next.streamEvents.map((event) => event.content)).toEqual(['same', 'same']);
+    expect(next.streamEvents[0].id).not.toBe(next.streamEvents[1].id);
+    expect(next.timelineItems).toEqual([
+      expect.objectContaining({
+        kind: 'subagent',
+        toolCallId: 'call_duplicate',
+        entries: [{ kind: 'message', id: 'msg-0', text: 'samesame' }],
+      }),
+    ]);
+  });
+
 
   it('two concurrent subagents update independently with no cross-contamination', () => {
     const turn = baseTurn();
@@ -1294,6 +1315,55 @@ describe('buildDefaultAssistantTimeline', () => {
     // assistant_message row (timestamped 5000), not once per flat event.
     expect(items.map((item) => item.kind)).toEqual(['subagent', 'assistant_message']);
     expect(subagentItems[0].timestamp).toBe(1000);
+  });
+
+  it('reconstructs a correlated subagent card when a delta arrives before subagent_start', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'All done.',
+      timestamp: 5000,
+      streamEvents: [
+        {
+          id: 'e1',
+          eventType: 'subagent_message_delta',
+          content: 'Recovered text',
+          timestamp: 1000,
+          metadata: { tool_call_id: 'call_late' },
+        },
+        {
+          id: 'e2',
+          eventType: 'subagent_start',
+          timestamp: 1010,
+          metadata: { subagent_name: 'researcher', tool_call_id: 'call_late' },
+        },
+        {
+          id: 'e3',
+          eventType: 'subagent_result',
+          timestamp: 1020,
+          metadata: {
+            subagent_name: 'researcher',
+            tool_call_id: 'call_late',
+            success: true,
+            result_preview: 'Recovered result',
+          },
+        },
+      ],
+    };
+
+    const items = buildDefaultAssistantTimeline(message);
+    const subagentItems = items.filter((item) => item.kind === 'subagent');
+
+    expect(subagentItems).toHaveLength(1);
+    expect(subagentItems[0]).toMatchObject({
+      id: 'subagent-call_late',
+      toolCallId: 'call_late',
+      subagentName: 'researcher',
+      status: 'success',
+      resultPreview: 'Recovered result',
+      entries: [{ kind: 'message', id: 'msg-0', text: 'Recovered text' }],
+    });
+    expect(items.map((item) => item.kind)).toEqual(['subagent', 'assistant_message']);
   });
 
   it('keeps two concurrent subagents as two separate grouped cards on reload', () => {

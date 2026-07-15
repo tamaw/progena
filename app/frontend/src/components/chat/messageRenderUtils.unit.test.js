@@ -395,3 +395,35 @@ describe('normal tool detail rendering', () => {
     expect(details.body).toBe('{"message":"permission denied","request_id":"r-1"}');
   });
 });
+
+describe('describeStreamEvent normal tool metadata', () => {
+  it('uses duration only for a normal tool_result without reading result_preview', () => {
+    const event = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'read_file',
+        duration_ms: 1250,
+        get result_preview() {
+          throw new Error('result_preview should not be evaluated for normal tools');
+        },
+      },
+    };
+
+    expect(describeStreamEvent(event).metaDetail).toBe('1.25s');
+  });
+
+  it('uses duration only for a normal tool_error without reading error', () => {
+    const event = {
+      eventType: 'tool_error',
+      metadata: {
+        tool_name: 'read_file',
+        duration_ms: 125,
+        get error() {
+          throw new Error('error should not be evaluated for normal tools');
+        },
+      },
+    };
+
+    expect(describeStreamEvent(event).metaDetail).toBe('125ms');
+  });
+});
