@@ -1956,20 +1956,6 @@ body,
   transform: translateX(0);
 }
 
-/* Quick Chat opens from the left so the AI prompt and its conversation stay
-   visually connected to the navigation rail. */
-.topnav-pane--quick {
-  left: 0;
-  right: auto;
-  border-left: 0;
-  border-right: 1px solid var(--color-border);
-  box-shadow: 4px 0 24px rgba(15, 18, 25, 0.14);
-  transform: translateX(-100%);
-}
-
-.topnav-pane--quick.is-open {
-  transform: translateX(0);
-}
 
 /* Pinned: exits fixed positioning and occupies the third grid column */
 .topnav-pane.is-pinned {
@@ -1987,18 +1973,11 @@ body,
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
-[data-theme="dark"] .topnav-pane--quick {
-  box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
-}
 
 [data-theme="dark"] .topnav-pane.is-pinned {
   box-shadow: none;
 }
 
-.topnav-pane--quick.is-pinned {
-  border-left: 0;
-  border-right: 1px solid var(--color-border);
-}
 
 /* Settings & Account are centered modal popups, not the right-side slide-in used
    by the other chrome tools (quick chat, alerts, search, insights). This reverts
