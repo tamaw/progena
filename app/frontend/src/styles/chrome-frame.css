@@ -4044,6 +4044,12 @@ body,
   font-size: 12.5px;
   line-height: 1.5;
 }
+.tool__summary.tool-event-disclosure__summary {
+  margin: 0;
+  padding: 0;
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+}
 .tool-event-disclosure {
   display: block;
 }

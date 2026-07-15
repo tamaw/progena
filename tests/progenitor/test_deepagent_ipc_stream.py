@@ -126,6 +126,7 @@ async def test_stream_items_include_reasoning_and_custom_events():
         "metadata": {
             "message_chunk_type": "AIMessageChunk",
             "stream_metadata": {"langgraph_node": "respond"},
+            "summary": "Checked constraints. ",
             "text_length": 21,
         },
     } in items
@@ -1110,7 +1111,11 @@ async def test_final_reasoning_summary_only_updates_tokens_after_streamed_deltas
             "type": "stream_event",
             "event_type": "reasoning_summary",
             "content": "First. Second.",
-            "metadata": {"reasoning_tokens": 7, "text_length": 14},
+            "metadata": {
+                "reasoning_tokens": 7,
+                "text_length": 14,
+                "summary": "First. Second.",
+            },
         }
     ]
     assert bridge.last_reasoning_trace == "First. Second."
@@ -1181,7 +1186,11 @@ async def test_streamed_reasoning_survives_when_final_message_drops_it():
             "type": "stream_event",
             "event_type": "reasoning_summary",
             "content": "Checked inputs. Computed answer.",
-            "metadata": {"reasoning_tokens": 7, "text_length": 32},
+            "metadata": {
+                "reasoning_tokens": 7,
+                "text_length": 32,
+                "summary": "Checked inputs. Computed answer.",
+            },
         }
     ]
     assert bridge.last_reasoning_trace == "Checked inputs. Computed answer."

@@ -516,69 +516,8 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('chat-event-tag--reason');
     expect(html).toContain('Reasoning');
   });
-  it('collapses multi-paragraph reasoning behind its visible summary', () => {
-    const summaryText = 'I will inspect the existing behavior first.';
-    const firstDetail = 'Then I will implement the smallest safe change.';
-    const secondDetail = 'Finally I will verify the affected flow.';
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'reasoning-disclosure',
-          event: {
-            id: 'reasoning-disclosure',
-            eventType: 'reasoning_delta',
-            content: `${summaryText}\n\n${firstDetail}\n\n${secondDetail}`,
-            metadata: { reasoning_tokens: 11 },
-          },
-        },
-      ],
-    });
 
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-    const disclosureMatch = html.match(/<details class="tool-event-disclosure reasoning-event-disclosure">[\s\S]*?<\/details>/);
-    const disclosure = disclosureMatch?.[0] || '';
-    const summaryMatch = disclosure.match(/<summary>([\s\S]*?)<\/summary>/);
-    const summary = summaryMatch?.[1] || '';
-    const summaryEnd = disclosure.indexOf('</summary>');
-
-    expect(disclosure).toContain('<details class="tool-event-disclosure reasoning-event-disclosure">');
-    expect(summary).toContain(summaryText);
-    expect(summary).not.toContain(firstDetail);
-    expect(summary).not.toContain(secondDetail);
-    expect(disclosure.indexOf(firstDetail)).toBeGreaterThan(summaryEnd);
-    expect(disclosure.indexOf(secondDetail)).toBeGreaterThan(summaryEnd);
-    expect(disclosure).toContain('>Expand</span>');
-    expect(disclosure).toContain('>Collapse</span>');
-    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
-    expect(html).toContain('11 reasoning tokens');
-  });
-
-  it('renders single-paragraph reasoning as a non-disclosure body', () => {
-    const reasoningText = 'This reasoning remains directly visible.';
-    const message = baseMessage({
-      timelineItems: [
-        {
-          kind: 'stream_event',
-          id: 'single-paragraph-reasoning',
-          event: {
-            id: 'single-paragraph-reasoning',
-            eventType: 'reasoning_delta',
-            content: reasoningText,
-            metadata: {},
-          },
-        },
-      ],
-    });
-
-    const html = renderToStaticMarkup(React.createElement(Message, { message }));
-
-    expect(html).toContain('class="message-stream-event-body entry__content"');
-    expect(html).toContain(reasoningText);
-    expect(html).not.toContain('reasoning-event-disclosure');
-  });
-
-  it('reconstructs earlier reasoning ahead of a later tool timeline item with its timestamp', () => {
+  it('reconstructs earlier reasoning ahead of a later tool timeline item with visible text', () => {
     const reasoningTimestamp = '2026-07-15T02:31:08.000Z';
     const toolTimestamp = new Date('2026-07-15T02:31:09.000Z').getTime();
     const message = baseMessage({
@@ -625,6 +564,7 @@ describe('Message with timelineItems', () => {
     expect(html.slice(reasoningRowPos, toolRowPos)).toContain('Thinking before the tool call');
     expect(html.slice(reasoningRowPos, toolRowPos)).toContain(formattedReasoningTimestamp);
   });
+
 
   it('renders tool_error stream event with error styling', () => {
     const message = baseMessage({
@@ -1049,5 +989,101 @@ describe('normal tool content and metadata display', () => {
     expect(disclosure.indexOf(escapedResult)).toBeGreaterThan(payloadStart);
     expect(disclosure).toContain(escapedResult);
     expect(disclosure).not.toContain(rawResult);
+  });
+});
+
+describe('reasoning summary presentation', () => {
+  it('renders explicit summary and detail metadata in normal content with an exact closed disclosure count', () => {
+    const providerSummary = 'The provider supplied this summary.';
+    const providerDetail = 'Evidence 🔍';
+    const unstructuredContent = 'This event content must never be rendered.';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'provider-reasoning-summary',
+        event: {
+          id: 'provider-reasoning-summary',
+          eventType: 'reasoning_summary',
+          content: unstructuredContent,
+          metadata: { summary: providerSummary, detail: providerDetail },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosure = html.match(/<details\b[^>]*\breasoning-event-disclosure\b[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
+    const summaryEnd = disclosure.indexOf('</summary>');
+    const summary = disclosure.slice(0, summaryEnd);
+    const detail = disclosure.slice(summaryEnd);
+
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    expect(summary).toMatch(/class="[^"]*\bmessage-content\b[^"]*\breasoning-event-disclosure__summary/);
+    expect(summary).toContain(providerSummary);
+    expect(summary).not.toContain(providerDetail);
+    expect(summary).not.toContain(unstructuredContent);
+    expect(detail).toContain(providerDetail);
+    expect(detail).not.toContain(unstructuredContent);
+  });
+
+
+  it('renders reconstructed persisted reasoning as a visible summary and closed paragraph detail', () => {
+    const summaryParagraph = 'The persisted agent checked the repository state.';
+    const detailParagraph = 'It compared the changed files with the requested behavior.';
+    const finalParagraph = 'The remaining differences explain the next repair step.';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'persisted-reasoning',
+        event: {
+          id: 'persisted-reasoning',
+          eventType: 'reasoning_summary',
+          content: `${summaryParagraph}\n\n${detailParagraph}\n\n${finalParagraph}`,
+          metadata: {
+            source: 'message_reasoning',
+            text_length: summaryParagraph.length + detailParagraph.length + finalParagraph.length + 4,
+          },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosure = html.match(/<details\b[^>]*\breasoning-event-disclosure\b[^>]*>[\s\S]*?<\/details>/)?.[0] || '';
+    const summaryEnd = disclosure.indexOf('</summary>');
+    const summary = disclosure.slice(0, summaryEnd);
+    const detail = disclosure.slice(summaryEnd);
+
+    expect(summaryEnd).toBeGreaterThan(-1);
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    expect(summary).toContain(summaryParagraph);
+    expect(summary).not.toContain(detailParagraph);
+    expect(summary).not.toContain(finalParagraph);
+    expect(detail).toContain(detailParagraph);
+    expect(detail).toContain(finalParagraph);
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+  });
+
+  it('renders a metadata summary alone in normal message-content markup without a disclosure', () => {
+    const providerSummary = 'The provider supplied the complete summary.';
+    const unstructuredContent = 'Event content does not substitute for detail.';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'summary-only-reasoning',
+        event: {
+          id: 'summary-only-reasoning',
+          eventType: 'reasoning_summary',
+          content: unstructuredContent,
+          metadata: { summary: providerSummary },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('class="message-content reasoning-event-content entry__content"');
+    expect(html).toContain(providerSummary);
+    expect(html).not.toContain(unstructuredContent);
+    expect(html).not.toContain('reasoning-event-disclosure');
   });
 });

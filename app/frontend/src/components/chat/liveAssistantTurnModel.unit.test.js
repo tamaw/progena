@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -50,6 +50,7 @@ describe('createLiveAssistantTurn', () => {
       tokenCount: 0,
       reasoningText: '',
       reasoningTokenCount: 0,
+      reasoningSummaryReceived: false,
       streamEvents: [],
       displayAgentName: '',
       displayModelName: '',
@@ -278,7 +279,7 @@ describe('applyAssistantStreamEvent', () => {
   });
 
   // Reasoning events
-  it('handles reasoning_delta: updates reasoningText/reasoningTokenCount and seeds a timeline row', () => {
+  it('handles reasoning_delta: accumulates text and token count in one visible timeline row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('reasoning_delta', {
       content: 'thinking step 1',
@@ -287,34 +288,124 @@ describe('applyAssistantStreamEvent', () => {
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next.reasoningText).toBe('thinking step 1');
     expect(next.reasoningTokenCount).toBe(5);
-    // The first reasoning_delta seeds a row so live reasoning is visible while
-    // it streams, instead of waiting for a terminal reasoning_summary.
     expect(next.timelineItems).toHaveLength(1);
     expect(next.timelineItems[0].kind).toBe('stream_event');
     expect(next.timelineItems[0].event.eventType).toBe('reasoning_delta');
     expect(next.timelineItems[0].event.content).toBe('thinking step 1');
   });
 
-  it('reasoning_delta: merges into an existing reasoning row instead of replacing its content', () => {
+  it('reasoning_delta: accumulates multiple fragments in one stable visible reasoning row', () => {
     const turn = baseTurn();
-    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
-      content: 'initial',
-      metadata: { reasoning_tokens: 3 },
+    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+      content: 'thinking step 1',
+      metadata: { reasoning_tokens: 5 },
     }), NOW);
-    // reasoning_summary adds a timeline item.
-    expect(first.timelineItems).toHaveLength(1);
-    expect(first.timelineItems[0].event.eventType).toBe('reasoning_summary');
-
+    const firstReasoningItem = first.timelineItems[0];
     const second = applyAssistantStreamEvent(first, rawStreamEvent('reasoning_delta', {
-      content: ' step 2',
+      content: ' and step 2',
       metadata: { reasoning_tokens: 7 },
     }), NOW);
-    // Still 1 item, with the delta concatenated onto the existing content
-    // rather than replacing it outright.
+
+    expect(second.reasoningText).toBe('thinking step 1 and step 2');
+    expect(second.reasoningTokenCount).toBe(7);
     expect(second.timelineItems).toHaveLength(1);
-    expect(second.reasoningText).toBe('initial step 2');
-    expect(second.timelineItems[0].event.content).toBe('initial step 2');
+    expect(second.timelineItems[0].id).toBe(firstReasoningItem.id);
+    expect(second.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(second.timelineItems[0].event.content).toBe('thinking step 1 and step 2');
   });
+
+  it('reasoning_summary before a later delta keeps one summary row and ignores the delta', () => {
+    const turn = baseTurn();
+    const summary = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+      content: 'final reasoning',
+      metadata: { reasoning_tokens: 10 },
+    }), NOW);
+    const summaryRow = summary.timelineItems[0];
+    const afterDelta = applyAssistantStreamEvent(summary, rawStreamEvent('reasoning_delta', {
+      content: 'late fragment that must be ignored',
+      metadata: { reasoning_tokens: 11 },
+    }), NOW);
+
+    expect(afterDelta.timelineItems).toHaveLength(1);
+    expect(afterDelta.timelineItems[0].id).toBe(summaryRow.id);
+    expect(afterDelta.timelineItems[0].event.eventType).toBe('reasoning_summary');
+    expect(afterDelta.timelineItems[0].event.content).toBe('final reasoning');
+    expect(afterDelta.reasoningText).toBe('final reasoning');
+    expect(afterDelta.reasoningTokenCount).toBe(10);
+    expect(afterDelta.streamEvents).toHaveLength(1);
+    expect(afterDelta.streamEvents[0].eventType).toBe('reasoning_summary');
+  });
+
+  it('reasoning_delta then reasoning_summary: replaces one stable row with complete terminal summary', () => {
+    const turn = baseTurn();
+    const withDelta = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+      content: 'partial thought',
+      metadata: { reasoning_tokens: 5, summary: 'delta fragment' },
+    }), NOW);
+    expect(withDelta.timelineItems).toHaveLength(1);
+    expect(withDelta.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(withDelta.timelineItems[0].event.content).toBe('partial thought');
+    const reasoningRowId = withDelta.timelineItems[0].id;
+
+    const withTool = applyAssistantStreamEvent(
+      withDelta,
+      rawStreamEvent('tool_start', { content: 'searching' }),
+      NOW,
+    );
+    const completeReasoning = 'complete reasoning trace';
+    const summary = applyAssistantStreamEvent(withTool, rawStreamEvent('reasoning_summary', {
+      content: completeReasoning,
+      metadata: {
+        reasoning_tokens: 42,
+        summary: 'Final reasoning summary',
+        detail: 'Provider detail',
+      },
+    }), NOW);
+
+    const reasoningItems = summary.timelineItems.filter((item) => item.event.eventType === 'reasoning_summary');
+    expect(reasoningItems).toHaveLength(1);
+    expect(reasoningItems[0].id).toBe(reasoningRowId);
+    expect(reasoningItems[0].event.content).toBe(completeReasoning);
+    expect(reasoningItems[0].event.metadata).toEqual(expect.objectContaining({
+      reasoning_tokens: 42,
+      summary: 'Final reasoning summary',
+      detail: 'Provider detail',
+    }));
+    expect(summary.reasoningText).toBe(completeReasoning);
+    expect(summary.reasoningTokenCount).toBe(42);
+  });
+  it('places a terminal reasoning summary before later tool rows using the delta timestamp', () => {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      let turn = baseTurn();
+
+      vi.setSystemTime(NOW + 100);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+        content: 'early thought',
+        metadata: { reasoning_tokens: 3 },
+      }));
+
+      vi.setSystemTime(NOW + 200);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }));
+      vi.setSystemTime(NOW + 300);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_result', { content: 'result' }));
+
+      vi.setSystemTime(NOW + 400);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+        content: 'complete reasoning trace',
+        metadata: { reasoning_tokens: 42 },
+      }));
+
+      expect(turn.timelineItems.map((item) => item.event.eventType)).toEqual([
+        'reasoning_summary',
+        'tool_start',
+        'tool_result',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 
   it('reasoning_summary: adds a timeline item when there is no prior reasoning item', () => {
     const turn = baseTurn();
@@ -329,30 +420,6 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.reasoningTokenCount).toBe(10);
   });
 
-  it('reasoning_summary: merges into the row seeded by an earlier reasoning_delta', () => {
-    const turn = baseTurn();
-    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
-      content: 'thinking...',
-      metadata: { reasoning_tokens: 2 },
-    }), NOW);
-    // reasoning_delta with no prior item seeds a new row.
-    expect(first.timelineItems).toHaveLength(1);
-    expect(first.timelineItems[0].event.eventType).toBe('reasoning_delta');
-
-    // Now push a non-reasoning event so there's another row after it.
-    const withTool = applyAssistantStreamEvent(first, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
-    expect(withTool.timelineItems).toHaveLength(2);
-
-    const summary = applyAssistantStreamEvent(withTool, rawStreamEvent('reasoning_summary', {
-      content: 'summary',
-      metadata: { reasoning_tokens: 42 },
-    }), NOW);
-    // Merges into the existing reasoning row (still at its original position)
-    // instead of appending a duplicate row after tool_start.
-    expect(summary.timelineItems).toHaveLength(2);
-    expect(summary.timelineItems[0].event.eventType).toBe('reasoning_delta');
-    expect(summary.reasoningTokenCount).toBe(42);
-  });
 
   it('reasoning arriving after the assistant_message row is inserted before it, not appended after', () => {
     const turn = baseTurn();

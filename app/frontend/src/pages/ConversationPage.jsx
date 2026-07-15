@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
@@ -103,6 +103,48 @@ const WEEKDAY_WELCOME_MESSAGES = [
 
 function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
+}
+
+function estimateReasoningTokens(reasoningText) {
+  const length = typeof reasoningText === 'string' ? reasoningText.trim().length : 0;
+  return length > 0 ? Math.round(length / 4) : 0;
+}
+
+function reasoningTokenDisplay(messages, liveAssistantTurn) {
+  let total = countReasoningTokens(messages);
+  let estimated = false;
+  for (const message of messages) {
+    if (message?.role !== 'assistant' && message?.role !== 'ai') continue;
+    if (Number.isFinite(message.reasoningTokenCount) && message.reasoningTokenCount > 0) continue;
+    const estimate = estimateReasoningTokens(message.reasoningText);
+    if (estimate > 0) {
+      total += estimate;
+      estimated = true;
+    }
+  }
+
+  if (liveAssistantTurn) {
+    const committed = liveAssistantTurn.assistantMessageId
+      ? messages.find((message) => message.id === liveAssistantTurn.assistantMessageId)
+      : null;
+    const liveCount = Number.isFinite(liveAssistantTurn.reasoningTokenCount)
+      ? liveAssistantTurn.reasoningTokenCount
+      : 0;
+    const committedCount = Number.isFinite(committed?.reasoningTokenCount)
+      ? committed.reasoningTokenCount
+      : 0;
+    if (liveCount > committedCount) {
+      total += liveCount - committedCount;
+    } else if (!committed) {
+      const estimate = estimateReasoningTokens(liveAssistantTurn.reasoningText);
+      if (estimate > 0) {
+        total += estimate;
+        estimated = true;
+      }
+    }
+  }
+
+  return { total, estimated };
 }
 
 function filterSupportedPersistedStreamEvents(streamEvents) {
@@ -386,6 +428,11 @@ function ConversationPage() {
     selectedBackendChatIdRef,
     reloadOpenChat,
   });
+  const liveAssistantTurn = useSyncExternalStore(
+    liveTurnStore.subscribe,
+    liveTurnStore.getSnapshot,
+    liveTurnStore.getSnapshot,
+  );
 
   const openBackendChat = useCallback(async (threadId) => {
     if (!threadId) {
@@ -984,7 +1031,10 @@ function ConversationPage() {
   }, [startNewChatSession]);
   const welcomeMessage = useMemo(() => getDailyWelcomeMessage(), []);
   const totalTokenCount = useMemo(() => countTokens(messages), [messages]);
-  const totalReasoningTokenCount = useMemo(() => countReasoningTokens(messages), [messages]);
+  const reasoningTokenMeta = useMemo(
+    () => reasoningTokenDisplay(messages, liveAssistantTurn),
+    [liveAssistantTurn, messages],
+  );
   const totalToolCount = useMemo(() => countToolInvocations(messages), [messages]);
   const eventCounts = useMemo(() => {
     const counts = STREAM_EVENT_CATEGORIES.reduce((acc, c) => { acc[c.id] = 0; return acc; }, {});
@@ -1000,8 +1050,14 @@ function ConversationPage() {
       counts.images += collectMessageImages(message).length;
       countCategorizedEvents(message.streamEvents, counts);
     }
+    if (liveAssistantTurn) {
+      counts.reasoning += countReasoningTimelineEntries(
+        liveAssistantTurn.timelineItems?.map((item) => item.event),
+        '',
+      );
+    }
     return counts;
-  }, [messages]);
+  }, [liveAssistantTurn, messages]);
   const firstMessageTime = useMemo(
     () => messages.find((message) => Number.isFinite(message.timestamp))?.timestamp,
     [messages],
@@ -1495,7 +1551,7 @@ function ConversationPage() {
             </span>,
             <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
             <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
-            <span key="reasoning-tokens" className="muted">{new Intl.NumberFormat().format(totalReasoningTokenCount)} reasoning tokens</span>,
+            <span key="reasoning-tokens" className="muted">{reasoningTokenMeta.estimated ? '~' : ''}{new Intl.NumberFormat().format(reasoningTokenMeta.total)} reasoning tokens</span>,
             threadId ? <span key="id" className="chat-session-id">{threadId}</span> : null,
           ]}
         />

@@ -238,6 +238,7 @@ def build_reasoning_delta_event(
     safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_PREVIEW_BYTES)
     safe_metadata = _normalize_metadata(metadata)
     safe_metadata["text_length"] = len(safe_content)
+    safe_metadata["summary"] = safe_content
     return {
         "event_type": "reasoning_delta",
         "content": safe_content,
@@ -254,6 +255,7 @@ def build_reasoning_summary_event(
     safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_ARGS_BYTES)
     safe_metadata = _normalize_metadata(metadata)
     safe_metadata["text_length"] = len(safe_content)
+    safe_metadata["summary"] = safe_content
     return {
         "event_type": "reasoning_summary",
         "content": safe_content,

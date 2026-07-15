@@ -374,6 +374,26 @@ function splitReasoningContent(content) {
   };
 }
 
+function reasoningPresentation(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  const content = typeof event?.content === 'string' ? event.content.trim() : '';
+  const summary = typeof metadata.summary === 'string' ? metadata.summary.trim() : '';
+  const detail = typeof metadata.detail === 'string' ? metadata.detail.trim() : '';
+  const generatedReasoning = metadata.source === 'message_reasoning' || metadata.source === 'stream_reasoning';
+  const generatedSummaryMatchesContent = Boolean(summary && !detail && content && summary === content);
+
+  // Generated live and checkpoint traces are authoritative in event.content;
+  // explicit provider summary/detail metadata remains authoritative otherwise.
+  // Split generated traces into a glanceable summary plus expandable remainder.
+  const shouldSplitGeneratedContent = !detail && (generatedReasoning || generatedSummaryMatchesContent);
+  const presentation = shouldSplitGeneratedContent
+    ? splitReasoningContent(content || summary)
+    : (summary || detail ? { summary, detail } : { summary: '', detail: '' });
+
+  return presentation;
+}
+
+
 // ─── Stream event rendering ───────────────────────────────────────────────
 
 export function describeStreamEvent(event) {
@@ -447,12 +467,12 @@ export function describeStreamEvent(event) {
   }
 
   if (isReasoningEvent(event)) {
-    const { summary, detail } = splitReasoningContent(event.content);
+    const presentation = reasoningPresentation(event);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
-      bodyHtml: summary ? formatMessage(summary) : '',
-      reasoningDetailHtml: detail ? formatMessage(detail) : '',
+      bodyHtml: presentation.summary ? formatMessage(presentation.summary) : '',
+      reasoningDetailHtml: presentation.detail ? formatMessage(presentation.detail) : '',
       metaDetail: '',
       bodyDetail: '',
     };

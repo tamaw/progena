@@ -339,6 +339,7 @@ def test_build_reasoning_delta_event_tracks_text_length():
     assert event["event_type"] == "reasoning_delta"
     assert event["content"] == "Checked inputs. "
     assert event["metadata"]["text_length"] == len("Checked inputs. ")
+    assert event["metadata"]["summary"] == "Checked inputs. "
 
 
 def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
@@ -349,6 +350,7 @@ def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
     )
     assert event["event_type"] == "reasoning_summary"
     assert event["metadata"]["reasoning_tokens"] == 17
+    assert event["metadata"]["summary"] == "Checked inputs before answering."
     assert api_key not in repr(event)
 
 
