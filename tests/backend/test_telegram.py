@@ -458,7 +458,7 @@ class TestSubscriberTracking:
         # Add a mock subscriber
         original = _ui_stream_subscribers.copy()
         _ui_stream_subscribers.clear()
-        _ui_stream_subscribers.add(asyncio.Queue())
+        _ui_stream_subscribers[asyncio.Queue()] = None
 
         try:
             assert has_active_ui_stream_subscribers() is True

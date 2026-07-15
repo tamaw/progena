@@ -709,7 +709,7 @@ class TestUIRoutes:
         )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             response = client.get(f"/api/ui/tasks/{card_id}/activity")
             request_id = response.headers["X-Request-ID"]
@@ -721,7 +721,7 @@ class TestUIRoutes:
             )
             envelopes = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
 
         assert request_id.startswith("req-")
         assert len(envelopes) == 1
@@ -753,7 +753,7 @@ class TestUIRoutes:
         card_id = board.payload["card_order"][-1]
         request_id = "task-content-save-42"
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             response = client.put(
                 f"/api/ui/tasks/{card_id}/content",
@@ -762,7 +762,7 @@ class TestUIRoutes:
             )
             emitted = [queue.get_nowait() for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
 
         assert_acknowledged(
             response,
@@ -1367,7 +1367,7 @@ class TestLogsEndpoint:
         )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             response = client.get(
                 "/api/ui/logs/export?format=jsonl",
@@ -1383,7 +1383,7 @@ class TestLogsEndpoint:
             while not queue.empty():
                 emitted.append(queue.get_nowait())
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
 
         assert [event["type"] for event in emitted] == ["ui.event", "ui.event", "ui.event"]
         envelopes = [event["envelope"] for event in emitted]
@@ -1466,7 +1466,7 @@ class TestLogsEndpoint:
         request_id = "empty-log-export-request"
         queue = asyncio.Queue()
         assert not any(kanban_state_reader.logs_dir.iterdir())
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             response = client.get(
                 "/api/ui/logs/export",
@@ -1482,7 +1482,7 @@ class TestLogsEndpoint:
             while not queue.empty():
                 emitted.append(queue.get_nowait())
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
 
         envelopes = [event["envelope"] for event in emitted]
         assert [envelope.type for envelope in envelopes] == [
@@ -1574,11 +1574,11 @@ class TestScheduleEndpoint:
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             envelope = ui_routes.broadcast_schedule_snapshot()
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
 
         assert envelope.type == "schedule.snapshot"
         assert envelope.payload["items"][0]["id"] == "sched-live"
@@ -1723,12 +1723,12 @@ class TestSplitSSEEndpoints:
         clear_alerts()
         alert = create_alert(type="warning", title="Build", message="Build failed")
         queue = ui_routes.asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         try:
             ui_routes.broadcast_alerts_state()
             event = queue.get_nowait()
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
             clear_alerts()
 
         assert event["type"] == "ui.event"

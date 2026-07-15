@@ -19,6 +19,13 @@ export const realtimeListenerMiddleware = createListenerMiddleware();
 let eventSource = null;
 let activeStreamUrl = null;
 
+// The backend emits a `connection.heartbeat` ui.event every 15s
+// (SSE_HEARTBEAT_INTERVAL). A stream silent for longer than this is deaf:
+// the server evicted the subscriber or the socket is half-open — states
+// EventSource never surfaces through onerror, so it never reconnects.
+const HEARTBEAT_STALE_MS = 45000;
+const WATCHDOG_POLL_MS = 15000;
+
 function isUiDataThunkLifecycle(action) {
   return action.type.startsWith('uiData/');
 }
@@ -87,11 +94,32 @@ realtimeListenerMiddleware.startListening({
     const source = new EventSource(streamUrl);
     eventSource = source;
     activeStreamUrl = streamUrl;
+    let lastEventAt = Date.now();
+
+    const watchdog = setInterval(() => {
+      if (eventSource !== source) {
+        clearInterval(watchdog);
+        return;
+      }
+      if (Date.now() - lastEventAt <= HEARTBEAT_STALE_MS) {
+        return;
+      }
+      // Deaf stream: tear it down and reconnect from scratch.
+      clearInterval(watchdog);
+      source.close();
+      eventSource = null;
+      activeStreamUrl = null;
+      const error = 'Realtime stream stale — reconnecting';
+      listenerApi.dispatch(realtimeErrored(error));
+      failPendingOperations(listenerApi, error);
+      listenerApi.dispatch(startRealtimeStream({ streamUrl }));
+    }, WATCHDOG_POLL_MS);
 
     source.onopen = () => {
       if (eventSource !== source) {
         return;
       }
+      lastEventAt = Date.now();
       listenerApi.dispatch(realtimeConnected());
     };
 
@@ -107,6 +135,7 @@ realtimeListenerMiddleware.startListening({
     };
 
     source.addEventListener('ui.event', (messageEvent) => {
+      lastEventAt = Date.now();
       try {
         const event = JSON.parse(messageEvent.data);
         const invalidReason = invalidEnvelopeReason(event);

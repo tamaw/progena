@@ -495,7 +495,7 @@ class TestRealTimeUpdates:
 
         # Add test queue
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             # Broadcast event
@@ -504,7 +504,7 @@ class TestRealTimeUpdates:
             # Verify event was added
             assert not queue.empty()
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)
 
     def test_status_monitor_function_exists(self):
         """Test status monitor functions exist."""

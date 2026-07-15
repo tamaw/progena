@@ -59,7 +59,7 @@ class TestUserMessageEvents:
                 )
 
         queue = asyncio.Queue()
-        ui_routes._ui_stream_subscribers.add(queue)
+        ui_routes._ui_stream_subscribers[queue] = None
         backend_main.client = _MockClient()
         try:
             response = client.post(
@@ -69,7 +69,7 @@ class TestUserMessageEvents:
             )
             events = [queue.get_nowait()["envelope"] for _ in range(queue.qsize())]
         finally:
-            ui_routes._ui_stream_subscribers.discard(queue)
+            ui_routes._ui_stream_subscribers.pop(queue, None)
             backend_main.client = original_client
 
         assert response.status_code == 202
@@ -149,7 +149,7 @@ class TestSSEEventDelivery:
         _ui_stream_subscribers.clear()
 
         chat_queue = asyncio.Queue()
-        _ui_stream_subscribers.add(chat_queue)
+        _ui_stream_subscribers[chat_queue] = None
 
         try:
             broadcast_ui_event(
@@ -169,7 +169,7 @@ class TestSSEEventDelivery:
             assert envelope.payload["content"] == "Hello from agent"
             assert envelope.payload["request_id"] == "agent-message-request"
         finally:
-            _ui_stream_subscribers.discard(chat_queue)
+            _ui_stream_subscribers.pop(chat_queue, None)
 
     def test_broadcast_status_event_functionality(self):
         """Test broadcast_ui_event delivers status-typed events to stream subscribers."""
@@ -178,7 +178,7 @@ class TestSSEEventDelivery:
         _ui_stream_subscribers.clear()
 
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             broadcast_ui_event(
@@ -195,7 +195,7 @@ class TestSSEEventDelivery:
             assert envelope.payload["uptime"] == 100
             assert envelope.payload["request_id"] == "status-update-request"
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)
 
 
 class TestEventPayloadValidation:
@@ -288,7 +288,7 @@ class TestTypingIndicatorEvents:
         _ui_stream_subscribers.clear()
 
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             # Simulate typing indicator sequence
@@ -307,7 +307,7 @@ class TestTypingIndicatorEvents:
             assert events[1]["envelope"].type == "typing_update"
             assert events[2]["envelope"].type == "typing_stop"
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)
 
 
 class TestMessageContentTypes:
