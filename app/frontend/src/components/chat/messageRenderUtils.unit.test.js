@@ -1,5 +1,6 @@
+// @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary, formatTimestamp } from './messageRenderUtils';
+import { appendStreamingCursor, describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary, formatTimestamp } from './messageRenderUtils';
 
 function todosEvent(todos) {
   return { eventType: 'todos_update', metadata: { todos } };
@@ -436,5 +437,56 @@ describe('formatTimestamp', () => {
     });
 
     expect(formatTimestamp(isoTimestamp)).toBe(expected);
+  });
+});
+
+describe('appendStreamingCursor', () => {
+  function parse(html) {
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    return container;
+  }
+
+  it('returns one cursor span for empty input', () => {
+    const container = parse(appendStreamingCursor(''));
+
+    expect(container.children).toHaveLength(1);
+    expect(container.firstElementChild.tagName).toBe('SPAN');
+    expect(container.firstElementChild.className).toBe('stream-cursor');
+    expect(container.firstElementChild.textContent).toBe('▋');
+  });
+
+  it('places the cursor inside a paragraph after its text', () => {
+    const container = parse(appendStreamingCursor('<p>Hello</p>'));
+    const paragraph = container.querySelector('p');
+    const cursor = container.querySelector('.stream-cursor');
+
+    expect(cursor).not.toBeNull();
+    expect(cursor.parentElement).toBe(paragraph);
+    expect(paragraph.lastElementChild).toBe(cursor);
+    expect(paragraph.textContent).toBe('Hello▋');
+  });
+
+  it('places the cursor inside the deepest final element of nested markup', () => {
+    const container = parse(appendStreamingCursor('<blockquote><p><strong>Final</strong></p></blockquote>'));
+    const cursor = container.querySelector('.stream-cursor');
+
+    expect(cursor).not.toBeNull();
+    expect(cursor.parentElement?.tagName).toBe('STRONG');
+    expect(cursor.parentElement?.parentElement?.tagName).toBe('P');
+    expect(cursor.parentElement?.lastElementChild).toBe(cursor);
+    expect(container.querySelectorAll('.stream-cursor')).toHaveLength(1);
+  });
+
+  it('places the cursor in the final node among multiple top-level nodes', () => {
+    const container = parse(appendStreamingCursor('<p>First</p><p>Second</p>'));
+    const paragraphs = container.querySelectorAll('p');
+    const cursor = container.querySelector('.stream-cursor');
+
+    expect(cursor).not.toBeNull();
+    expect(cursor.parentElement).toBe(paragraphs[1]);
+    expect(paragraphs[0].querySelector('.stream-cursor')).toBeNull();
+    expect(paragraphs[1].textContent).toBe('Second▋');
+    expect(container.querySelectorAll('.stream-cursor')).toHaveLength(1);
   });
 });

@@ -299,10 +299,9 @@ export function useChatStream({
             }
           }
           clearLiveTurnForStream(streamId);
-          dispatch(fetchChatSessions({
-            chatsUrl: getApiUrl('chats'),
-            includeArchived: true,
-          }));
+          // The foreground message is already committed locally and the state
+          // watcher publishes the authoritative chat.sessions.snapshot. Avoid
+          // a second /api/ui/chats roster request at stream completion.
           setIsGenerating(false);
         },
         // onError
@@ -374,7 +373,6 @@ export function useChatStream({
     activeBackendChat,
     applyBackgroundStreamOutcome,
     dispatch,
-    getApiUrl,
     messages,
     selectedBackendChatId,
     selectedBackendChatIdRef,

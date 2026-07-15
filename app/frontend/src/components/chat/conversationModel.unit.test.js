@@ -9,6 +9,9 @@ import {
   collectMessageImages,
   countToolInvocations,
   countReasoningTokens,
+  committedReasoningTokenDisplay,
+  committedReasoningTokenCounts,
+  liveReasoningTokenAdjustment,
   countTokens,
   getTimeBucket,
   groupSessionItems,
@@ -259,6 +262,63 @@ describe('countReasoningTokens', () => {
     ];
 
     expect(countReasoningTokens(messages)).toBe(192);
+  });
+});
+
+describe('committed and live reasoning token totals', () => {
+  it('combines explicit committed counts with text estimates for missing counts', () => {
+    const messages = [
+      { id: 'explicit', role: 'assistant', reasoningTokenCount: 7, reasoningText: 'ignored fallback' },
+      { id: 'estimated', role: 'assistant', reasoningText: '12345678' },
+      { id: 'zero-count', role: 'ai', reasoningTokenCount: 0, reasoningText: 'abcd' },
+      { id: 'user', role: 'user', reasoningTokenCount: 99, reasoningText: 'not included' },
+    ];
+
+    expect(committedReasoningTokenDisplay(messages)).toEqual({ total: 10, estimated: true });
+  });
+
+  it('keeps finite counts for identified assistant messages only', () => {
+    const counts = committedReasoningTokenCounts([
+      { id: 'assistant-1', role: 'assistant', reasoningTokenCount: 5 },
+      { id: 'ai-1', role: 'ai', reasoningTokenCount: 3 },
+      { id: 'user-1', role: 'user', reasoningTokenCount: 99 },
+      { id: 'missing', role: 'assistant' },
+      { id: 'invalid', role: 'assistant', reasoningTokenCount: NaN },
+      { role: 'assistant', reasoningTokenCount: 8 },
+    ]);
+
+    expect(counts).toEqual(new Map([
+      ['assistant-1', 5],
+      ['ai-1', 3],
+    ]));
+  });
+
+  it('subtracts the matching committed assistant count from the live total', () => {
+    const committedCounts = committedReasoningTokenCounts([
+      { id: 'assistant-1', role: 'assistant', reasoningTokenCount: 5 },
+    ]);
+
+    expect(liveReasoningTokenAdjustment({
+      assistantMessageId: 'assistant-1',
+      reasoningTokenCount: 8,
+      reasoningText: 'already persisted reasoning',
+    }, committedCounts)).toEqual({ total: 3, estimated: false });
+  });
+
+  it('estimates live reasoning text when no matching committed message exists', () => {
+    const committedCounts = committedReasoningTokenCounts([
+      { id: 'other-assistant', role: 'assistant', reasoningTokenCount: 4 },
+    ]);
+
+    expect(liveReasoningTokenAdjustment({
+      assistantMessageId: 'new-assistant',
+      reasoningTokenCount: 0,
+      reasoningText: '  1234567890  ',
+    }, committedCounts)).toEqual({ total: 3, estimated: true });
+  });
+
+  it('returns a zero adjustment when there is no live turn', () => {
+    expect(liveReasoningTokenAdjustment(null, new Map())).toEqual({ total: 0, estimated: false });
   });
 });
 

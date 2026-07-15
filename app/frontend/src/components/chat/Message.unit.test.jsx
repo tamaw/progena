@@ -239,6 +239,35 @@ describe('Message with timelineItems', () => {
     expect(assistantPos).toBeGreaterThan(toolStartPos);
     expect(toolResultPos).toBeGreaterThan(assistantPos);
   });
+  it('renders streamed assistant content once in the explicit timeline row', () => {
+    const streamedContent = 'Live assistant response';
+    const message = baseMessage({
+      content: streamedContent,
+      isStreaming: true,
+      timelineItems: [{
+        kind: 'assistant_message',
+        id: 'assistant-live',
+        content: streamedContent,
+        timestamp: MS_EPOCH,
+        displayAgentName: '',
+        displayModelName: '',
+        displayToolCalls: [],
+        tokenCount: 0,
+        reasoningTokenCount: 0,
+        reasoningText: '',
+        isStreaming: true,
+        error: false,
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const timelineItem = divMarkupByClass(html, 'chat-entry-chain--item');
+    const messageEntries = html.match(/class="entry__main msg__entry-main"/g) || [];
+
+    expect(timelineItem).toContain('class="entry__main msg__entry-main"');
+    expect(timelineItem).toContain(streamedContent);
+    expect(messageEntries).toHaveLength(1);
+  });
 
   it('hides assistant content and images while retaining filtered timeline events', () => {
     const message = baseMessage({
@@ -1085,5 +1114,31 @@ describe('reasoning summary presentation', () => {
     expect(html).toContain(providerSummary);
     expect(html).not.toContain(unstructuredContent);
     expect(html).not.toContain('reasoning-event-disclosure');
+  });
+  it('renders explicit reasoning summary and detail metadata in the classic fallback stream', () => {
+    const providerSummary = 'The provider supplied this summary.';
+    const providerDetail = 'The fallback preserved the detailed trace.';
+    const unstructuredContent = 'This event content must never be rendered.';
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [{
+        id: 'fallback-reasoning-summary',
+        eventType: 'reasoning_summary',
+        content: unstructuredContent,
+        metadata: { summary: providerSummary, detail: providerDetail },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const eventStart = html.indexOf('message-stream-event');
+    const assistantStart = html.indexOf('Hello world');
+    const summaryPos = html.indexOf(providerSummary);
+    const detailPos = html.indexOf(providerDetail);
+
+    expect(eventStart).toBeGreaterThan(-1);
+    expect(summaryPos).toBeGreaterThan(eventStart);
+    expect(detailPos).toBeGreaterThan(summaryPos);
+    expect(detailPos).toBeLessThan(assistantStart);
+    expect(html).not.toContain(unstructuredContent);
   });
 });

@@ -1,9 +1,9 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { memo, useEffect, useRef, useSyncExternalStore } from 'react';
 import { Message } from './Message';
 import { toCommittedAssistantMessage } from './liveAssistantTurnModel';
 import PendingAssistantCursor from './PendingAssistantCursor';
 
-export default function LiveAssistantTurn({
+const LiveAssistantTurn = memo(function LiveAssistantTurn({
   store,
   messagesContainerRef,
   isPinnedToBottomRef,
@@ -63,4 +63,6 @@ export default function LiveAssistantTurn({
       showImages={showImages}
     />
   );
-}
+});
+
+export default LiveAssistantTurn;
