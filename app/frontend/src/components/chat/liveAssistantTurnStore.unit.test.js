@@ -52,4 +52,60 @@ describe('createLiveAssistantTurnStore', () => {
     expect(receivedSnapshots).toEqual([firstTurn]);
     expect(store.getSnapshot()).toBe(laterTurn);
   });
+
+  it('notifies header subscribers only when live reasoning metadata changes', () => {
+    const store = createLiveAssistantTurnStore();
+    const headerSnapshots = [];
+    const firstTurn = {
+      streamId: 'stream-001',
+      assistantMessageId: 'assistant-001',
+      content: 'First visible text',
+      reasoningTokenCount: 0,
+      reasoningText: 'Checking the relevant evidence.',
+      timelineItems: [{
+        kind: 'stream_event',
+        event: { eventType: 'reasoning_delta', content: 'Checking the relevant evidence.' },
+      }],
+    };
+
+    store.subscribeHeader(() => headerSnapshots.push(store.getHeaderSnapshot()));
+    store.set(firstTurn);
+
+    const initialHeaderSnapshot = store.getHeaderSnapshot();
+    expect(headerSnapshots).toEqual([initialHeaderSnapshot]);
+
+    const textOnlyTurn = { ...firstTurn, content: 'First visible text, extended.' };
+    store.set(textOnlyTurn);
+
+    expect(headerSnapshots).toHaveLength(1);
+    expect(store.getHeaderSnapshot()).toBe(initialHeaderSnapshot);
+
+    const tokenUpdate = { ...textOnlyTurn, reasoningTokenCount: 8 };
+    store.set(tokenUpdate);
+    expect(headerSnapshots).toHaveLength(2);
+    expect(headerSnapshots[1]).not.toBe(initialHeaderSnapshot);
+
+    const reasoningTextUpdate = {
+      ...tokenUpdate,
+      reasoningText: 'Checked the relevant evidence.',
+      timelineItems: [{
+        kind: 'stream_event',
+        event: { eventType: 'reasoning_delta', content: 'Checked the relevant evidence.' },
+      }],
+    };
+    store.set(reasoningTextUpdate);
+    expect(headerSnapshots).toHaveLength(3);
+
+    const reasoningEventCountUpdate = {
+      ...reasoningTextUpdate,
+      timelineItems: [{
+        kind: 'stream_event',
+        event: { eventType: 'reasoning_summary', content: 'Checked the relevant evidence.' },
+      }],
+    };
+    store.set(reasoningEventCountUpdate);
+
+    expect(headerSnapshots).toHaveLength(4);
+    expect(headerSnapshots.at(-1).reasoningEventCount).toBe(1);
+  });
 });
