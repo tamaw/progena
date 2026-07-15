@@ -290,10 +290,10 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
   chatActions,
   title,
 }) {
-  const liveAssistantTurn = useSyncExternalStore(
-    liveTurnStore.subscribe,
-    liveTurnStore.getSnapshot,
-    liveTurnStore.getSnapshot,
+  const liveHeaderSnapshot = useSyncExternalStore(
+    liveTurnStore.subscribeHeader,
+    liveTurnStore.getHeaderSnapshot,
+    liveTurnStore.getHeaderSnapshot,
   );
   const committedReasoningMeta = useMemo(
     () => committedReasoningTokenDisplay(messages),
@@ -304,8 +304,8 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
     [messages],
   );
   const liveReasoningMeta = useMemo(
-    () => liveReasoningTokenAdjustment(liveAssistantTurn, committedReasoningCounts),
-    [committedReasoningCounts, liveAssistantTurn],
+    () => liveReasoningTokenAdjustment(liveHeaderSnapshot, committedReasoningCounts),
+    [committedReasoningCounts, liveHeaderSnapshot],
   );
   const reasoningTokenMeta = useMemo(() => ({
     total: committedReasoningMeta.total + liveReasoningMeta.total,
@@ -327,14 +327,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
     }
     return counts;
   }, [messages]);
-  const liveReasoningEventCount = useMemo(() => (
-    liveAssistantTurn
-      ? countReasoningTimelineEntries(
-        liveAssistantTurn.timelineItems?.map((item) => item.event),
-        '',
-      )
-      : 0
-  ), [liveAssistantTurn]);
+  const liveReasoningEventCount = liveHeaderSnapshot?.reasoningEventCount ?? 0;
   const eventCounts = useMemo(() => ({
     ...committedEventCounts,
     reasoning: committedEventCounts.reasoning + liveReasoningEventCount,

@@ -70,7 +70,7 @@ export function useChatStream({
   const activeStreamIdRef = useRef(null);
   const backgroundOriginChatIdRef = useRef(null);
   const liveTurnRef = useRef(null);
-  const pendingLiveTurnUpdatesRef = useRef([]);
+  const pendingTextRef = useRef({ streamId: null, content: '' });
   const liveTurnFrameRef = useRef(null);
 
   const setLiveAssistantTurn = useCallback((nextTurn) => {
@@ -81,52 +81,48 @@ export function useChatStream({
     liveTurnStore.set(resolvedTurn);
   }, [liveTurnStore]);
 
-  const flushLiveTurnUpdates = useCallback((streamId) => {
-    const updates = pendingLiveTurnUpdatesRef.current;
-    if (updates.length === 0) {
+  const flushPendingText = useCallback((streamId) => {
+    const pending = pendingTextRef.current;
+    if (!pending.content || pending.streamId !== streamId) {
       return;
     }
-    const currentUpdates = updates.filter((update) => update.streamId === streamId);
-    const remainingUpdates = updates.filter((update) => update.streamId !== streamId);
-    pendingLiveTurnUpdatesRef.current = remainingUpdates;
-    if (remainingUpdates.length > 0 && liveTurnFrameRef.current === null) {
-      const nextStreamId = remainingUpdates[0].streamId;
-      liveTurnFrameRef.current = requestAnimationFrame(() => {
-        liveTurnFrameRef.current = null;
-        flushLiveTurnUpdates(nextStreamId);
-      });
-    }
+    pendingTextRef.current = { streamId: null, content: '' };
     if (
-      currentUpdates.length === 0
-      || activeStreamIdRef.current !== streamId
+      activeStreamIdRef.current !== streamId
       || liveTurnRef.current?.streamId !== streamId
     ) {
       return;
     }
-    setLiveAssistantTurn((turn) => currentUpdates.reduce(
-      (nextTurn, { updater }) => (nextTurn ? updater(nextTurn) : nextTurn),
-      turn,
+    setLiveAssistantTurn((turn) => (
+      turn ? applyAssistantChunk(turn, pending.content, Date.now()) : turn
     ));
   }, [setLiveAssistantTurn]);
 
-  const discardPendingLiveTurnUpdates = useCallback(() => {
-    pendingLiveTurnUpdatesRef.current = [];
+  const discardPendingText = useCallback(() => {
+    pendingTextRef.current = { streamId: null, content: '' };
     if (liveTurnFrameRef.current !== null) {
       cancelAnimationFrame(liveTurnFrameRef.current);
       liveTurnFrameRef.current = null;
     }
   }, []);
 
-  const queueLiveTurnUpdate = useCallback((streamId, updater) => {
-    pendingLiveTurnUpdatesRef.current.push({ streamId, updater });
+  const queueTextChunk = useCallback((streamId, chunk) => {
+    const pending = pendingTextRef.current;
+    if (pending.streamId && pending.streamId !== streamId) {
+      return;
+    }
+    pendingTextRef.current = {
+      streamId,
+      content: pending.content + chunk,
+    };
     if (liveTurnFrameRef.current !== null) {
       return;
     }
     liveTurnFrameRef.current = requestAnimationFrame(() => {
       liveTurnFrameRef.current = null;
-      flushLiveTurnUpdates(streamId);
+      flushPendingText(streamId);
     });
-  }, [flushLiveTurnUpdates]);
+  }, [flushPendingText]);
   // A stream may finish after a newer send has replaced the live turn. Only
   // the stream that still owns both identities may clear that turn.
   const isCurrentLiveTurn = useCallback((streamId) => (
@@ -164,10 +160,10 @@ export function useChatStream({
   useEffect(() => {
     return () => {
       preserveStreamInBackground();
-      discardPendingLiveTurnUpdates();
+      discardPendingText();
       activeStreamIdRef.current = null;
     };
-  }, [discardPendingLiveTurnUpdates, preserveStreamInBackground]);
+  }, [discardPendingText, preserveStreamInBackground]);
 
   // Dispatches the redux side effects for a resolveBackgroundStreamOutcome()
   // result whose action isn't 'foreground' (that case is handled inline by
@@ -205,7 +201,7 @@ export function useChatStream({
     setIsGenerating(true);
 
     const streamId = `stream_${Date.now()}`;
-    discardPendingLiveTurnUpdates();
+    discardPendingText();
     activeStreamIdRef.current = streamId;
 
     // Start the live turn — no assistant message created yet.
@@ -256,17 +252,19 @@ export function useChatStream({
     // Render the first text delta immediately so an accepted response never
     // waits behind a frame boundary. Later text deltas share one visual update
     // per frame; every structural event flushes first and remains immediate.
-    const updateTextTurn = (updater) => {
+    const updateTextTurn = (chunk) => {
       if (!liveTurnRef.current?.content) {
-        flushLiveTurnUpdates(streamId);
-        setLiveAssistantTurn((turn) => (turn ? updater(turn) : turn));
+        flushPendingText(streamId);
+        setLiveAssistantTurn((turn) => (
+          turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn
+        ));
         return;
       }
-      queueLiveTurnUpdate(streamId, updater);
+      queueTextChunk(streamId, chunk);
     };
 
     const updateStreamEventTurn = (updater) => {
-      flushLiveTurnUpdates(streamId);
+      flushPendingText(streamId);
       setLiveAssistantTurn((turn) => (turn ? updater(turn) : turn));
     };
 
@@ -278,13 +276,13 @@ export function useChatStream({
         // onChunk
         (chunk) => {
           if (isStale()) return;
-          updateTextTurn((prev) => applyAssistantChunk(prev, chunk, Date.now()));
+          updateTextTurn(chunk);
         },
         // onComplete
         (status) => {
           const stale = isStale();
           if (!stale) {
-            flushLiveTurnUpdates(streamId);
+            flushPendingText(streamId);
           }
           const outcome = resolveBackgroundStreamOutcome({
             isStale: stale,
@@ -315,7 +313,7 @@ export function useChatStream({
               setMessages(prevMessages => [...prevMessages, committed]);
             }
           }
-          flushLiveTurnUpdates(streamId);
+          flushPendingText(streamId);
           clearLiveTurnForStream(streamId);
           if (activeStreamIdRef.current === streamId) {
             activeStreamIdRef.current = null;
@@ -343,14 +341,14 @@ export function useChatStream({
           }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
-            discardPendingLiveTurnUpdates();
+            discardPendingText();
             clearLiveTurnForStream(streamId);
             return;
           }
           if (!isCurrentLiveTurn(streamId)) {
             return;
           }
-          flushLiveTurnUpdates(streamId);
+          flushPendingText(streamId);
           show('error', 'Chat Error', error.message);
           const turn = liveTurnRef.current;
           if (turn) {
@@ -393,13 +391,13 @@ export function useChatStream({
       }
       show('error', 'Chat Error', error.message);
       setIsGenerating(false);
-      discardPendingLiveTurnUpdates();
+      discardPendingText();
       clearLiveTurnForStream(streamId);
     }
   }, [
-    discardPendingLiveTurnUpdates,
-    flushLiveTurnUpdates,
-    queueLiveTurnUpdate,
+    discardPendingText,
+    flushPendingText,
+    queueTextChunk,
     reloadOpenChat,
     clearLiveTurnForStream,
     isCurrentLiveTurn,

@@ -11,8 +11,18 @@ vi.mock('react', () => ({
 vi.mock('react-redux', () => ({
   useSelector: () => [],
 }));
+vi.mock('../components/chat/liveAssistantTurnModel', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    applyAssistantChunk: vi.fn(actual.applyAssistantChunk),
+  };
+});
+
 
 import { useChatStream } from './useChatStream';
+import { applyAssistantChunk } from '../components/chat/liveAssistantTurnModel';
+
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -60,6 +70,86 @@ describe('useChatStream', () => {
       content: 'First visible chunk',
       assistantMessageId: expect.any(String),
     });
+  });
+
+  it('aggregates delayed text deltas into one model update before terminal flush', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+
+    let onChunk;
+    let onComplete;
+    const setMessages = vi.fn();
+    const hook = useChatStream({
+      messages: [],
+      setMessages,
+      activeBackendChat: null,
+      selectedBackendChatId: null,
+      threadId: null,
+      sendMessageStream: vi.fn((content, history, nextOnChunk, nextOnComplete) => {
+        onChunk = nextOnChunk;
+        onComplete = nextOnComplete;
+        return new Promise(() => {});
+      }),
+      cancelStream: vi.fn(),
+      dispatch: vi.fn(),
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: null },
+      reloadOpenChat: vi.fn(),
+    });
+    void hook.handleSend('Hello');
+
+    onChunk('First');
+    applyAssistantChunk.mockClear();
+
+    onChunk(' second');
+    onChunk(' third');
+    onChunk(' fourth');
+
+    expect(scheduledFrames).toHaveLength(1);
+    expect(applyAssistantChunk).not.toHaveBeenCalled();
+
+    scheduledFrames[0]();
+
+    expect(applyAssistantChunk).toHaveBeenCalledOnce();
+    expect(applyAssistantChunk).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'First' }),
+      ' second third fourth',
+      expect.any(Number),
+    );
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First second third fourth',
+    });
+
+    onChunk(' final');
+    expect(scheduledFrames).toHaveLength(2);
+    applyAssistantChunk.mockClear();
+
+    // Completion is a terminal boundary: it must synchronously flush the
+    // final pending text instead of waiting for its captured rAF.
+    onComplete('completed');
+
+    expect(applyAssistantChunk).toHaveBeenCalledOnce();
+    expect(applyAssistantChunk).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'First second third fourth' }),
+      ' final',
+      expect.any(Number),
+    );
+    const committedMessages = setMessages.mock.calls.reduce(
+      (messages, [update]) => update(messages),
+      [],
+    );
+    expect(committedMessages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'assistant', content: 'First second third fourth final' }),
+    ]));
+    expect(hook.liveTurnStore.getSnapshot()).toBeNull();
+
+    // A frame captured before completion cannot replay a terminally flushed update.
+    scheduledFrames[1]();
+    expect(applyAssistantChunk).toHaveBeenCalledOnce();
   });
 
   it('flushes queued text before committing the terminal response', () => {
