@@ -778,19 +778,12 @@ body,
   justify-content: center;
 }
 
-.app-shell__sidebar.is-collapsed .app-shell__nav-dot:not(.app-shell__nav-dot--notification),
-.app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
-  display: none;
-}
-
-.app-shell__sidebar.is-collapsed .app-shell__nav-dot--notification {
+.app-shell__sidebar.is-collapsed .app-shell__nav-dot {
   position: absolute;
   top: 4px;
   right: 4px;
   display: block;
   margin-left: 0;
-  background: var(--color-error);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--color-error) 60%, transparent);
 }
 
 /* Collapsed rail: groups become clusters of icons threaded on a short strand,
