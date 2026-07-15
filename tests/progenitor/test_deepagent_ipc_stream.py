@@ -1139,3 +1139,99 @@ async def test_streamed_reasoning_survives_when_final_message_drops_it():
     assert (
         extract_reasoning_trace(bridge.state["messages"][-1]) == "Checked inputs. Computed answer."
     )
+
+
+@pytest.mark.asyncio
+async def test_reasoning_summary_sums_reasoning_tokens_across_model_calls_in_one_turn():
+    # A multi-step turn runs the model once per tool round-trip; each call
+    # reports its own usage on its own AIMessage in an update event. The final
+    # reasoning_summary must carry the SUM across the turn's calls, not just
+    # the last call's count (the UI header totals it).
+    first_call = AIMessage(
+        id="ai-1",
+        content="",
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 70,
+            "total_tokens": 71,
+            "output_token_details": {"reasoning": 64},
+        },
+    )
+    final_call = AIMessage(
+        id="ai-2",
+        content=[
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Thought it through."}],
+            },
+            {"type": "text", "text": "Done"},
+        ],
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 70,
+            "total_tokens": 71,
+            "output_token_details": {"reasoning": 64},
+        },
+    )
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [first_call]}}),
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Done",
+                        # LangGraph re-delivers already-seen state messages
+                        # alongside the new one; the id dedupe must keep
+                        # first_call from double-counting here.
+                        "messages": [first_call, final_call],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+
+    items = await _collect_items(bridge)
+
+    summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["metadata"]["reasoning_tokens"] == 128
+
+
+@pytest.mark.asyncio
+async def test_duplicate_update_delivery_of_same_message_id_counts_reasoning_once():
+    # The same provider message can arrive in several update events (distinct
+    # objects, same id). Its usage must count exactly once toward the turn
+    # total -- dedupe is by message id, not delivery.
+    def _message() -> AIMessage:
+        return AIMessage(
+            id="ai-dup",
+            content=[
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Thought it through."}],
+                },
+                {"type": "text", "text": "Done"},
+            ],
+            usage_metadata={
+                "input_tokens": 1,
+                "output_tokens": 70,
+                "total_tokens": 71,
+                "output_token_details": {"reasoning": 64},
+            },
+        )
+
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [_message()]}}),
+            ("updates", {"respond": {"pending_response": "Done", "messages": [_message()]}}),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+
+    items = await _collect_items(bridge)
+
+    summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["metadata"]["reasoning_tokens"] == 64
