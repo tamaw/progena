@@ -25,6 +25,18 @@ export function buildEntityPath(basePath, id, title, maxLength = MAX_SLUG_LENGTH
   return slug ? `${basePath}/${encodedId}/${encodeURIComponent(slug)}` : `${basePath}/${encodedId}`;
 }
 
+// A detail URL can render before its event-backed collection has hydrated. In
+// that window `id` is temporarily empty, but replacing the path with the bare
+// collection route would discard the only selection hint and prevent the page
+// from resolving the requested entity after the snapshot arrives.
+function hasEntitySegment(basePath, pathname) {
+  const normalizedBasePath = basePath.replace(/\/+$/, '');
+  if (!normalizedBasePath || !pathname.startsWith(`${normalizedBasePath}/`)) {
+    return false;
+  }
+  return Boolean(pathname.slice(normalizedBasePath.length + 1).split('/')[0]);
+}
+
 // Keeps the address bar in sync with whichever entity is actually selected on
 // a list/detail page (Chat, Inbox, Tasks, Tools, Knowledge, Schedules). Pass
 // `basePath: null` to disable the sync (e.g. Tasks embedded in a project's
@@ -34,7 +46,7 @@ export function useEntityUrlSync(basePath, id, title) {
   const navigate = useNavigate();
   const location = useLocation();
   useEffect(() => {
-    if (!basePath) {
+    if (!basePath || (!id && hasEntitySegment(basePath, location.pathname))) {
       return;
     }
     const nextPath = buildEntityPath(basePath, id, title || id);

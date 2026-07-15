@@ -57,6 +57,13 @@ function acknowledgementFor(action) {
   return null;
 }
 
+function failPendingOperations(listenerApi, error) {
+  const pendingOps = listenerApi.getState().realtime.pendingOps || {};
+  for (const requestId of Object.keys(pendingOps)) {
+    listenerApi.dispatch(failPendingOp({ requestId, error }));
+  }
+}
+
 function closeCurrentStream(dispatch) {
   if (eventSource) {
     eventSource.close();
@@ -82,11 +89,21 @@ realtimeListenerMiddleware.startListening({
     activeStreamUrl = streamUrl;
 
     source.onopen = () => {
+      if (eventSource !== source) {
+        return;
+      }
       listenerApi.dispatch(realtimeConnected());
     };
 
     source.onerror = () => {
-      listenerApi.dispatch(realtimeErrored('Realtime stream disconnected'));
+      if (eventSource !== source) {
+        return;
+      }
+      const error = 'Realtime stream disconnected';
+      listenerApi.dispatch(realtimeErrored(error));
+      // EventSource retries automatically after an error. Requests waiting for
+      // an event from the failed connection must not remain pending forever.
+      failPendingOperations(listenerApi, error);
     };
 
     source.addEventListener('ui.event', (messageEvent) => {
@@ -115,11 +132,8 @@ realtimeListenerMiddleware.startListening({
   actionCreator: stopRealtimeStream,
   effect: async (_action, listenerApi) => {
     closeCurrentStream(listenerApi.dispatch);
-    // Fail all pending operations when the stream disconnects
-    const state = listenerApi.getState();
-    for (const requestId of Object.keys(state.realtime.pendingOps || {})) {
-      listenerApi.dispatch(failPendingOp({ requestId, error: 'Stream disconnected' }));
-    }
+    // Fail all pending operations when the stream disconnects.
+    failPendingOperations(listenerApi, 'Stream disconnected');
   },
 });
 // Register at thunk dispatch, before its fetch begins. A backend publishes the

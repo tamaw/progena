@@ -95,8 +95,9 @@ Notes:
 event-stream-only browser API. It returns an empty `200 OK` and no application
 data.
 
-Current health probes are implemented as follows:
-- `backend`: `curl -fsS http://127.0.0.1:8000/healthz`
-- `frontend` through Nginx: `curl -fsS http://127.0.0.1/healthz` (proxied to `backend`)
-- `frontend` container process: `wget -q -O /dev/null http://127.0.0.1/`
-- `progenitor`: `curl -f http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint, same-container)
+Current health probes are implemented as follows (run the container-local probes with
+`docker compose exec`; only the frontend is published on the host):
+- `backend` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T backend curl -fsS http://127.0.0.1:8000/healthz`
+- `frontend` through the published Nginx port: `curl -fsS http://localhost/healthz` (proxied to `backend`)
+- `frontend` container process: `docker compose -f docker/docker-compose.progenitor.yml exec -T frontend wget -q -O /dev/null http://127.0.0.1/`
+- `progenitor` container: `docker compose -f docker/docker-compose.progenitor.yml exec -T progenitor curl -fsS http://127.0.0.1:9501/health` (the runtime's own HTTP endpoint)

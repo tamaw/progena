@@ -111,6 +111,20 @@ export function useChatStream({
     setLiveAssistantTurn(nextTurn);
     return nextTurn;
   }, [setLiveAssistantTurn]);
+  // A stream may finish after a newer send has replaced the live turn. Only
+  // the stream that still owns both identities may clear that turn.
+  const isCurrentLiveTurn = useCallback((streamId) => (
+    activeStreamIdRef.current === streamId
+    && liveTurnRef.current?.streamId === streamId
+  ), []);
+
+  const clearLiveTurnForStream = useCallback((streamId) => {
+    if (!isCurrentLiveTurn(streamId)) {
+      return false;
+    }
+    setLiveAssistantTurn(null);
+    return true;
+  }, [isCurrentLiveTurn, setLiveAssistantTurn]);
 
   const queueLiveTurnUpdate = useCallback((update) => {
     pendingLiveTurnUpdatesRef.current.push(update);
@@ -241,8 +255,8 @@ export function useChatStream({
       queueLiveTurnUpdate((turn) => (turn ? updater(turn) : turn));
     };
 
+    const isStale = () => activeStreamIdRef.current !== streamId;
     try {
-      const isStale = () => activeStreamIdRef.current !== streamId;
       await sendMessageStream(
         content,
         history,
@@ -265,7 +279,10 @@ export function useChatStream({
           }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
-            setLiveAssistantTurn(null);
+            clearLiveTurnForStream(streamId);
+            return;
+          }
+          if (!isCurrentLiveTurn(streamId)) {
             return;
           }
           // Foreground stream finished — finalise the live turn.
@@ -281,7 +298,7 @@ export function useChatStream({
               setMessages(prevMessages => [...prevMessages, committed]);
             }
           }
-          setLiveAssistantTurn(null);
+          clearLiveTurnForStream(streamId);
           dispatch(fetchChatSessions({
             chatsUrl: getApiUrl('chats'),
             includeArchived: true,
@@ -302,7 +319,10 @@ export function useChatStream({
           }
           if (outcome.action !== 'foreground') {
             applyBackgroundStreamOutcome(outcome);
-            setLiveAssistantTurn(null);
+            clearLiveTurnForStream(streamId);
+            return;
+          }
+          if (!isCurrentLiveTurn(streamId)) {
             return;
           }
           show('error', 'Chat Error', error.message);
@@ -318,7 +338,7 @@ export function useChatStream({
               setMessages(prevMessages => [...prevMessages, committed]);
             }
           }
-          setLiveAssistantTurn(null);
+          clearLiveTurnForStream(streamId);
           setIsGenerating(false);
         },
         // onStreamEvent
@@ -339,11 +359,16 @@ export function useChatStream({
         threadMetadata,
       );
     } catch (error) {
+      if (isStale()) {
+        return;
+      }
       show('error', 'Chat Error', error.message);
       setIsGenerating(false);
-      setLiveAssistantTurn(null);
+      clearLiveTurnForStream(streamId);
     }
   }, [
+    clearLiveTurnForStream,
+    isCurrentLiveTurn,
     discardPendingLiveTurnUpdates,
     flushLiveTurnUpdates,
     activeBackendChat,

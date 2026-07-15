@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Message } from './Message';
+import MessageImageStrip from './MessageImageStrip';
 
 // Ensure React is in global scope for the component's JSX compilation
 // when the automatic JSX runtime import is not injected by vitest.
@@ -237,6 +238,60 @@ describe('Message with timelineItems', () => {
     expect(toolStartPos).toBeGreaterThan(0);
     expect(assistantPos).toBeGreaterThan(toolStartPos);
     expect(toolResultPos).toBeGreaterThan(assistantPos);
+  });
+
+  it('hides assistant content and images while retaining filtered timeline events', () => {
+    const message = baseMessage({
+      content: 'Should be hidden',
+      streamEvents: [{
+        id: 'e-hidden-content',
+        eventType: 'tool_result',
+        metadata: { tool_name: 'search_web', result_preview: 'retained event' },
+        images: [{ id: 'image-1', base64: 'AAA', media_type: 'image/png' }],
+      }],
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'e-hidden-content',
+          event: {
+            id: 'e-hidden-content',
+            eventType: 'tool_result',
+            metadata: { tool_name: 'search_web', result_preview: 'retained event' },
+          },
+        },
+        {
+          kind: 'assistant_message',
+          id: 'assistant-hidden-content',
+          content: 'Should be hidden',
+          timestamp: MS_EPOCH,
+          displayAgentName: '',
+          displayModelName: '',
+          displayToolCalls: [],
+          tokenCount: 0,
+          reasoningTokenCount: 0,
+          reasoningText: '',
+          isStreaming: false,
+          error: false,
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message, hideContent: true }));
+
+    expect(html).not.toContain('Should be hidden');
+    expect(html).toContain('retained event');
+    expect(html).not.toContain('msg-img-strip');
+  });
+
+  it('exposes image thumbnails as keyboard-activatable controls', () => {
+    const html = renderToStaticMarkup(React.createElement(MessageImageStrip, {
+      images: [{ id: 'image-1', src: 'https://cdn.example.test/image.png', alt: 'Generated result' }],
+    }));
+
+    expect(html).toContain('role="button"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('aria-label="View image 1 full size"');
+    expect(html).toContain('alt="Generated result"');
   });
   it('renders a submitted task summary entry before the subagent final result', () => {
     const message = baseMessage({

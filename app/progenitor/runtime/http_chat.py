@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 EVENTS_KEEPALIVE_SECONDS = 15.0
 EVENTS_SUBSCRIBER_QUEUE_SIZE = 256
+DIRECT_STREAM_QUEUE_SIZE = 256
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -142,7 +143,9 @@ class RuntimeChatService:
             # backend's httpx read timeout. Consume it from a background task
             # so this loop can keep writing SSE keepalive comments while
             # waiting, the same pattern handle_events() uses.
-            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(
+                maxsize=DIRECT_STREAM_QUEUE_SIZE
+            )
 
             async def _produce() -> None:
                 try:

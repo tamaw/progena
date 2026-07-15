@@ -22,28 +22,27 @@ the canonical `/api/ui/stream` contract.
 
 `GET /api/ui/stream` remains the single long-lived browser data transport. It continues to return `200 text/event-stream`: this is a stream establishment, not an accepted work request.
 
-Every other retained application request returns **`201 Created`** after the backend has accepted and completed the request's synchronous persistence/dispatch work and has enqueued its causal `ui.event` envelope(s). This includes retained `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` requests.
+Every other retained application request returns **`202 Accepted`** after the backend has accepted and completed the request's synchronous persistence/dispatch work and has enqueued its causal `ui.event` envelope(s). This includes retained `GET`, `POST`, `PUT`, `PATCH`, and `DELETE` requests.
 
 A successful request has this sole response shape:
 
 ```json
 {
-  "accepted": true,
   "request_id": "<client-generated operation id>",
   "event_types": ["<causal ui.event type>"]
 }
 ```
 
-Implement `UiRequestAccepted` once as a Pydantic model and one helper for constructing it. It must be the only successful finite application-response model.
+Implement `UiRequestAcknowledgement` once as a Pydantic model and one helper for constructing it. It must be the only successful finite application-response model.
 
 Rules:
 
 1. The frontend generates one UUID operation ID for every application request and sends it in `X-Request-ID`. Existing detail routes may retain a query `request_id` only until all callers use the header; the value must be identical.
 2. The response returns that exact operation ID. It has no entity, list, status, query result, error, or generated-text field.
 3. Every causal `ui.event.payload` includes `request_id`. A snapshot caused by a request includes it too.
-4. Persist first; enqueue the event only after persistence succeeds; return `201` only after enqueueing the event(s).
-5. `201` means **accepted and enqueued**, not delivered to or applied by a browser. The frontend keeps the operation pending until its matching event arrives, the request fails, or an explicit timeout/reconnect policy ends it.
-6. Validation, missing-resource, conflict, and internal failures keep their existing non-201 status semantics and emit no success event.
+4. Persist first; enqueue the event only after persistence succeeds; return `202` only after enqueueing the event(s).
+5. `202` means **accepted and enqueued**, not delivered to or applied by a browser. The frontend keeps the operation pending until its matching event arrives, the request fails, or an explicit timeout/reconnect policy ends it.
+6. Validation, missing-resource, conflict, and internal failures keep their existing non-202 status semantics and emit no success event.
 7. Events from another tab/process update Redux state but do not resolve this tab's unrelated pending operation.
 8. Reducers must be idempotent for replayed snapshots, updates, and deletes. Existing `UiEventEnvelope` identifiers and replay remain the dedupe mechanism.
 
@@ -65,9 +64,9 @@ Source: `app/backend/chat_sessions.py:92-99`; producer/replay transport: `app/ba
 
 ## Route disposition
 
-### Retain and convert to `201` acknowledgement plus `ui.event`
+### Retain and convert to `202` acknowledgement plus `ui.event`
 
-All retained routes below return `UiRequestAccepted`; the listed event is the only source of result data.
+All retained routes below return `UiRequestAcknowledgement`; the listed event is the only source of result data.
 
 | Domain | Routes | Required causal events |
 |---|---|---|
@@ -81,7 +80,7 @@ All retained routes below return `UiRequestAccepted`; the listed event is the on
 | Prompts and skills | retained catalogue/write/create routes | `prompts.snapshot`, `skills.snapshot` |
 | Alerts and UI status | alert read/mutation routes; any retained status request | `alerts.updated`, `alert`, `status.updated`, `connection.ready` |
 | Log browsing/export | retained logs list/filter/source/export operations | add request-scoped `logs.page.loaded`, `logs.sources.loaded`, and chunked `logs.export.started|chunk|completed` events; the frontend builds downloads locally |
-| Generation | `POST /v1/responses`; `PUT /v1/responses/{request_id}/cancel` | add request-correlated `chat.response.started|delta|completed|failed|cancelled`; move token consumption from response-body SSE to canonical `ui.event` frames |
+| Generation | `POST /api/ui/responses`; `PUT /api/ui/responses/{generation_id}/cancel` | add request-correlated `chat.response.started|delta|completed|failed|cancelled`; move token consumption from response-body SSE to canonical `ui.event` frames |
 | Session / health, only if retained during cutover | existing frontend-used session/health requests | emit request-correlated `session.updated` / `status.updated`; otherwise replace their frontend behavior and delete their routes |
 
 No retained finite endpoint may return resource JSON, a `204`, a file attachment, a raw response stream, or a direct query result.
@@ -92,7 +91,7 @@ Delete these endpoints because the frontend has no live callsite or their consum
 
 - `GET /health/detailed`, `GET /ready`, `GET /live`, `GET /v1/models`, `POST /chat`.
 - Attachment upload/download endpoints.
-- Legacy session/preferences/settings/conversation endpoints after the `/v1/responses` client no longer needs them.
+- Legacy session/preferences/settings/conversation endpoints after the `/api/ui/responses` client no longer needs them.
 - `POST /agents/register`; retain registry read/watch machinery used by profiles.
 - `GET /api/ui/status/snapshot`, `/loops`, `/agents`, `/backlog`, `/schedule`, `/tasks`, `/agents/{agent_name}`, `/database/schema`, `/telegram/status`, and `POST /api/ui/telegram/test`.
 - `GET /api/ui/tasks/{card_id}/content`, `GET /api/ui/prompts/content`, `GET /api/ui/skills/content`, and the route-only `PromptService.get_prompt` / `SkillService.get_skill` helpers.
@@ -108,7 +107,7 @@ The deletion list is source-grounded by `app/frontend/src/context/ConfigContext.
 
 **Backend**
 
-1. Add `UiRequestAccepted` and an acknowledgement builder in the backend response/state model layer.
+1. Use the existing `UiRequestAcknowledgement` and acknowledgement builder in the backend response/state model layer.
 2. Make request correlation explicit in the event API: every `broadcast_ui_event()` call caused by a request accepts and embeds `request_id`.
 3. Preserve `Last-Event-ID` replay and `connection.ready`. Extend it only where a retained page needs a reliable bootstrap snapshot.
 4. Fix event payload gaps before any client stops reading HTTP bodies:
@@ -119,14 +118,14 @@ The deletion list is source-grounded by `app/frontend/src/context/ConfigContext.
    - normalize widget event payload serialization;
    - define `workspace.snapshot` and `widget-schemas.snapshot` only if their currently dead workspace UI is retained; otherwise delete both surfaces;
    - define query-result and export-chunk events for retained knowledge/log features;
-   - define chat response delta/completion events for `/v1/responses`.
-5. Keep event generation after the write succeeds and before the `201` acknowledgement. Do not suppress the existing always-on kanban workflow-reconciliation watcher; it has runtime behavior independent of browser connections.
+   - define chat response delta/completion events for `/api/ui/responses`.
+5. Keep event generation after the write succeeds and before the `202` acknowledgement. Do not suppress the existing always-on kanban workflow-reconciliation watcher; it has runtime behavior independent of browser connections.
 
 **Frontend**
 
 1. Make `realtimeListener.js` and `RealtimeBridge.jsx` the only owners of application realtime state.
 2. Add a pending-operation registry to `realtimeSlice` keyed by `request_id`.
-3. Add a request helper distinct from `requestJson` / generic response readers. It validates exactly `201`, parses only `UiRequestAccepted`, records pending event types, and never installs returned domain data.
+3. Add a request helper distinct from `requestJson` / generic response readers. It validates exactly `202`, parses only `UiRequestAcknowledgement`, records pending event types, and never installs returned domain data.
 4. Preserve a separate low-level helper only for opening the canonical EventSource. After this phase there is no second EventSource hook.
 
 ### 2. Convert Redux domains to event-only hydration
@@ -134,7 +133,7 @@ The deletion list is source-grounded by `app/frontend/src/context/ConfigContext.
 For every retained `uiData` thunk:
 
 - `pending`: record request metadata only.
-- fulfilled `201`: record acknowledgement only; do not clear event-confirmation loading and do not mutate entity/list/detail data.
+- fulfilled `202`: record acknowledgement only; do not clear event-confirmation loading and do not mutate entity/list/detail data.
 - rejected: clear pending and set an error; no success event must be applied.
 - matching `ui.event`: update the domain reducer, clear the correlated pending operation, then let pages select the new state.
 
@@ -167,7 +166,7 @@ Update live consumers so they dispatch a request and wait for selector changes c
 
 ### 4. Convert backend route families
 
-Convert in this dependency order. Each family is complete only when the backend returns 201-only acknowledgements, the needed event contains the complete result, Redux hydrates from that event, and no page reads the former body.
+Convert in this dependency order. Each family is complete only when the backend returns `202` acknowledgements, the needed event contains the complete result, Redux hydrates from that event, and no page reads the former body.
 
 1. Chats, agent profiles, and inbox — establish request correlation using the existing detail-selection precedent.
 2. Knowledge — include `knowledge.search.results` for request-scoped search.
@@ -180,11 +179,11 @@ Convert in this dependency order. Each family is complete only when the backend 
 
 For every converted handler update:
 
-- decorator `status_code=201` and `response_model=UiRequestAccepted`;
-- all successful deletes return 201, never 204;
+- decorator `status_code=202` and `response_model=UiRequestAcknowledgement`;
+- all successful deletes return 202, never 204;
 - success path returns only the acknowledgement helper;
 - event payload supplies every field formerly required by the frontend;
-- failure behavior remains explicit and non-201;
+- failure behavior remains explicit and non-202;
 - no endpoint calls another route handler merely to reuse an old body response; extract a state operation/helper instead.
 
 ### 5. Delete obsolete surface area
@@ -208,7 +207,7 @@ Make `docs/BACKEND.md` the one authoritative client contract. It must define:
 
 - the sole `/api/ui/stream` transport;
 - envelope schema, replay, ordering, and reconnect behavior;
-- the exact 201 acknowledgement schema and correlation rule;
+- the exact 202 acknowledgement schema and correlation rule;
 - persistence/event/ack ordering;
 - error and timeout semantics;
 - the rule that data does not arrive in successful HTTP responses;
@@ -222,12 +221,12 @@ Use focused tests, then targeted integration flows. Do not retain tests that ass
 
 ### Backend contract tests
 
-1. Table-drive every retained finite route: valid request returns exactly `201` and `UiRequestAccepted`; its body contains no application data.
+1. Table-drive every retained finite route: valid request returns exactly `202` and `UiRequestAcknowledgement`; its body contains no application data.
 2. For every request, capture `/api/ui/stream` and prove the causal event includes the same `request_id`, expected type, and enough data for Redux hydration.
 3. Assert persistence happens before event/ack; rejected operations emit no success event.
 4. Assert stream headers, `ui.event` frame name, envelope shape, heartbeat, `Last-Event-ID` replay filtering, ordering, and reconnect bootstrap.
 5. Assert concurrent requests of the same type resolve only their matching pending operation, including reversed event arrival.
-6. Assert delete operations are 201 acknowledgements followed by event-based Redux removal; replayed deletes are safe.
+6. Assert delete operations are 202 acknowledgements followed by event-based Redux removal; replayed deletes are safe.
 7. Assert direct data paths are absent from OpenAPI except `GET /api/ui/stream`; assert deleted endpoint paths return 404.
 8. Cover chunked generation and log-export events, cancellation, failure, and client reconstruction of output/download data.
 
@@ -236,10 +235,10 @@ Primary backend test rewrite targets: `tests/backend/test_ui_routes.py`, `test_w
 ### Frontend contract tests
 
 1. Mock one EventSource and prove `RealtimeBridge` opens only `/api/ui/stream`; no code opens `/api/ui/status` or `/api/ui/events`.
-2. For every domain, prove a 201 acknowledgement does not hydrate data; only a matching event does.
+2. For every domain, prove a 202 acknowledgement does not hydrate data; only a matching event does.
 3. Prove duplicate/replayed envelopes are idempotent, malformed frames report realtime error, and reconnect replay preserves pending-operation correlation.
 4. Prove no stale/out-of-order detail, create, update, or delete event resolves a newer request.
-5. Prove page interactions remain pending after 201 and complete only after the corresponding selector changes.
+5. Prove page interactions remain pending after 202 and complete only after the corresponding selector changes.
 6. Prove foreground generation and log export reconstruct from canonical event chunks.
 
 Primary frontend test targets: `app/frontend/src/store/realtimeSlice.unit.test.js`, `uiDataSlice.unit.test.js`, new listener/bridge tests, and affected page/model tests.
@@ -250,7 +249,7 @@ The refactor is complete only when:
 
 - Exactly one browser EventSource is constructed in the application.
 - It targets only `/api/ui/stream`.
-- Every retained finite application request returns exactly `201 UiRequestAccepted` on success.
+- Every retained finite application request returns exactly `202 UiRequestAcknowledgement` on success.
 - No successful finite response body contains application data.
 - Every accepted request has a matching causal event with the same `request_id`.
 - Redux is the sole durable frontend application-data owner.

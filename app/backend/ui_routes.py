@@ -3221,6 +3221,20 @@ async def get_task_activity(
     return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
+@router.get("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_task_content(
+    card_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a task-content request and publish its canonical markdown."""
+    request_id = _request_correlation_id(request, x_request_id)
+    state_reader = get_state_reader()
+    card = _find_kanban_card(state_reader, card_id)
+    content = _read_task_content(state_reader, card)
+    broadcast_task_content(card_id, content, request_id=request_id)
+    return acknowledgement_response(request_id, ["task.content.updated"])
+
 @router.put("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
 async def update_task_content(
     card_id: str,

@@ -78,12 +78,7 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
                 metadata.setdefault("original_event_type", event_type)
             event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
-    safe_metadata = truncate_json_safe(
-        _redact_value(metadata),
-        DEFAULT_STREAM_ARGS_BYTES,
-    )
-    if not isinstance(safe_metadata, dict):
-        safe_metadata = {"value": safe_metadata}
+    safe_metadata = _normalize_metadata(metadata)
 
     return {
         "event_type": event_type,
@@ -383,11 +378,33 @@ def _redact_preview(value: Any) -> str:
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
 
 
+_CORRELATION_METADATA_FIELDS = ("tool_call_id", "subagent_type")
+
+
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    safe_metadata = truncate_json_safe(
-        _redact_value(dict(metadata) if metadata is not None else {}),
-        DEFAULT_STREAM_ARGS_BYTES,
-    )
-    if isinstance(safe_metadata, dict):
-        return safe_metadata
-    return {"value": safe_metadata}
+    """Redact and bound metadata while preserving correlation fields.
+
+    Tool dispatch metadata can contain a large ``args_preview`` (especially for
+    ``task`` calls). Keep the fields used to join tool and subagent lifecycle
+    events outside the general metadata byte budget so truncating the payload
+    cannot break that correlation. All remaining fields retain the existing
+    ``truncate_json_safe`` behavior and budget.
+    """
+    redacted = _redact_value(dict(metadata) if metadata is not None else {})
+    if not isinstance(redacted, dict):
+        return {"value": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES)}
+
+    correlation = {
+        field: redacted[field]
+        for field in _CORRELATION_METADATA_FIELDS
+        if field in redacted
+    }
+    payload = {
+        field: value
+        for field, value in redacted.items()
+        if field not in _CORRELATION_METADATA_FIELDS
+    }
+    safe_payload = truncate_json_safe(payload, DEFAULT_STREAM_ARGS_BYTES)
+    if isinstance(safe_payload, dict):
+        return {**correlation, **safe_payload}
+    return {**correlation, "value": safe_payload}

@@ -8,6 +8,7 @@ import inspect
 import logging
 import time
 import uuid
+from collections import deque
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -31,6 +32,7 @@ from ..utils import utcnow_isoformat
 logger = logging.getLogger(__name__)
 _TERMINAL_TASK_STATES = {"completed", "failed", "canceled", "cancelled"}
 
+_MAX_PROGRESS_UPDATES = 50
 
 class A2AClient:
     """Client for calling A2A agents over HTTP."""
@@ -110,7 +112,8 @@ class A2AClient:
         agent_config: dict[str, Any],
         payload: dict[str, Any],
         *,
-        timeout: float,
+        timeout: float | None = None,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         state = self._task_state(payload)
         if state in _TERMINAL_TASK_STATES:
@@ -120,16 +123,23 @@ class A2AClient:
         if not task_id:
             return payload
 
-        deadline = time.monotonic() + max(timeout, 0.0)
+        if deadline is None:
+            deadline = time.monotonic() + max(timeout or 0.0, 0.0)
         latest = payload
-        while time.monotonic() < deadline:
-            remaining = max(deadline - time.monotonic(), 0.1)
-            polled = await self.get_task(
-                agent_config,
-                task_id,
-                history_length=None,
-                timeout=min(remaining, 15.0),
-            )
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return latest
+            try:
+                async with asyncio.timeout(remaining):
+                    polled = await self.get_task(
+                        agent_config,
+                        task_id,
+                        history_length=None,
+                        timeout=min(remaining, 15.0),
+                    )
+            except (TimeoutError, httpx.TimeoutException):
+                return latest
             if not polled.get("success"):
                 return latest
             result = polled.get("result")
@@ -138,8 +148,12 @@ class A2AClient:
             latest = result
             if self._task_state(latest) in _TERMINAL_TASK_STATES:
                 return latest
-            await asyncio.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
-        return latest
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return latest
+            await asyncio.sleep(min(0.25, remaining))
+
+
 
     async def call_agent(
         self,
@@ -167,10 +181,15 @@ class A2AClient:
                 "error": f"Unsupported transport: {transport}. Only 'http' is supported.",
             }
 
+        deadline = time.monotonic() + max(timeout, 0.0)
+        last_payload: Any = None
+        progress_updates: deque[Any] = deque(maxlen=_MAX_PROGRESS_UPDATES)
+
         try:
-            async with self._sdk_client(
+            remaining = max(deadline - time.monotonic(), 0.0)
+            async with asyncio.timeout(remaining), self._sdk_client(
                 agent_config,
-                timeout=timeout,
+                timeout=remaining,
                 # Only request streaming when a caller actually wants
                 # intermediate progress (on_progress): callers that don't
                 # are better served by plain non-streaming request/response,
@@ -198,21 +217,13 @@ class A2AClient:
                         PushNotificationConfig(url=callback_url) if callback_url else None
                     ),
                 )
-                last_payload: Any = None
-                progress_updates: list[Any] = []
                 stream = client.send_message(message, configuration=configuration)
                 try:
-                    # httpx's per-request timeout (passed into _sdk_client
-                    # above) only bounds the gap *between* bytes/events, not
-                    # the stream as a whole -- a peer that keeps emitting
-                    # non-terminal status updates more often than that keeps
-                    # this loop (and thus this call) alive indefinitely.
-                    # _await_terminal_task's own deadline doesn't start until
-                    # after this loop exits, so it can't backstop that.
-                    # Wrap the whole streamed phase in the advertised
-                    # timeout so a live peer can't hold a blocking caller
-                    # open forever.
-                    async with asyncio.timeout(timeout):
+                    # httpx's per-request timeout bounds the gap between
+                    # events, not the stream as a whole. Use the same absolute
+                    # deadline that terminal polling below also observes.
+                    remaining = max(deadline - time.monotonic(), 0.0)
+                    async with asyncio.timeout(remaining):
                         async for item in stream:
                             if isinstance(item, tuple) and len(item) == 2:
                                 task_payload = self._serialize_model(item[0])
@@ -223,51 +234,41 @@ class A2AClient:
                                     if isinstance(update_payload, dict):
                                         # Stamped at the moment this update actually
                                         # arrived -- not part of the A2A wire spec,
-                                        # purely internal bookkeeping so a later,
-                                        # batch extraction (extract_progress_log,
-                                        # called only after the whole call
-                                        # completes) can still recover each entry's
-                                        # real time instead of collapsing them all
-                                        # onto one post-hoc "now".
+                                        # purely internal bookkeeping for progress log
+                                        # extraction.
                                         update_payload["_progenitor_received_at"] = (
                                             utcnow_isoformat()
                                         )
                                     task_payload["latestUpdate"] = update_payload
-                                    if blocking:
-                                        # Non-blocking dispatch breaks after the
-                                        # first snapshot below regardless, but
-                                        # gate here too rather than relying on
-                                        # that: an update-shaped first event
-                                        # (plausible -- that's the normal shape
-                                        # for a streaming submission ack) would
-                                        # otherwise leak one entry into
-                                        # progress_updates for a non-blocking
-                                        # call, contradicting the "blocking=True
-                                        # only" contract below.
+                                    # Publish the latest task snapshot before invoking
+                                    # user code, so a callback timeout cannot discard
+                                    # the remote task ID/state that just arrived.
+                                    last_payload = task_payload
+                                    # Artifact updates carry result data, not status
+                                    # progress. Keep them on the task snapshot but do
+                                    # not retain or forward them as progress events.
+                                    is_artifact_update = isinstance(update_payload, dict) and str(
+                                        update_payload.get("kind") or ""
+                                    ).strip().lower().replace("_", "-") == "artifact-update"
+                                    if blocking and not is_artifact_update:
                                         progress_updates.append(update_payload)
                                         if on_progress is not None:
                                             # Best-effort: a UI-emission failure
-                                            # must never break the actual A2A
-                                            # call.
+                                            # must never break the actual A2A call.
                                             try:
                                                 await on_progress(update_payload)
                                             except Exception:
                                                 logger.debug(
                                                     "on_progress callback failed", exc_info=True
                                                 )
-                                last_payload = task_payload
+                                else:
+                                    last_payload = task_payload
                             else:
                                 last_payload = self._serialize_model(item)
                             if not blocking:
                                 # Non-blocking dispatch: take the first snapshot
-                                # and stop. Once streaming is negotiated, this
-                                # generator otherwise keeps yielding until the
-                                # server closes the stream -- i.e. until the
-                                # whole task finishes -- which would silently
-                                # turn "submit and return" into a full wait.
-                                # Live progress after this point belongs to a
-                                # separate tasks/resubscribe call, not to
-                                # draining this one to exhaustion.
+                                # and stop. Live progress after this point belongs
+                                # to a separate tasks/resubscribe call.
                                 break
                 finally:
                     aclose = getattr(stream, "aclose", None)
@@ -275,9 +276,22 @@ class A2AClient:
                         with contextlib.suppress(Exception):
                             maybe = aclose()
                             if inspect.isawaitable(maybe):
-                                await cast(Any, maybe)
+                                remaining = max(deadline - time.monotonic(), 0.0)
+                                async with asyncio.timeout(remaining):
+                                    await cast(Any, maybe)
         except (TimeoutError, httpx.TimeoutException):
-            return {"success": False, "error": f"Request timeout after {timeout}s"}
+            # A blocking stream may have already yielded a live task snapshot.
+            # Return it with the timeout so callers can persist the remote task
+            # ID/state and resume polling instead of losing the still-running task.
+            result: dict[str, Any] = {
+                "success": False,
+                "error": f"Request timeout after {timeout}s",
+            }
+            if isinstance(last_payload, dict):
+                result["result"] = last_payload
+            if progress_updates:
+                result["progress_updates"] = list(progress_updates)
+            return result
         except Exception as exc:
             return {"success": False, "error": str(exc)}
 
@@ -287,18 +301,15 @@ class A2AClient:
             last_payload = await self._await_terminal_task(
                 agent_config,
                 last_payload,
-                timeout=timeout,
+                deadline=deadline,
             )
-        result: dict[str, Any] = {"success": True, "result": last_payload}
+        result = {"success": True, "result": last_payload}
         if progress_updates:
-            # Every intermediate TaskStatusUpdateEvent seen while draining
-            # the stream (blocking=True only -- non-blocking dispatch breaks
-            # after the first snapshot above and never accumulates these).
-            # Also live-streamed to the chat UI via on_progress as they
-            # arrive (see the emission above); kept here too as a fallback/
-            # log trail available to any caller, streaming or not.
-            result["progress_updates"] = progress_updates
+            # Keep only the bounded recent status-update trail. Also live-stream
+            # those same updates to the chat UI via on_progress as they arrive.
+            result["progress_updates"] = list(progress_updates)
         return result
+
 
     async def get_task(
         self,

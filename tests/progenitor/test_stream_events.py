@@ -188,6 +188,29 @@ def test_normalize_custom_event_truncates_oversized_metadata():
     assert len(rendered.encode("utf-8")) <= 2048
 
 
+def test_normalize_custom_event_preserves_correlation_fields_when_metadata_is_oversized():
+    """Lifecycle joins must survive truncation of unrelated event metadata."""
+    envelope = normalize_custom_event(
+        {
+            "event_type": "debug_event",
+            "content": "progress",
+            "metadata": {
+                "tool_call_id": "call-correlation-7",
+                "subagent_type": "researcher",
+                "blob": "x" * 10_000,
+            },
+        }
+    )
+
+    assert envelope is not None
+    metadata = envelope["metadata"]
+    assert metadata["tool_call_id"] == "call-correlation-7"
+    assert metadata["subagent_type"] == "researcher"
+    assert "blob" not in metadata
+    assert len(str(metadata["value"]).encode("utf-8")) <= DEFAULT_STREAM_ARGS_BYTES
+
+
+
 def test_build_tool_start_event_redacts_args():
     api_key = "sk-" + "a" * 48
     event = build_tool_start_event(

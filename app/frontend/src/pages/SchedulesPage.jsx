@@ -26,7 +26,7 @@ import { useConfig } from '../context/ConfigContext';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { selectSchedules, selectUiWidgets } from '../store/uiDataSlice';
 import { requestAcknowledged } from '../store/http';
-import { selectUiEventQueue } from '../store/realtimeSlice';
+import { selectRealtimeConnected, selectUiEventQueue } from '../store/realtimeSlice';
 
 const SCHEDULE_FILTERS = ['All', 'Active', 'Paused', 'Completed'];
 const SCHEDULE_SORTS = ['Type', 'Next', 'Status'];
@@ -279,9 +279,11 @@ function SchedulesPage() {
   const { scheduleId: urlScheduleId } = useParams();
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
-  // seed it once via REST on mount; every change after that arrives as an event.
+  // seed it once after realtime connects; every change after that arrives as an
+  // event.
   const schedules = useSelector(selectSchedules);
   const widgets = useSelector(selectUiWidgets);
+  const realtimeConnected = useSelector(selectRealtimeConnected);
   const [loading, setLoading] = useState(true);
   const [pendingScheduleRequestId, setPendingScheduleRequestId] = useState(null);
   const hasPendingScheduleSnapshot = useSelector((state) => (
@@ -307,6 +309,9 @@ function SchedulesPage() {
   const [triggerText, setTriggerText] = useState('');
   const triggerInputRef = useRef(null);
   useEffect(() => {
+    if (!realtimeConnected) {
+      return undefined;
+    }
     let cancelled = false;
     const requestId = crypto.randomUUID();
     setLoading(true);
@@ -325,7 +330,7 @@ function SchedulesPage() {
     return () => {
       cancelled = true;
     };
-  }, [getApiUrl]);
+  }, [getApiUrl, realtimeConnected]);
 
   useEffect(() => {
     if (!pendingScheduleRequestId || !hasPendingScheduleSnapshot) {
@@ -347,12 +352,15 @@ function SchedulesPage() {
   }, [getWidgets]);
 
   useEffect(() => {
+    if (loading || pendingScheduleRequestId !== null) {
+      return;
+    }
     setSelectedScheduleId((current) => (
       schedules.some((schedule) => schedule.id === current)
         ? current
         : schedules[0]?.id ?? null
     ));
-  }, [schedules]);
+  }, [loading, pendingScheduleRequestId, schedules]);
 
   const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
     const scheduleId = widget?.data?.schedule_id;
@@ -399,11 +407,14 @@ function SchedulesPage() {
   const selectedSchedule =
     schedules.find((schedule) => schedule.id === selectedScheduleId) || visibleSchedules[0] || null;
 
-  // Keep the URL in sync with whichever schedule is actually selected -- a
-  // deep-linked or stale id falls back to the top visible schedule the same
-  // way `selectedSchedule` already does above. The title slug is cosmetic;
-  // only the id segment is ever read back.
-  useEntityUrlSync('/schedules', selectedSchedule?.id, selectedSchedule?.name);
+  // Keep the URL in sync with whichever schedule is actually selected after
+  // the initial snapshot has hydrated. Until then, preserve a deep-linked id
+  // instead of replacing it with an empty/default selection.
+  useEntityUrlSync(
+    loading || pendingScheduleRequestId !== null ? null : '/schedules',
+    selectedSchedule?.id,
+    selectedSchedule?.name,
+  );
 
   const activeCount = schedules.filter((schedule) => !schedule.paused).length;
   const pausedCount = schedules.filter((schedule) => statusOf(schedule) === 'paused').length;
