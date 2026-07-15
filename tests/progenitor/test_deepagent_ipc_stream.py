@@ -194,7 +194,7 @@ async def test_node_output_without_todos_emits_no_todos_update_event():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_events_expand_into_subagent_events():
+async def test_task_tool_events_emit_outer_rows_and_subagent_events():
     graph = _FakeGraph(
         [
             (
@@ -233,6 +233,29 @@ async def test_task_tool_events_expand_into_subagent_events():
 
     assert {
         "type": "stream_event",
+        "event_type": "tool_start",
+        "content": "task",
+        "metadata": {
+            "tool_name": "task",
+            "tool_call_id": "call_1",
+            "subagent_type": "hello-world",
+            "args_preview": {"subagent_type": "hello-world"},
+        },
+    } in items
+    assert {
+        "type": "stream_event",
+        "event_type": "tool_result",
+        "content": "task",
+        "metadata": {
+            "tool_name": "task",
+            "tool_call_id": "call_1",
+            "duration_ms": 12.5,
+            "success": True,
+            "result_preview": "HELLO_FROM_SUBAGENT",
+        },
+    } in items
+    assert {
+        "type": "stream_event",
         "event_type": "subagent_start",
         "content": "hello-world",
         "metadata": {
@@ -252,21 +275,20 @@ async def test_task_tool_events_expand_into_subagent_events():
             "result_preview": "HELLO_FROM_SUBAGENT",
         },
     } in items
+    assert [
+        item["event_type"]
+        for item in items
+        if item.get("type") == "stream_event"
+        and item.get("metadata", {}).get("tool_call_id") == "call_1"
+    ] == ["tool_start", "subagent_start", "tool_result", "subagent_result"]
     assert {"type": "stream_chunk", "content": "HELLO_FROM_SUBAGENT", "is_final": False} in items
 
-    # The raw generic tool_start/tool_result for the top-level `task` call
-    # itself must ALSO go out, alongside its subagent_start/subagent_result
-    # translation -- the same "plain row + rich card" pairing call_agent
-    # already gets (see test_call_agent_tool_events_pass_through_unmodified_
-    # alongside_task_expansion below). Both the live frontend's grouping
-    # logic and reload reconstruction fold the raw pair into an ordinary
-    # "Tool: Task" row independently of the SubagentCard built from the
-    # subagent_* events.
+    # The outer task lifecycle remains a normal readable tool disclosure;
+    # expanded subagent events additionally drive the grouped card.
     raw_task_event_types = [
         item.get("event_type")
         for item in items
         if item.get("type") == "stream_event"
-        and item.get("event_type") in {"tool_start", "tool_result", "tool_error"}
         and item.get("metadata", {}).get("tool_name") == "task"
     ]
     assert raw_task_event_types == ["tool_start", "tool_result"]
@@ -274,12 +296,8 @@ async def test_task_tool_events_expand_into_subagent_events():
 
 @pytest.mark.asyncio
 async def test_task_tool_result_images_survive_subagent_result_translation():
-    """Regression: the raw tool_result carrying top-level `images` (see
-    _handle_custom_stream_event) used to be fully discarded once translated
-    into subagent_result -- that dict had no images field of its own, so a
-    `task` delegation's own images silently vanished instead of surfacing on
-    the resulting subagent_result event the way they did on the raw event
-    before translation replaced it."""
+    """Both the outer task result and the expanded subagent result retain
+    top-level images for their respective readable row/card renderers."""
     graph = _FakeGraph(
         [
             (
@@ -316,6 +334,16 @@ async def test_task_tool_result_images_survive_subagent_result_translation():
 
     items = await _collect_items(bridge)
 
+    task_results = [
+        item
+        for item in items
+        if item.get("event_type") == "tool_result"
+        and item.get("metadata", {}).get("tool_name") == "task"
+    ]
+    assert len(task_results) == 1
+    assert task_results[0]["images"] == [
+        {"id": "img-1", "media_type": "image/png", "base64": "abc123"}
+    ]
     subagent_results = [item for item in items if item.get("event_type") == "subagent_result"]
     assert len(subagent_results) == 1
     assert subagent_results[0]["images"] == [
@@ -324,10 +352,8 @@ async def test_task_tool_result_images_survive_subagent_result_translation():
 
 
 @pytest.mark.asyncio
-async def test_task_tool_start_without_subagent_type_falls_back_to_raw_event():
-    """If expansion can't determine which subagent this is (malformed/unexpected
-    args_preview), the raw generic tool_start must still go out -- better to show
-    an unlabeled "Tool: Task" row than silently drop the event entirely."""
+async def test_task_tool_start_without_subagent_type_is_dropped_without_raw_event():
+    """Malformed task dispatches must not leak a generic task row."""
     graph = _FakeGraph(
         [
             (
@@ -348,17 +374,42 @@ async def test_task_tool_start_without_subagent_type_falls_back_to_raw_event():
 
     items = await _collect_items(bridge)
 
-    assert {
-        "type": "stream_event",
-        "event_type": "tool_start",
-        "content": "task",
-        "metadata": {
-            "tool_name": "task",
-            "tool_call_id": "call_1",
-            "args_preview": {},
-        },
-    } in items
-    assert not any(item.get("event_type") == "subagent_start" for item in items)
+    assert not any(
+        item.get("event_type") in {"tool_start", "tool_result", "tool_error"}
+        and item.get("metadata", {}).get("tool_name") == "task"
+        for item in items
+    )
+    assert not any(item.get("event_type", "").startswith("subagent_") for item in items)
+
+
+@pytest.mark.asyncio
+async def test_task_tool_start_without_tool_call_id_is_dropped_without_raw_event():
+    graph = _FakeGraph(
+        [
+            (
+                "custom",
+                {
+                    "event_type": "tool_start",
+                    "content": "task",
+                    "metadata": {
+                        "tool_name": "task",
+                        "subagent_type": "hello-world",
+                        "args_preview": {"subagent_type": "hello-world"},
+                    },
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    items = await _collect_items(bridge)
+
+    assert not any(
+        item.get("event_type") in {"tool_start", "tool_result", "tool_error"}
+        and item.get("metadata", {}).get("tool_name") == "task"
+        for item in items
+    )
+    assert not any(item.get("event_type", "").startswith("subagent_") for item in items)
 
 
 @pytest.mark.asyncio

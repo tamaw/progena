@@ -80,17 +80,8 @@ function glyphForA2AState(state) {
   return Glyph();
 }
 
-// One status update = one mini entry in the nested chain: its own badge, its
-// own tag naming *this update's own* state (submitted/working/completed/...)
-// rather than a generic "A2A" repeated on every line, its own connecting
-// line down to the next update -- `isLast` drops that trailing line the same
-// way the outer chain drops it for its own last item (entry--chain-end vs
-// entry--chain-item). No separate role text next to the tag (that would just
-// repeat the same word) and no per-line StatusPill either (that redundant-
-// emphasis problem is why the previous plain-log version dropped it too) --
-// the tag text is the label, and the badge's own glyph/color
-// (glyphForA2AState, chat-panel.css) is the status indicator in place of a
-// pill.
+// One status update = one mini entry in the nested chain. Its glyph is the
+// visual status indicator; the timestamp remains right-aligned metadata.
 const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
   const state = message.state || 'update';
   // A per-entry clock time, not just chain position -- shows exactly when
@@ -105,10 +96,11 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
       </div>
       <div className="entry__main">
         <div className="entry__head">
-          <span className="entry__tag a2a-call-card__tag">{state}</span>
-          {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+          {message.text && <span className="a2a-sub-entry__text">{message.text}</span>}
+          <span className="msg__head-trailing">
+            {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+          </span>
         </div>
-        {message.text && <div className="a2a-sub-entry__text">{message.text}</div>}
       </div>
     </div>
   );

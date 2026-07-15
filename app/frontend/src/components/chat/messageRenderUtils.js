@@ -148,6 +148,135 @@ export function statusPillProps(status) {
   if (status === 'success') return { label: 'done', tone: 'ok' };
   return { label: 'running', tone: 'pending' };
 }
+function firstStringArg(args, keys) {
+  for (const key of keys) {
+    const value = args?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function compactInputValue(value, limit = 96) {
+  if (typeof value === 'string') {
+    const compact = value.replace(/\s+/g, ' ').trim();
+    return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  return '';
+}
+
+/**
+ * Deterministically describes the intent of a normal tool invocation without
+ * sending arguments through an LLM. The original args remain in metadata and
+ * are still rendered in the tool detail block; this is only the terse header
+ * label used by tool_start rows.
+ */
+export function formatToolInputSummary(toolName, args) {
+  const name = typeof toolName === 'string' && toolName.trim() ? toolName.trim().toLowerCase() : 'tool';
+  let input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  if (typeof args === 'string') {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed;
+    } catch {
+      return compactInputValue(args) || 'invoking…';
+    }
+  }
+  if (name === 'task') {
+    const subagentType = firstStringArg(input, ['subagent_type']);
+    return subagentType ? `subagent_type: ${compactInputValue(subagentType)}` : 'invoke subagent';
+  }
+  const path = firstStringArg(input, ['path', 'relative_path', 'file_path', 'filename', 'directory']);
+
+  if (name === 'read_file' || name === 'readfile' || name === 'file_read') {
+    return path ? `path: ${compactInputValue(path)}` : 'read file';
+  }
+
+  if (name === 'glob' || name === 'glob_files' || name === 'search_files') {
+    const pattern = firstStringArg(input, ['pattern', 'glob_pattern', 'query']);
+    const parts = [];
+    if (pattern) parts.push(`pattern: ${compactInputValue(pattern)}`);
+    if (path) parts.push(`path: ${compactInputValue(path)}`);
+    return parts.join(' • ') || 'find files';
+  }
+
+  if (name === 'ls' || name === 'list_dir' || name === 'list_directory') {
+    return `path: ${compactInputValue(path || '.')}`;
+  }
+
+  if (name === 'list_agents' || name === 'rediscover_agents') {
+    return 'list agents';
+  }
+
+  if (name === 'write_todos' || name === 'write_todo' || name === 'update_todos') {
+    const todos = input.todos || input.tasks || input.items;
+    if (Array.isArray(todos)) {
+      const active = todos.find((todo) => todo && (todo.status === 'in_progress' || todo.status === 'pending'));
+      const activeText = compactInputValue(active?.content || active?.title || active?.task, 72);
+      return `${todos.length} todo${todos.length === 1 ? '' : 's'}${activeText ? ` • ${activeText}` : ''}`;
+    }
+    return 'update todos';
+  }
+
+  const isImageTool = name.includes('image') || name.includes('vision') || name.includes('draw') || name.includes('generate');
+  const isSearchTool = name.includes('search') || name.includes('query');
+  const query = firstStringArg(input, ['query', 'q', 'search_query', 'prompt', 'text', 'request', 'description']);
+  if (query && (isImageTool || isSearchTool)) {
+    return `${isImageTool ? 'prompt' : 'query'}: ${compactInputValue(query)}`;
+  }
+
+  const keys = Object.keys(input)
+    .filter((key) => !/token|secret|password|api[_-]?key|authorization/i.test(key))
+    .sort()
+    .slice(0, 3);
+  const generic = keys.map((key) => {
+    const value = compactInputValue(input[key], 64);
+    return value ? `${key}: ${value}` : `${key}: ${Array.isArray(input[key]) ? `${input[key].length} items` : 'set'}`;
+  });
+  return generic.join(' • ') || 'invoking…';
+}
+
+function artifactSummary(metadata) {
+  const artifact = metadata?.artifact;
+  return artifact && typeof artifact === 'object' && !Array.isArray(artifact)
+    && typeof artifact.summary === 'string' && artifact.summary.trim()
+    ? artifact.summary.trim()
+    : '';
+}
+
+function todoItemCount(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  try {
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === 'object' && (parsed.todos || parsed.tasks || parsed.items));
+    return Array.isArray(items) ? items.length : null;
+  } catch {
+    // Some tool adapters stringify Python-style lists with single quotes.
+    // Count item objects without displaying that serialized representation.
+    const matches = raw.match(/\{\s*["'](?:content|title|task)["']\s*:/g);
+    return matches && matches.length > 0 ? matches.length : null;
+  }
+}
+
+function toolOutputLabel(metadata, fallbackKey, toolName = '') {
+  const artifact = artifactSummary(metadata);
+  if (artifact) return artifact;
+  const fallback = typeof metadata?.[fallbackKey] === 'string' ? metadata[fallbackKey].trim() : '';
+  if (toolName === 'write_todos' && fallbackKey === 'result_preview') {
+    const count = todoItemCount(fallback);
+    if (count !== null) return `Updated todo list · ${count} item${count === 1 ? '' : 's'}`;
+  }
+  return fallback;
+}
+
+function isNormalTool(toolName) {
+  return toolName !== 'call_agent';
+}
+
 
 export function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
@@ -237,45 +366,40 @@ export function describeStreamEvent(event) {
 
   if (eventType === 'tool_start') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const args = formatArgsPreview(metadata.args_preview);
     return {
       badge: 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
-      metaDetail: args || 'invoking…',
+      metaDetail: isNormalTool(toolName)
+        ? ''
+        : (formatArgsPreview(metadata.args_preview) || 'invoking…'),
       bodyDetail: '',
     };
   }
 
   if (eventType === 'tool_result') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
-      parts.push(metadata.result_preview);
-    }
+    const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
+    const output = isNormalTool(toolName)
+      ? toolOutputLabel(metadata, 'result_preview', toolName)
+      : (typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '');
     return {
       badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'completed',
+      metaDetail: isNormalTool(toolName) ? duration : [duration, output].filter(Boolean).join(' • ') || 'completed',
       bodyDetail: '',
     };
   }
 
   if (eventType === 'tool_error') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.error === 'string' && metadata.error) {
-      parts.push(metadata.error);
-    }
+    const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
+    const output = isNormalTool(toolName)
+      ? toolOutputLabel(metadata, 'error', toolName)
+      : (typeof metadata.error === 'string' ? metadata.error.trim() : '');
     return {
       badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'error',
+      metaDetail: isNormalTool(toolName) ? duration : [duration, output].filter(Boolean).join(' • ') || 'error',
       bodyDetail: '',
     };
   }
@@ -496,18 +620,27 @@ export function toolDetailsForEvent(event, description) {
 
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+  const isNormal = isNormalTool(toolName);
   const args = formatArgsPreview(metadata.args_preview);
   const isError = eventType === 'tool_error';
-  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview : '';
-  const error = typeof metadata.error === 'string' ? metadata.error : '';
+  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '';
+  const error = typeof metadata.error === 'string' ? metadata.error.trim() : '';
   const duration = typeof metadata.duration_ms === 'number' ? formatDuration(metadata.duration_ms) : '';
+  const summary = eventType === 'tool_start'
+    ? (isNormal ? formatToolInputSummary(toolName, metadata.args_preview) : '')
+    : (isNormal
+      ? (toolOutputLabel(metadata, isError ? 'error' : 'result_preview', toolName) || (isError ? 'error' : 'completed'))
+      : '');
 
   return {
     kind: toolName,
     desc: description.title.replace(/^[→✓✗]\s*/, ''),
     status: isError ? 'error' : eventType === 'tool_result' ? 'complete' : 'running',
     statusTone: isError ? 'err' : 'ok',
+    summary,
+    duration: isNormal ? duration : '',
     command: args,
-    body: [duration, error || result].filter(Boolean).join('\n'),
+    body: isNormal ? (isError ? error : result) : [duration, isError ? error : result].filter(Boolean).join('\n'),
+    isNormal,
   };
 }

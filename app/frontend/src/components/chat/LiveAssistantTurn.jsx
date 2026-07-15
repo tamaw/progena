@@ -5,7 +5,8 @@ import PendingAssistantCursor from './PendingAssistantCursor';
 
 export default function LiveAssistantTurn({
   store,
-  messagesEndRef,
+  messagesContainerRef,
+  isPinnedToBottomRef,
   streamEventFilter,
   hideContent,
   showImages,
@@ -18,19 +19,30 @@ export default function LiveAssistantTurn({
   const scrollFrameRef = useRef(null);
 
   useEffect(() => {
-    if (!liveAssistantTurn || scrollFrameRef.current !== null) {
+    if (
+      !liveAssistantTurn
+      || !isPinnedToBottomRef.current
+      || scrollFrameRef.current !== null
+    ) {
       return;
     }
 
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
     scrollFrameRef.current = requestAnimationFrame(() => {
       scrollFrameRef.current = null;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      const currentContainer = messagesContainerRef.current;
+      if (currentContainer && isPinnedToBottomRef.current) {
+        currentContainer.scrollTop = currentContainer.scrollHeight;
+      }
     });
-  }, [liveAssistantTurn, messagesEndRef]);
+  }, [liveAssistantTurn, messagesContainerRef, isPinnedToBottomRef]);
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) {
       cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
     }
   }, []);
 

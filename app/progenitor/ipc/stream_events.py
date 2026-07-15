@@ -148,6 +148,9 @@ def build_tool_result_event(
             ),
         },
     }
+    artifact = _extract_artifact(result)
+    if artifact is not None:
+        payload["metadata"]["artifact"] = artifact
     if images:
         payload["images"] = images
     return payload
@@ -297,6 +300,53 @@ def _redact_value(value: Any) -> Any:
     except Exception:
         rendered = repr(type(value))
     return redact_secrets(rendered)
+
+
+_ARTIFACT_FIELDS = ("summary", "count", "kind", "status")
+_ARTIFACT_STRING_BYTES = DEFAULT_STREAM_PREVIEW_BYTES
+_ARTIFACT_TOTAL_BYTES = DEFAULT_STREAM_ARGS_BYTES
+
+
+def _extract_artifact(result: Any) -> dict[str, Any] | None:
+    """Return a small, redacted projection of a tool result's artifact.
+
+    Tool artifacts are intentionally treated as an untrusted side channel. A
+    tool can attach arbitrary nested data to ``ToolMessage.artifact``; only a
+    small allowlist of scalar fields is exposed on the normal tool-result
+    stream. In particular, preserving ``summary`` gives the UI a concise
+    explanation without forwarding files, records, or other raw payloads.
+    """
+    if isinstance(result, Mapping):
+        artifact = result.get("artifact")
+    else:
+        artifact = getattr(result, "artifact", None)
+    if not isinstance(artifact, Mapping):
+        return None
+
+    projection: dict[str, Any] = {}
+    for field in _ARTIFACT_FIELDS:
+        value = artifact.get(field)
+        if field == "summary":
+            if isinstance(value, str):
+                projection[field] = truncate_text(redact_secrets(value), _ARTIFACT_STRING_BYTES)
+            continue
+
+        if isinstance(value, bool) or isinstance(value, int) and abs(value) <= 10**12:
+            projection[field] = value
+        elif isinstance(value, float) and value == value and abs(value) <= 10**12:
+            # Keep only finite, reasonably-sized numbers; NaN is not strict
+            # JSON and very large values defeat the bounded projection.
+            projection[field] = value
+        elif isinstance(value, str):
+            projection[field] = truncate_text(redact_secrets(value), _ARTIFACT_STRING_BYTES)
+
+    if not projection:
+        return None
+    safe = truncate_json_safe(projection, _ARTIFACT_TOTAL_BYTES)
+    if isinstance(safe, dict):
+        return safe
+    summary = projection.get("summary")
+    return {"summary": summary} if isinstance(summary, str) else None
 
 
 def _unwrap_command_result(value: Any) -> Any:

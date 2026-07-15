@@ -2,13 +2,165 @@ import { describe, it, expect } from 'vitest';
 import {
   CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
+  shouldShowChatContentLoading,
+  shouldShowNewChatEmptyState,
   toValidTimestamp,
   deriveChatTitle,
   collectMessageImages,
   countToolInvocations,
   getTimeBucket,
   groupSessionItems,
+  getActiveRouteThreadId,
 } from './conversationModel';
+
+describe('chat content loading state', () => {
+  it('shows loading while a selected chat detail request is in flight', () => {
+    expect(shouldShowChatContentLoading({
+      backendChatsLoaded: true,
+      messages: [],
+      selectedBackendChatId: 'chat-1',
+      activeChatLoading: true,
+      activeChatThreadId: 'chat-1',
+      activeChatDetailThreadId: 'chat-1',
+    })).toBe(true);
+  });
+
+  it('shows loading until the selected chat thread and detail match', () => {
+    const baseState = {
+      backendChatsLoaded: true,
+      messages: [],
+      selectedBackendChatId: 'chat-1',
+      activeChatLoading: false,
+    };
+
+    expect(shouldShowChatContentLoading({
+      ...baseState,
+      activeChatThreadId: 'chat-2',
+      activeChatDetailThreadId: 'chat-1',
+    })).toBe(true);
+    expect(shouldShowChatContentLoading({
+      ...baseState,
+      activeChatThreadId: 'chat-1',
+      activeChatDetailThreadId: 'chat-2',
+    })).toBe(true);
+  });
+
+  it('shows loading during the initial unselected roster load', () => {
+    expect(shouldShowChatContentLoading({
+      backendChatsLoaded: false,
+      messages: [],
+      selectedBackendChatId: null,
+      activeChatLoading: false,
+      activeChatThreadId: null,
+      activeChatDetailThreadId: null,
+    })).toBe(true);
+  });
+  it('keeps a URL-selected chat loading while initial selection is pending', () => {
+    const pendingState = {
+      backendChatsLoaded: true,
+      messages: [],
+      selectedBackendChatId: null,
+      activeChatLoading: false,
+      activeChatThreadId: null,
+      activeChatDetailThreadId: null,
+      urlThreadId: 'url-chat',
+      initialSelectionPending: true,
+    };
+
+    expect(shouldShowChatContentLoading(pendingState)).toBe(true);
+    expect(shouldShowChatContentLoading({
+      ...pendingState,
+      selectedBackendChatId: 'draft-chat',
+      activeChatThreadId: 'draft-chat',
+      activeChatDetailThreadId: 'draft-chat',
+    })).toBe(true);
+    expect(shouldShowChatContentLoading({
+      ...pendingState,
+      selectedBackendChatId: 'url-chat',
+      activeChatThreadId: 'url-chat',
+      activeChatDetailThreadId: 'url-chat',
+      initialSelectionPending: false,
+    })).toBe(false);
+  });
+});
+
+describe('getActiveRouteThreadId', () => {
+  it('preserves a URL-selected thread while initial selection is pending', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [],
+      threadId: null,
+      urlThreadId: 'url-thread',
+      initialSelectionPending: true,
+    })).toBe('url-thread');
+  });
+
+  it('prefers the selected backend thread over the pending URL thread', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: 'backend-thread',
+      messages: [],
+      threadId: null,
+      urlThreadId: 'url-thread',
+      initialSelectionPending: true,
+    })).toBe('backend-thread');
+  });
+
+  it('uses a non-empty local thread when no backend thread is selected', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [{ role: 'user', content: 'hello' }],
+      threadId: 'local-thread',
+      urlThreadId: 'url-thread',
+      initialSelectionPending: true,
+    })).toBe('local-thread');
+  });
+
+  it('returns null after initial selection completes without selected or local content', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [],
+      threadId: null,
+      urlThreadId: 'url-thread',
+      initialSelectionPending: false,
+    })).toBeNull();
+  });
+
+  it('does not let empty messages override a pending URL thread', () => {
+    expect(getActiveRouteThreadId({
+      selectedBackendChatId: null,
+      messages: [],
+      threadId: 'local-thread',
+      urlThreadId: 'url-thread',
+      initialSelectionPending: true,
+    })).toBe('url-thread');
+  });
+});
+
+describe('new-chat empty state', () => {
+  it('allows suggestions for a selected loaded chat with no messages', () => {
+    const chatState = {
+      messages: [],
+      selectedBackendChatId: 'chat-1',
+      threadId: 'chat-1',
+    };
+    expect(shouldShowChatContentLoading({
+      ...chatState,
+      backendChatsLoaded: true,
+      activeChatLoading: false,
+      activeChatThreadId: 'chat-1',
+      activeChatDetailThreadId: 'chat-1',
+    })).toBe(false);
+    expect(shouldShowNewChatEmptyState(chatState)).toBe(true);
+  });
+
+  it('does not show suggestions for unselected empty messages', () => {
+    expect(shouldShowNewChatEmptyState({
+      messages: [],
+      selectedBackendChatId: null,
+      threadId: null,
+    })).toBe(false);
+  });
+});
 
 describe('toValidTimestamp', () => {
   it('passes finite numbers through', () => {

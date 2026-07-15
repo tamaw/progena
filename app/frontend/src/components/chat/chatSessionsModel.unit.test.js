@@ -5,6 +5,7 @@ import {
   buildChatSessionItems,
   findAdjacentSessionItem,
   shouldMaterializeBeforeSwitching,
+  shouldLoadSelectedBackendChat,
   visibleGroupsForFilter,
   sidebarEmptyMessage,
 } from './chatSessionsModel';
@@ -92,6 +93,27 @@ describe('normalizeBackendChatMessage', () => {
     expect(m.streamEvents[0].metadata.tool_name).toBe('search');
   });
 
+  it('preserves persisted normal tool duration and curated artifact metadata', () => {
+    const m = normalizeBackendChatMessage({
+      id: 'm-tool-metadata',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [{
+        id: 'call-1',
+        name: 'read_file',
+        args: { path: 'README.md' },
+        result: 'file contents',
+        duration_ms: 123.4,
+        artifact: { summary: 'README.md: 12 lines', count: 12 },
+      }],
+    }, 1);
+
+    const result = m.streamEvents.find((event) => event.eventType === 'tool_result');
+    expect(result.metadata.duration_ms).toBe(123.4);
+    expect(result.metadata.artifact).toEqual({ summary: 'README.md: 12 lines', count: 12 });
+    expect(result.metadata.result_preview).toBe('file contents');
+  });
+
   it('carries the tool call created_at onto both synthesized events as a real timestamp', () => {
     const m = normalizeBackendChatMessage({
       id: 'm4',
@@ -116,16 +138,10 @@ describe('normalizeBackendChatMessage', () => {
     expect(m.streamEvents[0].timestamp).toBeUndefined();
   });
 
-  // Regression: reloaded chats routed `task` calls through the generic
-  // tool_start/tool_result path only, which buildDefaultAssistantTimeline's
-  // collectSubagentGroups doesn't recognize -- so subagent cards rendered
-  // live during the session vanished entirely on refresh. task calls must
-  // ALSO synthesize subagent_start/subagent_result, mirroring the backend's
-  // own live _expand_task_subagent_events -- alongside, not instead of, the
-  // plain tool_start/tool_result pair every other tool call gets (the same
-  // "plain row + rich card" pairing call_agent gets via its own
-  // tool_start/tool_result plus a2a_call_progress).
-  it('expands a task tool_call into tool_start + subagent_start + subagent_result + tool_result', () => {
+  // Reloaded task calls preserve both the outer readable tool lifecycle and
+  // the richer subagent dispatch events. buildDefaultAssistantTimeline groups
+  // the latter into one card while retaining the former as normal disclosures.
+  it('expands a task tool_call into outer tool rows plus subagent events', () => {
     const m = normalizeBackendChatMessage({
       id: 'm6',
       role: 'assistant',
@@ -138,26 +154,34 @@ describe('normalizeBackendChatMessage', () => {
       }],
     }, 1);
     const types = m.streamEvents.map((e) => e.eventType);
-    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
-    expect(m.streamEvents[0].metadata).toMatchObject({ tool_name: 'task', tool_call_id: 'call_1' });
-    expect(m.streamEvents[1].metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
-    expect(m.streamEvents[2].metadata).toMatchObject({
+    expect(types).toHaveLength(4);
+    expect(types.filter((type) => type === 'tool_start')).toHaveLength(1);
+    expect(types.filter((type) => type === 'tool_result')).toHaveLength(1);
+    expect(types.filter((type) => type === 'subagent_start')).toHaveLength(1);
+    expect(types.filter((type) => type === 'subagent_result')).toHaveLength(1);
+    const outerStart = m.streamEvents.find((e) => e.eventType === 'tool_start');
+    const outerResult = m.streamEvents.find((e) => e.eventType === 'tool_result');
+    expect(outerStart.metadata).toMatchObject({
+      tool_name: 'task',
+      tool_call_id: 'call_1',
+      args_preview: { subagent_type: 'researcher', description: 'look into it' },
+    });
+    expect(outerResult.metadata).toMatchObject({
+      tool_name: 'task',
+      tool_call_id: 'call_1',
+      result_preview: 'Here is what I found.',
+    });
+    const subagentStart = m.streamEvents.find((e) => e.eventType === 'subagent_start');
+    const subagentResult = m.streamEvents.find((e) => e.eventType === 'subagent_result');
+    expect(subagentStart.metadata).toMatchObject({ subagent_name: 'researcher', tool_call_id: 'call_1' });
+    expect(subagentResult.metadata).toMatchObject({
       subagent_name: 'researcher',
       tool_call_id: 'call_1',
       success: true,
       result_preview: 'Here is what I found.',
     });
-    expect(m.streamEvents[3].metadata).toMatchObject({
-      tool_name: 'task',
-      tool_call_id: 'call_1',
-      result_preview: 'Here is what I found.',
-    });
   });
 
-  // Regression: an image-only subagent result has empty extracted text, so
-  // checking only `result` for truthiness never emitted a terminal
-  // subagent_result event, leaving the reconstructed card stuck "running"
-  // forever on reload and silently dropping the image.
   it('still emits a terminal subagent_result for an image-only task result', () => {
     const m = normalizeBackendChatMessage({
       id: 'm6b',
@@ -172,15 +196,21 @@ describe('normalizeBackendChatMessage', () => {
       }],
     }, 1);
     const types = m.streamEvents.map((e) => e.eventType);
-    expect(types).toEqual(['tool_start', 'subagent_start', 'subagent_result', 'tool_result']);
-    expect(m.streamEvents[2].metadata).toMatchObject({
+    expect(types).toHaveLength(4);
+    expect(types.filter((type) => type === 'tool_start')).toHaveLength(1);
+    expect(types.filter((type) => type === 'tool_result')).toHaveLength(1);
+    expect(types.filter((type) => type === 'subagent_start')).toHaveLength(1);
+    expect(types.filter((type) => type === 'subagent_result')).toHaveLength(1);
+    const subagentResult = m.streamEvents.find((e) => e.eventType === 'subagent_result');
+    expect(subagentResult.metadata).toMatchObject({
       subagent_name: 'researcher',
       tool_call_id: 'call_1',
       success: true,
       result_preview: '1 image',
     });
-    expect(m.streamEvents[2].images).toEqual([{ url: 'data:image/png;base64,abc' }]);
+    expect(subagentResult.images).toEqual([{ url: 'data:image/png;base64,abc' }]);
   });
+
 
   it('reconstructs a grouped subagent timeline card from the reloaded task call', () => {
     const m = normalizeBackendChatMessage({
@@ -202,6 +232,8 @@ describe('normalizeBackendChatMessage', () => {
       status: 'success',
       resultPreview: 'hello!',
     });
+    expect(m.timelineItems.filter((item) => item.kind === 'stream_event')).toHaveLength(2);
+    expect(m.timelineItems.some((item) => item.kind === 'assistant_message')).toBe(true);
   });
 
   it('leaves a task call with no result as a running subagent_start only', () => {
@@ -211,13 +243,29 @@ describe('normalizeBackendChatMessage', () => {
       content: 'done',
       tool_calls: [{ id: 'call_1', name: 'task', args: { subagent_type: 'researcher' } }],
     }, 1);
-    // No `result` and no images means the generic tool_result (which requires
-    // one or the other, same as every other tool) is withheld too -- just the
-    // dispatch-time pair: the plain tool_start row and the subagent_start
-    // that seeds the still-running card.
+    // No result and no images means the dispatch remains an open card, while
+    // its outer invocation remains visible as a normal tool_start row.
     expect(m.streamEvents.map((e) => e.eventType)).toEqual(['tool_start', 'subagent_start']);
     const subagentItems = m.timelineItems.filter((item) => item.kind === 'subagent');
     expect(subagentItems[0].status).toBe('running');
+    expect(m.timelineItems.filter((item) => item.kind === 'stream_event')).toHaveLength(1);
+  });
+
+  it.each([
+    ['missing id', { name: 'task', args: { subagent_type: 'researcher' }, result: 'ignored' }],
+    ['missing subagent name', { id: 'call_missing_name', name: 'task', args: {}, result: 'ignored' }],
+    ['malformed id and name', { id: 42, name: 'task', args: { subagent_type: null }, result: 'ignored' }],
+  ])('drops task calls with %s without a generic task row', (_caseName, toolCall) => {
+    const m = normalizeBackendChatMessage({
+      id: 'malformed-task-message',
+      role: 'assistant',
+      content: 'done',
+      tool_calls: [toolCall],
+    }, 1);
+
+    expect(m.streamEvents).toEqual([]);
+    expect(m.timelineItems.some((item) => item.kind === 'subagent')).toBe(false);
+    expect(m.timelineItems.some((item) => item.kind === 'stream_event')).toBe(false);
   });
 
   // Covers the fallback for a persisted tool_calls entry with no
@@ -518,6 +566,62 @@ describe('buildChatSessionItems', () => {
     expect(items.some((i) => i.source === 'local' && i.id === 'archived-1')).toBe(true);
     // The transient current-draft card is still correctly hidden.
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
+  });
+});
+
+describe('shouldLoadSelectedBackendChat', () => {
+  const selectedBackendCard = {
+    selected: true,
+    source: 'backend',
+    threadId: 'chat-1',
+  };
+
+  it('loads a selected backend card when no active detail is hydrated', () => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem: selectedBackendCard,
+      activeBackendChat: null,
+      activeBackendChatState: null,
+      lastAppliedRequestId: null,
+    })).toBe(true);
+  });
+
+  it('loads a selected backend card when the active detail belongs to another chat', () => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem: selectedBackendCard,
+      activeBackendChat: { thread_id: 'chat-2' },
+      activeBackendChatState: { loading: false, requestId: 'request-1' },
+      lastAppliedRequestId: 'request-1',
+    })).toBe(true);
+  });
+
+  it('does not issue a duplicate load while the selected chat request is loading', () => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem: selectedBackendCard,
+      activeBackendChat: { thread_id: 'chat-2' },
+      activeBackendChatState: { loading: true, requestId: 'request-2' },
+      lastAppliedRequestId: null,
+    })).toBe(false);
+  });
+
+  it('does not reload a hydrated selected chat whose request was applied', () => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem: selectedBackendCard,
+      activeBackendChat: { thread_id: 'chat-1' },
+      activeBackendChatState: { loading: false, requestId: 'request-3' },
+      lastAppliedRequestId: 'request-3',
+    })).toBe(false);
+  });
+
+  it.each([
+    ['a local selected card', { selected: true, source: 'local', threadId: 'chat-1' }],
+    ['an unselected backend card', { selected: false, source: 'backend', threadId: 'chat-1' }],
+  ])('does not load %s', (_description, sessionItem) => {
+    expect(shouldLoadSelectedBackendChat({
+      sessionItem,
+      activeBackendChat: null,
+      activeBackendChatState: null,
+      lastAppliedRequestId: null,
+    })).toBe(false);
   });
 });
 

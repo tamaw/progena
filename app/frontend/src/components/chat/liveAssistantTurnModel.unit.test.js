@@ -372,7 +372,7 @@ describe('applyAssistantStreamEvent', () => {
   });
 
   // Subagent execution events (nested `task` tool delegation) get their own
-  // grouped card rather than a flat stream_event row.
+  // grouped card while the task's outer lifecycle remains a flat tool row.
   it('subagent_start creates a subagent timeline item, not a stream_event row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('subagent_start', {
@@ -386,6 +386,53 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.timelineItems[0].id).toBe('subagent-call_1');
     expect(next.timelineItems[0].subagentName).toBe('researcher');
     expect(next.timelineItems[0].status).toBe('running');
+  });
+  it('task lifecycle keeps outer tool rows alongside its grouped subagent card', () => {
+    const turn = baseTurn();
+    let next = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', {
+      content: 'task',
+      metadata: {
+        tool_name: 'task',
+        tool_call_id: 'call_1',
+        args_preview: { subagent_type: 'researcher' },
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_start', {
+      content: 'researcher',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('tool_result', {
+      content: 'task',
+      metadata: {
+        tool_name: 'task',
+        tool_call_id: 'call_1',
+        result_preview: 'Found it',
+        success: true,
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_result', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_1',
+        result_preview: 'Found it',
+        success: true,
+      },
+    }), NOW);
+
+    expect(next.streamEvents.map((event) => event.eventType)).toEqual([
+      'tool_start', 'subagent_start', 'tool_result', 'subagent_result',
+    ]);
+    expect(next.timelineItems.map((item) => item.kind)).toEqual([
+      'stream_event', 'subagent', 'stream_event',
+    ]);
+    expect(next.timelineItems.find((item) => item.kind === 'stream_event').event.metadata.tool_name).toBe('task');
+    expect(next.timelineItems.find((item) => item.kind === 'subagent')).toMatchObject({
+      toolCallId: 'call_1',
+      subagentName: 'researcher',
+      status: 'success',
+      resultPreview: 'Found it',
+    });
   });
 
   it('two concurrent subagents update independently with no cross-contamination', () => {
@@ -1335,9 +1382,9 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e2')).toBeDefined();
   });
 
-  // Same regression for the subagent grouping block (identical pre-existing
-  // pattern, fixed the same way).
-  it('falls through to a flat stream_event row for a subagent_start with no tool_call_id, instead of dropping it', () => {
+  // Malformed subagent events cannot form a grouped card and are dropped
+  // rather than exposed as generic stream-event rows.
+  it('drops a subagent_start with no tool_call_id instead of rendering a card or flat stream_event row', () => {
     const message = {
       role: 'assistant',
       id: 'msg_1',
@@ -1349,8 +1396,7 @@ describe('buildDefaultAssistantTimeline', () => {
     };
     const items = buildDefaultAssistantTimeline(message);
     expect(items.filter((item) => item.kind === 'subagent')).toHaveLength(0);
-    const flatItem = items.find((item) => item.kind === 'stream_event' && item.id === 'e1');
-    expect(flatItem).toBeDefined();
+    expect(items.filter((item) => item.kind === 'stream_event')).toHaveLength(0);
   });
 });
 

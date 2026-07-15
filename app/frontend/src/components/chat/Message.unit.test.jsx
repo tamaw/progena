@@ -216,7 +216,7 @@ describe('Message with timelineItems', () => {
 
     const toolStartPos = html.indexOf('→ Search Web');
     const assistantPos = html.indexOf('I found results.');
-    const toolResultPos = html.lastIndexOf('search_web');
+    const toolResultPos = html.indexOf('tool_result');
 
     expect(toolStartPos).toBeGreaterThan(0);
     expect(assistantPos).toBeGreaterThan(toolStartPos);
@@ -466,5 +466,160 @@ describe('Message user messages', () => {
 
     expect(html).toContain('entry__tag--in');
     expect(html).toContain('Message');
+  });
+});
+
+describe('normal tool content and metadata display', () => {
+  it('renders a tool_start summary in normal content with a closed Payload disclosure', () => {
+    const rawArgs = '{"path":"src/main.py","include_line_numbers":true}';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'tool-start-1',
+        event: {
+          id: 'tool-start-1',
+          eventType: 'tool_start',
+          timestamp: MS_EPOCH,
+          metadata: {
+            tool_name: 'read_file',
+            args_preview: rawArgs,
+          },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const headerStart = html.indexOf('message-stream-event-header');
+    const headerEnd = html.indexOf('</div>', headerStart);
+    const header = html.slice(headerStart, headerEnd);
+    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
+    expect(disclosureStart).toBeGreaterThan(-1);
+    const disclosure = html.slice(disclosureStart);
+    const summaryStart = html.indexOf('class="tool__summary');
+
+    expect(summaryStart).toBeGreaterThan(disclosureStart);
+    expect(html).toContain('path: src/main.py');
+    expect(header).not.toContain('path: src/main.py');
+    expect(disclosure).toContain('tool-event-disclosure__summary');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    expect(payloadStart).toBeGreaterThan(-1);
+    expect(disclosure.indexOf('class="tool__summary')).toBeLessThan(payloadStart);
+    expect(disclosure.indexOf(rawArgs.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
+    expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
+  });
+  it('renders artifact result summary as content, raw JSON inside closed Payload, and duration before timestamp', () => {
+    const rawResult = '{"content":"raw result"}';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'stream_event',
+        id: 'tool-result-1',
+        event: {
+          id: 'tool-result-1',
+          eventType: 'tool_result',
+          timestamp: MS_EPOCH,
+          metadata: {
+            tool_name: 'read_file',
+            duration_ms: 1250,
+            artifact: { summary: '12 lines read' },
+            result_preview: rawResult,
+          },
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const timestamp = new Date(MS_EPOCH).toLocaleTimeString([], {
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+    });
+    const headerStart = html.indexOf('message-stream-event-header');
+    const headerEnd = html.indexOf('</div>', headerStart);
+    const header = html.slice(headerStart, headerEnd);
+    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
+    const disclosure = html.slice(disclosureStart);
+
+    expect(html).toContain('12 lines read');
+    expect(header).toContain('1.25s');
+    expect(header).not.toContain('12 lines read');
+    expect(header).not.toContain(rawResult);
+    expect(header.indexOf('1.25s')).toBeLessThan(header.indexOf(timestamp));
+    expect(disclosure).toContain('tool-event-disclosure__summary');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    expect(payloadStart).toBeGreaterThan(-1);
+    expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
+    expect(disclosure).toContain(rawResult.replaceAll('"', '&quot;'));
+  });
+
+  it('keeps the fallback stream-event renderer consistent with TimelineItem', () => {
+    const rawArgs = '{"query":"status"}';
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [{
+        id: 'fallback-tool-start-1',
+        eventType: 'tool_start',
+        metadata: { tool_name: 'search_web', args_preview: rawArgs },
+      }],
+    });
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
+    expect(disclosureStart).toBeGreaterThan(-1);
+    const disclosure = html.slice(disclosureStart);
+    expect(html).toContain('class="tool__summary');
+    expect(html).toContain('query: status');
+    expect(disclosure).toContain('tool-event-disclosure__summary');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    expect(payloadStart).toBeGreaterThan(-1);
+    expect(disclosure.indexOf(rawArgs.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
+    expect(disclosure).toContain(rawArgs.replaceAll('"', '&quot;'));
+  });
+
+  it('keeps fallback result summaries out of the header while retaining raw output', () => {
+    const rawResult = '{"content":"fallback raw result"}';
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [{
+        id: 'fallback-tool-result-1',
+        eventType: 'tool_result',
+        timestamp: MS_EPOCH,
+        metadata: {
+          tool_name: 'read_file',
+          duration_ms: 750,
+          artifact: { summary: '7 lines read' },
+          result_preview: rawResult,
+        },
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const headerStart = html.indexOf('message-stream-event-header');
+    const headerEnd = html.indexOf('</div>', headerStart);
+    const header = html.slice(headerStart, headerEnd);
+    const disclosureStart = html.indexOf('<details class="tool-event-disclosure">');
+    const disclosure = html.slice(disclosureStart);
+
+    expect(header).toContain('750ms');
+    expect(header).not.toContain('7 lines read');
+    expect(header).not.toContain(rawResult);
+    expect(html).toContain('class="tool__summary');
+    expect(html).toContain('7 lines read');
+    expect(disclosure).toContain('tool-event-disclosure__summary');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    expect(payloadStart).toBeGreaterThan(-1);
+    expect(disclosure.indexOf(rawResult.replaceAll('"', '&quot;'))).toBeGreaterThan(payloadStart);
+    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
+    expect(disclosure).toContain(rawResult.replaceAll('"', '&quot;'));
   });
 });

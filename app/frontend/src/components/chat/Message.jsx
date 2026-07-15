@@ -13,6 +13,7 @@ import {
   formatMessage,
   sanitizeHtmlFragment,
   appendStreamingCursor,
+  formatTimestamp,
 } from './messageRenderUtils';
 
 function isTimelineStreamEvent(event) {
@@ -277,6 +278,30 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
   );
 }
 
+function NormalToolContent({ tool }) {
+  const hasPayload = Boolean(tool?.command || tool?.body);
+  const payload = (
+    <div className="tool chat-event-tool">
+      {tool.command && <div className="tool__cmd"><span className="prompt">$</span>{tool.command}</div>}
+      {tool.body && <pre className="tool__body tool__body--out">{tool.body}</pre>}
+    </div>
+  );
+  const summary = <span className={`tool__summary${hasPayload ? ' tool-event-disclosure__summary' : ''}`}>{tool.summary}</span>;
+
+  if (!hasPayload) return summary;
+  return (
+    <details className="tool-event-disclosure">
+      <summary>
+        {summary}
+        <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+        <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+        <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+      </summary>
+      {payload}
+    </details>
+  );
+}
+
 function StreamEvents({ events }) {
   return (
     <>
@@ -285,6 +310,7 @@ function StreamEvents({ events }) {
         const badge = badgeForEvent(event.eventType || 'stream_event');
         const tool = toolDetailsForEvent(event, description);
         const tokenMetaItems = tokenMetaItemsForEvent(event);
+        const eventFormattedTime = formatTimestamp(event.timestamp);
         return (
           <article
             key={event.id}
@@ -299,13 +325,16 @@ function StreamEvents({ events }) {
                 <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
                 <span className="entry__role">{description.title}</span>
                 <span className="msg__head-trailing">
-                  {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
+                  {tool?.isNormal
+                    ? (tool.duration && <span className="muted">{tool.duration}</span>)
+                    : (description.metaDetail && <span className="muted">{description.metaDetail}</span>)}
                   {tokenMetaItems.map((item, index) => (
                     <Fragment key={`${event.id}-${item}-${index}`}>
-                      {index > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
+                      {(index > 0 || tool?.duration) && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
                       <span className="msg__stat message-token-count">{item}</span>
                     </Fragment>
                   ))}
+                  {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
                 </span>
               </div>
               {description.bodyHtml && (
@@ -317,7 +346,7 @@ function StreamEvents({ events }) {
               {description.bodyDetail && !tool && !description.bodyHtml && (
                 <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
               )}
-              {tool && (
+              {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
                 <div className="tool chat-event-tool">
                   <div className="tool__head">
                     <span className="tool__kind">{tool.kind}</span>
