@@ -546,6 +546,69 @@ class TestTurnTokenAccounting:
         assert reply.reasoning_token_count == 30 + 10
         assert [tc["name"] for tc in reply.tool_calls] == ["search"]
 
+    def test_tool_only_responses_reasoning_is_attached_to_follow_up_reply(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_reasoning_fold"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_reasoning_fold",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "search for x"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "summary": [
+                                    {
+                                        "type": "summary_text",
+                                        "text": "Need to search before answering.",
+                                    }
+                                ],
+                            }
+                        ],
+                        "tool_calls": [{"id": "call_1", "name": "search", "args": {"q": "x"}}],
+                        "usage_metadata": {
+                            "output_tokens": 81,
+                            "output_token_details": {"reasoning": 30},
+                        },
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "result text",
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here you go",
+                        "usage_metadata": {
+                            "output_tokens": 57,
+                            "output_token_details": {"reasoning": 10},
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_reasoning_fold")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert len(assistants) == 1
+        reply = assistants[0]
+        assert reply.content == "Here you go"
+        assert [tc["name"] for tc in reply.tool_calls] == ["search"]
+        assert reply.tool_calls[0]["result"] == "result text"
+        assert reply.reasoning_text.strip()
+        assert "Need to search before answering." in reply.reasoning_text
+        assert reply.token_count == 81 + 57
+        assert reply.reasoning_token_count == 30 + 10
+
     def test_each_turns_assistant_reply_carries_only_its_own_usage(self):
         store = InMemoryDocumentStore()
         create_chat_metadata(store, ChatCreateRequest(thread_id="thread_token_reset"))
