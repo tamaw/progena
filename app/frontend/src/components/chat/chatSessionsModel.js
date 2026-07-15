@@ -5,7 +5,7 @@ import {
   getTimeBucket,
   toValidTimestamp,
 } from './conversationModel';
-import { buildDefaultAssistantTimeline } from './liveAssistantTurnModel';
+import { buildDefaultAssistantTimeline, normalizeTaskSummary } from './liveAssistantTurnModel';
 import { extractCallAgentSummary } from './messageRenderUtils';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
@@ -30,6 +30,7 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
   const toolCallId = typeof tc.id === 'string' ? tc.id : '';
   const result = typeof tc.result === 'string' ? tc.result : '';
   const images = Array.isArray(tc.images) && tc.images.length > 0 ? tc.images : null;
+  const taskSummary = normalizeTaskSummary(tc.args?.description);
 
   const events = [
     {
@@ -41,6 +42,7 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
         subagent_name: subagentName,
         tool_call_id: toolCallId,
         source: 'checkpoint',
+        ...(taskSummary ? { task_summary: taskSummary } : {}),
       },
     },
   ];
@@ -61,6 +63,7 @@ function buildSubagentDispatchStreamEvents(tc, messageId, index, timestamp) {
         tool_call_id: toolCallId,
         success: true,
         result_preview: images ? `${images.length} image${images.length !== 1 ? 's' : ''}` : result,
+        ...(taskSummary ? { task_summary: taskSummary } : {}),
         source: 'checkpoint',
       },
     };

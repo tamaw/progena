@@ -15,6 +15,16 @@ export function WorkingGlyph() {
   );
 }
 
+// Submitted: an upward arrow showing work handed off to another agent.
+export function SubmittedGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <line x1="12" y1="21" x2="12" y2="3" />
+      <polyline points="4 11 12 3 20 11" />
+    </svg>
+  );
+}
+
 // Succeeded: checkmark.
 export function CompletedGlyph() {
   return (

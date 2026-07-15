@@ -76,9 +76,36 @@ function subagentItemId(toolCallId) {
   return `subagent-${toolCallId}`;
 }
 
+export const TASK_SUMMARY_MAX_LENGTH = 140;
+
+/** Normalize a task description into the bounded summary shown on subagent cards. */
+export function normalizeTaskSummary(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > TASK_SUMMARY_MAX_LENGTH
+    ? `${normalized.slice(0, TASK_SUMMARY_MAX_LENGTH - 1)}…`
+    : normalized;
+}
+
+function taskSummaryFromMetadata(metadata) {
+  return normalizeTaskSummary(metadata?.task_summary);
+}
+
+function addTaskSummaryMetadata(event) {
+  if (!event || (event.eventType !== 'subagent_start' && event.eventType !== 'subagent_result')) {
+    return event;
+  }
+  const metadata = event.metadata || {};
+  const taskSummary = taskSummaryFromMetadata(metadata);
+  if (!taskSummary || metadata.task_summary === taskSummary) return event;
+  return { ...event, metadata: { ...metadata, task_summary: taskSummary } };
+}
+
 function createSubagentItem(toolCallId, subagentName, startedAt) {
   return {
     kind: 'subagent',
+    taskSummary: '',
     id: subagentItemId(toolCallId),
     toolCallId,
     subagentName: subagentName || '',
@@ -140,11 +167,13 @@ function upsertSubagentToolEntry(entries, nestedToolCallId, patch) {
 function applySubagentEventToItem(item, nextEvent) {
   const metadata = nextEvent.metadata || {};
   const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
-
+  const taskSummary = taskSummaryFromMetadata(metadata);
   switch (nextEvent.eventType) {
+
     case 'subagent_start':
       return {
         ...item,
+        taskSummary: taskSummary || item.taskSummary || '',
         subagentName: metadata.subagent_name || item.subagentName,
         status: 'running',
       };
@@ -188,6 +217,7 @@ function applySubagentEventToItem(item, nextEvent) {
     case 'subagent_result':
       return {
         ...item,
+        taskSummary: taskSummary || item.taskSummary || '',
         subagentName: metadata.subagent_name || item.subagentName,
         status: metadata.success === false ? 'error' : 'success',
         finishedAt: nextEvent.timestamp ?? item.finishedAt,
@@ -210,20 +240,21 @@ function applySubagentEventToItem(item, nextEvent) {
  * through to their own generic handling.
  */
 export function applySubagentEvent(timelineItems, nextEvent) {
-  if (!nextEvent || !SUBAGENT_EVENT_TYPES.has(nextEvent.eventType)) return null;
-  const toolCallId = nextEvent.metadata?.tool_call_id;
+  const normalizedEvent = addTaskSummaryMetadata(nextEvent);
+  if (!normalizedEvent || !SUBAGENT_EVENT_TYPES.has(normalizedEvent.eventType)) return null;
+  const toolCallId = normalizedEvent.metadata?.tool_call_id;
   if (!toolCallId) return null;
 
   const itemId = subagentItemId(toolCallId);
   const index = timelineItems.findIndex((entry) => entry.kind === 'subagent' && entry.id === itemId);
 
   if (index === -1) {
-    const seed = createSubagentItem(toolCallId, nextEvent.metadata?.subagent_name, nextEvent.timestamp);
-    return [...timelineItems, applySubagentEventToItem(seed, nextEvent)];
+    const seed = createSubagentItem(toolCallId, normalizedEvent.metadata?.subagent_name, normalizedEvent.timestamp);
+    return [...timelineItems, applySubagentEventToItem(seed, normalizedEvent)];
   }
 
   return timelineItems.map((entry, idx) => (
-    idx === index ? applySubagentEventToItem(entry, nextEvent) : entry
+    idx === index ? applySubagentEventToItem(entry, normalizedEvent) : entry
   ));
 }
 
@@ -353,7 +384,7 @@ export function applyA2ACallEvent(timelineItems, nextEvent) {
 
 /** Apply a non-visual stream event (control event like node metadata). */
 export function applyAssistantStreamEvent(turn, streamEvent) {
-  const nextEvent = createStreamEvent(streamEvent);
+  const nextEvent = addTaskSummaryMetadata(createStreamEvent(streamEvent));
   if (!nextEvent) return turn;
 
   // assistant_metadata is handled by applyAssistantMetadata, not here.
