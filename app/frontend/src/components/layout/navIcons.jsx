@@ -304,6 +304,16 @@ export function QuickChatIcon() {
   );
 }
 
+export function ProgenitorAiIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <path d="m8 1.25 1.9 3.8L8 8.7 6.1 5.05 8 1.25Z" fill="currentColor" opacity="0.92" />
+      <path d="m3.15 5.95 1.9 1.9-1.9 1.9-1.9-1.9 1.9-1.9ZM12.85 5.95l1.9 1.9-1.9 1.9-1.9-1.9 1.9-1.9Z" fill="currentColor" opacity="0.7" />
+      <path d="m8 8.1 1.9 3.8L8 14.75l-1.9-2.85L8 8.1Z" fill="currentColor" opacity="0.92" />
+    </svg>
+  );
+}
+
 export function AlertsIcon() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
