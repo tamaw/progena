@@ -184,7 +184,7 @@ export function collectMessageImages(message) {
       .flatMap((event) => event.images)
       .map((image, index) => ({
         id: image.id || `tool-${index}`,
-        src: `data:${image.media_type || 'image/jpeg'};base64,${image.base64}`,
+        src: image.url || `data:${image.media_type || 'image/jpeg'};base64,${image.base64}`,
         alt: `Image ${index + 1}`,
       }))
     : [];
@@ -208,9 +208,16 @@ export function countToolInvocations(messages) {
   ), 0);
 }
 
-function countTokens(messages) {
+export function countTokens(messages) {
   return messages.reduce(
     (total, message) => total + (Number.isFinite(message?.tokenCount) ? message.tokenCount : 0),
+    0,
+  );
+}
+
+export function countReasoningTokens(messages) {
+  return messages.reduce(
+    (total, message) => total + (Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0),
     0,
   );
 }
