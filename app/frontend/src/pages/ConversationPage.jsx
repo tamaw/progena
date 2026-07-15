@@ -561,6 +561,7 @@ function ConversationPage() {
     backgroundGeneratingChatIds,
     backgroundErrorChatIds,
     activeStreamIdRef,
+    backgroundOriginChatIdRef,
     liveTurnStore,
     setLiveAssistantTurn,
     preserveStreamInBackground,
@@ -815,6 +816,13 @@ function ConversationPage() {
     ) {
       return;
     }
+    const isHydratingActiveStream = activeStreamIdRef.current !== null
+      && backgroundOriginChatIdRef.current === activeBackendChat.thread_id
+      && selectedBackendChatId === activeBackendChat.thread_id;
+    if (isHydratingActiveStream) {
+      lastAppliedBackendChatRequestIdRef.current = activeBackendChatState?.requestId ?? null;
+      return;
+    }
 
     const backendMessages = Array.isArray(activeBackendChat.messages)
       ? activeBackendChat.messages
@@ -845,7 +853,7 @@ function ConversationPage() {
     if (backendMessages.length === 0) {
       localStorage.removeItem(config.storage.chatHistory);
     }
-  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
+  }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, backgroundOriginChatIdRef, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
 
   // Committed message changes and generation transitions keep the page at the
   // tail only while the user remains near the bottom. Per-frame live-turn

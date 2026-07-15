@@ -23,7 +23,6 @@ import { formatDisplayToolCalls } from './messageDisplayModel';
 import {
   formatMessage,
   sanitizeHtmlFragment,
-  appendStreamingCursor,
   describeStreamEvent,
   badgeForEvent,
   toolDetailsForEvent,
@@ -50,10 +49,13 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
   }
 
   if (item.kind === 'assistant_message') {
-    const sanitizedContent = sanitizeHtmlFragment(formatMessage(item.content || ''));
-    const formattedContent = item.isStreaming && item.content
-      ? appendStreamingCursor(sanitizedContent)
-      : sanitizedContent;
+    // A stream changes far more often than a completed message. Render its
+    // literal text until terminal finalization, then run Markdown once for
+    // the committed result instead of reparsing the growing response per
+    // token/frame.
+    const formattedContent = item.isStreaming
+      ? ''
+      : sanitizeHtmlFragment(formatMessage(item.content || ''));
     const formattedTime = formatTimestamp(item.timestamp);
     const tokenMeta = [
       Number.isFinite(item.tokenCount) && item.tokenCount > 0
@@ -91,7 +93,14 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
               </span>
             </div>
             <div className={`message assistant ${item.isStreaming ? 'streaming' : ''} ${item.error ? 'error' : ''}`}>
-              <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+              {item.isStreaming ? (
+                <div className="message-content message-content--streaming-text">
+                  {item.content || ''}
+                  {item.content && <span className="stream-cursor" aria-hidden="true">▋</span>}
+                </div>
+              ) : (
+                <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+              )}
             </div>
           </div>
         </article>

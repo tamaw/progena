@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import realtimeReducer, { registerPendingOp } from './realtimeSlice';
 import uiDataReducer from './uiDataSlice';
+import { subscribeUiEvent } from './realtimeEvents';
 import {
   realtimeListenerMiddleware,
   startRealtimeStream,
@@ -138,5 +139,37 @@ describe('realtimeListener heartbeat watchdog', () => {
 
     expect(MockEventSource.instances).toHaveLength(1);
     expect(source.closed).toBe(false);
+  });
+
+  it('FIFO-publishes high-rate response frames without adding them to Redux', async () => {
+    store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
+    await Promise.resolve();
+
+    const source = MockEventSource.instances[0];
+    const receivedFrames = [];
+    const unsubscribe = subscribeUiEvent((event) => receivedFrames.push(event));
+    const frames = Array.from({ length: 128 }, (_, index) => ({
+      id: `response-${index + 1}`,
+      seq: index + 1,
+      type: index % 2 === 0 ? 'chat.response.delta' : 'chat.response.event',
+      scope: 'request',
+      payload: {
+        request_id: 'request-high-rate',
+        ...(index % 2 === 0 ? { delta: String(index) } : { event_type: 'tool_call' }),
+      },
+    }));
+
+    for (const frame of frames) {
+      source.emit('ui.event', JSON.stringify(frame));
+    }
+    unsubscribe();
+
+    expect(receivedFrames).toEqual(frames);
+    expect(store.getState().realtime).toMatchObject({
+      eventQueue: [],
+      eventSequence: 0,
+      receivedIds: [],
+      lastEvent: null,
+    });
   });
 });

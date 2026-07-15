@@ -31,7 +31,6 @@ export function renderMarkdownToHtml(content) {
 
   formatted = escapeHtml(formatted);
 
-  formatted = formatted.replace(/@@CODEBLOCK_(\d+)@@/g, (match, index) => codeBlocks[Number(index)] || '');
 
   formatted = formatted.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
 
@@ -104,7 +103,7 @@ export function renderMarkdownToHtml(content) {
   // normalized) <li> nested inside the injected notepad and won't strip it.
   formatted = normalizeListMarkup(formatted);
 
-  return restoreWritingBlocks(formatted, writingBlocks);
+  return restoreWritingBlocks(restoreCodeBlocks(formatted, codeBlocks), writingBlocks);
 }
 
 function renderWritingBlock(inner) {
@@ -115,6 +114,22 @@ function renderWritingBlock(inner) {
     + `<div class="writing-block__sheet">${body}</div>`
     + '</div>'
   );
+}
+
+function restoreCodeBlocks(html, codeBlocks) {
+  if (codeBlocks.length === 0) return html;
+  // Keep fenced blocks opaque until every heading/list/table pass has finished.
+  // Restoring a block earlier puts its literal `#`/`-` lines through markdown
+  // normalization and can invalidate the complete surrounding document.
+  return html
+    .replace(
+      /<p>\s*(?:<br>\s*)*@@CODEBLOCK_(\d+)@@(?:\s*<br>)*\s*<\/p>/g,
+      (match, index) => codeBlocks[Number(index)] || '',
+    )
+    .replace(
+      /@@CODEBLOCK_(\d+)@@/g,
+      (match, index) => codeBlocks[Number(index)] || '',
+    );
 }
 
 function restoreWritingBlocks(html, writingBlocks) {
