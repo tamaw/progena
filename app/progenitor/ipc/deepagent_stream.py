@@ -43,6 +43,27 @@ _NESTED_TOOL_EVENT_REMAP = {
     "tool_result": "subagent_tool_result",
     "tool_error": "subagent_tool_error",
 }
+_TASK_SUMMARY_MAX_LENGTH = 140
+
+
+def _normalize_task_summary(value: Any) -> str | None:
+    """Normalize a task description for compact, readable card metadata."""
+    if not isinstance(value, str):
+        return None
+    summary = " ".join(value.split())
+    if not summary:
+        return None
+    if len(summary) > _TASK_SUMMARY_MAX_LENGTH:
+        return summary[: _TASK_SUMMARY_MAX_LENGTH - 1] + "…"
+    return summary
+
+
+def _extract_task_summary(metadata: dict[str, Any]) -> str | None:
+    """Extract a bounded summary only from structured task args previews."""
+    args_preview = metadata.get("args_preview")
+    if not isinstance(args_preview, dict):
+        return None
+    return _normalize_task_summary(args_preview.get("description"))
 
 
 def _extract_tool_call_id_from_task_input(payload: Any) -> str | None:
@@ -89,6 +110,7 @@ class DeepAgentIPCStream:
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
+        self._task_subagent_summaries: dict[str, str] = {}
         # Pregel push-task id -> triggering tool_call_id, harvested from
         # stream_mode="tasks" start events at the outer namespace. A nested
         # subgraph's own namespace segment is "<node_name>:<task_id>", so this
@@ -472,36 +494,46 @@ class DeepAgentIPCStream:
                 subagent_name = raw_name
             if not subagent_name:
                 return []
-            if tool_call_id:
-                self._task_subagent_calls[tool_call_id] = subagent_name
+            task_summary = _extract_task_summary(metadata)
+            self._task_subagent_calls[tool_call_id] = subagent_name
+            if task_summary:
+                self._task_subagent_summaries[tool_call_id] = task_summary
+            else:
+                self._task_subagent_summaries.pop(tool_call_id, None)
+            start_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+            }
+            if task_summary:
+                start_metadata["task_summary"] = task_summary
             return [
                 {
                     "type": "stream_event",
                     "event_type": "subagent_start",
                     "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                    },
+                    "metadata": start_metadata,
                 }
             ]
-
         subagent_name = self._task_subagent_calls.pop(tool_call_id, "")
+        task_summary = self._task_subagent_summaries.pop(tool_call_id, None)
         if not subagent_name:
             return []
 
         if event_type == "tool_result":
+            result_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+                "success": bool(metadata.get("success", True)),
+                "duration_ms": metadata.get("duration_ms"),
+                "result_preview": metadata.get("result_preview"),
+            }
+            if task_summary:
+                result_metadata["task_summary"] = task_summary
             result_item: dict[str, Any] = {
                 "type": "stream_event",
                 "event_type": "subagent_result",
                 "content": subagent_name,
-                "metadata": {
-                    "subagent_name": subagent_name,
-                    "tool_call_id": tool_call_id,
-                    "success": bool(metadata.get("success", True)),
-                    "duration_ms": metadata.get("duration_ms"),
-                    "result_preview": metadata.get("result_preview"),
-                },
+                "metadata": result_metadata,
             }
             # The raw tool_result's own top-level images (see
             # _handle_custom_stream_event) would otherwise be lost entirely --
@@ -512,20 +544,22 @@ class DeepAgentIPCStream:
             if images:
                 result_item["images"] = images
             return [result_item]
-
         if event_type == "tool_error":
+            error_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+                "success": False,
+                "duration_ms": metadata.get("duration_ms"),
+                "error": metadata.get("error"),
+            }
+            if task_summary:
+                error_metadata["task_summary"] = task_summary
             return [
                 {
                     "type": "stream_event",
                     "event_type": "subagent_result",
                     "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                        "success": False,
-                        "duration_ms": metadata.get("duration_ms"),
-                        "error": metadata.get("error"),
-                    },
+                    "metadata": error_metadata,
                 }
             ]
 

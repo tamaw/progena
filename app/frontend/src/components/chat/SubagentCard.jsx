@@ -32,13 +32,14 @@ import {
   sanitizeHtmlFragment,
   appendStreamingCursor,
   formatArgsPreview,
+  formatToolInputSummary,
   formatDuration,
   formatTimestamp,
   statusPillProps,
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
 import StatusPill from './StatusPill';
-import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
+import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
 
 // Distinguishes the subagent card's badge from A2ACallCard's at a glance --
 // a branch spinning off the main line, standing in for "delegated sub-work".
@@ -78,6 +79,23 @@ function glyphForChildStatus(status) {
   return Glyph();
 }
 
+const SubagentTaskSummaryEntry = memo(function SubagentTaskSummaryEntry({ taskSummary, isLast }) {
+  return (
+    <div className={`entry subagent-child subagent-card__task-summary-entry ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
+      <div className="entry__gutter" aria-hidden="true">
+        <span className="entry__badge subagent-card__badge subagent-card__badge--submitted">
+          {SubmittedGlyph()}
+        </span>
+      </div>
+      <div className="entry__main">
+        <div className="entry__head">
+          <div className="message-stream-event-body subagent-card__task-summary muted">{taskSummary}</div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 // One nested tool call = one mini entry in the chain, the same "mini card/
 // event" treatment A2ACallCard's A2ASubEntry gives each status update:
 // its own badge (glyph + color keyed off child.status, reusing the exact
@@ -97,12 +115,26 @@ function glyphForChildStatus(status) {
 // SubagentMessageEntry's markdown parse below -- on every single delta of
 // an unrelated, later entry, turning a streaming turn with several message/
 // tool entries into O(entries x deltas) work instead of O(deltas).
+
+function childToolSummary(child) {
+  const toolName = child.toolName || 'tool';
+  const detail = formatToolInputSummary(toolName, child.argsPreview);
+  if (child.status === 'error') {
+    return `${toolName} · failed${detail ? ` · ${detail}` : ''}`;
+  }
+  return detail ? `${toolName} · ${detail}` : toolName;
+}
+
+// Every nested tool call is a closed-by-default disclosure, matching the
+// top-level tool-event-disclosure control. The status/summary stays visible;
+// args, duration, and result/error remain available behind Expand.
 const SubagentChild = memo(function SubagentChild({ child, isLast }) {
   const args = formatArgsPreview(child.argsPreview);
   const body = [
     Number.isFinite(child.durationMs) ? formatDuration(child.durationMs) : '',
     child.error || child.resultPreview,
   ].filter(Boolean).join('\n');
+  const summary = childToolSummary(child);
 
   return (
     <div className={`entry subagent-child ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
@@ -112,13 +144,21 @@ const SubagentChild = memo(function SubagentChild({ child, isLast }) {
         </span>
       </div>
       <div className="entry__main">
-        <div className="tool">
-          <div className="tool__head">
-            <span className="tool__kind">{child.toolName || 'tool'}</span>
-            <span className="tool__desc">{args}</span>
+        <details className="tool-event-disclosure">
+          <summary>
+            <span className="tool__summary tool-event-disclosure__summary">{summary}</span>
+            <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+            <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+            <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+          </summary>
+          <div className="tool chat-event-tool">
+            <div className="tool__head">
+              <span className="tool__kind">{child.toolName || 'tool'}</span>
+              <span className="tool__desc">{args}</span>
+            </div>
+            {body && <pre className="tool__body">{body}</pre>}
           </div>
-          {body && <pre className="tool__body">{body}</pre>}
-        </div>
+        </details>
       </div>
     </div>
   );
@@ -196,8 +236,11 @@ const SubagentCard = memo(function SubagentCard({ item }) {
           </span>
         </div>
         <div className="subagent-card__body entry__content" ref={scrollRef} onScroll={onScroll}>
-          {entryCount > 0 && (
+          {(item.taskSummary || entryCount > 0) && (
             <div className="subagent-card__children">
+              {item.taskSummary && (
+                <SubagentTaskSummaryEntry taskSummary={item.taskSummary} isLast={entryCount === 0} />
+              )}
               {entries.map((entry, index) => (
                 entry.kind === 'tool' ? (
                   <SubagentChild key={entry.id} child={entry} isLast={index === entryCount - 1} />

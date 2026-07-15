@@ -415,6 +415,16 @@
     animation: fadeIn 0.2s ease;
 }
 
+.subagent-card__summary {
+    max-width: 100%;
+    margin-top: 4px;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
 /* Compounded with the shared .entry__badge/.entry__tag base class (not just
    the modifier class alone) so these deterministically win the cascade --
    chrome-frame.css is imported after chat-panel.css and its .entry__badge/
@@ -572,6 +582,11 @@
 .subagent-card__children .entry__head,
 .a2a-call-card__subchain .entry__head {
     margin-bottom: 2px;
+}
+.subagent-card__children .subagent-child > .entry__main > .tool-event-disclosure > summary .tool__summary {
+    padding: 0;
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
 }
 
 .subagent-card__children .entry__tag,

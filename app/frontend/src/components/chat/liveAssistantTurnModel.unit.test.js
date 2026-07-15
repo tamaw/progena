@@ -9,6 +9,7 @@ import {
   buildDefaultAssistantTimeline,
   finalizeLiveAssistantTurn,
   toCommittedAssistantMessage,
+  normalizeTaskSummary,
 } from './liveAssistantTurnModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
@@ -386,6 +387,51 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.timelineItems[0].id).toBe('subagent-call_1');
     expect(next.timelineItems[0].subagentName).toBe('researcher');
     expect(next.timelineItems[0].status).toBe('running');
+  });
+  it('normalizes bounded task summaries on live subagent cards', () => {
+    expect(normalizeTaskSummary('  Read   the\n README.md\tand summarize its purpose  '))
+      .toBe('Read the README.md and summarize its purpose');
+    expect(normalizeTaskSummary('x'.repeat(200))).toBe(`${'x'.repeat(139)}…`);
+    expect(normalizeTaskSummary('   \n\t ')).toBe('');
+  });
+
+  it('carries task_summary from start and preserves it through the final result', () => {
+    const turn = baseTurn();
+    const withStart = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_start', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_summary',
+        task_summary: '  Read   the README.md and summarize its purpose  ',
+      },
+    }), NOW);
+    const withResult = applyAssistantStreamEvent(withStart, rawStreamEvent('subagent_result', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_summary',
+        success: true,
+        result_preview: 'Final answer',
+      },
+    }), NOW + 100);
+
+    expect(withResult.timelineItems[0]).toMatchObject({
+      kind: 'subagent',
+      taskSummary: 'Read the README.md and summarize its purpose',
+      status: 'success',
+      resultPreview: 'Final answer',
+    });
+  });
+
+  it('does not promote args_preview.description when task_summary is absent', () => {
+    const next = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('subagent_start', {
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_no_summary',
+        args_preview: { description: 'legacy description must stay hidden' },
+      },
+    }), NOW);
+    expect(next.timelineItems[0].taskSummary).toBe('');
   });
   it('task lifecycle keeps outer tool rows alongside its grouped subagent card', () => {
     const turn = baseTurn();

@@ -22,7 +22,7 @@ import {
   extractCallAgentSummary,
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
-import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
+import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
 
 // Distinguishes the A2A card's badge from SubagentCard's at a glance -- a
 // link between two endpoints, standing in for "agent-to-agent connection".
@@ -38,20 +38,6 @@ function A2AGlyph() {
   );
 }
 
-// Submitted: the task was just handed off -- an upward/outward arrow. Spans
-// nearly the full viewBox (y 3-21, x 4-20), matching the visual weight of
-// the other glyphs -- a smaller/tighter arrow reads as noticeably thinner
-// next to WorkingGlyph's 18-unit ring and CompletedGlyph's 16-unit check.
-// A2A-specific (no equivalent "submitted" state elsewhere), so this one
-// stays local instead of moving to eventGlyphs.jsx.
-function SubmittedGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="12" y1="21" x2="12" y2="3" />
-      <polyline points="4 11 12 3 20 11" />
-    </svg>
-  );
-}
 
 const A2A_STATE_GLYPHS = {
   submitted: SubmittedGlyph,

@@ -164,6 +164,22 @@ function baseMessage(overrides = {}) {
     ...overrides,
   };
 }
+function divMarkupByClass(markup, className) {
+  const openingTag = `<div class="${className}">`;
+  const start = markup.indexOf(openingTag);
+  if (start === -1) return '';
+
+  const divTag = /<\/?div\b[^>]*>/g;
+  divTag.lastIndex = start;
+  let depth = 0;
+  let match;
+  while ((match = divTag.exec(markup))) {
+    depth += match[0].startsWith('</') ? -1 : 1;
+    if (depth === 0) return markup.slice(start, divTag.lastIndex);
+  }
+  return '';
+}
+
 
 /* ------------------------------------------------------------------ */
 /*  timelineItems                                                      */
@@ -221,6 +237,110 @@ describe('Message with timelineItems', () => {
     expect(toolStartPos).toBeGreaterThan(0);
     expect(assistantPos).toBeGreaterThan(toolStartPos);
     expect(toolResultPos).toBeGreaterThan(assistantPos);
+  });
+  it('renders a submitted task summary entry before the subagent final result', () => {
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'subagent',
+        id: 'subagent-call-summary',
+        toolCallId: 'call-summary',
+        subagentName: 'researcher',
+        taskSummary: 'Read the README.md and summarize its purpose',
+        status: 'success',
+        startedAt: MS_EPOCH,
+        finishedAt: MS_EPOCH + 100,
+        durationMs: 100,
+        resultPreview: 'Final answer from the researcher',
+        error: null,
+        entries: [],
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const bodyPos = html.indexOf('subagent-card__body');
+    const summaryEntryPos = html.indexOf('subagent-card__task-summary-entry');
+    const summaryPos = html.indexOf('Read the README.md and summarize its purpose');
+    const resultPos = html.indexOf('Final answer from the researcher');
+
+    expect(bodyPos).toBeGreaterThan(-1);
+    expect(summaryEntryPos).toBeGreaterThan(bodyPos);
+    expect(summaryPos).toBeGreaterThan(summaryEntryPos);
+    expect(resultPos).toBeGreaterThan(summaryPos);
+    expect(html).toContain('Read the README.md and summarize its purpose');
+    expect(html.slice(summaryEntryPos, resultPos)).toMatch(/<svg[^>]*aria-hidden="true"/);
+    expect(html.slice(summaryEntryPos, resultPos)).toContain('message-stream-event-body');
+    expect(divMarkupByClass(html, 'subagent-card__children')).toMatch(
+      /Read the README\.md and summarize its purpose[\s\S]*Final answer from the researcher/,
+    );
+  });
+
+  it('omits the task summary line when persisted metadata has no description', () => {
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'subagent',
+        id: 'subagent-call-no-summary',
+        toolCallId: 'call-no-summary',
+        subagentName: 'researcher',
+        status: 'success',
+        startedAt: MS_EPOCH,
+        finishedAt: MS_EPOCH + 100,
+        durationMs: 100,
+        resultPreview: 'Final answer from the researcher',
+        error: null,
+        entries: [],
+      }],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    expect(html).not.toContain('subagent-card__task-summary');
+  });
+
+  it('renders a successful nested tool as a closed disclosure with payload details', () => {
+    const rawArgs = '{"path":"src/main.py","include_line_numbers":true}';
+    const rawResult = '{"content":"function main()"}';
+    const message = baseMessage({
+      timelineItems: [{
+        kind: 'subagent',
+        id: 'subagent-call-nested-tool',
+        toolCallId: 'call-nested-tool',
+        subagentName: 'researcher',
+        status: 'success',
+        startedAt: MS_EPOCH,
+        finishedAt: MS_EPOCH + 1250,
+        durationMs: 1250,
+        resultPreview: 'Final answer from the researcher',
+        error: null,
+        entries: [{
+          kind: 'tool',
+          id: 'nested-tool-1',
+          toolName: 'read_file',
+          status: 'success',
+          argsPreview: rawArgs,
+          resultPreview: rawResult,
+          error: null,
+          durationMs: 1250,
+        }],
+      }],
+    });
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+    const disclosures = html.match(/<details class="tool-event-disclosure">[\s\S]*?<\/details>/g) || [];
+    expect(disclosures).toHaveLength(1);
+    const disclosure = disclosures[0] || '';
+
+    expect(disclosure).toContain('read_file · path: src/main.py');
+    expect(disclosure).not.toContain('completed');
+    expect(disclosure).toContain('>Expand</span>');
+    expect(disclosure).toContain('>Collapse</span>');
+    expect(disclosure).toContain('class="tool-event-disclosure__chevron"');
+    expect(disclosure).not.toMatch(/<details[^>]*\bopen(?:=|\s|>)/);
+
+    const payloadStart = disclosure.indexOf('class="tool chat-event-tool"');
+    expect(payloadStart).toBeGreaterThan(-1);
+    const summary = disclosure.slice(0, payloadStart);
+    const payload = disclosure.slice(payloadStart);
+    expect(summary).not.toContain(rawResult.replaceAll('"', '&quot;'));
+    expect(payload).toContain(rawArgs.replaceAll('"', '&quot;'));
+    expect(payload).toContain(rawResult.replaceAll('"', '&quot;'));
   });
 
   it('renders assistant_message with agent header, displayAgentName, and model details', () => {
