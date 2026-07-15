@@ -140,7 +140,7 @@ body,
 }
 
 .app-shell__search--ai {
-  width: min(380px, 34vw);
+  width: min(340px, 32vw);
   gap: 8px;
   padding: 5px 10px;
   background:
@@ -175,16 +175,6 @@ body,
   height: 17px;
 }
 
-.app-shell__search-hint {
-  flex: 0 0 auto;
-  padding: 2px 5px;
-  color: var(--color-text-muted);
-  border: 1px solid var(--color-border-light);
-  border-radius: 4px;
-  font-size: 10px;
-  line-height: 1;
-  white-space: nowrap;
-}
 
 .app-shell__search > svg {
   flex: 0 0 auto;

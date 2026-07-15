@@ -430,7 +430,6 @@ function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, o
       <form className="app-shell__search app-shell__search--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
         <span className="app-shell__search-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
         <input name="search" type="text" placeholder="Ask Progenitor AI to explain, plan, or build..." aria-label="Ask Progenitor AI" autoComplete="off" />
-        <span className="app-shell__search-hint" aria-hidden="true">Enter ↵</span>
       </form>
       <div className="app-shell__actions">
         <ChromeIconButton
