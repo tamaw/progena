@@ -3855,6 +3855,11 @@ body,
   display: none;
 }
 
+/* Work-stream entries stay connected across their wrapper boundaries. */
+.chat-detail-body .entry--chain-item > .entry__gutter::before {
+  display: block;
+}
+
 .entry__badge {
   position: relative;
   z-index: 1;
