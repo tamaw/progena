@@ -5,6 +5,7 @@ import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
 import TimelineItem from './TimelineItem';
 import MessageImageStrip from './MessageImageStrip';
 import NormalToolContent from './NormalToolContent';
+import MessageActions from './MessageActions';
 import {
   describeStreamEvent,
   badgeForEvent,
@@ -116,7 +117,14 @@ function withReasoningFallback(
   ];
 }
 
-function MessageView({ message, streamEventFilter, hideContent = false, showImages = true }) {
+function MessageView({
+  message,
+  streamEventFilter,
+  hideContent = false,
+  showImages = true,
+  onRegenerate,
+  regenerateDisabled = false,
+}) {
   const {
     role,
     content,
@@ -170,21 +178,7 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     const count = new Intl.NumberFormat().format(tokenCount);
     return `${count} ${tokenCount === 1 ? 'token' : 'tokens'}`;
   }, [isStreaming, role, tokenCount]);
-
-  const formattedReasoningTokenCount = useMemo(() => {
-    if (
-      role !== 'assistant'
-      || isStreaming
-      || !Number.isFinite(reasoningTokenCount)
-      || reasoningTokenCount <= 0
-    ) {
-      return '';
-    }
-    const count = new Intl.NumberFormat().format(reasoningTokenCount);
-    return `${count} reasoning token${reasoningTokenCount === 1 ? '' : 's'}`;
-  }, [isStreaming, reasoningTokenCount, role]);
-
-  const tokenMetaItems = [formattedTokenCount, formattedReasoningTokenCount].filter(Boolean);
+  const tokenMetaItems = [formattedTokenCount].filter(Boolean);
   const displayName = role === 'assistant' && displayAgentName ? displayAgentName : 'Progenitor';
   const displayModel = role === 'assistant' && displayModelName ? displayModelName : model;
   const displayTools = useMemo(
@@ -241,7 +235,11 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
             ))}
             {displayModel && <span className="msg__model">{displayModel}</span>}
             {displayTools && <span className="msg__model">{displayTools}</span>}
-            <MessageActions role={role} content={content} />
+            <MessageActions
+              content={content}
+              onRegenerate={role === 'assistant' ? onRegenerate : undefined}
+              regenerateDisabled={regenerateDisabled}
+            />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
         </div>
@@ -298,7 +296,13 @@ function MessageView({ message, streamEventFilter, hideContent = false, showImag
     return (
       <div className="chat-entry-chain chat-entry-chain--connected">
         {visibleTimelineItems.map((item, idx) => (
-          <TimelineItem key={item.id || `tl-${idx}`} item={item} itemIndex={idx} />
+          <TimelineItem
+            key={item.id || `tl-${idx}`}
+            item={item}
+            itemIndex={idx}
+            onRegenerate={onRegenerate}
+            regenerateDisabled={regenerateDisabled}
+          />
         ))}
         {showImages && !hideContent && messageImages.length > 0 && (
           <div className="chat-entry-chain__images">
@@ -390,35 +394,6 @@ function StreamEvents({ events }) {
   );
 }
 
-function MessageActions({ role, content }) {
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-    } catch (e) {
-      console.error('Failed to copy:', e);
-    }
-  };
-
-  return (
-    <span className="message-actions msg__actions">
-      <button className="msg-action-btn copy-btn" onClick={handleCopy} title="Copy" aria-label="Copy message">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-          <rect x="4" y="4" width="9" height="9" rx="1.5"></rect>
-          <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"></path>
-        </svg>
-        <span>Copy</span>
-      </button>
-      {role === 'assistant' && (
-        <button className="msg-action-btn regen-btn" title="Regenerate" aria-label="Regenerate response">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.98M13.5 2.5v3h-3"></path>
-          </svg>
-          <span>Regenerate</span>
-        </button>
-      )}
-    </span>
-  );
-}
 
 // Memoized so a streamed token only re-renders the streaming message, not the
 // whole transcript. streamEventFilter is a stable useCallback in the parent and

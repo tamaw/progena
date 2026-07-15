@@ -36,31 +36,11 @@ import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
 import NormalToolContent from './NormalToolContent';
+import MessageActions from './MessageActions';
 
 
-function AssistantMessageActions({ content }) {
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(content);
-    } catch (e) {
-      console.error('Failed to copy:', e);
-    }
-  };
 
-  return (
-    <span className="message-actions msg__actions">
-      <button className="msg-action-btn copy-btn" onClick={handleCopy} title="Copy" aria-label="Copy message">
-        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3">
-          <rect x="4" y="4" width="9" height="9" rx="1.5"></rect>
-          <path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"></path>
-        </svg>
-        <span>Copy</span>
-      </button>
-    </span>
-  );
-}
-
-const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, regenerateDisabled = false }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
   }
@@ -78,9 +58,6 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
     const tokenMeta = [
       Number.isFinite(item.tokenCount) && item.tokenCount > 0
         ? `${new Intl.NumberFormat().format(item.tokenCount)} token${item.tokenCount === 1 ? '' : 's'}`
-        : '',
-      Number.isFinite(item.reasoningTokenCount) && item.reasoningTokenCount > 0
-        ? `${new Intl.NumberFormat().format(item.reasoningTokenCount)} reasoning token${item.reasoningTokenCount === 1 ? '' : 's'}`
         : '',
     ].filter(Boolean);
 
@@ -105,7 +82,11 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
                 {Array.isArray(item.displayToolCalls) && item.displayToolCalls.length > 0 && (
                   <span className="msg__model">{formatDisplayToolCalls(item.displayToolCalls)}</span>
                 )}
-                <AssistantMessageActions content={item.content || ''} />
+                <MessageActions
+                  content={item.content || ''}
+                  onRegenerate={onRegenerate}
+                  regenerateDisabled={regenerateDisabled}
+                />
                 {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
               </span>
             </div>
@@ -153,12 +134,28 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
                 {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
               </span>
             </div>
-            {description.bodyHtml && (
+            {description.bodyHtml && (description.reasoningDetailHtml ? (
+              <details className="tool-event-disclosure reasoning-event-disclosure">
+                <summary>
+                  <div
+                    className="message-stream-event-body reasoning-event-disclosure__summary"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
+                  />
+                  <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+                  <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+                  <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+                </summary>
+                <div
+                  className="message-stream-event-body reasoning-event-disclosure__detail"
+                  dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
+                />
+              </details>
+            ) : (
               <div
                 className="message-stream-event-body entry__content"
                 dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
               />
-            )}
+            ))}
             {description.bodyDetail && !tool && !description.bodyHtml && (
               <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
             )}

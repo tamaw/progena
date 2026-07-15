@@ -364,6 +364,16 @@ function badgeForEventType(eventType) {
   return 'Event';
 }
 
+function splitReasoningContent(content) {
+  const paragraphs = typeof content === 'string'
+    ? content.trim().split(/\n\s*\n/).filter(Boolean)
+    : [];
+  return {
+    summary: paragraphs[0] || '',
+    detail: paragraphs.slice(1).join('\n\n'),
+  };
+}
+
 // ─── Stream event rendering ───────────────────────────────────────────────
 
 export function describeStreamEvent(event) {
@@ -437,10 +447,12 @@ export function describeStreamEvent(event) {
   }
 
   if (isReasoningEvent(event)) {
+    const { summary, detail } = splitReasoningContent(event.content);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
-      bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
+      bodyHtml: summary ? formatMessage(summary) : '',
+      reasoningDetailHtml: detail ? formatMessage(detail) : '',
       metaDetail: '',
       bodyDetail: '',
     };
