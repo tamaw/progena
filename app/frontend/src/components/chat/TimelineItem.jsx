@@ -21,7 +21,7 @@
 import { Fragment, memo } from 'react';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import {
-  formatMessage,
+  renderSafeMarkdown,
   sanitizeHtmlFragment,
   describeStreamEvent,
   badgeForEvent,
@@ -39,7 +39,7 @@ import MessageActions from './MessageActions';
 
 
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate, regenerateDisabled = false }) {
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
   }
@@ -55,7 +55,7 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
     // token/frame.
     const formattedContent = item.isStreaming
       ? ''
-      : sanitizeHtmlFragment(formatMessage(item.content || ''));
+      : renderSafeMarkdown(item.content || '');
     const formattedTime = formatTimestamp(item.timestamp);
     const tokenMeta = [
       Number.isFinite(item.tokenCount) && item.tokenCount > 0
@@ -87,7 +87,6 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate,
                 <MessageActions
                   content={item.content || ''}
                   onRegenerate={onRegenerate}
-                  regenerateDisabled={regenerateDisabled}
                 />
                 {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
               </span>

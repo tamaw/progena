@@ -16,14 +16,17 @@ import {
   deleteChatSession,
   ensureDraftChatSession,
   requestChatSessionDetail,
+  requestChatSessionReconciliation,
   selectActiveChatSession,
   selectActiveChatSessionState,
+  selectChatReconciliationState,
   selectChatSessions,
   selectChatSessionsState,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
+import { RegenerateAvailabilityContext } from '../components/chat/MessageActions';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
@@ -45,6 +48,10 @@ import {
   CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
   collectMessageImages,
+  areChatTranscriptsEquivalent,
+  mergeCanonicalMessages,
+  excludeLiveOwnedMessage,
+  shouldRetireLiveOwnerAfterCanonicalReconciliation,
   committedReasoningTokenCounts,
   committedReasoningTokenDisplay,
   countTokens,
@@ -248,7 +255,6 @@ const HistoricalMessage = memo(function HistoricalMessage({
   hideContent,
   showImages,
   onRegenerate,
-  regenerateDisabled,
 }) {
   const handleMessageRegenerate = useCallback(
     () => onRegenerate?.(message.id),
@@ -262,7 +268,6 @@ const HistoricalMessage = memo(function HistoricalMessage({
       hideContent={hideContent}
       showImages={showImages}
       onRegenerate={message.role === 'assistant' ? handleMessageRegenerate : undefined}
-      regenerateDisabled={regenerateDisabled}
     />
   );
 });
@@ -439,6 +444,7 @@ function ConversationPage() {
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
+  const chatReconciliationState = useSelector(selectChatReconciliationState);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
@@ -489,6 +495,7 @@ function ConversationPage() {
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
+  const [foregroundReconciliationIntent, setForegroundReconciliationIntent] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
   const [composerFocusTick, setComposerFocusTick] = useState(0);
@@ -509,6 +516,7 @@ function ConversationPage() {
   // whenever this component had remounted since the id was last seen — e.g.
   // navigating to another nav item and back mid-stream.
   const lastAppliedBackendChatRequestIdRef = useRef(null);
+  const lastAppliedChatReconciliationRequestIdRef = useRef(null);
   // Draft creation is acknowledged separately from its causal session event.
   // Register resolvers before dispatch so a fast stream event cannot be missed.
   const pendingDraftSessionsRef = useRef(new Map());
@@ -518,6 +526,8 @@ function ConversationPage() {
   const selectedBackendChatIdRef = useRef(null);
   // Track recently added scheduled messages to deduplicate.
   const recentScheduledContent = useRef(new Set());
+  const foregroundOwnershipTokenRef = useRef(0);
+  const reconciliationIntentRef = useRef(null);
 
   useEffect(() => {
     selectedBackendChatIdRef.current = selectedBackendChatId;
@@ -535,6 +545,23 @@ function ConversationPage() {
       requestId,
     }));
   }, [dispatch, getApiUrl]);
+
+  const beginForegroundStream = useCallback(() => {
+    foregroundOwnershipTokenRef.current += 1;
+    reconciliationIntentRef.current = null;
+    setForegroundReconciliationIntent(null);
+  }, []);
+
+  const requestForegroundReconciliation = useCallback(({ threadId: reconciliationThreadId, streamId }) => {
+    if (!reconciliationThreadId || selectedBackendChatIdRef.current !== reconciliationThreadId) {
+      return;
+    }
+    setForegroundReconciliationIntent({
+      threadId: reconciliationThreadId,
+      streamId,
+      ownershipToken: foregroundOwnershipTokenRef.current,
+    });
+  }, []);
 
   const {
     archivedSessions,
@@ -573,12 +600,15 @@ function ConversationPage() {
     show,
     selectedBackendChatIdRef,
     reloadOpenChat,
+    onForegroundStreamStarted: beginForegroundStream,
+    requestForegroundReconciliation,
   });
 
   const openBackendChat = useCallback(async (threadId) => {
     if (!threadId) {
       return;
     }
+    beginForegroundStream();
     activeStreamIdRef.current = null;
     setIsGenerating(false);
     setIsEditingTitle(false);
@@ -592,7 +622,7 @@ function ConversationPage() {
       threadId,
       requestId: crypto.randomUUID(),
     })).unwrap();
-  }, [activeStreamIdRef, dispatch, getApiUrl, setIsGenerating]);
+  }, [activeStreamIdRef, beginForegroundStream, dispatch, getApiUrl, setIsGenerating]);
 
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
     const requestId = crypto.randomUUID();
@@ -800,6 +830,68 @@ function ConversationPage() {
   }, [messages, selectedBackendChatId, config.storage.chatHistory]);
 
   useEffect(() => {
+    if (!foregroundReconciliationIntent) {
+      return;
+    }
+    if (
+      foregroundReconciliationIntent.ownershipToken !== foregroundOwnershipTokenRef.current
+      || selectedBackendChatIdRef.current !== foregroundReconciliationIntent.threadId
+    ) {
+      setForegroundReconciliationIntent(null);
+      return;
+    }
+    const request = dispatch(requestChatSessionReconciliation({
+      chatsUrl: getApiUrl('chats'),
+      threadId: foregroundReconciliationIntent.threadId,
+      requestId: crypto.randomUUID(),
+    }));
+    reconciliationIntentRef.current = {
+      ...foregroundReconciliationIntent,
+      requestId: request.requestId,
+      messagesSnapshot: messages,
+    };
+    setForegroundReconciliationIntent(null);
+  }, [dispatch, foregroundReconciliationIntent, getApiUrl, messages]);
+
+  useEffect(() => {
+    const requestId = chatReconciliationState.requestId;
+    const intent = reconciliationIntentRef.current;
+    if (
+      !requestId
+      || requestId === lastAppliedChatReconciliationRequestIdRef.current
+      || !chatReconciliationState.detail
+      || !intent
+      || requestId !== intent.requestId
+    ) {
+      return;
+    }
+    lastAppliedChatReconciliationRequestIdRef.current = requestId;
+    if (
+      intent.ownershipToken !== foregroundOwnershipTokenRef.current
+      || intent.threadId !== chatReconciliationState.threadId
+      || selectedBackendChatId !== intent.threadId
+      || selectedBackendChatIdRef.current !== intent.threadId
+      || !areChatTranscriptsEquivalent(messages, intent.messagesSnapshot)
+    ) {
+      return;
+    }
+    const canonicalMessages = Array.isArray(chatReconciliationState.detail.messages)
+      ? chatReconciliationState.detail.messages
+        .map((message, index) => normalizeBackendChatMessage(message, index))
+        .filter(Boolean)
+      : [];
+    if (!areChatTranscriptsEquivalent(messages, canonicalMessages)) {
+      setMessages(mergeCanonicalMessages(messages, canonicalMessages));
+      // Canonical reconciliation can replace the locally committed row with a
+      // backend identity. The frozen live turn then cannot hide that row by
+      // its client id, so hand visual ownership to the canonical transcript.
+      if (shouldRetireLiveOwnerAfterCanonicalReconciliation(liveTurnStore.getSnapshot(), intent.streamId)) {
+        setLiveAssistantTurn(null);
+      }
+    }
+  }, [chatReconciliationState, liveTurnStore, messages, selectedBackendChatId, setLiveAssistantTurn]);
+
+  useEffect(() => {
     if (!activeBackendChat?.thread_id) {
       return;
     }
@@ -963,15 +1055,24 @@ function ConversationPage() {
     handleChatEvent({ type: event?.type, data: payload });
   }), [handleChatEvent]);
 
+  // Regenerate actions sit on every historical assistant card. Keep their
+  // dispatcher identity stable so a new streamed reply cannot invalidate the
+  // entire committed transcript; read the current transcript at click time.
+  const regenerateStateRef = useRef({ messages, isGenerating, handleSend, show });
+  regenerateStateRef.current.messages = messages;
+  regenerateStateRef.current.isGenerating = isGenerating;
+  regenerateStateRef.current.handleSend = handleSend;
+  regenerateStateRef.current.show = show;
   const handleQuickAction = useCallback((message) => {
     handleSend(message);
   }, [handleSend]);
 
   const handleRegenerate = useCallback((assistantMessageId) => {
-    if (isGenerating) return false;
-    const assistantIndex = messages.findIndex((message) => message.id === assistantMessageId);
+    const current = regenerateStateRef.current;
+    if (current.isGenerating) return false;
+    const assistantIndex = current.messages.findIndex((message) => message.id === assistantMessageId);
     const prompt = assistantIndex > 0
-      ? messages
+      ? current.messages
         .slice(0, assistantIndex)
         .reverse()
         .find((message) => (
@@ -981,12 +1082,12 @@ function ConversationPage() {
         ))
       : null;
     if (!prompt) {
-      show('error', 'Regeneration unavailable', 'The original user message is no longer available.');
+      current.show('error', 'Regeneration unavailable', 'The original user message is no longer available.');
       return false;
     }
-    void handleSend(prompt.content);
+    void current.handleSend(prompt.content);
     return true;
-  }, [handleSend, isGenerating, messages, show]);
+  }, []);
 
   const clearBackendSelection = useCallback(() => {
     setSelectedBackendChatId(null);
@@ -1505,6 +1606,9 @@ function ConversationPage() {
     },
   ];
 
+  const liveOwnedMessageId = liveTurnStore.getSnapshot()?.assistantMessageId ?? null;
+  const visibleMessages = excludeLiveOwnedMessage(messages, liveOwnedMessageId);
+
   return (
     <PageShell className="chat-page">
       <PaneSection as="aside" className={sessionsPaneClassName} aria-label="Conversation sessions" onItemSelect={() => setSessionsCollapsed(true)}>
@@ -1621,57 +1725,58 @@ function ConversationPage() {
           title={chatTitle}
         />
 
-        <div
-          className="chat-messages sess-detail__body chat-detail-body"
-          ref={messagesContainerRef}
-          onScroll={handleMessagesScroll}
-        >
-          <div className="chat-messages__inner">
-            {isRouteDetailError ? (
-              <div className="chat-load-error" role="alert">
-                <h2>Unable to load conversation</h2>
-                <p>{chatDetailError}</p>
-              </div>
-            ) : isContentLoading ? (
-              <div className="chat-loading">Loading...</div>
-            ) : isEmptyConversationPane ? (
-              <div className="welcome-message">
-                <h2>No conversations yet</h2>
-                <p className="muted">Click <strong>+ New</strong> to start a conversation.</p>
-              </div>
-            ) : isNewChatEmpty ? (
-              <div className="welcome-message">
-                <h2>{welcomeMessage}</h2>
-                <QuickActions onAction={handleQuickAction} />
-              </div>
-            ) : (
-              <>
-                {messages.map((msg) => {
-                  if (msg.role === 'user' && streamFilters.user === false) return null;
-                  return (
-                    <HistoricalMessage
-                      key={msg.id}
-                      message={msg}
-                      streamEventFilter={streamEventFilter}
-                      hideContent={msg.role === 'assistant' && streamFilters.agent === false}
-                      showImages={streamFilters.images !== false}
-                      onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
-                      regenerateDisabled={isGenerating}
-                    />
-                  );
-                })}
-                <LiveAssistantTurn
-                  store={liveTurnStore}
-                  messagesContainerRef={messagesContainerRef}
-                  isPinnedToBottomRef={isPinnedToBottomRef}
-                  streamEventFilter={streamEventFilter}
-                  hideContent={streamFilters.agent === false}
-                  showImages={streamFilters.images !== false}
-                />
-              </>
-            )}
+        <RegenerateAvailabilityContext.Provider value={isGenerating}>
+          <div
+            className="chat-messages sess-detail__body chat-detail-body"
+            ref={messagesContainerRef}
+            onScroll={handleMessagesScroll}
+          >
+            <div className="chat-messages__inner">
+              {isRouteDetailError ? (
+                <div className="chat-load-error" role="alert">
+                  <h2>Unable to load conversation</h2>
+                  <p>{chatDetailError}</p>
+                </div>
+              ) : isContentLoading ? (
+                <div className="chat-loading">Loading...</div>
+              ) : isEmptyConversationPane ? (
+                <div className="welcome-message">
+                  <h2>No conversations yet</h2>
+                  <p className="muted">Click <strong>+ New</strong> to start a conversation.</p>
+                </div>
+              ) : isNewChatEmpty ? (
+                <div className="welcome-message">
+                  <h2>{welcomeMessage}</h2>
+                  <QuickActions onAction={handleQuickAction} />
+                </div>
+              ) : (
+                <>
+                  {visibleMessages.map((msg) => {
+                    if (msg.role === 'user' && streamFilters.user === false) return null;
+                    return (
+                      <HistoricalMessage
+                        key={msg.id}
+                        message={msg}
+                        streamEventFilter={streamEventFilter}
+                        hideContent={msg.role === 'assistant' && streamFilters.agent === false}
+                        showImages={streamFilters.images !== false}
+                        onRegenerate={msg.role === 'assistant' ? handleRegenerate : undefined}
+                      />
+                    );
+                  })}
+                  <LiveAssistantTurn
+                    store={liveTurnStore}
+                    messagesContainerRef={messagesContainerRef}
+                    isPinnedToBottomRef={isPinnedToBottomRef}
+                    streamEventFilter={streamEventFilter}
+                    hideContent={streamFilters.agent === false}
+                    showImages={streamFilters.images !== false}
+                  />
+                </>
+              )}
+            </div>
           </div>
-        </div>
+        </RegenerateAvailabilityContext.Provider>
 
         <ChatInput
           onSend={handleSend}

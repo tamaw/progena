@@ -99,6 +99,25 @@ def _next_sse_frame(lines: Iterator[str]) -> tuple[str, dict[str, object]]:
     raise AssertionError("SSE stream closed before a complete event frame")
 
 
+def _next_response_sse_frame(
+    lines: Iterator[str],
+) -> tuple[str, dict[str, object], str | None]:
+    """Decode one response-content SSE frame, preserving its replay cursor."""
+    event_name: str | None = None
+    event_id: str | None = None
+    data_lines: list[str] = []
+    for line in lines:
+        if line.startswith("event: "):
+            event_name = line.removeprefix("event: ")
+        elif line.startswith("id: "):
+            event_id = line.removeprefix("id: ")
+        elif line.startswith("data: "):
+            data_lines.append(line.removeprefix("data: "))
+        elif line == "" and event_name is not None:
+            return event_name, json.loads("\n".join(data_lines)), event_id
+    raise AssertionError("SSE stream closed before a complete response frame")
+
+
 class TestAsyncResponseHandling:
     """Tests for async response handling."""
 
@@ -132,8 +151,22 @@ class TestAsyncResponseHandling:
 
         assert response.status_code in (404, 405)
 
+    def test_response_stream_route_is_registered_in_openapi(self, client):
+        """Generated clients can discover the dedicated response-content stream route."""
+        operation = client.get("/openapi.json").json()["paths"][
+            "/api/ui/responses/{request_id}/stream"
+        ]["get"]
+
+        parameters = {(parameter["name"], parameter["in"]) for parameter in operation["parameters"]}
+
+        assert {
+            ("request_id", "path"),
+            ("after", "query"),
+            ("Last-Event-ID", "header"),
+        } <= parameters
+
     def test_streaming_responses_use_session_thread_id(self, monkeypatch):
-        """A dispatched generation resolves over serialized canonical SSE frames."""
+        """Canonical SSE carries lifecycle while its response stream carries text deltas."""
         import app.backend.main as backend_main
 
         captured: dict[str, object] = {}
@@ -155,11 +188,11 @@ class TestAsyncResponseHandling:
         monkeypatch.setattr(backend_main, "client", _MockClient())
         with _live_backend() as base_url, httpx.Client(base_url=base_url, timeout=5) as live_client:
             live_client.cookies.set("progenitor_session", "sess_thread_abc")
-            with live_client.stream("GET", "/api/ui/stream") as stream:
-                assert stream.status_code == 200
-                assert stream.headers["content-type"].startswith("text/event-stream")
-                lines = stream.iter_lines()
-                ready_name, ready = _next_sse_frame(lines)
+            with live_client.stream("GET", "/api/ui/stream") as canonical_stream:
+                assert canonical_stream.status_code == 200
+                assert canonical_stream.headers["content-type"].startswith("text/event-stream")
+                canonical_lines = canonical_stream.iter_lines()
+                ready_name, ready = _next_sse_frame(canonical_lines)
                 assert ready_name == "ui.event"
                 assert ready["type"] == "connection.ready"
 
@@ -168,7 +201,15 @@ class TestAsyncResponseHandling:
                     json={"model": "progenitor-v1", "input": "hi", "stream": True},
                     headers={"X-Request-ID": request_id},
                 )
-                frames = [_next_sse_frame(lines) for _ in range(4)]
+                with live_client.stream(
+                    "GET", f"/api/ui/responses/{request_id}/stream"
+                ) as response_stream:
+                    assert response_stream.status_code == 200
+                    assert response_stream.headers["content-type"].startswith("text/event-stream")
+                    response_lines = response_stream.iter_lines()
+                    dedicated_frames = [_next_response_sse_frame(response_lines) for _ in range(2)]
+                    assert list(response_lines) == []
+                canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
 
         assert response.status_code == 202
         assert response.headers["X-Request-ID"] == request_id
@@ -181,28 +222,106 @@ class TestAsyncResponseHandling:
             "request_id": request_id,
             "metadata": {"thread_id": "thread_sess_thread_abc"},
         }
-        assert [event_name for event_name, _ in frames] == ["ui.event"] * 4
-        events = [event for _, event in frames]
-        assert [event["type"] for event in events] == [
+        assert [event_name for event_name, _ in canonical_frames] == ["ui.event"] * 2
+        lifecycle = [event for _, event in canonical_frames]
+        assert [event["type"] for event in lifecycle] == [
             "chat.response.started",
-            "chat.response.delta",
-            "chat.response.delta",
             "chat.response.completed",
         ]
-        assert all(event["scope"] == "chat" for event in events)
-        assert all(event["payload"]["request_id"] == request_id for event in events)
-        assert "".join(event["payload"]["delta"] for event in events[1:3]) == "Hello world"
-        assert events[-1]["payload"]["id"] == events[1]["payload"]["id"]
+        assert all(event["scope"] == "chat" for event in lifecycle)
+        assert all(event["payload"]["request_id"] == request_id for event in lifecycle)
+        assert lifecycle[0]["payload"]["id"] == lifecycle[1]["payload"]["id"]
+
+        assert [event_name for event_name, _, _ in dedicated_frames] == [
+            "chat.response.delta",
+            "chat.response.delta",
+        ]
+        assert [frame_id for _, _, frame_id in dedicated_frames] == [
+            f"chat-response:{request_id}:1",
+            f"chat-response:{request_id}:2",
+        ]
+        payloads = [payload for _, payload, _ in dedicated_frames]
+        assert all(payload["request_id"] == request_id for payload in payloads)
+        assert all(payload["id"] == lifecycle[0]["payload"]["id"] for payload in payloads)
+        assert "".join(payload["delta"] for payload in payloads) == "Hello world"
+
+    @pytest.mark.asyncio
+    async def test_response_event_stream_forwards_runtime_timing_from_direct_frames(
+        self, monkeypatch
+    ):
+        """Dedicated frames preserve runtime timing while canonical SSE gets only terminal state."""
+        import app.backend.main as backend_main
+
+        request_id = "runtime-timing-request"
+        published: list[tuple[str, dict[str, object]]] = []
+
+        class _MockClient:
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                yield {
+                    "type": "stream_chunk",
+                    "content": "Hello",
+                    "runtime_emitted_at_ms": 1_700_000_000_001,
+                    "runtime_stream_seq": 7,
+                }
+                yield {
+                    "type": "stream_event",
+                    "event_type": "node_update",
+                    "content": "respond",
+                    "metadata": {"node_name": "respond"},
+                    "runtime_emitted_at_ms": 1_700_000_000_002,
+                    "runtime_stream_seq": 8,
+                }
+
+        def record(event_type: str, payload: dict[str, object], **_kwargs: object) -> None:
+            published.append((event_type, payload))
+
+        state = backend_main._ensure_response_stream(
+            request_id,
+            "response-runtime-timing",
+            "thread-runtime-timing",
+            "progenitor-v1",
+        )
+        monkeypatch.setattr(backend_main, "client", _MockClient())
+        monkeypatch.setattr(backend_main, "broadcast_ui_event", record)
+        try:
+            await backend_main._run_response_event_stream(
+                "hi",
+                "progenitor-v1",
+                request_id,
+                "response-runtime-timing",
+                "thread-runtime-timing",
+            )
+        finally:
+            backend_main._response_streams.pop(request_id, None)
+
+        assert [event_type for event_type, _ in published] == ["chat.response.completed"]
+        assert [frame.event_type for frame in state.frames] == [
+            "chat.response.delta",
+            "chat.response.event",
+        ]
+        assert state.frames[0].payload == {
+            "id": "response-runtime-timing",
+            "model": "progenitor-v1",
+            "thread_id": "thread-runtime-timing",
+            "delta": "Hello",
+            "request_id": request_id,
+            "runtime_emitted_at_ms": 1_700_000_000_001,
+            "runtime_stream_seq": 7,
+        }
+        assert state.frames[1].payload == {
+            "id": "response-runtime-timing",
+            "model": "progenitor-v1",
+            "thread_id": "thread-runtime-timing",
+            "event_type": "node_update",
+            "content": "respond",
+            "metadata": {"node_name": "respond"},
+            "request_id": request_id,
+            "runtime_emitted_at_ms": 1_700_000_000_002,
+            "runtime_stream_seq": 8,
+        }
 
     def test_streaming_response_forwards_structured_stream_events(self, monkeypatch):
-        """Structured runtime stream events ride the canonical stream intact.
-
-        The subagent/A2A live cards are built entirely from ``stream_event``
-        items (tool lifecycle, nested subagent events, A2A progress), so the
-        ``chat.response.event`` frames must preserve ``event_type``,
-        ``content``, full ``metadata`` (including ``subagent_type``), and
-        ``images`` -- and must omit ``images`` when the runtime item has none.
-        """
+        """Dedicated SSE preserves structured events and their ordering relative to text."""
         import app.backend.main as backend_main
 
         request_id = "3d1a6c1e-59cb-45cf-88e2-b6f5f7f1a001"
@@ -249,30 +368,38 @@ class TestAsyncResponseHandling:
         with (
             _live_backend() as base_url,
             httpx.Client(base_url=base_url, timeout=5) as live_client,
-            live_client.stream("GET", "/api/ui/stream") as stream,
+            live_client.stream("GET", "/api/ui/stream") as canonical_stream,
         ):
-            lines = stream.iter_lines()
-            _next_sse_frame(lines)
+            canonical_lines = canonical_stream.iter_lines()
+            _next_sse_frame(canonical_lines)
             response = live_client.post(
                 "/api/ui/responses",
                 json={"model": "progenitor-v1", "input": "delegate", "stream": True},
                 headers={"X-Request-ID": request_id},
             )
-            frames = [_next_sse_frame(lines) for _ in range(6)]
+            with live_client.stream(
+                "GET", f"/api/ui/responses/{request_id}/stream"
+            ) as response_stream:
+                response_lines = response_stream.iter_lines()
+                dedicated_frames = [_next_response_sse_frame(response_lines) for _ in range(4)]
+                assert list(response_lines) == []
+            canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
 
         assert response.status_code == 202
-        events = [event for _, event in frames]
-        assert [event["type"] for event in events] == [
+        assert [event["type"] for _, event in canonical_frames] == [
             "chat.response.started",
+            "chat.response.completed",
+        ]
+        assert [event_name for event_name, _, _ in dedicated_frames] == [
             "chat.response.event",
             "chat.response.event",
             "chat.response.event",
             "chat.response.delta",
-            "chat.response.completed",
         ]
-        assert all(event["payload"]["request_id"] == request_id for event in events)
+        payloads = [payload for _, payload, _ in dedicated_frames]
+        assert all(payload["request_id"] == request_id for payload in payloads)
 
-        tool_start, progress, subagent_result = (event["payload"] for event in events[1:4])
+        tool_start, progress, subagent_result, delta = payloads
         assert tool_start["event_type"] == "tool_start"
         assert tool_start["content"] == "task"
         assert tool_start["metadata"]["subagent_type"] == "researcher"
@@ -291,9 +418,126 @@ class TestAsyncResponseHandling:
             "success": True,
         }
         assert subagent_result["images"] == [image_block]
+        assert delta["delta"] == "done"
+
+    def test_response_stream_replays_only_frames_after_cursor(self):
+        """A reconnect receives only response-content frames newer than its cursor."""
+        import app.backend.main as backend_main
+
+        request_id = "replay-response-request"
+        state = backend_main._ensure_response_stream(
+            request_id, "resp-replay", "thread-replay", "progenitor-v1"
+        )
+        first = backend_main._append_response_stream_frame(
+            state,
+            "chat.response.delta",
+            {"request_id": request_id, "delta": "first"},
+        )
+        backend_main._append_response_stream_frame(
+            state,
+            "chat.response.event",
+            {"request_id": request_id, "event_type": "tool_start", "content": "work"},
+        )
+        backend_main._append_response_stream_frame(
+            state,
+            "chat.response.delta",
+            {"request_id": request_id, "delta": "last"},
+        )
+        state.terminal_reached = True
+        try:
+            with (
+                _live_backend() as base_url,
+                httpx.Client(base_url=base_url, timeout=5) as live_client,
+            ):
+                with live_client.stream(
+                    "GET", f"/api/ui/responses/{request_id}/stream?after={first.id}"
+                ) as response_stream:
+                    assert response_stream.status_code == 200
+                    response_lines = response_stream.iter_lines()
+                    replayed_frames = [_next_response_sse_frame(response_lines) for _ in range(2)]
+                    assert list(response_lines) == []
+        finally:
+            backend_main._response_streams.pop(request_id, None)
+
+        assert [event_name for event_name, _, _ in replayed_frames] == [
+            "chat.response.event",
+            "chat.response.delta",
+        ]
+        assert [frame_id for _, _, frame_id in replayed_frames] == [
+            f"chat-response:{request_id}:2",
+            f"chat-response:{request_id}:3",
+        ]
+        assert [
+            payload["content"] if "content" in payload else payload["delta"]
+            for _, payload, _ in replayed_frames
+        ] == ["work", "last"]
+
+    def test_response_stream_resyncs_once_for_invalid_or_expired_cursor(self, monkeypatch):
+        """Unrecoverable cursors surface one resync frame instead of partial content."""
+        import app.backend.main as backend_main
+
+        invalid_request_id = "invalid-cursor-request"
+        invalid_state = backend_main._ensure_response_stream(
+            invalid_request_id, "resp-invalid", "thread-invalid", "progenitor-v1"
+        )
+        backend_main._append_response_stream_frame(
+            invalid_state,
+            "chat.response.delta",
+            {"request_id": invalid_request_id, "delta": "must-not-replay"},
+        )
+        invalid_state.terminal_reached = True
+
+        expired_request_id = "expired-cursor-request"
+        monkeypatch.setattr(backend_main, "RESPONSE_STREAM_REPLAY_LIMIT", 2)
+        expired_state = backend_main._ensure_response_stream(
+            expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
+        )
+        for content in ("discarded", "retained-one", "retained-two"):
+            backend_main._append_response_stream_frame(
+                expired_state,
+                "chat.response.delta",
+                {"request_id": expired_request_id, "delta": content},
+            )
+        expired_state.terminal_reached = True
+
+        try:
+            with (
+                _live_backend() as base_url,
+                httpx.Client(base_url=base_url, timeout=5) as live_client,
+            ):
+                with live_client.stream(
+                    "GET",
+                    f"/api/ui/responses/{invalid_request_id}/stream?after=not-a-response-cursor",
+                ) as response_stream:
+                    invalid_lines = response_stream.iter_lines()
+                    invalid_frame = _next_response_sse_frame(invalid_lines)
+                    assert list(invalid_lines) == []
+
+                with live_client.stream(
+                    "GET",
+                    f"/api/ui/responses/{expired_request_id}/stream?after="
+                    f"chat-response:{expired_request_id}:0",
+                ) as response_stream:
+                    expired_lines = response_stream.iter_lines()
+                    expired_frame = _next_response_sse_frame(expired_lines)
+                    assert list(expired_lines) == []
+        finally:
+            backend_main._response_streams.pop(invalid_request_id, None)
+            backend_main._response_streams.pop(expired_request_id, None)
+
+        assert invalid_frame == (
+            "chat.response.resync_required",
+            {"request_id": invalid_request_id, "reason": "invalid_cursor"},
+            None,
+        )
+        assert expired_frame == (
+            "chat.response.resync_required",
+            {"request_id": expired_request_id, "reason": "cursor_expired"},
+            None,
+        )
 
     def test_failed_generation_emits_post_acknowledgement_causal_event(self, monkeypatch):
-        """An acknowledged generation publishes a correlated failure rather than success."""
+        """A failed generation keeps partial text dedicated and failure canonical."""
         import app.backend.main as backend_main
 
         request_id = "e234a82e-00c1-4a96-bebe-652485775d92"
@@ -307,16 +551,22 @@ class TestAsyncResponseHandling:
         with (
             _live_backend() as base_url,
             httpx.Client(base_url=base_url, timeout=5) as live_client,
-            live_client.stream("GET", "/api/ui/stream") as stream,
+            live_client.stream("GET", "/api/ui/stream") as canonical_stream,
         ):
-            lines = stream.iter_lines()
-            _next_sse_frame(lines)
+            canonical_lines = canonical_stream.iter_lines()
+            _next_sse_frame(canonical_lines)
             response = live_client.post(
                 "/api/ui/responses",
                 json={"model": "progenitor-v1", "input": "fail", "stream": True},
                 headers={"X-Request-ID": request_id},
             )
-            frames = [_next_sse_frame(lines) for _ in range(3)]
+            with live_client.stream(
+                "GET", f"/api/ui/responses/{request_id}/stream"
+            ) as response_stream:
+                response_lines = response_stream.iter_lines()
+                dedicated_frame = _next_response_sse_frame(response_lines)
+                assert list(response_lines) == []
+            canonical_frames = [_next_sse_frame(canonical_lines) for _ in range(2)]
 
         assert response.status_code == 202
         assert response.headers["X-Request-ID"] == request_id
@@ -324,70 +574,146 @@ class TestAsyncResponseHandling:
             "request_id": request_id,
             "event_types": ["chat.response.started"],
         }
-        assert [event_name for event_name, _ in frames] == ["ui.event"] * 3
-        events = [event for _, event in frames]
-        assert [event["type"] for event in events] == [
+        assert [event["type"] for _, event in canonical_frames] == [
             "chat.response.started",
-            "chat.response.delta",
             "chat.response.failed",
         ]
-        failed = events[-1]
+        assert dedicated_frame[0] == "chat.response.delta"
+        assert dedicated_frame[1]["delta"] == "partial"
+        failed = canonical_frames[-1][1]
         assert failed["scope"] == "chat"
         assert failed["payload"]["request_id"] == request_id
         assert failed["payload"]["error"] == "stream exploded"
 
-    def test_cancel_response_sets_active_stream_event(self, client):
-        """Cancellation is acknowledged only after its causal stream event is enqueued."""
+    @pytest.mark.asyncio
+    async def test_stream_ending_after_cancellation_emits_cancelled_not_completed(
+        self, monkeypatch
+    ):
+        """A clean iterator exit after cancellation remains terminally cancelled."""
         import app.backend.main as backend_main
         from app.backend import ui_routes
 
-        original_client = backend_main.client
+        target_request_id = "target-request-cancel-race"
+        response_id = "response-cancel-race"
+        cancel_event = asyncio.Event()
+        iterator_started = asyncio.Event()
+
+        class _MockClient:
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                iterator_started.set()
+                await cancel_event.wait()
+                if False:
+                    yield {}
+
+        event_start = len(ui_routes._ui_event_replay)
+        monkeypatch.setattr(backend_main, "client", _MockClient())
+        backend_main._active_response_streams[target_request_id] = cancel_event
+        try:
+            runner = asyncio.create_task(
+                backend_main._run_response_event_stream(
+                    "cancelled while streaming",
+                    "progenitor-v1",
+                    target_request_id,
+                    response_id,
+                    "thread-cancel-race",
+                )
+            )
+            await iterator_started.wait()
+            cancel_event.set()
+            await runner
+            emitted = [
+                event
+                for event in ui_routes._ui_event_replay[event_start:]
+                if event.payload.get("request_id") == target_request_id
+            ]
+        finally:
+            backend_main._active_response_streams.pop(target_request_id, None)
+
+        event_types = [event.type for event in emitted]
+        assert event_types == ["chat.response.cancelled"]
+        assert "chat.response.completed" not in event_types
+        assert emitted[0].payload == {
+            "id": response_id,
+            "model": "progenitor-v1",
+            "thread_id": "thread-cancel-race",
+            "cancelled": True,
+            "request_id": target_request_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_cancel_response_sets_active_stream_event(self, client):
+        """A cancel acknowledgement differs from the target runner's terminal cancellation."""
+        import app.backend.main as backend_main
+        from app.backend import ui_routes
+
         cancel_event = asyncio.Event()
         captured: dict[str, object] = {}
-        request_id = "cancel-operation-request"
+        cancel_request_id = "cancel-operation-request"
+        target_request_id = "req-cancel-test"
 
         class _MockClient:
             async def cancel_request(self, generation_id: str) -> bool:
                 captured["generation_id"] = generation_id
                 return True
 
+            async def send_message_stream_events(self, *_args, **_kwargs):
+                if False:
+                    yield {}
+
         event_start = len(ui_routes._ui_event_replay)
+        previous_client = backend_main.client
         backend_main.client = _MockClient()
-        backend_main._active_response_streams["req-cancel-test"] = cancel_event
+        backend_main._active_response_streams[target_request_id] = cancel_event
         try:
             response = client.put(
-                "/api/ui/responses/req-cancel-test/cancel",
-                headers={"X-Request-ID": request_id},
+                f"/api/ui/responses/{target_request_id}/cancel",
+                headers={"X-Request-ID": cancel_request_id},
             )
-            streamed = next(
+            await backend_main._run_response_event_stream(
+                "cancelled request",
+                "progenitor-v1",
+                target_request_id,
+                "resp-cancel-test",
+                "thread-cancel-test",
+            )
+            emitted = [
                 event
                 for event in ui_routes._ui_event_replay[event_start:]
-                if event.payload.get("request_id") == request_id
-            )
+                if event.payload.get("request_id") in {cancel_request_id, target_request_id}
+            ]
         finally:
-            backend_main._active_response_streams.pop("req-cancel-test", None)
-            backend_main.client = original_client
+            backend_main._active_response_streams.pop(target_request_id, None)
+            backend_main.client = previous_client
 
         assert response.status_code == 202
-        assert response.headers["X-Request-ID"] == request_id
+        assert response.headers["X-Request-ID"] == cancel_request_id
         assert response.json() == {
-            "request_id": request_id,
-            "event_types": ["chat.response.cancelled"],
+            "request_id": cancel_request_id,
+            "event_types": ["chat.response.cancel_requested"],
         }
         assert cancel_event.is_set()
-        assert captured["generation_id"] == "req-cancel-test"
-        assert streamed.type == "chat.response.cancelled"
-        assert streamed.payload["request_id"] == request_id
-        assert streamed.payload["cancel_request_id"] == request_id
-        assert streamed.payload["target_request_id"] == "req-cancel-test"
-
+        assert captured["generation_id"] == target_request_id
+        assert [event.type for event in emitted] == [
+            "chat.response.cancel_requested",
+            "chat.response.cancelled",
+        ]
+        acknowledgement, terminal = emitted
+        assert acknowledgement.payload == {
+            "target_request_id": target_request_id,
+            "cancel_request_id": cancel_request_id,
+            "cancelled": True,
+            "request_id": cancel_request_id,
+        }
+        assert terminal.payload["request_id"] == target_request_id
+        assert terminal.payload["cancelled"] is True
+        assert terminal.payload["id"] == "resp-cancel-test"
 
     def test_cancel_response_resolves_browser_response_id_to_request_id(self, client):
-        """The cancel URL receives the started event's response id, not its request id."""
+        """Cancelling by response id acknowledges the operation without terminally cancelling it."""
         import app.backend.main as backend_main
         from app.backend import ui_routes
 
-        original_client = backend_main.client
+        previous_client = backend_main.client
         request_id = "generation-request-42"
         response_id = "resp-browser-42"
         cancel_event = asyncio.Event()
@@ -407,28 +733,31 @@ class TestAsyncResponseHandling:
                 f"/api/ui/responses/{response_id}/cancel",
                 headers={"X-Request-ID": "cancel-operation-42"},
             )
-            streamed = next(
+            emitted = [
                 event
                 for event in ui_routes._ui_event_replay[event_start:]
-                if event.type == "chat.response.cancelled"
-                and event.payload.get("target_response_id") == response_id
-            )
+                if event.payload.get("target_response_id") == response_id
+            ]
         finally:
             backend_main._active_response_streams.pop(request_id, None)
             backend_main._response_request_ids.pop(response_id, None)
-            backend_main.client = original_client
+            backend_main.client = previous_client
 
         assert response.status_code == 202
         assert response.json() == {
             "request_id": "cancel-operation-42",
-            "event_types": ["chat.response.cancelled"],
+            "event_types": ["chat.response.cancel_requested"],
         }
         assert cancel_event.is_set()
         assert captured["target_request_id"] == request_id
-        assert streamed.payload["target_request_id"] == request_id
-        assert streamed.payload["target_response_id"] == response_id
-        assert streamed.payload["cancel_request_id"] == "cancel-operation-42"
-
+        assert [event.type for event in emitted] == ["chat.response.cancel_requested"]
+        assert emitted[0].payload == {
+            "target_request_id": request_id,
+            "target_response_id": response_id,
+            "cancel_request_id": "cancel-operation-42",
+            "cancelled": True,
+            "request_id": "cancel-operation-42",
+        }
 
     def test_healthz_bypasses_rate_limiter_when_api_quota_is_exhausted(self, client, monkeypatch):
         """Container liveness must remain probeable after an API rate-limit decision."""
@@ -445,6 +774,7 @@ class TestAsyncResponseHandling:
 
         assert response.status_code == 200
         assert response.content == b""
+
     def test_cancel_response_returns_404_for_unknown_request(self, client):
         """Unknown cancellation IDs should not be reported as successful."""
         import app.backend.main as backend_main

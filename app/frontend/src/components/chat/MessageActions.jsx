@@ -1,6 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 
 const FEEDBACK_DURATION_MS = 1600;
+
+// This changes only the action controls. Keeping it out of Message and
+// TimelineItem props lets completed Markdown/event cards retain their memo
+// boundary when generation begins or ends.
+export const RegenerateAvailabilityContext = createContext(false);
 
 function CopyIcon() {
   return (
@@ -19,7 +24,8 @@ function RegenerateIcon() {
   );
 }
 
-export default function MessageActions({ content, onRegenerate, regenerateDisabled = false }) {
+export default function MessageActions({ content, onRegenerate }) {
+  const regenerateDisabled = useContext(RegenerateAvailabilityContext);
   const [feedback, setFeedback] = useState('');
   const feedbackTimeoutRef = useRef(null);
 

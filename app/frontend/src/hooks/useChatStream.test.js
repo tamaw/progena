@@ -55,6 +55,7 @@ describe('useChatStream', () => {
       show: vi.fn(),
       selectedBackendChatIdRef: { current: null },
       reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
     });
     void hook.handleSend('Hello');
     expect(sendMessageStream).toHaveBeenCalledOnce();
@@ -78,6 +79,7 @@ describe('useChatStream', () => {
       scheduledFrames.push(callback);
       return scheduledFrames.length;
     }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
 
     let onChunk;
     let onComplete;
@@ -99,6 +101,8 @@ describe('useChatStream', () => {
       show: vi.fn(),
       selectedBackendChatIdRef: { current: null },
       reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation: vi.fn(),
     });
     void hook.handleSend('Hello');
 
@@ -138,69 +142,29 @@ describe('useChatStream', () => {
       ' final',
       expect.any(Number),
     );
-    const committedMessages = setMessages.mock.calls.reduce(
-      (messages, [update]) => update(messages),
-      [],
-    );
-    expect(committedMessages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: 'assistant', content: 'First second third fourth final' }),
-    ]));
-    expect(hook.liveTurnStore.getSnapshot()).toBeNull();
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First second third fourth final',
+    });
+
+    // The first terminal frame lets the external-store update paint; only the
+    // second may commit local history and finalize the live turn in place.
+    expect(scheduledFrames).toHaveLength(3);
+    scheduledFrames[2]();
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First second third fourth final',
+    });
+    expect(scheduledFrames).toHaveLength(4);
+    scheduledFrames[3]();
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First second third fourth final',
+      isStreaming: false,
+    });
 
     // A frame captured before completion cannot replay a terminally flushed update.
     scheduledFrames[1]();
     expect(applyAssistantChunk).toHaveBeenCalledOnce();
   });
 
-  it('flushes queued text before committing the terminal response', () => {
-    const scheduledFrames = [];
-    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
-      scheduledFrames.push(callback);
-      return scheduledFrames.length;
-    }));
-
-    let onChunk;
-    let onComplete;
-    const sendMessageStream = vi.fn((content, history, nextOnChunk, nextOnComplete) => {
-      onChunk = nextOnChunk;
-      onComplete = nextOnComplete;
-      return new Promise(() => {});
-    });
-    const setMessages = vi.fn();
-    const hook = useChatStream({
-      messages: [],
-      setMessages,
-      activeBackendChat: null,
-      selectedBackendChatId: null,
-      threadId: null,
-      sendMessageStream,
-      cancelStream: vi.fn(),
-      dispatch: vi.fn(),
-      getApiUrl: vi.fn(),
-      show: vi.fn(),
-      selectedBackendChatIdRef: { current: null },
-      reloadOpenChat: vi.fn(),
-    });
-    void hook.handleSend('Hello');
-
-    onChunk('First');
-    onChunk(' second');
-    onChunk(' third');
-
-    expect(hook.liveTurnStore.getSnapshot().content).toBe('First');
-    expect(scheduledFrames).toHaveLength(1);
-
-    onComplete('completed');
-
-    expect(hook.liveTurnStore.getSnapshot()).toBeNull();
-    const committedMessages = setMessages.mock.calls.reduce(
-      (messages, [update]) => update(messages),
-      [],
-    );
-    expect(committedMessages).toEqual(expect.arrayContaining([
-      expect.objectContaining({ role: 'assistant', content: 'First second third' }),
-    ]));
-  });
 
   it('flushes queued text before publishing a structural stream event', () => {
     const scheduledFrames = [];
@@ -228,6 +192,7 @@ describe('useChatStream', () => {
       show: vi.fn(),
       selectedBackendChatIdRef: { current: null },
       reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
     });
     void hook.handleSend('Hello');
 
@@ -271,6 +236,7 @@ describe('useChatStream', () => {
       show: vi.fn(),
       selectedBackendChatIdRef: { current: null },
       reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
     });
 
     void hook.handleSend('First request');
@@ -292,30 +258,33 @@ describe('useChatStream', () => {
     });
   });
 
-  it('releases foreground ownership before reloading a completed thread', () => {
-    let onComplete;
-    const setMessages = vi.fn();
-    const authoritativeMessages = [{
-      id: 'persisted-assistant',
-      role: 'assistant',
-      content: 'Persisted authoritative response',
-    }];
-    let hook;
-    const reloadOpenChat = vi.fn((threadId) => {
-      // Detail hydration must observe no foreground/background stream owner.
-      expect(threadId).toBe('thread-a');
-      expect(hook.activeStreamIdRef.current).toBeNull();
-      expect(hook.backgroundOriginChatIdRef.current).toBeNull();
-      setMessages(() => authoritativeMessages);
-    });
+  it('keeps a foreground completed turn visible through a paint before committing it locally', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
 
-    hook = useChatStream({
+    let onChunk;
+    let onComplete;
+    let messagesCommittedBySetter = [];
+    const setMessages = vi.fn((update) => {
+      messagesCommittedBySetter = update(messagesCommittedBySetter);
+    });
+    const reloadOpenChat = vi.fn();
+    let messagesAtReconciliation = null;
+    const requestForegroundReconciliation = vi.fn(() => {
+      messagesAtReconciliation = messagesCommittedBySetter;
+    });
+    const hook = useChatStream({
       messages: [],
       setMessages,
       activeBackendChat: { thread_id: 'thread-a' },
       selectedBackendChatId: 'thread-a',
       threadId: 'thread-a',
-      sendMessageStream: vi.fn((content, history, onChunk, nextOnComplete) => {
+      sendMessageStream: vi.fn((content, history, nextOnChunk, nextOnComplete) => {
+        onChunk = nextOnChunk;
         onComplete = nextOnComplete;
         return new Promise(() => {});
       }),
@@ -325,13 +294,164 @@ describe('useChatStream', () => {
       show: vi.fn(),
       selectedBackendChatIdRef: { current: 'thread-a' },
       reloadOpenChat,
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation,
     });
 
     void hook.handleSend('Hello');
+    onChunk('First visible');
+    onChunk(' terminal text');
+    const streamingTurn = hook.liveTurnStore.getSnapshot();
+    expect(streamingTurn).toMatchObject({
+      streamId: expect.any(String),
+      assistantMessageId: expect.any(String),
+      isStreaming: true,
+    });
     onComplete('completed');
 
-    expect(reloadOpenChat).toHaveBeenCalledOnce();
-    const hydrate = setMessages.mock.calls.at(-1)[0];
-    expect(hydrate([])).toEqual(authoritativeMessages);
+    // Terminal text is synchronously visible, but must survive two animation
+    // frames: the first gives the external store a paint opportunity; the
+    // second commits local history and finalizes that same live turn in place.
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First visible terminal text',
+    });
+    expect(reloadOpenChat).not.toHaveBeenCalled();
+    expect(requestForegroundReconciliation).not.toHaveBeenCalled();
+    const messagesBeforePaint = setMessages.mock.calls.reduce(
+      (messages, [update]) => update(messages),
+      [],
+    );
+    expect(messagesBeforePaint).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Hello' }),
+    ]);
+
+    expect(scheduledFrames).toHaveLength(2);
+    scheduledFrames[1]();
+
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'First visible terminal text',
+    });
+    expect(scheduledFrames).toHaveLength(3);
+    expect(reloadOpenChat).not.toHaveBeenCalled();
+    expect(requestForegroundReconciliation).not.toHaveBeenCalled();
+    const messagesAfterFirstPaint = setMessages.mock.calls.reduce(
+      (messages, [update]) => update(messages),
+      [],
+    );
+    expect(messagesAfterFirstPaint).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Hello' }),
+    ]);
+
+    scheduledFrames[2]();
+
+    const completedLiveTurn = hook.liveTurnStore.getSnapshot();
+    expect(completedLiveTurn).toMatchObject({
+      content: 'First visible terminal text',
+      isStreaming: false,
+      streamId: streamingTurn.streamId,
+      assistantMessageId: streamingTurn.assistantMessageId,
+    });
+    const messagesAfterSecondPaint = setMessages.mock.calls.reduce(
+      (messages, [update]) => update(messages),
+      [],
+    );
+    expect(messagesAfterSecondPaint).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Hello' }),
+      expect.objectContaining({ role: 'assistant', content: 'First visible terminal text' }),
+    ]);
+    expect(messagesAfterSecondPaint.filter(
+      ({ role, content }) => role === 'assistant' && content === 'First visible terminal text',
+    )).toHaveLength(1);
+    expect(reloadOpenChat).not.toHaveBeenCalled();
+    expect(requestForegroundReconciliation).toHaveBeenCalledOnce();
+    expect(requestForegroundReconciliation).toHaveBeenCalledWith({
+      threadId: 'thread-a',
+      streamId: expect.any(String),
+    });
+    expect(messagesAtReconciliation).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Hello' }),
+      expect.objectContaining({ role: 'assistant', content: 'First visible terminal text' }),
+    ]);
+  });
+
+  it('commits response frames accepted between terminal handoff animation frames', () => {
+    const scheduledFrames = [];
+    vi.stubGlobal('requestAnimationFrame', vi.fn((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    }));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+
+    let onChunk;
+    let onComplete;
+    let onStreamEvent;
+    let messagesCommittedBySetter = [];
+    const setMessages = vi.fn((update) => {
+      messagesCommittedBySetter = update(messagesCommittedBySetter);
+    });
+    const hook = useChatStream({
+      messages: [],
+      setMessages,
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn((content, history, nextOnChunk, nextOnComplete, onError, nextOnStreamEvent) => {
+        onChunk = nextOnChunk;
+        onComplete = nextOnComplete;
+        onStreamEvent = nextOnStreamEvent;
+        return new Promise(() => {});
+      }),
+      cancelStream: vi.fn(),
+      dispatch: vi.fn(),
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-a' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+      requestForegroundReconciliation: vi.fn(),
+    });
+
+    void hook.handleSend('Hello');
+    onChunk('Initial output');
+    onComplete('completed');
+
+    // The first handoff frame has painted the terminal snapshot and queued its
+    // second frame. Content frames may still arrive before that second frame.
+    expect(scheduledFrames).toHaveLength(1);
+    scheduledFrames[0]();
+    expect(scheduledFrames).toHaveLength(2);
+
+    onChunk(' late chunk');
+    onStreamEvent({ event_type: 'node_update', content: 'Late structured content' });
+
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'Initial output late chunk',
+      streamEvents: [expect.objectContaining({
+        eventType: 'node_update',
+        content: 'Late structured content',
+      })],
+    });
+
+    scheduledFrames[1]();
+
+    expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
+      content: 'Initial output late chunk',
+      isStreaming: false,
+      streamEvents: [expect.objectContaining({
+        eventType: 'node_update',
+        content: 'Late structured content',
+      })],
+    });
+    expect(messagesCommittedBySetter).toEqual([
+      expect.objectContaining({ role: 'user', content: 'Hello' }),
+      expect.objectContaining({
+        role: 'assistant',
+        content: 'Initial output late chunk',
+        streamEvents: [expect.objectContaining({
+          eventType: 'node_update',
+          content: 'Late structured content',
+        })],
+      }),
+    ]);
   });
 });

@@ -3,14 +3,17 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
 const renderers = vi.hoisted(() => ({
-  formatMessage: vi.fn(() => '<p><strong>formatted terminal content</strong></p>'),
+  renderSafeMarkdown: vi.fn(() => '<p><strong>formatted terminal content</strong></p>'),
+  formatMessage: vi.fn(() => '<p><strong>legacy formatted terminal content</strong></p>'),
   sanitizeHtmlFragment: vi.fn((html) => html),
+  describeStreamEvent: vi.fn(() => ({ badge: '', title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' })),
 }));
 
 vi.mock('./messageRenderUtils', () => ({
+  renderSafeMarkdown: renderers.renderSafeMarkdown,
   formatMessage: renderers.formatMessage,
   sanitizeHtmlFragment: renderers.sanitizeHtmlFragment,
-  describeStreamEvent: () => ({ badge: '', title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' }),
+  describeStreamEvent: renderers.describeStreamEvent,
   badgeForEvent: () => ({ className: '', label: '' }),
   toolDetailsForEvent: () => null,
   todosDetailsForEvent: () => null,
@@ -49,6 +52,7 @@ describe('TimelineItem assistant messages', () => {
       itemIndex: 0,
     }));
 
+    expect(renderers.renderSafeMarkdown).not.toHaveBeenCalled();
     expect(renderers.formatMessage).not.toHaveBeenCalled();
     expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
     expect(streamingMarkup).toContain('message-content--streaming-text');
@@ -62,10 +66,43 @@ describe('TimelineItem assistant messages', () => {
       itemIndex: 0,
     }));
 
-    expect(renderers.formatMessage).toHaveBeenCalledOnce();
-    expect(renderers.formatMessage).toHaveBeenCalledWith('**literal markdown** <img src=x onerror=alert(1)>');
-    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledOnce();
-    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledWith('<p><strong>formatted terminal content</strong></p>');
+    expect(renderers.renderSafeMarkdown).toHaveBeenCalledOnce();
+    expect(renderers.renderSafeMarkdown).toHaveBeenCalledWith('**literal markdown** <img src=x onerror=alert(1)>');
+    expect(renderers.formatMessage).not.toHaveBeenCalled();
+    expect(renderers.sanitizeHtmlFragment).not.toHaveBeenCalled();
     expect(terminalMarkup).toContain('<p><strong>formatted terminal content</strong></p>');
+  });
+
+  it('renders sanitized reasoning disclosure content without throwing', () => {
+    const bodyHtml = '<strong>Reasoning summary</strong>';
+    const reasoningDetailHtml = '<p>Reasoning detail</p>';
+    renderers.describeStreamEvent.mockReturnValueOnce({
+      badge: 'reasoning',
+      title: 'Reasoning',
+      metaDetail: '',
+      bodyHtml,
+      reasoningDetailHtml,
+      bodyDetail: '',
+    });
+    renderers.sanitizeHtmlFragment
+      .mockImplementationOnce(() => '<p>Sanitized reasoning summary</p>')
+      .mockImplementationOnce(() => '<p>Sanitized reasoning detail</p>');
+
+    let markup = '';
+    expect(() => {
+      markup = renderToStaticMarkup(React.createElement(TimelineItem, {
+        item: {
+          kind: 'stream_event',
+          event: { id: 'reasoning-1', eventType: 'reasoning', timestamp: 1720000000000 },
+        },
+        itemIndex: 0,
+      }));
+    }).not.toThrow();
+
+    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledWith(bodyHtml);
+    expect(renderers.sanitizeHtmlFragment).toHaveBeenCalledWith(reasoningDetailHtml);
+    expect(markup).toContain('reasoning-event-disclosure');
+    expect(markup).toContain('<p>Sanitized reasoning summary</p>');
+    expect(markup).toContain('<p>Sanitized reasoning detail</p>');
   });
 });

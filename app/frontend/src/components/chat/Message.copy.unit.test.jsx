@@ -2,9 +2,12 @@ import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from 'vitest
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Message } from './Message';
+import { RegenerateAvailabilityContext } from './MessageActions';
 
 const actionHarness = {
   feedback: '',
+  regenerateDisabled: false,
+  useRenderedContext: false,
 };
 
 vi.mock('react', async (importOriginal) => {
@@ -21,6 +24,11 @@ vi.mock('react', async (importOriginal) => {
     useRef: (initialValue) => ({ current: initialValue }),
     useCallback: (callback) => callback,
     useEffect: () => {},
+    useContext: (context) => (
+      actionHarness.useRenderedContext
+        ? actual.useContext(context)
+        : actionHarness.regenerateDisabled
+    ),
   };
 });
 
@@ -98,11 +106,26 @@ function assistantMessage(content, timelineBacked) {
 }
 
 function renderAssistantActions(message, onRegenerate) {
-  return Message({ message, onRegenerate, regenerateDisabled: false });
+  return Message({ message, onRegenerate });
+}
+
+function renderWithRegenerateAvailability(value, element) {
+  actionHarness.useRenderedContext = true;
+  try {
+    return renderToStaticMarkup(
+      <RegenerateAvailabilityContext.Provider value={value}>
+        {element}
+      </RegenerateAvailabilityContext.Provider>,
+    );
+  } finally {
+    actionHarness.useRenderedContext = false;
+  }
 }
 
 afterEach(() => {
   actionHarness.feedback = '';
+  actionHarness.regenerateDisabled = false;
+  actionHarness.useRenderedContext = false;
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -164,7 +187,6 @@ describe('assistant message actions', () => {
     const markup = renderToStaticMarkup(React.createElement(Message, {
       message,
       onRegenerate: () => {},
-      regenerateDisabled: false,
     }));
 
     expect(markup).toContain('class="msg-action-btn copy-btn"');
@@ -173,5 +195,22 @@ describe('assistant message actions', () => {
     expect(markup).toContain('class="msg-action-btn regen-btn"');
     expect(markup).toContain('aria-label="Regenerate response"');
     expect(markup).toContain('class="msg-action-btn__label">Regenerate</span>');
+  });
+  it.each([
+    { name: 'disables the historical-card action while generation is active', contextValue: true, staleProp: false, isDisabled: true },
+    { name: 'enables the historical-card action after generation ends', contextValue: false, staleProp: true, isDisabled: false },
+  ])('$name', ({ contextValue, staleProp, isDisabled }) => {
+    const markup = renderWithRegenerateAvailability(
+      contextValue,
+      <Message
+        message={assistantMessage('Historical response', true)}
+        onRegenerate={() => {}}
+        regenerateDisabled={staleProp}
+      />,
+    );
+    const regenerateButton = markup.match(/<button[^>]*class="msg-action-btn regen-btn"[^>]*>/)?.[0];
+
+    expect(regenerateButton).toBeDefined();
+    expect(regenerateButton?.includes(' disabled=""')).toBe(isDisabled);
   });
 });

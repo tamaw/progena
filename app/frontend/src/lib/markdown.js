@@ -1,7 +1,14 @@
 import hljs from 'highlight.js/lib/common';
+import {
+  chatPerformanceNow,
+  isChatPerformanceTracingEnabled,
+  traceChatPerformance,
+} from '../components/chat/chatPerformanceTrace';
 
 export function renderMarkdownToHtml(content) {
   if (!content) return '';
+  const tracing = isChatPerformanceTracingEnabled();
+  const startedAt = tracing ? chatPerformanceNow() : 0;
 
   // Pull `:::writing … :::` directives out first so their inner content renders
   // as its own markdown document inside a notepad container (see chat-panel.css).
@@ -103,7 +110,17 @@ export function renderMarkdownToHtml(content) {
   // normalized) <li> nested inside the injected notepad and won't strip it.
   formatted = normalizeListMarkup(formatted);
 
-  return restoreWritingBlocks(restoreCodeBlocks(formatted, codeBlocks), writingBlocks);
+  const html = restoreWritingBlocks(restoreCodeBlocks(formatted, codeBlocks), writingBlocks);
+  if (tracing) {
+    traceChatPerformance('render.markdown_document', {
+      sourceCharacterCount: content.length,
+      htmlCharacterCount: html.length,
+      codeBlockCount: codeBlocks.length,
+      writingBlockCount: writingBlocks.length,
+      durationMs: chatPerformanceNow() - startedAt,
+    });
+  }
+  return html;
 }
 
 function renderWritingBlock(inner) {
@@ -432,25 +449,46 @@ function autolinkPlainUrls(text) {
   return working.replace(restoreRe, (match, index) => skipped[Number(index)] || '');
 }
 
+// Highlighting is synchronous and grammar-heavy. Large tool/file payloads
+// must remain responsive at terminal handoff, so retain the visual code block
+// but leave syntax coloring to reasonably sized snippets.
+const MAX_HIGHLIGHTED_CODE_CHARS = 12 * 1024;
+
 function renderCodeBlock(language, code) {
+  const tracing = isChatPerformanceTracingEnabled();
+  const startedAt = tracing ? chatPerformanceNow() : 0;
   const normalizedLanguage = typeof language === 'string' ? language.trim().toLowerCase() : '';
   const trimmedCode = code.replace(/\n$/, '');
   const safeLanguage = normalizedLanguage ? escapeHtml(normalizedLanguage) : '';
 
   let highlightedValue = escapeHtml(trimmedCode);
   let languageClass = '';
+  let highlightMode = 'skipped';
 
-  if (trimmedCode) {
+  if (trimmedCode && trimmedCode.length <= MAX_HIGHLIGHTED_CODE_CHARS) {
     if (normalizedLanguage && hljs.getLanguage(normalizedLanguage)) {
       highlightedValue = hljs.highlight(trimmedCode, { language: normalizedLanguage }).value;
       languageClass = ` language-${safeLanguage}`;
+      highlightMode = 'explicit';
     } else {
       const autoResult = hljs.highlightAuto(trimmedCode);
       highlightedValue = autoResult.value;
       languageClass = autoResult.language ? ` language-${escapeHtml(autoResult.language)}` : '';
+      highlightMode = 'auto';
     }
+  } else if (safeLanguage) {
+    languageClass = ` language-${safeLanguage}`;
   }
 
   const langLabel = safeLanguage ? `<span class="code-lang">${safeLanguage}</span>` : '';
-  return `<div class="code-block">${langLabel}<pre><code class="hljs${languageClass}">${highlightedValue}</code></pre></div>`;
+  const html = `<div class="code-block">${langLabel}<pre><code class="hljs${languageClass}">${highlightedValue}</code></pre></div>`;
+  if (tracing) {
+    traceChatPerformance('render.code_block', {
+      sourceCharacterCount: trimmedCode.length,
+      language: normalizedLanguage,
+      highlightMode,
+      durationMs: chatPerformanceNow() - startedAt,
+    });
+  }
+  return html;
 }

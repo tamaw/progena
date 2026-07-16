@@ -150,6 +150,7 @@ export const selectHasUnseenNavRoute = createSelector(
 export {
   fetchChatSessions,
   requestChatSessionDetail,
+  requestChatSessionReconciliation,
   createChatSession,
   ensureDraftChatSession,
   updateChatSessionMetadata,
@@ -162,6 +163,7 @@ export {
   selectChatIndicators,
   selectActiveChatSession,
   selectActiveChatSessionState,
+  selectChatReconciliationState,
 } from './uiData/chats';
 
 export {

@@ -8,11 +8,75 @@
 
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { isReasoningEvent } from './streamEventsModel';
+import {
+  chatPerformanceNow,
+  isChatPerformanceTracingEnabled,
+  traceChatPerformance,
+} from './chatPerformanceTrace';
 
 // ─── Markdown / HTML ──────────────────────────────────────────────────────
 
 export function formatMessage(content) {
-  return renderMarkdownToHtml(content);
+  if (!isChatPerformanceTracingEnabled()) {
+    return renderMarkdownToHtml(content);
+  }
+  const startedAt = chatPerformanceNow();
+  const html = renderMarkdownToHtml(content);
+  traceChatPerformance('render.markdown_format', {
+    sourceCharacterCount: typeof content === 'string' ? content.length : 0,
+    htmlCharacterCount: html.length,
+    durationMs: chatPerformanceNow() - startedAt,
+  });
+  return html;
+}
+// A foreground turn and its settled historical message mount under different
+// owners. Keep a small LRU cache so that handoff or canonical reconciliation
+// does not parse, sanitize, and highlight unchanged terminal Markdown twice.
+const renderedMarkdownCache = new Map();
+const MAX_RENDERED_MARKDOWN_ENTRIES = 16;
+const MAX_RENDERED_MARKDOWN_CHARS = 2 * 1024 * 1024;
+let renderedMarkdownChars = 0;
+
+export function renderSafeMarkdown(content) {
+  if (!content) return '';
+
+  const cached = renderedMarkdownCache.get(content);
+  if (cached !== undefined) {
+    renderedMarkdownCache.delete(content);
+    renderedMarkdownCache.set(content, cached);
+    traceChatPerformance('render.markdown_cache_hit', {
+      sourceCharacterCount: content.length,
+      htmlCharacterCount: cached.length,
+    });
+    return cached;
+  }
+
+  const tracing = isChatPerformanceTracingEnabled();
+  const startedAt = tracing ? chatPerformanceNow() : 0;
+  const rendered = sanitizeHtmlFragment(formatMessage(content));
+  if (tracing) {
+    traceChatPerformance('render.markdown_cache_miss', {
+      sourceCharacterCount: content.length,
+      htmlCharacterCount: rendered.length,
+      durationMs: chatPerformanceNow() - startedAt,
+    });
+  }
+  const cacheCost = content.length + rendered.length;
+  if (cacheCost > MAX_RENDERED_MARKDOWN_CHARS) {
+    return rendered;
+  }
+
+  renderedMarkdownCache.set(content, rendered);
+  renderedMarkdownChars += cacheCost;
+  while (
+    renderedMarkdownCache.size > MAX_RENDERED_MARKDOWN_ENTRIES
+    || renderedMarkdownChars > MAX_RENDERED_MARKDOWN_CHARS
+  ) {
+    const [oldestContent, oldestRendered] = renderedMarkdownCache.entries().next().value;
+    renderedMarkdownCache.delete(oldestContent);
+    renderedMarkdownChars -= oldestContent.length + oldestRendered.length;
+  }
+  return rendered;
 }
 // Reasoning events are merged into fresh objects as deltas arrive, so a WeakMap
 // keyed only by object identity misses the cache on every update. Keep a small
@@ -102,12 +166,22 @@ function sanitizeNode(node) {
 
 export function sanitizeHtmlFragment(html) {
   if (!html) return '';
+  const tracing = isChatPerformanceTracingEnabled();
+  const startedAt = tracing ? chatPerformanceNow() : 0;
   const template = document.createElement('template');
   template.innerHTML = html;
   sanitizeNode(template.content);
   const div = document.createElement('div');
   div.appendChild(template.content.cloneNode(true));
-  return div.innerHTML;
+  const sanitized = div.innerHTML;
+  if (tracing) {
+    traceChatPerformance('render.sanitize_html', {
+      sourceCharacterCount: html.length,
+      htmlCharacterCount: sanitized.length,
+      durationMs: chatPerformanceNow() - startedAt,
+    });
+  }
+  return sanitized;
 }
 
 // Splices a blinking cursor span onto the very end of already-sanitized

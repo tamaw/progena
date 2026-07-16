@@ -1632,6 +1632,9 @@ describe('toCommittedAssistantMessage', () => {
     };
     const msg = toCommittedAssistantMessage(turn);
     expect(msg).toEqual({
+      streamId: STREAM_ID,
+      assistantMessageId: 'msg_42',
+      startedAt: NOW - 1000,
       id: 'msg_42',
       role: 'assistant',
       content: 'Hello',
@@ -1654,6 +1657,22 @@ describe('toCommittedAssistantMessage', () => {
     const msg = toCommittedAssistantMessage(turn);
     expect(msg.id).toBe(`${STREAM_ID}-assistant`);
     expect(msg.timestamp).toBe(NOW - 1000);
+  });
+
+  it('preserves live ownership identity on the terminal committed copy', () => {
+    const streamingTurn = applyAssistantChunk(baseTurn(), 'Terminal answer', NOW);
+    const committed = finalizeLiveAssistantTurn(streamingTurn, {
+      status: 'completed',
+      now: NOW + 100,
+    });
+
+    expect(committed).toMatchObject({
+      id: streamingTurn.assistantMessageId,
+      assistantMessageId: streamingTurn.assistantMessageId,
+      streamId: STREAM_ID,
+      startedAt: NOW - 1000,
+      isStreaming: false,
+    });
   });
 });
 

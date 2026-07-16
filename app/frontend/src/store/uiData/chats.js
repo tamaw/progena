@@ -18,11 +18,19 @@ const emptyActive = () => ({
   requestId: null,
 });
 
+const emptyReconciliation = () => ({
+  threadId: null,
+  detail: null,
+  error: null,
+  requestId: null,
+});
+
 export const initialState = {
   chatRuntime: {
     unreadChatIds: [],
     generatingChatIds: [],
     erroredChatIds: [],
+    responseThreadsByRequestId: {},
   },
   chats: {
     byId: {},
@@ -34,6 +42,7 @@ export const initialState = {
     requestedAt: null,
     lastRequestTotal: null,
     active: emptyActive(),
+    reconciliation: emptyReconciliation(),
   },
 };
 
@@ -122,6 +131,18 @@ function removeChatRuntimeId(ids, threadId) {
   return ids.filter((id) => id !== threadId);
 }
 
+function responseRequestIdFor(payload) {
+  return typeof payload?.request_id === 'string' && payload.request_id ? payload.request_id : null;
+}
+
+function responseThreadIdFor(payload, responseThreadsByRequestId) {
+  if (typeof payload?.thread_id === 'string' && payload.thread_id) {
+    return payload.thread_id;
+  }
+  const requestId = responseRequestIdFor(payload);
+  return requestId ? responseThreadsByRequestId[requestId] || null : null;
+}
+
 export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessions', async ({ chatsUrl, includeArchived = true }, { requestId }) => {
   return requestAcknowledged(
     withQuery(chatsUrl, { include_archived: includeArchived ? 'true' : 'false' }),
@@ -129,6 +150,17 @@ export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessio
   );
 });
 export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    { requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+
+// A completed foreground stream is already visible locally. This fetches the
+// persisted canonical transcript without taking ownership of the selected
+// detail or putting ConversationPage into its blocking loading branch.
+export const requestChatSessionReconciliation = createAcknowledgedThunk('uiData/requestChatSessionReconciliation', async ({ chatsUrl, threadId }, { requestId }) => {
   const acknowledgement = await requestAcknowledged(
     withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
     { requestId },
@@ -212,6 +244,62 @@ export const reducers = {
 };
 
 export const eventHandlers = {
+  'chat.response.started': (state, payload) => {
+    const requestId = responseRequestIdFor(payload);
+    const threadId = typeof payload?.thread_id === 'string' && payload.thread_id
+      ? payload.thread_id
+      : null;
+    if (requestId && threadId) {
+      state.chatRuntime.responseThreadsByRequestId[requestId] = threadId;
+    }
+    if (threadId && state.chats.active.threadId !== threadId) {
+      state.chatRuntime.generatingChatIds = addChatRuntimeId(
+        state.chatRuntime.generatingChatIds,
+        threadId,
+      );
+    }
+  },
+  'chat.response.completed': (state, payload) => {
+    const requestId = responseRequestIdFor(payload);
+    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
+    if (requestId) {
+      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    state.chatRuntime.generatingChatIds = removeChatRuntimeId(
+      state.chatRuntime.generatingChatIds,
+      threadId,
+    );
+    if (threadId && state.chats.active.threadId !== threadId) {
+      state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    }
+  },
+  'chat.response.failed': (state, payload) => {
+    const requestId = responseRequestIdFor(payload);
+    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
+    if (requestId) {
+      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    state.chatRuntime.generatingChatIds = removeChatRuntimeId(
+      state.chatRuntime.generatingChatIds,
+      threadId,
+    );
+    if (threadId && state.chats.active.threadId !== threadId) {
+      state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+    }
+  },
+  'chat.response.cancelled': (state, payload) => {
+    const requestId = responseRequestIdFor(payload);
+    const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
+    if (requestId) {
+      delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    state.chatRuntime.generatingChatIds = removeChatRuntimeId(
+      state.chatRuntime.generatingChatIds,
+      threadId,
+    );
+  },
   'chat.sessions.snapshot': (state, payload) => {
     replaceChatList(state.chats, payload.sessions);
     state.chats.loaded = true;
@@ -237,6 +325,12 @@ export const eventHandlers = {
     state.chats.loaded = true;
   },
   'chat.session.selected': (state, payload) => {
+    if (state.chats.reconciliation.requestId === payload.request_id) {
+      state.chats.reconciliation.detail = payload.session || null;
+      state.chats.reconciliation.threadId = payload.session?.thread_id || null;
+      state.chats.reconciliation.error = null;
+      return;
+    }
     if (state.chats.active.requestId && payload.request_id !== state.chats.active.requestId) {
       return;
     }
@@ -283,6 +377,18 @@ export function buildExtraReducers(builder) {
         state.chats.active.loading = false;
         state.chats.active.error = action.error?.message || 'Failed to load chat';
       }
+    })
+    .addCase(requestChatSessionReconciliation.pending, (state, action) => {
+      state.chats.reconciliation.threadId = action.meta.arg.threadId;
+      state.chats.reconciliation.detail = null;
+      state.chats.reconciliation.error = null;
+      state.chats.reconciliation.requestId = action.meta.requestId;
+    })
+    .addCase(requestChatSessionReconciliation.rejected, (state, action) => {
+      if (state.chats.reconciliation.requestId === action.meta.requestId) {
+        state.chats.reconciliation.error = action.error?.message || 'Failed to reconcile chat';
+        state.chats.reconciliation.requestId = null;
+      }
     });
 }
 
@@ -303,3 +409,5 @@ export const selectChatIndicators = createSelector(
 );
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
+
+export const selectChatReconciliationState = (state) => state.uiData.chats.reconciliation;

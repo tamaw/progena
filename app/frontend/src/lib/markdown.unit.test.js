@@ -1,5 +1,14 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const highlighter = vi.hoisted(() => ({
+  getLanguage: vi.fn((language) => language === 'js'),
+  highlight: vi.fn((code) => ({ value: `<span class="hljs-keyword">${code}</span>` })),
+  highlightAuto: vi.fn((code) => ({ value: code, language: '' })),
+}));
+
+vi.mock('highlight.js/lib/common', () => ({ default: highlighter }));
+
 import { renderMarkdownToHtml } from './markdown';
 
 function renderCodeFence(source) {
@@ -7,6 +16,35 @@ function renderCodeFence(source) {
   container.innerHTML = renderMarkdownToHtml(source);
   return container;
 }
+
+describe('renderMarkdownToHtml fenced-code highlighting budget', () => {
+  beforeEach(() => {
+    highlighter.getLanguage.mockClear();
+    highlighter.highlight.mockClear();
+    highlighter.highlightAuto.mockClear();
+  });
+
+  it('keeps a code block larger than 12 KiB escaped and visible without invoking highlighter grammars', () => {
+    const largeCode = 'const payload = "<tag>";\n'.repeat(600);
+    const container = renderCodeFence(['```js', largeCode, '```'].join('\n'));
+    const code = container.querySelector('.code-block code');
+
+    expect(code).not.toBeNull();
+    expect(code?.className).toContain('language-js');
+    expect(code?.textContent).toContain('const payload = "<tag>";');
+    expect(code?.innerHTML).toContain('&lt;tag&gt;');
+    expect(highlighter.highlight).not.toHaveBeenCalled();
+    expect(highlighter.highlightAuto).not.toHaveBeenCalled();
+  });
+
+  it('keeps named small fences syntax highlighted', () => {
+    const container = renderCodeFence('```js\nconst answer = 42;\n```');
+
+    expect(highlighter.highlight).toHaveBeenCalledOnce();
+    expect(highlighter.highlight).toHaveBeenCalledWith('const answer = 42;', { language: 'js' });
+    expect(container.querySelector('.code-block code .hljs-keyword')?.textContent).toBe('const answer = 42;');
+  });
+});
 
 describe('renderMarkdownToHtml fenced text blocks', () => {
   it('keeps heading and list syntax literal inside a fenced text block', () => {
