@@ -147,14 +147,29 @@ async def test_send_message_stream_events_yields_verbatim_and_swallows_queued() 
         await client.stop()
         await _stop_runtime_server(runtime)
 
-    assert events == [
-        {
-            "type": "stream_chunk",
-            "content": "ok",
-            "is_final": True,
-            "request_id": "req-2",
-        }
-    ]
+    assert len(events) == 1
+    event = events[0]
+    assert set(event) == {
+        "type",
+        "content",
+        "is_final",
+        "request_id",
+        "runtime_emitted_at_ms",
+        "runtime_stream_seq",
+    }
+    assert {
+        "type": event["type"],
+        "content": event["content"],
+        "is_final": event["is_final"],
+        "request_id": event["request_id"],
+    } == {
+        "type": "stream_chunk",
+        "content": "ok",
+        "is_final": True,
+        "request_id": "req-2",
+    }
+    assert isinstance(event["runtime_emitted_at_ms"], int)
+    assert event["runtime_stream_seq"] == 1
 
 
 async def test_send_message_stream_events_raises_on_error_frame() -> None:
