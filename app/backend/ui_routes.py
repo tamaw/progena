@@ -3221,6 +3221,20 @@ async def get_task_activity(
     return acknowledgement_response(request_id, ["task.activity.updated"])
 
 
+@router.get("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_task_content(
+    card_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a task-content request and publish its canonical markdown."""
+    request_id = _request_correlation_id(request, x_request_id)
+    state_reader = get_state_reader()
+    card = _find_kanban_card(state_reader, card_id)
+    content = _read_task_content(state_reader, card)
+    broadcast_task_content(card_id, content, request_id=request_id)
+    return acknowledgement_response(request_id, ["task.content.updated"])
+
 @router.put("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
 async def update_task_content(
     card_id: str,
@@ -3836,8 +3850,12 @@ _SSE_HEARTBEAT_INTERVAL: float = _parse_heartbeat_interval(
     os.getenv("SSE_HEARTBEAT_INTERVAL", "15")
 )
 
-# Event subscribers for the canonical SSE stream
-_ui_stream_subscribers: set[asyncio.Queue] = set()  # Canonical typed UI event envelopes
+# Event subscribers for the canonical SSE stream: queue -> handler task.
+# The task reference lets eviction cancel a stalled handler so its HTTP
+# connection actually closes (a full queue means the handler stopped draining,
+# typically because it is blocked writing to a dead/half-open socket; leaving
+# it open makes the client's EventSource permanently deaf with no reconnect).
+_ui_stream_subscribers: dict[asyncio.Queue, asyncio.Task | None] = {}
 _ui_event_seq = 0
 _ui_event_replay: list[UiEventEnvelope] = []
 _UI_EVENT_REPLAY_LIMIT = 200
@@ -4283,9 +4301,8 @@ async def _generate_ui_stream(
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-    _ui_stream_subscribers.add(queue)
-
     current_task = asyncio.current_task()
+    _ui_stream_subscribers[queue] = current_task
     if current_task:
         _active_ui_stream_tasks.add(current_task)
 
@@ -4339,7 +4356,7 @@ async def _generate_ui_stream(
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
-        _ui_stream_subscribers.discard(queue)
+        _ui_stream_subscribers.pop(queue, None)
         if current_task:
             _active_ui_stream_tasks.discard(current_task)
         if not _ui_stream_subscribers:
@@ -4389,10 +4406,16 @@ def broadcast_ui_event(
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:
-            logger.warning("Event queue full for UI stream subscriber — evicting dead connection")
             dead.append(queue)
     for q in dead:
-        _ui_stream_subscribers.discard(q)
+        task = _ui_stream_subscribers.pop(q, None)
+        if task is not None and not task.done():
+            # A full queue means the handler stopped draining — it is blocked
+            # writing to a dead or half-open socket. Cancelling it closes the
+            # HTTP connection, so a live client's EventSource reconnects
+            # instead of staying open-but-deaf, and true zombies get reaped.
+            task.cancel()
+        logger.warning("Event queue full for UI stream subscriber — closing stale connection")
     return envelope
 
 

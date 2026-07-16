@@ -85,7 +85,7 @@ def test_workflow_crud_round_trip(workflow_env):
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             create_request_id = "workflow-create-request"
@@ -171,14 +171,14 @@ def test_workflow_crud_round_trip(workflow_env):
             assert deleted_events[0].payload["workflow_id"] == workflow_id
             assert deleted_events[1].payload["items"] == []
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_workflow_put_rejects_cycle(workflow_env):
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Cycle check"})
@@ -241,7 +241,7 @@ def test_workflow_put_rejects_cycle(workflow_env):
                 event.payload.get("request_id") == request_id for event in post_rejection_events
             )
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env, backend_client):
@@ -253,7 +253,7 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
     ]
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             created = client.post(
@@ -326,7 +326,7 @@ def test_manual_trigger_reuses_same_thread_id_for_two_prompt_chain(workflow_env,
             assert first_metadata["thread_id"] == second_metadata["thread_id"]
             assert run["thread_id"] == first_metadata["thread_id"]
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
@@ -336,7 +336,7 @@ def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
     from app.progenitor.workflows import WorkflowRun
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             created = client.post(
@@ -392,7 +392,7 @@ def test_manual_trigger_of_active_workflow_emits_real_active_run(workflow_env):
             "request_id": request_id,
         }
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_client):
@@ -400,7 +400,7 @@ def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_cl
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             created = client.post(
@@ -434,14 +434,14 @@ def test_kanban_create_event_triggers_matching_workflow(workflow_env, backend_cl
             assert run["trigger_event"]["event_type"] == "kanban.card.created"
             assert backend_client.send_message.await_count == 1
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             created = client.post("/api/ui/workflows", json={"title": "Broadcast workflow"})
@@ -487,7 +487,7 @@ def test_workflow_routes_broadcast_ui_events(workflow_env, backend_client):
                 "workflow.run.completed",
             } <= seen
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)
 
 
 def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, backend_client):
@@ -499,7 +499,7 @@ def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, back
     import app.backend.ui_routes as ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             client.post("/api/ui/workflows", json={"title": "Alias check"})
@@ -514,4 +514,4 @@ def test_workflow_updated_broadcast_serializes_edges_by_alias(workflow_env, back
                 assert "node" in edge["from"]
                 assert "node" in edge["to"]
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)

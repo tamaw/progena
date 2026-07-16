@@ -22,7 +22,7 @@ import {
   extractCallAgentSummary,
 } from './messageRenderUtils';
 import useStickyScroll from './useStickyScroll';
-import { WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
+import { SubmittedGlyph, WorkingGlyph, CompletedGlyph, FailedGlyph } from './eventGlyphs';
 
 // Distinguishes the A2A card's badge from SubagentCard's at a glance -- a
 // link between two endpoints, standing in for "agent-to-agent connection".
@@ -38,20 +38,6 @@ function A2AGlyph() {
   );
 }
 
-// Submitted: the task was just handed off -- an upward/outward arrow. Spans
-// nearly the full viewBox (y 3-21, x 4-20), matching the visual weight of
-// the other glyphs -- a smaller/tighter arrow reads as noticeably thinner
-// next to WorkingGlyph's 18-unit ring and CompletedGlyph's 16-unit check.
-// A2A-specific (no equivalent "submitted" state elsewhere), so this one
-// stays local instead of moving to eventGlyphs.jsx.
-function SubmittedGlyph() {
-  return (
-    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <line x1="12" y1="21" x2="12" y2="3" />
-      <polyline points="4 11 12 3 20 11" />
-    </svg>
-  );
-}
 
 const A2A_STATE_GLYPHS = {
   submitted: SubmittedGlyph,
@@ -80,17 +66,8 @@ function glyphForA2AState(state) {
   return Glyph();
 }
 
-// One status update = one mini entry in the nested chain: its own badge, its
-// own tag naming *this update's own* state (submitted/working/completed/...)
-// rather than a generic "A2A" repeated on every line, its own connecting
-// line down to the next update -- `isLast` drops that trailing line the same
-// way the outer chain drops it for its own last item (entry--chain-end vs
-// entry--chain-item). No separate role text next to the tag (that would just
-// repeat the same word) and no per-line StatusPill either (that redundant-
-// emphasis problem is why the previous plain-log version dropped it too) --
-// the tag text is the label, and the badge's own glyph/color
-// (glyphForA2AState, chat-panel.css) is the status indicator in place of a
-// pill.
+// One status update = one mini entry in the nested chain. Its glyph is the
+// visual status indicator; the timestamp remains right-aligned metadata.
 const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
   const state = message.state || 'update';
   // A per-entry clock time, not just chain position -- shows exactly when
@@ -105,10 +82,11 @@ const A2ASubEntry = memo(function A2ASubEntry({ message, isLast }) {
       </div>
       <div className="entry__main">
         <div className="entry__head">
-          <span className="entry__tag a2a-call-card__tag">{state}</span>
-          {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+          {message.text && <span className="a2a-sub-entry__text">{message.text}</span>}
+          <span className="msg__head-trailing">
+            {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
+          </span>
         </div>
-        {message.text && <div className="a2a-sub-entry__text">{message.text}</div>}
       </div>
     </div>
   );

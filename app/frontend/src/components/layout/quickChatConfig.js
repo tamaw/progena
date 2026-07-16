@@ -118,6 +118,10 @@ export function normalizeQuickChatConfig(config) {
   };
 }
 
+export function normalizeAiPrompt(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
 export function buildQuickChatOutboundMessage(mode, text, config = {}) {
   if (mode === 'mcp-create') {
     return [

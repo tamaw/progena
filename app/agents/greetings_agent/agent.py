@@ -733,7 +733,9 @@ class GreetingsExecutor(AgentExecutor):
         self,
         push_sender: PushNotificationSender | None = None,
     ) -> None:
-        self._push_sender = push_sender
+        # Kept for constructor compatibility; DefaultRequestHandler owns push
+        # delivery for every event emitted by this executor.
+        _ = push_sender
         self._workers: dict[str, asyncio.Task[None]] = {}
         # The `event_queue` a cancel() call receives is a *fresh* tap
         # (on_cancel_task does its own `_queue_manager.tap(task.id)`), not
@@ -821,27 +823,21 @@ class GreetingsExecutor(AgentExecutor):
             self._cancel_handled.pop(task_id, None)
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
-        """Cancel a running greeting task.
+        """Cancel a running greeting task through the handler's event queue.
 
-        Pushes the terminal `canceled` event itself, using the queue this
-        call receives (on_cancel_task taps a fresh one specifically for this
-        request) -- deliberately NOT relying on `_run`'s own body to push
-        it: an asyncio.Task cancelled before the event loop has given it its
-        first turn never runs its coroutine body at all (confirmed
-        empirically -- a worker cancelled immediately after dispatch, with
-        no intervening await, never executes a single line), so a caller
-        that cancels right after dispatch would otherwise get nothing.
-        Awaiting the (cancelled) worker here just lets any work it did
-        manage to start unwind cleanly; it does not push its own event.
+        ``DefaultRequestHandler.on_cancel_task`` supplies a child tap so it can
+        consume the cancellation result, while the message/send or
+        message/stream handler keeps consuming the original queue.  Enqueueing
+        exactly once on that original queue fans the same event to both
+        consumers.  The handler's existing push-notification callback then
+        owns delivery, so cancellation follows the same exactly-once path as
+        normal terminal completion instead of sending a second notification
+        directly from the executor.
 
-        Claims the worker with `pop`, not `get`: two genuinely concurrent
-        cancel() calls for the same task_id would otherwise both observe
-        `worker.done() is False` (cancelling a task doesn't mark it done
-        synchronously -- only once the coroutine actually unwinds) and both
-        fall through to push a terminal event to the live queue, delivering
-        it twice. Popping makes the first caller to reach this line the sole
-        owner; a second, losing call sees the entry already gone and takes
-        the "no active task" branch below instead.
+        Claims the worker with ``pop`` so concurrent cancellation requests have
+        one terminal-event owner.  A worker cancelled before its coroutine gets
+        a first turn never runs its body, so this method must publish the
+        cancellation event itself after awaiting the worker's cleanup.
         """
         task_id = context.task_id or ""
         context_id = context.context_id or ""
@@ -866,27 +862,21 @@ class GreetingsExecutor(AgentExecutor):
             await worker
 
         terminal = await self._save_state(task_id, context_id, TaskState.canceled, "Cancelled.")
-        await event_queue.enqueue_event(
+        # ``event_queue`` is the fresh cancellation tap.  Publish through the
+        # original queue when it is still active: its fan-out delivers this
+        # one event to both the cancellation handler and the live request
+        # handler, whose push callback is the sole notification owner.
+        live_queue = self._event_queues.get(task_id)
+        notification_queue = live_queue or event_queue
+        await notification_queue.enqueue_event(
             TaskStatusUpdateEvent(
                 task_id=task_id, context_id=context_id, final=True, status=terminal.status
             )
         )
-        # Also push to the queue execute() was originally given, if it's a
-        # different object: that's the one an active message/stream watcher
-        # is actually consuming from (see __init__'s comment on
-        # _event_queues for why on_cancel_task's own tap doesn't reach it).
-        live_queue = self._event_queues.get(task_id)
-        if live_queue is not None and live_queue is not event_queue:
-            await live_queue.enqueue_event(
-                TaskStatusUpdateEvent(
-                    task_id=task_id, context_id=context_id, final=True, status=terminal.status
-                )
-            )
-        await self._notify(terminal)
 
         # Release execute(), which is waiting on this (see _cancel_handled's
         # comment in __init__) so it can't return -- and let the framework
-        # close event_queue -- until every push above has actually happened.
+        # close the original queue -- until the terminal event is enqueued.
         cancel_handled = self._cancel_handled.get(task_id)
         if cancel_handled is not None:
             cancel_handled.set()
@@ -976,13 +966,6 @@ class GreetingsExecutor(AgentExecutor):
             metadata=dict(message.metadata or {}),
         )
 
-    async def _notify(self, task: Task) -> None:
-        if self._push_sender is None:
-            return
-        try:
-            await self._push_sender.send_notification(task)
-        except Exception:
-            logger.debug("Push notification failed for task %s", task.id, exc_info=True)
 
 
 # ---------------------------------------------------------------------------

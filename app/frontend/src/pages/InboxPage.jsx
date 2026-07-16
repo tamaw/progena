@@ -75,7 +75,7 @@ export default function InboxPage() {
   const inboxUrl = getApiUrl('inbox');
   const messages = useSelector(selectInboxMessages);
   const inboxState = useSelector(selectInboxState);
-  const [selectedId, setSelectedId] = useState(null);
+  const [selectedId, setSelectedId] = useState(() => urlMessageId || null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('Recent');
@@ -123,18 +123,23 @@ export default function InboxPage() {
   // initial load, so it doesn't fight a selection the user already made.
   const hasAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (hasAutoSelectedRef.current || selectedId || !inboxState.loaded) {
+    if (hasAutoSelectedRef.current || !inboxState.loaded) {
       return;
     }
     hasAutoSelectedRef.current = true;
     if (urlMessageId) {
       const target = messages.find((message) => message.id === urlMessageId);
       if (target) {
-        Promise.resolve().then(() => selectMessage(target));
+        if (selectedId !== target.id) {
+          Promise.resolve().then(() => selectMessage(target));
+        } else if (!target.read) {
+          dispatch(markInboxMessageRead({ inboxUrl, messageId: target.id, read: true }));
+        }
         return;
       }
       // The linked message doesn't exist (deleted, or never real) - fall
       // back to auto-selecting the top card below.
+      Promise.resolve().then(() => setSelectedId(null));
       navigate('/inbox', { replace: true });
     }
     if (visibleMessages.length === 0) {
@@ -144,7 +149,7 @@ export default function InboxPage() {
     // Deferred a tick so the state update happens in a callback rather than
     // synchronously in the effect body (react-hooks/set-state-in-effect).
     Promise.resolve().then(() => selectMessage(topMessage));
-  }, [inboxState.loaded, messages, navigate, selectMessage, selectedId, urlMessageId, visibleMessages]);
+  }, [dispatch, inboxUrl, inboxState.loaded, messages, navigate, selectMessage, selectedId, urlMessageId, visibleMessages]);
 
   // Keep the URL in sync with whichever message is selected. The title slug
   // is cosmetic; only the id segment is ever read back.

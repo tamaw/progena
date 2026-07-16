@@ -44,6 +44,7 @@ import {
   MoonIcon,
   OpenChatIcon,
   PinIcon,
+  ProgenitorAiIcon,
   QuickChatIcon,
   RailSettingsIcon,
   RefreshIcon,
@@ -69,6 +70,7 @@ import {
 import {
   buildQuickChatOutboundMessage,
   defaultQuickChatConfig,
+  normalizeAiPrompt,
   normalizeQuickChatConfig,
 } from './quickChatConfig';
 
@@ -401,7 +403,7 @@ function WorkspaceSwitcher() {
   );
 }
 
-function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuickChat, onToggleNav }) {
+function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, onOpenQuickChat, onToggleNav }) {
   const { currentTheme, toggleTheme } = useTheme();
   const alerts = useSelector(selectUiAlerts);
   const unreadCount = alerts?.filter((a) => !a.viewed)?.length || 0;
@@ -425,9 +427,9 @@ function Header({ activePanel, setActivePanel, onSearch, onOpenPanel, onOpenQuic
         </span>
         <span className="app-shell__crumb">{pageLabel}</span>
       </div>
-      <form className="app-shell__search" onSubmit={onSearch}>
-        <SearchIcon />
-        <input name="search" type="search" placeholder="Search workspace, agents, prompts..." autoComplete="off" />
+      <form className="app-shell__search app-shell__search--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
+        <span className="app-shell__search-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
+        <input name="search" type="text" placeholder="Ask Progenitor AI to explain, plan, or build..." aria-label="Ask Progenitor AI" autoComplete="off" />
       </form>
       <div className="app-shell__actions">
         <ChromeIconButton
@@ -739,7 +741,15 @@ function AlertsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // naturally on full page reload.
 const quickChatMemory = { history: [], threadId: null, mode: null };
 
-function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinned, onTogglePin, isOpen }) {
+function QuickChatPanel({
+  onClose,
+  panelConfig = defaultQuickChatConfig,
+  isPinned,
+  onTogglePin,
+  isOpen,
+  pendingSubmission,
+  onSubmissionConsumed,
+}) {
   const { sendMessageStream, cancelStream } = useChatApi();
   const { config, getApiUrl } = useConfig();
   const dispatch = useDispatch();
@@ -985,6 +995,15 @@ function QuickChatPanel({ onClose, panelConfig = defaultQuickChatConfig, isPinne
       setIsSending(false);
     }
   }, [ensureQuickThread, history, isSending, normalizedConfig, sendMessageStream]);
+  useEffect(() => {
+    if (!pendingSubmission?.message || isSending) {
+      return;
+    }
+
+    onSubmissionConsumed?.(pendingSubmission.id);
+    setComposerSeed((current) => ({ key: current.key + 1, message: '' }));
+    void submit(pendingSubmission.message);
+  }, [isSending, onSubmissionConsumed, pendingSubmission, submit]);
 
   const openInChat = useCallback(() => {
     if (history.length > 0) {
@@ -1509,7 +1528,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
 
-function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, isPinned, onTogglePin }) {
+function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, isPinned, onTogglePin }) {
   const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -1583,6 +1602,8 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
         <QuickChatPanel
           onClose={closePanel}
           panelConfig={quickChatConfig}
+          pendingSubmission={quickChatSubmission}
+          onSubmissionConsumed={onQuickChatSubmissionConsumed}
           {...shared}
         />
       </>
@@ -1598,7 +1619,9 @@ function PanelHost({ activePanel, quickChatConfig, searchQuery, setActivePanel, 
 function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
-  const [searchQuery, setSearchQuery] = useState('');
+  const searchQuery = '';
+  const [quickChatSubmission, setQuickChatSubmission] = useState(null);
+  const quickChatSubmissionIdRef = useRef(0);
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
@@ -1657,12 +1680,20 @@ function AppRuntimeShell() {
     };
   }, []);
 
-  const handleSearch = useCallback((event) => {
+  const handleQuickChatSubmit = useCallback((event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const query = String(form.get('search') || '').trim();
-    setSearchQuery(query);
-    setActivePanel('search');
+    const prompt = normalizeAiPrompt(form.get('search'));
+    if (!prompt) {
+      return;
+    }
+    quickChatSubmissionIdRef.current += 1;
+    setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
+    setQuickChatConfig(defaultQuickChatConfig);
+    setActivePanel('quickChat');
+  }, []);
+  const handleQuickChatSubmissionConsumed = useCallback(() => {
+    setQuickChatSubmission(null);
   }, []);
   const handleOpenPanel = useCallback((panel) => {
     if (panel === 'insights') {
@@ -1682,7 +1713,7 @@ function AppRuntimeShell() {
       <Header
         activePanel={activePanel}
         setActivePanel={setActivePanel}
-        onSearch={handleSearch}
+        onSubmitQuickChat={handleQuickChatSubmit}
         onOpenPanel={handleOpenPanel}
         onOpenQuickChat={() => {
           setQuickChatConfig(defaultQuickChatConfig);
@@ -1695,6 +1726,8 @@ function AppRuntimeShell() {
       <PanelHost
         activePanel={activePanel}
         quickChatConfig={quickChatConfig}
+        quickChatSubmission={quickChatSubmission}
+        onQuickChatSubmissionConsumed={handleQuickChatSubmissionConsumed}
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}
         isPinned={isPinned}

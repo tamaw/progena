@@ -188,6 +188,28 @@ def test_normalize_custom_event_truncates_oversized_metadata():
     assert len(rendered.encode("utf-8")) <= 2048
 
 
+def test_normalize_custom_event_preserves_correlation_fields_when_metadata_is_oversized():
+    """Lifecycle joins must survive truncation of unrelated event metadata."""
+    envelope = normalize_custom_event(
+        {
+            "event_type": "debug_event",
+            "content": "progress",
+            "metadata": {
+                "tool_call_id": "call-correlation-7",
+                "subagent_type": "researcher",
+                "blob": "x" * 10_000,
+            },
+        }
+    )
+
+    assert envelope is not None
+    metadata = envelope["metadata"]
+    assert metadata["tool_call_id"] == "call-correlation-7"
+    assert metadata["subagent_type"] == "researcher"
+    assert "blob" not in metadata
+    assert len(str(metadata["value"]).encode("utf-8")) <= DEFAULT_STREAM_ARGS_BYTES
+
+
 def test_build_tool_start_event_redacts_args():
     api_key = "sk-" + "a" * 48
     event = build_tool_start_event(
@@ -214,6 +236,27 @@ def test_build_tool_start_event_preserves_subagent_type_when_args_preview_trunca
     # byte budget -- subagent_type must survive that collapse in its own field.
     assert isinstance(event["metadata"]["args_preview"], str)
     assert event["metadata"]["subagent_type"] == "researcher"
+
+
+def test_build_tool_start_event_preserves_bounded_redacted_task_summary_when_args_truncate():
+    """Task identity and its readable summary must outlive args-preview truncation."""
+    api_key = "sk-" + "z" * 48
+    description = f"  Review deployment with {api_key} " + ("x" * (DEFAULT_STREAM_ARGS_BYTES * 2))
+
+    event = build_tool_start_event(
+        tool_name="task",
+        tool_call_id="call_long-task",
+        raw_args={"subagent_type": "researcher", "description": description},
+    )
+
+    metadata = event["metadata"]
+    assert isinstance(metadata["args_preview"], str)
+    assert metadata["subagent_type"] == "researcher"
+    task_summary = metadata["task_summary"]
+    assert isinstance(task_summary, str)
+    assert len(task_summary) <= 140
+    assert api_key not in task_summary
+    assert "REDACTED" in task_summary
 
 
 def test_build_tool_start_event_omits_subagent_type_for_non_task_tools():
@@ -296,6 +339,7 @@ def test_build_reasoning_delta_event_tracks_text_length():
     assert event["event_type"] == "reasoning_delta"
     assert event["content"] == "Checked inputs. "
     assert event["metadata"]["text_length"] == len("Checked inputs. ")
+    assert event["metadata"]["summary"] == "Checked inputs. "
 
 
 def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
@@ -306,6 +350,7 @@ def test_build_reasoning_summary_event_redacts_metadata_and_keeps_tokens():
     )
     assert event["event_type"] == "reasoning_summary"
     assert event["metadata"]["reasoning_tokens"] == 17
+    assert event["metadata"]["summary"] == "Checked inputs before answering."
     assert api_key not in repr(event)
 
 
@@ -390,3 +435,86 @@ async def test_audit_middleware_swallows_writer_failure():
     ):
         result = await middleware.awrap_tool_call(request, handler)
     assert isinstance(result, ToolMessage)
+
+
+def test_build_tool_result_event_omits_artifact_when_result_has_none():
+    event = build_tool_result_event("read_file", "call-no-artifact", 4.0, "plain result")
+
+    assert "artifact" not in event["metadata"]
+    assert event["metadata"]["result_preview"] == "plain result"
+
+
+def test_build_tool_result_event_projects_bounded_redacted_artifact():
+    api_key = "sk-" + "f" * 48
+    event = build_tool_result_event(
+        "read_file",
+        "call-artifact",
+        8.0,
+        ToolMessage(
+            content="raw result",
+            name="read_file",
+            tool_call_id="call-artifact",
+            artifact={
+                "summary": f"{api_key} " + ("x" * (DEFAULT_STREAM_PREVIEW_BYTES * 3)),
+                "count": 3,
+                "kind": "file",
+                "status": "ok",
+                "raw": {"secret": api_key, "nested": ["discard me"]},
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert set(artifact) <= {"summary", "count", "kind", "status"}
+    assert artifact["count"] == 3
+    assert artifact["kind"] == "file"
+    assert artifact["status"] == "ok"
+    assert api_key not in repr(artifact)
+    assert len(artifact["summary"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
+
+
+def test_build_tool_result_event_appends_omitted_file_lines_to_truncated_summary():
+    summary = "src/main.py: 5 lines"
+    content = "line 1\nline 2\nline 3" + ("x" * DEFAULT_STREAM_PREVIEW_BYTES)
+    event = build_tool_result_event(
+        "read_file",
+        "call-truncated-artifact",
+        8.0,
+        ToolMessage(
+            content=content,
+            name="read_file",
+            tool_call_id="call-truncated-artifact",
+            artifact={
+                "summary": summary,
+                "count": 5,
+                "kind": "file",
+                "status": "ok",
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert artifact["summary"] == f"{summary} · 2 more lines not shown"
+
+
+def test_build_tool_result_event_preserves_untruncated_file_summary():
+    summary = "src/main.py: 3 lines"
+    event = build_tool_result_event(
+        "read_file",
+        "call-short-artifact",
+        8.0,
+        ToolMessage(
+            content="line 1\nline 2\nline 3",
+            name="read_file",
+            tool_call_id="call-short-artifact",
+            artifact={
+                "summary": summary,
+                "count": 3,
+                "kind": "file",
+                "status": "ok",
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert artifact["summary"] == summary

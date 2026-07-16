@@ -10,17 +10,51 @@ export function normalizeStreamEvent(event, index) {
     return null;
   }
 
+  const eventType = typeof event.eventType === 'string'
+    ? event.eventType
+    : (typeof event.event_type === 'string' ? event.event_type : 'stream_event');
+  const metadata = event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+    ? event.metadata
+    : {};
+
   return {
     id: typeof event.id === 'string' ? event.id : `evt_restored_${index}_${Date.now()}`,
-    eventType: typeof event.eventType === 'string'
-      ? event.eventType
-      : (typeof event.event_type === 'string' ? event.event_type : 'stream_event'),
+    eventType,
     content: typeof event.content === 'string' ? event.content : '',
-    metadata: event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
-      ? event.metadata
-      : {},
+    metadata: isReasoningEvent({ eventType })
+      ? { source: 'stream_reasoning', ...metadata }
+      : metadata,
     timestamp: Number.isFinite(event.timestamp) ? event.timestamp : undefined,
   };
+}
+
+export function createStreamEvent(streamEvent) {
+  if (!streamEvent || typeof streamEvent !== 'object') {
+    return null;
+  }
+
+  const eventType = typeof streamEvent.event_type === 'string' ? streamEvent.event_type : 'stream_event';
+  const metadata =
+    streamEvent.metadata
+    && typeof streamEvent.metadata === 'object'
+    && !Array.isArray(streamEvent.metadata)
+      ? streamEvent.metadata
+      : {};
+  const event = {
+    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    eventType,
+    content: typeof streamEvent.content === 'string' ? streamEvent.content : '',
+    metadata: isReasoningEvent({ eventType })
+      ? { source: 'stream_reasoning', ...metadata }
+      : metadata,
+    timestamp: Date.now(),
+  };
+
+  if (Array.isArray(streamEvent.images) && streamEvent.images.length > 0) {
+    event.images = streamEvent.images;
+  }
+
+  return event;
 }
 
 export function isReasoningEvent(event) {
@@ -33,10 +67,13 @@ export function hasReasoningContent(event) {
 
 export function countReasoningTimelineEntries(events, reasoningText) {
   const streamEvents = Array.isArray(events) ? events : [];
-  const reasoningEventCount = streamEvents.filter((event) =>
+  const hasReasoningEvent = streamEvents.some((event) =>
     isReasoningEvent(event) && hasReasoningContent(event)
+  );
+  const reasoningEventCount = streamEvents.filter((event) =>
+    event?.eventType === 'reasoning_summary' && hasReasoningContent(event)
   ).length;
-  if (reasoningEventCount > 0) {
+  if (hasReasoningEvent) {
     return reasoningEventCount;
   }
   return typeof reasoningText === 'string' && reasoningText.trim().length > 0 ? 1 : 0;
@@ -69,46 +106,27 @@ export function mergeReasoningEvents(existingEvent, nextEvent) {
 
   if (nextEvent.eventType === 'reasoning_delta') {
     mergedContent = `${existingContent}${nextEvent.content}`;
-  } else if (!existingContent && hasReasoningContent(nextEvent)) {
+  } else if (hasReasoningContent(nextEvent) && nextEvent.content.length >= existingContent.length) {
     mergedContent = nextEvent.content;
+  }
+
+  const metadata = {
+    ...existingEvent.metadata,
+    ...nextEvent.metadata,
+  };
+  if (nextEvent.eventType === 'reasoning_delta' && mergedContent) {
+    metadata.summary = mergedContent;
+    metadata.text_length = mergedContent.length;
   }
 
   return {
     ...existingEvent,
-    eventType: !existingContent && nextEvent.eventType === 'reasoning_summary'
+    eventType: nextEvent.eventType === 'reasoning_summary'
       ? 'reasoning_summary'
       : existingEvent.eventType,
     content: mergedContent,
-    metadata: {
-      ...existingEvent.metadata,
-      ...nextEvent.metadata,
-    },
+    metadata,
   };
-}
-
-export function createStreamEvent(streamEvent) {
-  if (!streamEvent || typeof streamEvent !== 'object') {
-    return null;
-  }
-
-  const event = {
-    id: `evt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    eventType: typeof streamEvent.event_type === 'string' ? streamEvent.event_type : 'stream_event',
-    content: typeof streamEvent.content === 'string' ? streamEvent.content : '',
-    metadata:
-      streamEvent.metadata
-      && typeof streamEvent.metadata === 'object'
-      && !Array.isArray(streamEvent.metadata)
-        ? streamEvent.metadata
-        : {},
-    timestamp: Date.now(),
-  };
-
-  if (Array.isArray(streamEvent.images) && streamEvent.images.length > 0) {
-    event.images = streamEvent.images;
-  }
-
-  return event;
 }
 
 export function appendStreamEvent(events, nextEvent) {
@@ -117,6 +135,12 @@ export function appendStreamEvent(events, nextEvent) {
     return currentEvents;
   }
   if (isReasoningEvent(nextEvent)) {
+    if (
+      nextEvent.eventType === 'reasoning_delta'
+      && currentEvents.some((event) => event?.eventType === 'reasoning_summary')
+    ) {
+      return currentEvents;
+    }
     const firstReasoningIndex = currentEvents.findIndex((event) =>
       isReasoningEvent(event) && hasReasoningContent(event)
     );

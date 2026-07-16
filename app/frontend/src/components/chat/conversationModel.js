@@ -3,6 +3,153 @@ import { extractMarkdownImages } from '../../lib/markdown';
 export const CHAT_AGENT_NAME = 'Progenitor';
 export const DEFAULT_CHAT_TITLE = 'New chat';
 
+export function shouldShowChatContentLoading({
+  backendChatsLoaded,
+  messages,
+  selectedBackendChatId,
+  activeChatLoading,
+  activeChatThreadId,
+  activeChatDetailThreadId,
+  urlThreadId,
+  initialSelectionPending = false,
+}) {
+  const hasMessages = Array.isArray(messages) && messages.length > 0;
+  const urlChatLoading = Boolean(urlThreadId && initialSelectionPending);
+  const selectedChatLoading = Boolean(selectedBackendChatId) && (
+    activeChatLoading
+    || activeChatThreadId !== selectedBackendChatId
+    || activeChatDetailThreadId !== selectedBackendChatId
+  );
+
+  return urlChatLoading || selectedChatLoading || (
+    !backendChatsLoaded
+    && !hasMessages
+    && !selectedBackendChatId
+  );
+}
+
+export function shouldShowNewChatEmptyState({
+  messages,
+  selectedBackendChatId,
+  threadId,
+}) {
+  return (
+    Array.isArray(messages)
+    && messages.length === 0
+    && Boolean(selectedBackendChatId || threadId)
+  );
+}
+
+export function getActiveRouteThreadId({
+  selectedBackendChatId,
+  messages,
+  threadId,
+  urlThreadId,
+  initialSelectionPending,
+}) {
+  return (
+    selectedBackendChatId
+    || (Array.isArray(messages) && messages.length > 0 ? threadId : null)
+    || (initialSelectionPending ? urlThreadId : null)
+  );
+}
+
+function eventRenderSignature(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  return {
+    eventType: typeof event?.eventType === 'string' ? event.eventType : '',
+    content: typeof event?.content === 'string' ? event.content : '',
+    toolCallId: typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id : '',
+    toolName: typeof metadata.tool_name === 'string' ? metadata.tool_name : '',
+    success: metadata.success === true ? true : metadata.success === false ? false : null,
+    resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
+    imageCount: Array.isArray(event?.images) ? event.images.length : 0,
+  };
+}
+
+function messageRenderSignature(message) {
+  return {
+    role: typeof message?.role === 'string' ? message.role : '',
+    content: typeof message?.content === 'string' ? message.content : '',
+    tokenCount: Number.isFinite(message?.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0,
+    reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
+    agentName: typeof message?.agentName === 'string' ? message.agentName : '',
+    model: typeof message?.model === 'string' ? message.model : '',
+    streamEvents: Array.isArray(message?.streamEvents)
+      ? message.streamEvents.map(eventRenderSignature)
+      : [],
+  };
+}
+
+// Persisted messages have backend IDs and rebuilt timeline items, while a
+// foreground live turn has client IDs and incremental timeline state. Compare
+// only fields that affect rendering before replacing the local transcript.
+export function areChatMessagesRenderEquivalent(localMessage, persistedMessage) {
+  if (localMessage?.role !== persistedMessage?.role) {
+    return false;
+  }
+  return JSON.stringify(messageRenderSignature(localMessage))
+    === JSON.stringify(messageRenderSignature(persistedMessage));
+}
+
+export function areChatTranscriptsEquivalent(localMessages, persistedMessages) {
+  if (!Array.isArray(localMessages) || !Array.isArray(persistedMessages)) {
+    return false;
+  }
+  if (localMessages.length !== persistedMessages.length) {
+    return false;
+  }
+  return localMessages.every((message, index) => (
+    areChatMessagesRenderEquivalent(message, persistedMessages[index])
+  ));
+}
+
+// Canonical reconciliation may correct one terminal row. Keep every unchanged
+// local object so memoized historical cards retain their rendered Markdown and
+// do not re-highlight earlier code blocks when only another row changed.
+export function mergeCanonicalMessages(localMessages, canonicalMessages) {
+  if (!Array.isArray(localMessages) || !Array.isArray(canonicalMessages)) {
+    return canonicalMessages;
+  }
+
+  const merged = canonicalMessages.map((canonicalMessage, index) => (
+    areChatMessagesRenderEquivalent(localMessages[index], canonicalMessage)
+      ? localMessages[index]
+      : canonicalMessage
+  ));
+  const unchanged = merged.length === localMessages.length
+    && merged.every((message, index) => message === localMessages[index]);
+  return unchanged ? localMessages : merged;
+}
+
+// A non-equivalent canonical transcript carries backend identities. Retire a
+// finalized live owner for that same terminal stream before both can render.
+export function shouldRetireLiveOwnerAfterCanonicalReconciliation(liveTurn, streamId) {
+  return Boolean(
+    liveTurn?.assistantMessageId
+    && liveTurn.streamId === streamId,
+  );
+}
+
+// A settled foreground turn remains mounted briefly as the visual owner of its
+// final row. Hide its committed history twin until that owner changes or is
+// cleared, so terminal completion does not render the same assistant message
+// twice.
+export function excludeLiveOwnedMessage(messages, liveAssistantMessageId) {
+  if (!Array.isArray(messages) || !liveAssistantMessageId) {
+    return messages;
+  }
+  const liveMessageIndex = messages.findIndex((message) => message?.id === liveAssistantMessageId);
+  if (liveMessageIndex < 0) {
+    return messages;
+  }
+  return [
+    ...messages.slice(0, liveMessageIndex),
+    ...messages.slice(liveMessageIndex + 1),
+  ];
+}
+
 const SIDEBAR_GROUPS = [
   { key: 'pinned', label: 'Pinned' },
   { key: 'today', label: 'Today' },
@@ -133,7 +280,7 @@ export function collectMessageImages(message) {
       .flatMap((event) => event.images)
       .map((image, index) => ({
         id: image.id || `tool-${index}`,
-        src: `data:${image.media_type || 'image/jpeg'};base64,${image.base64}`,
+        src: image.url || `data:${image.media_type || 'image/jpeg'};base64,${image.base64}`,
         alt: `Image ${index + 1}`,
       }))
     : [];
@@ -157,11 +304,77 @@ export function countToolInvocations(messages) {
   ), 0);
 }
 
-function countTokens(messages) {
+export function countTokens(messages) {
   return messages.reduce(
     (total, message) => total + (Number.isFinite(message?.tokenCount) ? message.tokenCount : 0),
     0,
   );
+}
+
+export function countReasoningTokens(messages) {
+  return messages.reduce((total, message) => {
+    if (message?.role !== 'assistant' && message?.role !== 'ai') return total;
+    return total + (Number.isFinite(message.reasoningTokenCount) ? message.reasoningTokenCount : 0);
+  }, 0);
+}
+
+function estimateReasoningTokens(reasoningText) {
+  const length = typeof reasoningText === 'string' ? reasoningText.trim().length : 0;
+  return length > 0 ? Math.round(length / 4) : 0;
+}
+
+export function committedReasoningTokenDisplay(messages) {
+  let total = countReasoningTokens(messages);
+  let estimated = false;
+  for (const message of messages) {
+    if (message?.role !== 'assistant' && message?.role !== 'ai') continue;
+    if (Number.isFinite(message.reasoningTokenCount) && message.reasoningTokenCount > 0) continue;
+    const estimate = estimateReasoningTokens(message.reasoningText);
+    if (estimate > 0) {
+      total += estimate;
+      estimated = true;
+    }
+  }
+  return { total, estimated };
+}
+
+export function committedReasoningTokenCounts(messages) {
+  const counts = new Map();
+  for (const message of messages) {
+    if (!message?.id || (message.role !== 'assistant' && message.role !== 'ai')) continue;
+    if (Number.isFinite(message.reasoningTokenCount)) {
+      counts.set(message.id, message.reasoningTokenCount);
+    }
+  }
+  return counts;
+}
+
+export function liveReasoningTokenAdjustment(liveAssistantTurn, committedCounts) {
+  if (!liveAssistantTurn) {
+    return { total: 0, estimated: false };
+  }
+
+  const hasCommitted = Boolean(
+    liveAssistantTurn.assistantMessageId
+    && committedCounts.has(liveAssistantTurn.assistantMessageId),
+  );
+  const liveCount = Number.isFinite(liveAssistantTurn.reasoningTokenCount)
+    ? liveAssistantTurn.reasoningTokenCount
+    : 0;
+  const committedCount = hasCommitted
+    ? committedCounts.get(liveAssistantTurn.assistantMessageId)
+    : 0;
+
+  if (liveCount > committedCount) {
+    return { total: liveCount - committedCount, estimated: false };
+  }
+  if (!hasCommitted) {
+    const estimate = estimateReasoningTokens(liveAssistantTurn.reasoningText);
+    if (estimate > 0) {
+      return { total: estimate, estimated: true };
+    }
+  }
+  return { total: 0, estimated: false };
 }
 
 function getFirstMessageTimestamp(messages) {

@@ -19,6 +19,14 @@ export const realtimeListenerMiddleware = createListenerMiddleware();
 let eventSource = null;
 let activeStreamUrl = null;
 
+// The backend emits a `connection.heartbeat` ui.event every 15s
+// (SSE_HEARTBEAT_INTERVAL). A stream silent for longer than this is deaf:
+// the server evicted the subscriber or the socket is half-open — states
+// EventSource never surfaces through onerror, so it never reconnects.
+const HEARTBEAT_STALE_MS = 45000;
+const WATCHDOG_POLL_MS = 15000;
+
+
 function isUiDataThunkLifecycle(action) {
   return action.type.startsWith('uiData/');
 }
@@ -57,6 +65,13 @@ function acknowledgementFor(action) {
   return null;
 }
 
+function failPendingOperations(listenerApi, error) {
+  const pendingOps = listenerApi.getState().realtime.pendingOps || {};
+  for (const requestId of Object.keys(pendingOps)) {
+    listenerApi.dispatch(failPendingOp({ requestId, error }));
+  }
+}
+
 function closeCurrentStream(dispatch) {
   if (eventSource) {
     eventSource.close();
@@ -80,16 +95,48 @@ realtimeListenerMiddleware.startListening({
     const source = new EventSource(streamUrl);
     eventSource = source;
     activeStreamUrl = streamUrl;
+    let lastEventAt = Date.now();
+
+    const watchdog = setInterval(() => {
+      if (eventSource !== source) {
+        clearInterval(watchdog);
+        return;
+      }
+      if (Date.now() - lastEventAt <= HEARTBEAT_STALE_MS) {
+        return;
+      }
+      // Deaf stream: tear it down and reconnect from scratch.
+      clearInterval(watchdog);
+      source.close();
+      eventSource = null;
+      activeStreamUrl = null;
+      const error = 'Realtime stream stale — reconnecting';
+      listenerApi.dispatch(realtimeErrored(error));
+      failPendingOperations(listenerApi, error);
+      listenerApi.dispatch(startRealtimeStream({ streamUrl }));
+    }, WATCHDOG_POLL_MS);
 
     source.onopen = () => {
+      if (eventSource !== source) {
+        return;
+      }
+      lastEventAt = Date.now();
       listenerApi.dispatch(realtimeConnected());
     };
 
     source.onerror = () => {
-      listenerApi.dispatch(realtimeErrored('Realtime stream disconnected'));
+      if (eventSource !== source) {
+        return;
+      }
+      const error = 'Realtime stream disconnected';
+      listenerApi.dispatch(realtimeErrored(error));
+      // EventSource retries automatically after an error. Requests waiting for
+      // an event from the failed connection must not remain pending forever.
+      failPendingOperations(listenerApi, error);
     };
 
     source.addEventListener('ui.event', (messageEvent) => {
+      lastEventAt = Date.now();
       try {
         const event = JSON.parse(messageEvent.data);
         const invalidReason = invalidEnvelopeReason(event);
@@ -115,11 +162,8 @@ realtimeListenerMiddleware.startListening({
   actionCreator: stopRealtimeStream,
   effect: async (_action, listenerApi) => {
     closeCurrentStream(listenerApi.dispatch);
-    // Fail all pending operations when the stream disconnects
-    const state = listenerApi.getState();
-    for (const requestId of Object.keys(state.realtime.pendingOps || {})) {
-      listenerApi.dispatch(failPendingOp({ requestId, error: 'Stream disconnected' }));
-    }
+    // Fail all pending operations when the stream disconnects.
+    failPendingOperations(listenerApi, 'Stream disconnected');
   },
 });
 // Register at thunk dispatch, before its fetch begins. A backend publishes the

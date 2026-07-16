@@ -7,13 +7,96 @@
  */
 
 import { renderMarkdownToHtml } from '../../lib/markdown';
-import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
+import { isReasoningEvent } from './streamEventsModel';
 
 // ─── Markdown / HTML ──────────────────────────────────────────────────────
 
 export function formatMessage(content) {
   return renderMarkdownToHtml(content);
 }
+// A foreground turn and its settled historical message mount under different
+// owners. Keep a small LRU cache so that handoff or canonical reconciliation
+// does not parse, sanitize, and highlight unchanged terminal Markdown twice.
+const renderedMarkdownCache = new Map();
+const MAX_RENDERED_MARKDOWN_ENTRIES = 16;
+const MAX_RENDERED_MARKDOWN_CHARS = 2 * 1024 * 1024;
+let renderedMarkdownChars = 0;
+
+export function renderSafeMarkdown(content) {
+  if (!content) return '';
+
+  const cached = renderedMarkdownCache.get(content);
+  if (cached !== undefined) {
+    renderedMarkdownCache.delete(content);
+    renderedMarkdownCache.set(content, cached);
+    return cached;
+  }
+
+  const rendered = sanitizeHtmlFragment(formatMessage(content));
+  const cacheCost = content.length + rendered.length;
+  if (cacheCost > MAX_RENDERED_MARKDOWN_CHARS) {
+    return rendered;
+  }
+
+  renderedMarkdownCache.set(content, rendered);
+  renderedMarkdownChars += cacheCost;
+  while (
+    renderedMarkdownCache.size > MAX_RENDERED_MARKDOWN_ENTRIES
+    || renderedMarkdownChars > MAX_RENDERED_MARKDOWN_CHARS
+  ) {
+    const [oldestContent, oldestRendered] = renderedMarkdownCache.entries().next().value;
+    renderedMarkdownCache.delete(oldestContent);
+    renderedMarkdownChars -= oldestContent.length + oldestRendered.length;
+  }
+  return rendered;
+}
+// Reasoning events are merged into fresh objects as deltas arrive, so a WeakMap
+// keyed only by object identity misses the cache on every update. Keep a small
+// ID-keyed cache as well; source strings still invalidate entries when a merged
+// event changes, and the bound prevents retained reasoning text from growing
+// without limit. Sanitized HTML remains uncached because it depends on the live
+// DOM policy.
+const reasoningMarkdownCache = new WeakMap();
+const reasoningMarkdownById = new Map();
+const MAX_REASONING_MARKDOWN_ENTRIES = 128;
+
+function renderReasoningHtml(event, presentation) {
+  const summary = presentation.summary || '';
+  const detail = presentation.detail || '';
+  if (!event || (typeof event !== 'object' && typeof event !== 'function')) {
+    return {
+      summaryHtml: summary ? formatMessage(summary) : '',
+      detailHtml: detail ? formatMessage(detail) : '',
+    };
+  }
+
+  const eventId = typeof event.id === 'string' && event.id ? event.id : null;
+  let cached = eventId ? reasoningMarkdownById.get(eventId) : reasoningMarkdownCache.get(event);
+  if (!cached) {
+    cached = { summarySource: undefined, detailSource: undefined, summaryHtml: '', detailHtml: '' };
+  }
+
+  if (cached.summarySource !== summary) {
+    cached.summarySource = summary;
+    cached.summaryHtml = summary ? formatMessage(summary) : '';
+  }
+  if (cached.detailSource !== detail) {
+    cached.detailSource = detail;
+    cached.detailHtml = detail ? formatMessage(detail) : '';
+  }
+
+  if (eventId) {
+    reasoningMarkdownById.delete(eventId);
+    reasoningMarkdownById.set(eventId, cached);
+    while (reasoningMarkdownById.size > MAX_REASONING_MARKDOWN_ENTRIES) {
+      reasoningMarkdownById.delete(reasoningMarkdownById.keys().next().value);
+    }
+  } else {
+    reasoningMarkdownCache.set(event, cached);
+  }
+  return { summaryHtml: cached.summaryHtml, detailHtml: cached.detailHtml };
+}
+ 
 
 const ALLOWED_TAGS = new Set([
   'p', 'br', 'b', 'i', 'em', 'strong', 'code', 'pre', 'blockquote',
@@ -75,18 +158,16 @@ export function appendStreamingCursor(html) {
   cursor.className = 'stream-cursor';
   cursor.textContent = '▋';
 
-  const template = document.createElement('template');
-  template.innerHTML = html || '';
+  const container = document.createElement('div');
+  container.innerHTML = html || '';
 
-  let host = template.content;
+  let host = container;
   while (host.lastElementChild) {
     host = host.lastElementChild;
   }
   host.appendChild(cursor);
 
-  const div = document.createElement('div');
-  div.appendChild(template.content.cloneNode(true));
-  return div.innerHTML;
+  return container.innerHTML;
 }
 
 // ─── Label / display helpers ─────────────────────────────────────────────
@@ -148,6 +229,162 @@ export function statusPillProps(status) {
   if (status === 'success') return { label: 'done', tone: 'ok' };
   return { label: 'running', tone: 'pending' };
 }
+function firstStringArg(args, keys) {
+  for (const key of keys) {
+    const value = args?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function compactInputValue(value, limit = 96) {
+  if (typeof value === 'string') {
+    const compact = value.replace(/\s+/g, ' ').trim();
+    return compact.length > limit ? `${compact.slice(0, limit - 1)}…` : compact;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} item${value.length === 1 ? '' : 's'}`;
+  return '';
+}
+
+/**
+ * Deterministically describes the intent of a normal tool invocation without
+ * sending arguments through an LLM. The original args remain in metadata and
+ * are still rendered in the tool detail block; this is only the terse header
+ * label used by tool_start rows.
+ */
+export function formatToolInputSummary(toolName, args) {
+  const name = typeof toolName === 'string' && toolName.trim() ? toolName.trim().toLowerCase() : 'tool';
+  let input = args && typeof args === 'object' && !Array.isArray(args) ? args : {};
+  if (typeof args === 'string') {
+    try {
+      const parsed = JSON.parse(args);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) input = parsed;
+    } catch {
+      return compactInputValue(args) || 'invoking…';
+    }
+  }
+  if (name === 'task') {
+    const subagentType = firstStringArg(input, ['subagent_type']);
+    return subagentType ? `subagent_type: ${compactInputValue(subagentType)}` : 'invoke subagent';
+  }
+  const path = firstStringArg(input, ['path', 'relative_path', 'file_path', 'filename', 'directory']);
+
+  if (name === 'read_file' || name === 'readfile' || name === 'file_read') {
+    return path ? `path: ${compactInputValue(path)}` : 'read file';
+  }
+
+  if (name === 'glob' || name === 'glob_files' || name === 'search_files') {
+    const pattern = firstStringArg(input, ['pattern', 'glob_pattern', 'query']);
+    const parts = [];
+    if (pattern) parts.push(`pattern: ${compactInputValue(pattern)}`);
+    if (path) parts.push(`path: ${compactInputValue(path)}`);
+    return parts.join(' • ') || 'find files';
+  }
+
+  if (name === 'ls' || name === 'list_dir' || name === 'list_directory') {
+    return `path: ${compactInputValue(path || '.')}`;
+  }
+
+  if (name === 'list_agents' || name === 'rediscover_agents') {
+    return 'list agents';
+  }
+
+  if (name === 'write_todos' || name === 'write_todo' || name === 'update_todos') {
+    const todos = input.todos || input.tasks || input.items;
+    if (Array.isArray(todos)) {
+      const active = todos.find((todo) => todo && (todo.status === 'in_progress' || todo.status === 'pending'));
+      const activeText = compactInputValue(active?.content || active?.title || active?.task, 72);
+      return `${todos.length} todo${todos.length === 1 ? '' : 's'}${activeText ? ` • ${activeText}` : ''}`;
+    }
+    return 'update todos';
+  }
+
+  const isImageTool = name.includes('image') || name.includes('vision') || name.includes('draw') || name.includes('generate');
+  const isSearchTool = name.includes('search') || name.includes('query');
+  const query = firstStringArg(input, ['query', 'q', 'search_query', 'prompt', 'text', 'request', 'description']);
+  if (query && (isImageTool || isSearchTool)) {
+    return `${isImageTool ? 'prompt' : 'query'}: ${compactInputValue(query)}`;
+  }
+
+  const keys = Object.keys(input)
+    .filter((key) => !/token|secret|password|api[_-]?key|authorization/i.test(key))
+    .sort()
+    .slice(0, 3);
+  const generic = keys.map((key) => {
+    const value = compactInputValue(input[key], 64);
+    return value ? `${key}: ${value}` : `${key}: ${Array.isArray(input[key]) ? `${input[key].length} items` : 'set'}`;
+  });
+  return generic.join(' • ') || 'invoking…';
+}
+
+function artifactSummary(metadata) {
+  const artifact = metadata?.artifact;
+  return artifact && typeof artifact === 'object' && !Array.isArray(artifact)
+    && typeof artifact.summary === 'string' && artifact.summary.trim()
+    ? artifact.summary.trim()
+    : '';
+}
+
+function todoItemCount(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  const raw = value.trim();
+  try {
+    const parsed = JSON.parse(raw);
+    const items = Array.isArray(parsed)
+      ? parsed
+      : (parsed && typeof parsed === 'object' && (parsed.todos || parsed.tasks || parsed.items));
+    return Array.isArray(items) ? items.length : null;
+  } catch {
+    // Some tool adapters stringify Python-style lists with single quotes.
+    // Count item objects without displaying that serialized representation.
+    const matches = raw.match(/\{\s*["'](?:content|title|task)["']\s*:/g);
+    return matches && matches.length > 0 ? matches.length : null;
+  }
+}
+
+function structuredResultSummary(raw, toolName) {
+  if (!raw || typeof raw !== 'string') return '';
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    if (!raw.startsWith('{') && !raw.startsWith('[')) return '';
+    if (toolName === 'list_agents') {
+      return 'Listed available agents';
+    }
+    return 'Returned structured data';
+  }
+  if (toolName === 'list_agents' && parsed && Array.isArray(parsed.agents)) {
+    const count = parsed.agents.length;
+    return `Found ${count} agent${count === 1 ? '' : 's'}`;
+  }
+  if (Array.isArray(parsed)) {
+    return `Returned ${parsed.length} item${parsed.length === 1 ? '' : 's'}`;
+  }
+  if (parsed && typeof parsed === 'object') {
+    const keys = Object.keys(parsed);
+    return keys.length > 0
+      ? `Returned structured data · ${keys.length} field${keys.length === 1 ? '' : 's'}`
+      : 'Completed with no structured output';
+  }
+  return '';
+}
+function toolOutputLabel(metadata, fallbackKey, toolName = '') {
+  const artifact = artifactSummary(metadata);
+  if (artifact) return artifact;
+  const fallback = typeof metadata?.[fallbackKey] === 'string' ? metadata[fallbackKey].trim() : '';
+  if (toolName === 'write_todos' && fallbackKey === 'result_preview') {
+    const count = todoItemCount(fallback);
+    if (count !== null) return `Updated todo list · ${count} item${count === 1 ? '' : 's'}`;
+  }
+  return structuredResultSummary(fallback, toolName) || fallback;
+}
+
+function isNormalTool(toolName) {
+  return Boolean(toolName);
+}
+
 
 export function formatArgsPreview(args) {
   if (args === null || args === undefined) return '';
@@ -167,8 +404,11 @@ export function formatDuration(ms) {
 }
 
 export function formatTimestamp(value) {
-  if (!Number.isFinite(value)) return '';
-  return new Date(value).toLocaleTimeString([], {
+  const timestamp = Number.isFinite(value)
+    ? value
+    : (typeof value === 'string' ? Date.parse(value) : NaN);
+  if (!Number.isFinite(timestamp)) return '';
+  return new Date(timestamp).toLocaleTimeString([], {
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
 }
@@ -205,6 +445,36 @@ function badgeForEventType(eventType) {
   return 'Event';
 }
 
+function splitReasoningContent(content) {
+  const paragraphs = typeof content === 'string'
+    ? content.trim().split(/\n\s*\n/).filter(Boolean)
+    : [];
+  return {
+    summary: paragraphs[0] || '',
+    detail: paragraphs.slice(1).join('\n\n'),
+  };
+}
+
+function reasoningPresentation(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  const content = typeof event?.content === 'string' ? event.content.trim() : '';
+  const summary = typeof metadata.summary === 'string' ? metadata.summary.trim() : '';
+  const detail = typeof metadata.detail === 'string' ? metadata.detail.trim() : '';
+  const generatedReasoning = metadata.source === 'message_reasoning' || metadata.source === 'stream_reasoning';
+  const generatedSummaryMatchesContent = Boolean(summary && !detail && content && summary === content);
+
+  // Generated live and checkpoint traces are authoritative in event.content;
+  // explicit provider summary/detail metadata remains authoritative otherwise.
+  // Split generated traces into a glanceable summary plus expandable remainder.
+  const shouldSplitGeneratedContent = !detail && (generatedReasoning || generatedSummaryMatchesContent);
+  const presentation = shouldSplitGeneratedContent
+    ? splitReasoningContent(content || summary)
+    : (summary || detail ? { summary, detail } : { summary: '', detail: '' });
+
+  return presentation;
+}
+
+
 // ─── Stream event rendering ───────────────────────────────────────────────
 
 export function describeStreamEvent(event) {
@@ -237,54 +507,54 @@ export function describeStreamEvent(event) {
 
   if (eventType === 'tool_start') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const args = formatArgsPreview(metadata.args_preview);
     return {
       badge: 'Tool',
       title: `→ ${prettifyLabel(toolName)}`,
-      metaDetail: args || 'invoking…',
+      metaDetail: isNormalTool(toolName)
+        ? ''
+        : (formatArgsPreview(metadata.args_preview) || 'invoking…'),
       bodyDetail: '',
     };
   }
 
   if (eventType === 'tool_result') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.result_preview === 'string' && metadata.result_preview) {
-      parts.push(metadata.result_preview);
-    }
+    const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
+    const normalTool = isNormalTool(toolName);
+    const output = normalTool
+      ? ''
+      : (typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '');
     return {
       badge: 'Tool',
       title: `✓ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'completed',
+      metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'completed',
       bodyDetail: '',
     };
   }
 
   if (eventType === 'tool_error') {
     const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
-    const parts = [];
-    if (typeof metadata.duration_ms === 'number') {
-      parts.push(formatDuration(metadata.duration_ms));
-    }
-    if (typeof metadata.error === 'string' && metadata.error) {
-      parts.push(metadata.error);
-    }
+    const duration = Number.isFinite(metadata.duration_ms) ? formatDuration(metadata.duration_ms) : '';
+    const normalTool = isNormalTool(toolName);
+    const output = normalTool
+      ? ''
+      : (typeof metadata.error === 'string' ? metadata.error.trim() : '');
     return {
       badge: 'Tool',
       title: `✗ ${prettifyLabel(toolName)}`,
-      metaDetail: parts.join(' • ') || 'error',
+      metaDetail: normalTool ? duration : [duration, output].filter(Boolean).join(' • ') || 'error',
       bodyDetail: '',
     };
   }
 
   if (isReasoningEvent(event)) {
+    const presentation = reasoningPresentation(event);
+    const reasoningHtml = renderReasoningHtml(event, presentation);
     return {
       badge: 'Reasoning',
       title: 'Reasoning',
-      bodyHtml: hasReasoningContent(event) ? formatMessage(event.content) : '',
+      bodyHtml: reasoningHtml.summaryHtml,
+      reasoningDetailHtml: reasoningHtml.detailHtml,
       metaDetail: '',
       bodyDetail: '',
     };
@@ -496,18 +766,27 @@ export function toolDetailsForEvent(event, description) {
 
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   const toolName = typeof metadata.tool_name === 'string' ? metadata.tool_name : 'tool';
+  const isNormal = isNormalTool(toolName);
   const args = formatArgsPreview(metadata.args_preview);
   const isError = eventType === 'tool_error';
-  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview : '';
-  const error = typeof metadata.error === 'string' ? metadata.error : '';
+  const result = typeof metadata.result_preview === 'string' ? metadata.result_preview.trim() : '';
+  const error = typeof metadata.error === 'string' ? metadata.error.trim() : '';
   const duration = typeof metadata.duration_ms === 'number' ? formatDuration(metadata.duration_ms) : '';
+  const summary = eventType === 'tool_start'
+    ? (isNormal ? formatToolInputSummary(toolName, metadata.args_preview) : '')
+    : (isNormal
+      ? (toolOutputLabel(metadata, isError ? 'error' : 'result_preview', toolName) || (isError ? 'error' : 'completed'))
+      : '');
 
   return {
     kind: toolName,
     desc: description.title.replace(/^[→✓✗]\s*/, ''),
     status: isError ? 'error' : eventType === 'tool_result' ? 'complete' : 'running',
     statusTone: isError ? 'err' : 'ok',
+    summary,
+    duration: isNormal ? duration : '',
     command: args,
-    body: [duration, error || result].filter(Boolean).join('\n'),
+    body: isNormal ? (isError ? error : result) : [duration, isError ? error : result].filter(Boolean).join('\n'),
+    isNormal,
   };
 }

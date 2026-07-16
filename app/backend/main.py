@@ -20,13 +20,15 @@ import logging
 import time
 import uuid
 from collections import defaultdict
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.sse import EventSourceResponse, ServerSentEvent
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
@@ -79,6 +81,138 @@ config = ChatServerConfig.from_env()
 # Client can be either IPC-based or subprocess-based
 client: ProgenitorClient | SSEProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
+_response_request_ids: dict[str, str] = {}
+
+RESPONSE_STREAM_REPLAY_LIMIT = 1024
+RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE = 100
+RESPONSE_STREAM_KEEPALIVE_SECONDS = 15.0
+RESPONSE_STREAM_TTL_SECONDS = 120.0
+
+
+@dataclass
+class ResponseStreamFrame:
+    """One replayable response-content frame for a browser request."""
+
+    id: str
+    seq: int
+    event_type: str
+    payload: dict[str, Any]
+
+
+@dataclass
+class ResponseStreamState:
+    """In-memory response-content stream state scoped to one browser request."""
+
+    request_id: str
+    response_id: str
+    thread_id: str
+    model: str
+    frames: list[ResponseStreamFrame]
+    subscribers: dict[asyncio.Queue, asyncio.Task | None]
+    next_seq: int
+    terminal_reached: bool
+    expires_at: float | None
+
+
+_response_streams: dict[str, ResponseStreamState] = {}
+
+
+def _response_stream_frame_id(request_id: str, seq: int) -> str:
+    """Return the stable replay cursor for one response-content frame."""
+    return f"chat-response:{request_id}:{seq}"
+
+
+def _parse_response_stream_cursor(request_id: str, cursor: str | None) -> tuple[str, int | None]:
+    """Validate a browser replay cursor for its response request."""
+    if cursor is None or not cursor.strip():
+        return "missing", None
+    prefix = f"chat-response:{request_id}:"
+    if not cursor.startswith(prefix):
+        return "invalid", None
+    try:
+        seq = int(cursor.removeprefix(prefix))
+    except ValueError:
+        return "invalid", None
+    return ("ok", seq) if seq >= 0 else ("invalid", None)
+
+
+def _ensure_response_stream(
+    request_id: str, response_id: str, thread_id: str, model: str
+) -> ResponseStreamState:
+    """Return the request-scoped dedicated stream, creating it once."""
+    state = _response_streams.get(request_id)
+    if state is not None:
+        return state
+    state = ResponseStreamState(
+        request_id=request_id,
+        response_id=response_id,
+        thread_id=thread_id,
+        model=model,
+        frames=[],
+        subscribers={},
+        next_seq=0,
+        terminal_reached=False,
+        expires_at=None,
+    )
+    _response_streams[request_id] = state
+    return state
+
+
+def _append_response_stream_frame(
+    state: ResponseStreamState, event_type: str, payload: dict[str, Any]
+) -> ResponseStreamFrame:
+    """Append one content frame, retaining it for replay and live subscribers."""
+    state.next_seq += 1
+    frame = ResponseStreamFrame(
+        id=_response_stream_frame_id(state.request_id, state.next_seq),
+        seq=state.next_seq,
+        event_type=event_type,
+        payload=payload,
+    )
+    state.frames.append(frame)
+    del state.frames[:-RESPONSE_STREAM_REPLAY_LIMIT]
+
+    stale_subscribers: list[asyncio.Queue] = []
+    for queue in list(state.subscribers):
+        try:
+            queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            stale_subscribers.append(queue)
+    for queue in stale_subscribers:
+        task = state.subscribers.pop(queue, None)
+        if task is not None and not task.done():
+            task.cancel()
+        logger.warning("Event queue full for response stream subscriber — closing stale connection")
+    return frame
+
+
+def _expire_response_stream_later(request_id: str, state: ResponseStreamState) -> None:
+    """Remove a terminal response stream after its replay grace period."""
+    if state.expires_at is None:
+        return
+
+    async def expire() -> None:
+        assert state.expires_at is not None
+        await asyncio.sleep(max(0.0, state.expires_at - time.time()))
+        if _response_streams.get(request_id) is state and time.time() >= state.expires_at:
+            _response_streams.pop(request_id, None)
+
+    _spawn_background_task(expire())
+
+
+# The event loop only holds weak references to tasks: an unreferenced
+# fire-and-forget task can be garbage-collected mid-await and die silently.
+# Observed in production: a dispatched generation vanished between its 202
+# acknowledgement and the runtime POST, losing the user's message.
+_background_tasks: set[asyncio.Task] = set()
+
+
+def _spawn_background_task(coro: Coroutine[Any, Any, Any]) -> asyncio.Task:
+    """``asyncio.create_task`` with a strong reference held until completion."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
 
 
 def get_progenitor_liveness() -> bool:
@@ -679,7 +813,7 @@ async def lifespan(app: FastAPI):
             urgent = bool(metadata.get("urgent")) or level in {"warning", "error"}
             requires_response = bool(metadata.get("requires_response"))
 
-            asyncio.create_task(
+            _spawn_background_task(
                 _handle_alert_request(
                     client,
                     title=title,
@@ -721,7 +855,7 @@ async def lifespan(app: FastAPI):
                 content = data.get("content", "")
                 if content:
                     # Fire and forget - don't block SSE broadcast
-                    asyncio.create_task(_send_telegram_message(telegram, content, event_type))
+                    _spawn_background_task(_send_telegram_message(telegram, content, event_type))
 
     client = get_sse_client(config, event_callback=combined_event_callback)
 
@@ -784,7 +918,7 @@ async def lifespan(app: FastAPI):
         logger.info("Telegram polling started with message handler")
 
         # Send a one-time agent-generated greeting now that Telegram + IPC are wired.
-        asyncio.create_task(_send_telegram_connected_message(telegram_client, client))
+        _spawn_background_task(_send_telegram_connected_message(telegram_client, client))
 
     # Don't auto-start Progenitor - let it start on first request
     # This allows the server to start even if Progenitor has issues
@@ -909,7 +1043,7 @@ async def rate_limit_middleware(request: Request, call_next):
     documentation_paths = ("/docs", "/openapi.json")
     if not config.rate_limit_enabled:
         return await call_next(request)
-    if request.url.path in documentation_paths:
+    if request.url.path in documentation_paths or request.url.path == "/healthz":
         return await call_next(request)
     if request.url.path.startswith("/api/ui/") and not (
         request.url.path == "/api/ui/responses" or request.url.path.startswith("/api/ui/responses/")
@@ -980,6 +1114,84 @@ def _request_correlation_id(request: Request, header_request_id: str | None) -> 
         return str(uuid.uuid4())
 
 
+async def _generate_response_stream(
+    state: ResponseStreamState,
+    cursor: str | None,
+) -> AsyncGenerator[ServerSentEvent, None]:
+    """Yield one request's replayable response content and live frames."""
+    queue: asyncio.Queue[ResponseStreamFrame] = asyncio.Queue(
+        maxsize=RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE
+    )
+    current_task = asyncio.current_task()
+    state.subscribers[queue] = current_task
+
+    try:
+        cursor_status, cursor_seq = _parse_response_stream_cursor(state.request_id, cursor)
+        if cursor_status == "invalid":
+            yield ServerSentEvent(
+                event="chat.response.resync_required",
+                data={"request_id": state.request_id, "reason": "invalid_cursor"},
+            )
+            return
+
+        retained_frames = list(state.frames)
+        if cursor_status == "ok":
+            assert cursor_seq is not None
+            if retained_frames and cursor_seq < retained_frames[0].seq - 1:
+                yield ServerSentEvent(
+                    event="chat.response.resync_required",
+                    data={"request_id": state.request_id, "reason": "cursor_expired"},
+                )
+                return
+        else:
+            cursor_seq = 0
+
+        for frame in retained_frames:
+            if frame.seq > cursor_seq:
+                yield ServerSentEvent(event=frame.event_type, data=frame.payload, id=frame.id)
+
+        while not (state.terminal_reached and queue.empty()):
+            try:
+                frame = await asyncio.wait_for(
+                    queue.get(), timeout=RESPONSE_STREAM_KEEPALIVE_SECONDS
+                )
+                yield ServerSentEvent(event=frame.event_type, data=frame.payload, id=frame.id)
+            except TimeoutError:
+                if state.terminal_reached and queue.empty():
+                    break
+                yield ServerSentEvent(
+                    event="chat.response.heartbeat",
+                    data={"request_id": state.request_id, "timestamp": time.time()},
+                )
+    finally:
+        state.subscribers.pop(queue, None)
+
+
+@app.get(
+    "/api/ui/responses/{request_id}/stream",
+    response_class=EventSourceResponse,
+)
+async def response_stream(
+    request_id: str,
+    response: Response,
+    after: str | None = Query(default=None),
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+) -> AsyncGenerator[ServerSentEvent, None]:
+    """Serve replayable response content without loading the global UI stream."""
+    if not request_id.strip():
+        raise HTTPException(status_code=404, detail="Unknown response stream")
+    state = _response_streams.get(request_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="Unknown response stream")
+
+    response.headers["X-Accel-Buffering"] = "no"
+    response.headers["Cache-Control"] = "no-cache"
+    response.headers["Connection"] = "keep-alive"
+    cursor = last_event_id if last_event_id is not None else after
+    async for event in _generate_response_stream(state, cursor):
+        yield event
+
+
 @app.post("/api/ui/responses", status_code=202, response_model=UiRequestAcknowledgement)
 async def responses(
     request: Request,
@@ -987,9 +1199,9 @@ async def responses(
     body: ResponseRequest,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Dispatch a browser generation and acknowledge it with HTTP 202.
+    """Dispatch a browser generation and acknowledge its lifecycle on ui.event.
 
-    Generation events are broadcast on the canonical UI event stream.
+    Streaming response content travels on the request-scoped response SSE endpoint.
     """
     request_id = _request_correlation_id(request, x_request_id)
 
@@ -1012,10 +1224,13 @@ async def responses(
 
     response_id = f"resp-{uuid.uuid4().hex[:8]}"
     _active_response_streams[request_id] = asyncio.Event()
+    if body.stream:
+        _ensure_response_stream(request_id, response_id, thread_id, body.model)
+    _response_request_ids[response_id] = request_id
 
     # Task creation is the generation dispatch. Enqueue the causal started
     # event only after that dispatch and before acknowledging it.
-    asyncio.create_task(
+    _spawn_background_task(
         _run_response_event_stream(
             message=last_user_msg,
             model=body.model,
@@ -1057,12 +1272,14 @@ async def cancel_response(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Cancel a generation without conflating its ID with this cancellation request."""
+    """Cancel a generation using either its browser response or request ID."""
     request_id = _request_correlation_id(request, x_request_id)
-    target_request_id = generation_id.strip()
-    if not target_request_id:
+    target_id = generation_id.strip()
+    if not target_id:
         raise HTTPException(status_code=400, detail="generation_id is required")
 
+    target_request_id = _response_request_ids.get(target_id, target_id)
+    target_response_id = target_id if target_id in _response_request_ids else None
     cancel_event = _active_response_streams.get(target_request_id)
     if cancel_event is not None:
         cancel_event.set()
@@ -1083,13 +1300,16 @@ async def cancel_response(
 
     # This event resolves the cancellation operation. The generation runner
     # separately emits its terminal event with the target request ID.
+    cancellation_payload = {
+        "target_request_id": target_request_id,
+        "cancel_request_id": request_id,
+        "cancelled": True,
+    }
+    if target_response_id is not None:
+        cancellation_payload["target_response_id"] = target_response_id
     broadcast_ui_event(
-        "chat.response.cancelled",
-        {
-            "target_request_id": target_request_id,
-            "cancel_request_id": request_id,
-            "cancelled": True,
-        },
+        "chat.response.cancel_requested",
+        cancellation_payload,
         scope="chat",
         request_id=request_id,
     )
@@ -1098,16 +1318,12 @@ async def cancel_response(
         # to emit the target terminal event after a successful remote cancel.
         broadcast_ui_event(
             "chat.response.cancelled",
-            {
-                "target_request_id": target_request_id,
-                "cancel_request_id": request_id,
-                "cancelled": True,
-            },
+            cancellation_payload,
             scope="chat",
             request_id=target_request_id,
         )
 
-    return acknowledgement_response(request_id, ["chat.response.cancelled"])
+    return acknowledgement_response(request_id, ["chat.response.cancel_requested"])
 
 
 def _extract_response_input(request: ResponseRequest) -> str:
@@ -1167,15 +1383,30 @@ async def _run_response_event_stream(
     stream: bool = True,
     include_reasoning: bool | None = None,
 ) -> None:
-    """Run one dispatched generation and publish all result data on ui.event."""
+    """Run one dispatched generation and publish lifecycle plus response content."""
     assert client is not None, "Client must be initialized"
     cancel_event = _active_response_streams.get(request_id)
     if cancel_event is None:
         cancel_event = asyncio.Event()
         _active_response_streams[request_id] = cancel_event
+    response_stream_state = _response_streams.get(request_id) if stream else None
 
     def response_payload(**fields: Any) -> dict[str, Any]:
         return {"id": response_id, "model": model, "thread_id": thread_id, **fields}
+
+    def runtime_stream_timing(item: dict[str, Any]) -> dict[str, int]:
+        return {
+            field: value
+            for field in ("runtime_emitted_at_ms", "runtime_stream_seq")
+            if isinstance((value := item.get(field)), int)
+        }
+
+    def mark_response_stream_terminal() -> None:
+        if response_stream_state is None or response_stream_state.terminal_reached:
+            return
+        response_stream_state.terminal_reached = True
+        response_stream_state.expires_at = time.time() + RESPONSE_STREAM_TTL_SECONDS
+        _expire_response_stream_later(request_id, response_stream_state)
 
     def emit_cancelled() -> None:
         broadcast_ui_event(
@@ -1185,6 +1416,7 @@ async def _run_response_event_stream(
             session_id=thread_id,
             request_id=request_id,
         )
+        mark_response_stream_terminal()
 
     try:
         if cancel_event.is_set():
@@ -1207,13 +1439,16 @@ async def _run_response_event_stream(
                     chunk = str(item.get("content", ""))
                     if not chunk:
                         continue
-                    broadcast_ui_event(
-                        "chat.response.delta",
-                        response_payload(delta=chunk),
-                        scope="chat",
-                        session_id=thread_id,
-                        request_id=request_id,
-                    )
+                    if response_stream_state is not None:
+                        _append_response_stream_frame(
+                            response_stream_state,
+                            "chat.response.delta",
+                            response_payload(
+                                delta=chunk,
+                                request_id=request_id,
+                                **runtime_stream_timing(item),
+                            ),
+                        )
                 elif item_type == "stream_event":
                     # Structured events may carry rich image blocks. Keep them
                     # intact rather than reducing them to response text.
@@ -1221,16 +1456,21 @@ async def _run_response_event_stream(
                         event_type=item.get("event_type", "unknown"),
                         content=item.get("content", ""),
                         metadata=item.get("metadata", {}),
+                        **runtime_stream_timing(item),
+                        request_id=request_id,
                     )
                     if isinstance(item.get("images"), list):
                         payload["images"] = item["images"]
-                    broadcast_ui_event(
-                        "chat.response.event",
-                        payload,
-                        scope="chat",
-                        session_id=thread_id,
-                        request_id=request_id,
-                    )
+                    if response_stream_state is not None:
+                        _append_response_stream_frame(
+                            response_stream_state,
+                            "chat.response.event",
+                            payload,
+                        )
+            if cancel_event.is_set():
+                logger.info("Response stream cancelled for %s", request_id)
+                emit_cancelled()
+                return
         else:
             response_details = await client.send_message(
                 message,
@@ -1262,6 +1502,7 @@ async def _run_response_event_stream(
             session_id=thread_id,
             request_id=request_id,
         )
+        mark_response_stream_terminal()
     except TimeoutError as error:
         logger.error("Responses API timeout: %s", error, exc_info=True)
         if cancel_event.is_set():
@@ -1274,6 +1515,7 @@ async def _run_response_event_stream(
                 session_id=thread_id,
                 request_id=request_id,
             )
+            mark_response_stream_terminal()
     except Exception as error:
         logger.error("Response generation error: %s", error, exc_info=True)
         if cancel_event.is_set():
@@ -1286,9 +1528,12 @@ async def _run_response_event_stream(
                 session_id=thread_id,
                 request_id=request_id,
             )
+            mark_response_stream_terminal()
     finally:
         if _active_response_streams.get(request_id) is cancel_event:
             _active_response_streams.pop(request_id, None)
+        if _response_request_ids.get(response_id) == request_id:
+            _response_request_ids.pop(response_id, None)
 
 
 async def _stream_text_chunks(events: AsyncIterator[dict[str, Any]]) -> AsyncIterator[str]:

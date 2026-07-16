@@ -17,6 +17,7 @@ from langgraph.types import Command
 from app.progenitor.ipc.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
+    TRUNCATION_SUFFIX,
     truncate_json_safe,
     truncate_text,
 )
@@ -78,12 +79,7 @@ def normalize_custom_event(payload: Any) -> dict[str, Any] | None:
                 metadata.setdefault("original_event_type", event_type)
             event_type = CUSTOM_EVENT_FALLBACK_TYPE
 
-    safe_metadata = truncate_json_safe(
-        _redact_value(metadata),
-        DEFAULT_STREAM_ARGS_BYTES,
-    )
-    if not isinstance(safe_metadata, dict):
-        safe_metadata = {"value": safe_metadata}
+    safe_metadata = _normalize_metadata(metadata)
 
     return {
         "event_type": event_type,
@@ -105,14 +101,15 @@ def build_tool_start_event(
         "args_preview": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES),
     }
     if tool_name == "task" and isinstance(redacted, dict):
-        # A large free-form `description` can push args_preview past the 2KB
-        # budget above, collapsing it from a dict into a truncated string --
-        # _expand_task_subagent_events (deepagent_stream.py) needs
-        # subagent_type to correlate this dispatch with its eventual result,
-        # so stash it separately here where truncation can't reach it.
+        # Keep correlation and a compact task summary outside the args budget.
+        # Large descriptions can turn args_preview into a truncated string,
+        # which would otherwise hide the fields needed to rebuild the card.
         subagent_type = redacted.get("subagent_type")
         if isinstance(subagent_type, str):
             metadata["subagent_type"] = subagent_type
+        description = redacted.get("description")
+        if isinstance(description, str):
+            metadata["task_summary"] = truncate_text(description, 140)
     return {
         "event_type": "tool_start",
         "content": tool_name,
@@ -148,6 +145,9 @@ def build_tool_result_event(
             ),
         },
     }
+    artifact = _extract_artifact(result)
+    if artifact is not None:
+        payload["metadata"]["artifact"] = artifact
     if images:
         payload["images"] = images
     return payload
@@ -239,6 +239,7 @@ def build_reasoning_delta_event(
     safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_PREVIEW_BYTES)
     safe_metadata = _normalize_metadata(metadata)
     safe_metadata["text_length"] = len(safe_content)
+    safe_metadata["summary"] = safe_content
     return {
         "event_type": "reasoning_delta",
         "content": safe_content,
@@ -255,6 +256,7 @@ def build_reasoning_summary_event(
     safe_content = truncate_text(redact_secrets(content), DEFAULT_STREAM_ARGS_BYTES)
     safe_metadata = _normalize_metadata(metadata)
     safe_metadata["text_length"] = len(safe_content)
+    safe_metadata["summary"] = safe_content
     return {
         "event_type": "reasoning_summary",
         "content": safe_content,
@@ -299,6 +301,85 @@ def _redact_value(value: Any) -> Any:
     return redact_secrets(rendered)
 
 
+_ARTIFACT_FIELDS = ("summary", "count", "kind", "status")
+_ARTIFACT_STRING_BYTES = DEFAULT_STREAM_PREVIEW_BYTES
+_ARTIFACT_TOTAL_BYTES = DEFAULT_STREAM_ARGS_BYTES
+
+
+def _extract_artifact(result: Any) -> dict[str, Any] | None:
+    """Return a small, redacted projection of a tool result's artifact.
+
+    Tool artifacts are intentionally treated as an untrusted side channel. A
+    tool can attach arbitrary nested data to ``ToolMessage.artifact``; only a
+    small allowlist of scalar fields is exposed on the normal tool-result
+    stream. In particular, preserving ``summary`` gives the UI a concise
+    explanation without forwarding files, records, or other raw payloads.
+    """
+    if isinstance(result, Mapping):
+        artifact = result.get("artifact")
+    else:
+        artifact = getattr(result, "artifact", None)
+    if not isinstance(artifact, Mapping):
+        return None
+
+    projection: dict[str, Any] = {}
+    for field in _ARTIFACT_FIELDS:
+        value = artifact.get(field)
+        if field == "summary":
+            if isinstance(value, str):
+                projection[field] = truncate_text(redact_secrets(value), _ARTIFACT_STRING_BYTES)
+            continue
+
+        if isinstance(value, bool) or isinstance(value, int) and abs(value) <= 10**12:
+            projection[field] = value
+        elif isinstance(value, float) and value == value and abs(value) <= 10**12:
+            # Keep only finite, reasonably-sized numbers; NaN is not strict
+            # JSON and very large values defeat the bounded projection.
+            projection[field] = value
+        elif isinstance(value, str):
+            projection[field] = truncate_text(redact_secrets(value), _ARTIFACT_STRING_BYTES)
+
+    _append_remaining_file_lines(projection, result)
+    if not projection:
+        return None
+    safe = truncate_json_safe(projection, _ARTIFACT_TOTAL_BYTES)
+    if isinstance(safe, dict):
+        return safe
+    summary = projection.get("summary")
+    return {"summary": summary} if isinstance(summary, str) else None
+
+
+def _append_remaining_file_lines(
+    projection: dict[str, Any],
+    result: Any,
+) -> None:
+    """Annotate truncated file summaries with the omitted line count."""
+    summary = projection.get("summary")
+    count = projection.get("count")
+    if (
+        not isinstance(summary, str)
+        or not summary
+        or projection.get("kind") != "file"
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count <= 0
+    ):
+        return
+
+    preview = _redact_preview(result)
+    if not preview.endswith(TRUNCATION_SUFFIX):
+        return
+
+    visible_text = preview[: -len(TRUNCATION_SUFFIX)]
+    visible_lines = len(visible_text.splitlines())
+    remaining = count - visible_lines
+    if remaining > 0:
+        projection["summary"] = truncate_text(
+            f"{summary} · {remaining} more lines not shown",
+            _ARTIFACT_STRING_BYTES,
+        )
+
+
 def _unwrap_command_result(value: Any) -> Any:
     """Pull the underlying tool result out of a ``Command`` state update.
 
@@ -333,11 +414,32 @@ def _redact_preview(value: Any) -> str:
     return truncate_text(redacted, DEFAULT_STREAM_PREVIEW_BYTES)
 
 
+_CORRELATION_METADATA_FIELDS = ("tool_call_id", "subagent_type", "task_summary")
+
+
 def _normalize_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any]:
-    safe_metadata = truncate_json_safe(
-        _redact_value(dict(metadata) if metadata is not None else {}),
-        DEFAULT_STREAM_ARGS_BYTES,
-    )
-    if isinstance(safe_metadata, dict):
-        return safe_metadata
-    return {"value": safe_metadata}
+    """Redact and bound metadata while preserving correlation fields.
+
+    Tool dispatch metadata can contain a large ``args_preview`` (especially for
+    ``task`` calls). Keep the fields used to join tool and subagent lifecycle
+    events outside the general metadata byte budget so truncating the payload
+    cannot break that correlation or discard the bounded task summary. All
+    remaining fields retain the existing ``truncate_json_safe`` behavior and
+    budget.
+    """
+    redacted = _redact_value(dict(metadata) if metadata is not None else {})
+    if not isinstance(redacted, dict):
+        return {"value": truncate_json_safe(redacted, DEFAULT_STREAM_ARGS_BYTES)}
+
+    correlation = {
+        field: redacted[field] for field in _CORRELATION_METADATA_FIELDS if field in redacted
+    }
+    payload = {
+        field: value
+        for field, value in redacted.items()
+        if field not in _CORRELATION_METADATA_FIELDS
+    }
+    safe_payload = truncate_json_safe(payload, DEFAULT_STREAM_ARGS_BYTES)
+    if isinstance(safe_payload, dict):
+        return {**correlation, **safe_payload}
+    return {**correlation, "value": safe_payload}

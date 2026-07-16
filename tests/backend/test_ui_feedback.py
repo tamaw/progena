@@ -532,7 +532,7 @@ class TestBroadcastEvent:
 
         # Create a mock queue
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             # Broadcast an event
@@ -541,4 +541,4 @@ class TestBroadcastEvent:
             # Verify event was queued (non-blocking check)
             assert not queue.empty()
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)

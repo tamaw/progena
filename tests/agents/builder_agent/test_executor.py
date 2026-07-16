@@ -146,6 +146,69 @@ async def test_run_build_request_cancels_active_background_build() -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_build_request_cancels_runner_task_before_build_acknowledgement() -> None:
+    """Cancellation during start_build still interrupts the runner task."""
+    from app.agents.builder_agent.agent import _run_build_request
+
+    build_settings = MagicMock(project_name="demo-agent")
+    start_called = asyncio.Event()
+    active_task = asyncio.create_task(asyncio.sleep(60))
+    runner = MagicMock()
+    runner._current_task = active_task
+    runner.cancel_build = AsyncMock(return_value=True)
+
+    async def _start_build(*_args, **_kwargs):
+        start_called.set()
+        await asyncio.Event().wait()
+
+    runner.start_build = _start_build
+    runner.get_build_status = MagicMock(return_value=None)
+    runner.set_progress_callback = MagicMock()
+
+    try:
+        with (
+            patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock),
+            patch("app.agents.builder_agent.agent._runner", runner),
+            patch("app.agents.builder_agent.agent._llm_client", MagicMock()),
+            patch(
+                "app.agents.builder_agent.agent._tool_registry",
+                MagicMock(get_tool_context=MagicMock(return_value="")),
+            ),
+            patch("app.agents.builder_agent.agent._normalize_build_action", return_value="build_agent"),
+            patch(
+                "app.agents.builder_agent.runtime.decide._request_decision_data",
+                new_callable=AsyncMock,
+                return_value={"action": "build_agent"},
+            ),
+            patch(
+                "app.agents.builder_agent.runtime.decide._generate_build_settings",
+                new_callable=AsyncMock,
+                return_value=build_settings,
+            ),
+            patch(
+                "app.agents.builder_agent.runtime.decide._infer_target_capabilities",
+                return_value=["agents"],
+            ),
+        ):
+            request_task = asyncio.create_task(
+                _run_build_request("task-race", "ctx-race", "build demo", {})
+            )
+            await asyncio.wait_for(start_called.wait(), timeout=2.0)
+            request_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await request_task
+
+        runner.cancel_build.assert_awaited_once_with(None)
+        assert active_task.cancelled()
+    finally:
+        if not active_task.done():
+            active_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await active_task
+
+
+
+@pytest.mark.asyncio
 async def test_run_build_request_registers_and_clears_progress_callback_when_streaming() -> None:
     """When called with an event_queue (the streaming path from
     BuilderTaskQueue._run_task), _run_build_request must register a progress
