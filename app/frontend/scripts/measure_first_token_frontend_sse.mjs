@@ -1,18 +1,19 @@
 import { chromium } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:5173';
 const prompt = process.env.MEASURE_PROMPT || 'Say exactly READY and nothing else.';
 const timeoutMs = Number(process.env.MEASURE_TIMEOUT_MS || 90000);
+const requestId = randomUUID();
+const threadId = `measure-frontend-sse-${randomUUID()}`;
 
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();
   await page.goto(`${baseUrl.replace(/\/$/, '')}/chat`, { waitUntil: 'domcontentloaded' });
-  const measurement = await page.evaluate(async ({ prompt, timeoutMs }) => {
+  const measurement = await page.evaluate(async ({ prompt, requestId, threadId, timeoutMs }) => {
     const streamUrl = '/api/ui/stream';
     const responseUrl = '/api/ui/responses';
-    const requestId = crypto.randomUUID();
-    const threadId = `measure-frontend-sse-${crypto.randomUUID()}`;
     const stream = new EventSource(streamUrl);
     const startedAt = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('SSE connection.ready timeout')), timeoutMs);
@@ -81,7 +82,7 @@ try {
       first_token_ms: Number((delta.at - requestStartedAt).toFixed(3)),
       delta_preview: delta.delta.slice(0, 120),
     };
-  }, { prompt, timeoutMs });
+  }, { prompt, requestId, threadId, timeoutMs });
   console.log(JSON.stringify(measurement));
 } finally {
   await browser.close();

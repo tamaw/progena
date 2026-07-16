@@ -26,7 +26,7 @@ import {
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
 import { Message } from '../components/chat/Message';
-import { RegenerateAvailabilityContext } from '../components/chat/MessageActions';
+import { RegenerateDisabledContext } from '../components/chat/RegenerateDisabledContext';
 import QuickActions from '../components/chat/QuickActions';
 import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
@@ -1725,7 +1725,7 @@ function ConversationPage() {
           title={chatTitle}
         />
 
-        <RegenerateAvailabilityContext.Provider value={isGenerating}>
+        <RegenerateDisabledContext.Provider value={isGenerating}>
           <div
             className="chat-messages sess-detail__body chat-detail-body"
             ref={messagesContainerRef}
@@ -1776,7 +1776,7 @@ function ConversationPage() {
               )}
             </div>
           </div>
-        </RegenerateAvailabilityContext.Provider>
+        </RegenerateDisabledContext.Provider>
 
         <ChatInput
           onSend={handleSend}

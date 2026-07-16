@@ -2,11 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfig } from '../../context/ConfigContext';
 import { subscribeUiEvent } from '../../store/realtimeEvents';
 import { requestAcknowledged, withQuery } from '../../store/http';
-import {
-  chatPerformanceNow,
-  isChatPerformanceTracingEnabled,
-  traceChatPerformance,
-} from '../../components/chat/chatPerformanceTrace';
 
 function normalizeInputContent(content) {
   if (typeof content === 'string') {
@@ -49,18 +44,6 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
   return 'connecting';
 }
 
-function streamEventTraceDetails(payload) {
-  const metadata = payload?.metadata && typeof payload.metadata === 'object' ? payload.metadata : {};
-  return {
-    eventType: typeof payload?.event_type === 'string' ? payload.event_type : 'unknown',
-    contentLength: typeof payload?.content === 'string' ? payload.content.length : 0,
-    toolName: typeof metadata.tool_name === 'string' ? metadata.tool_name : '',
-    toolCallId: typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id : '',
-    subagentName: typeof metadata.subagent_name === 'string' ? metadata.subagent_name : '',
-    nestedToolName: typeof metadata.nested_tool_name === 'string' ? metadata.nested_tool_name : '',
-    durationMs: Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null,
-  };
-}
 
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
@@ -129,16 +112,12 @@ export function useChatApi() {
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     };
 
-    const scheduleReconnect = (traceName) => {
+    const scheduleReconnect = () => {
       if (!isCurrent() || pending.cancelRequested || pending.desynced) {
         return;
       }
       cleanupPendingTransport(pending);
       pending.connectAttempts += 1;
-      traceChatPerformance(traceName, {
-        requestId,
-        connectAttempts: pending.connectAttempts,
-      });
       if (pending.connectAttempts >= RESPONSE_CONNECT_FAILURE_LIMIT) {
         if (!pending.openedOnce) {
           failUnavailable();
@@ -159,16 +138,8 @@ export function useChatApi() {
         return;
       }
       cleanupPendingTransport(pending);
-      const tracing = isChatPerformanceTracingEnabled();
       pending.lastEventAt = Date.now();
       const streamUrl = responseStreamUrl(responsesUrl, requestId, pending.lastEventId);
-      if (tracing) {
-        traceChatPerformance('chat_sse.connect_started', {
-          requestId,
-          after: pending.lastEventId,
-          connectAttempts: pending.connectAttempts,
-        });
-      }
       const source = new EventSource(streamUrl);
       pending.eventSource = source;
 
@@ -176,78 +147,35 @@ export function useChatApi() {
         if (!isCurrent() || pending.eventSource !== source || pending.cancelRequested) {
           return;
         }
-        const callbackStartedAt = tracing ? chatPerformanceNow() : 0;
         let payload;
         try {
           payload = JSON.parse(messageEvent.data);
         } catch {
           return;
         }
-        const parsedAt = tracing ? chatPerformanceNow() : 0;
         const frameId = messageEvent.lastEventId;
         if (hasSeenResponseFrameId(pending, frameId)) {
           return;
         }
         rememberResponseFrameId(pending, frameId);
-        const previousArrivalAt = pending.lastEventAt;
         pending.lastEventId = frameId || pending.lastEventId;
         pending.lastEventAt = Date.now();
         pending.openedOnce = true;
         pending.streamObserved = true;
         setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
-        const arrivalGapMs = previousArrivalAt === null ? null : pending.lastEventAt - previousArrivalAt;
         const delta = responseType === 'chat.response.delta' && typeof payload.delta === 'string'
           ? payload.delta
           : '';
-        const eventType = responseType === 'chat.response.event'
-          ? (typeof payload.event_type === 'string' ? payload.event_type : 'unknown')
-          : '';
-        if (tracing) {
-          traceChatPerformance('chat_sse.frame_received', {
-            requestId,
-            responseType,
-            deltaLength: delta.length,
-            eventType,
-            arrivalGapMs,
-            parseMs: parsedAt - callbackStartedAt,
-            runtimeStreamSeq: Number.isFinite(payload.runtime_stream_seq)
-              ? payload.runtime_stream_seq
-              : null,
-            runtimeToBrowserMs: Number.isFinite(payload.runtime_emitted_at_ms)
-              ? Date.now() - payload.runtime_emitted_at_ms
-              : null,
-          }, {
-            consoleOutput: responseType !== 'chat.response.delta'
-              || (arrivalGapMs !== null && arrivalGapMs >= 50),
-          });
-        }
 
-        const userCallbackStartedAt = tracing ? chatPerformanceNow() : 0;
         if (responseType === 'chat.response.delta') {
           if (delta) {
             pending.onChunk?.(delta);
-          }
-          if (tracing) {
-            traceChatPerformance('chat_api.delta_handler', {
-              requestId,
-              deltaLength: delta.length,
-              callbackDurationMs: chatPerformanceNow() - userCallbackStartedAt,
-              handlerDurationMs: chatPerformanceNow() - callbackStartedAt,
-            }, { consoleOutput: false });
           }
           return;
         }
 
         pending.onStreamEvent?.(payload);
-        if (tracing) {
-          traceChatPerformance('chat_api.stream_event_handler', {
-            requestId,
-            ...streamEventTraceDetails(payload),
-            callbackDurationMs: chatPerformanceNow() - userCallbackStartedAt,
-            handlerDurationMs: chatPerformanceNow() - callbackStartedAt,
-          });
-        }
       };
 
       source.onopen = () => {
@@ -255,9 +183,6 @@ export function useChatApi() {
           return;
         }
         pending.lastEventAt = Date.now();
-        if (tracing) {
-          traceChatPerformance('chat_sse.connected', { requestId });
-        }
       };
       source.addEventListener('chat.response.delta', (event) => {
         handleContentFrame('chat.response.delta', event);
@@ -270,28 +195,13 @@ export function useChatApi() {
           return;
         }
         pending.lastEventAt = Date.now();
-        if (tracing) {
-          traceChatPerformance('chat_sse.heartbeat', { requestId }, { consoleOutput: false });
-        }
       });
-      source.addEventListener('chat.response.resync_required', (event) => {
+      source.addEventListener('chat.response.resync_required', () => {
         if (!isCurrent() || pending.eventSource !== source) {
           return;
         }
-        let payload = {};
-        try {
-          payload = JSON.parse(event.data);
-        } catch {
-          // A malformed resync signal still means this transport is unusable.
-        }
         pending.desynced = true;
         cleanupPendingTransport(pending);
-        if (tracing) {
-          traceChatPerformance('chat_sse.resync_required', {
-            requestId,
-            reason: payload.reason || 'unknown',
-          });
-        }
       });
       source.onerror = () => {
         if (!isCurrent() || pending.eventSource !== source) {
@@ -301,14 +211,14 @@ export function useChatApi() {
           cleanupPendingTransport(pending);
           return;
         }
-        scheduleReconnect('chat_sse.onerror_reconnect');
+        scheduleReconnect();
       };
       pending.watchdogTimer = setInterval(() => {
         if (!isCurrent() || pending.eventSource !== source) {
           return;
         }
         if (Date.now() - pending.lastEventAt > RESPONSE_HEARTBEAT_STALE_MS) {
-          scheduleReconnect('chat_sse.stale_reconnect');
+          scheduleReconnect();
         }
       }, RESPONSE_WATCHDOG_POLL_MS);
     };
@@ -317,8 +227,6 @@ export function useChatApi() {
   }, []);
 
   const consumeStreamEvent = useCallback((event) => {
-    const tracing = isChatPerformanceTracingEnabled();
-    const handlerStartedAt = tracing ? chatPerformanceNow() : 0;
     const type = event?.type;
     const payload = event?.payload || event?.data;
     if (type === 'chat.response.cancel_requested') {
@@ -331,13 +239,6 @@ export function useChatApi() {
     const requestId = payload.request_id;
     const pending = requestId ? pendingStreamsRef.current.get(requestId) : null;
     if (!pending) {
-      if (tracing) {
-        traceChatPerformance('chat_api.unmatched_frame', {
-          requestId: payload.request_id || '',
-          responseType: type,
-          handlerDurationMs: chatPerformanceNow() - handlerStartedAt,
-        });
-      }
       return;
     }
 
@@ -345,13 +246,6 @@ export function useChatApi() {
       pending.streamObserved = true;
       if (!pending.cancelRequested) {
         setConnectionState(deriveConnectionState(pendingStreamsRef.current));
-      }
-      if (tracing) {
-        traceChatPerformance('chat_api.response_started', {
-          requestId,
-          dispatchToStartedMs: pending.dispatchedAt === null ? null : chatPerformanceNow() - pending.dispatchedAt,
-          handlerDurationMs: chatPerformanceNow() - handlerStartedAt,
-        });
       }
       return;
     }
@@ -377,13 +271,6 @@ export function useChatApi() {
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
     }
     pending.resolve();
-    if (tracing) {
-      traceChatPerformance('chat_api.terminal', {
-        requestId,
-        responseType: type,
-        handlerDurationMs: chatPerformanceNow() - handlerStartedAt,
-      });
-    }
   }, []);
 
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
@@ -407,7 +294,6 @@ export function useChatApi() {
         cancelRequested: false,
         acknowledged: false,
         streamObserved: false,
-        dispatchedAt: isChatPerformanceTracingEnabled() ? chatPerformanceNow() : null,
         eventSource: null,
         reconnectTimer: null,
         watchdogTimer: null,
@@ -427,13 +313,6 @@ export function useChatApi() {
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
       const body = { model: config.chat.defaultModel, input, stream: true };
-      if (isChatPerformanceTracingEnabled()) {
-        traceChatPerformance('chat_api.dispatch_started', {
-          requestId,
-          inputMessageCount: input.length,
-          inputCharacterCount: input.reduce((total, entry) => total + entry.content.length, 0),
-        });
-      }
       if (metadata && typeof metadata === 'object') {
         body.metadata = metadata;
       }
@@ -446,12 +325,6 @@ export function useChatApi() {
           errorLabel: 'sendMessage failed',
           signal: acknowledgementController.signal,
         });
-        if (isChatPerformanceTracingEnabled()) {
-          traceChatPerformance('chat_api.dispatch_acknowledged', {
-            requestId,
-            acknowledgementMs: pending.dispatchedAt === null ? null : chatPerformanceNow() - pending.dispatchedAt,
-          });
-        }
         if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
@@ -476,13 +349,6 @@ export function useChatApi() {
           resolveTerminal();
         } else if (currentPending === pending) {
           setConnectionState(deriveConnectionState(pendingStreamsRef.current));
-        }
-        if (isChatPerformanceTracingEnabled()) {
-          traceChatPerformance('chat_api.dispatch_failed', {
-            requestId,
-            observedStream: pending.streamObserved,
-            failureMs: pending.dispatchedAt === null ? null : chatPerformanceNow() - pending.dispatchedAt,
-          });
         }
       }
 

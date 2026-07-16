@@ -8,26 +8,11 @@
 
 import { renderMarkdownToHtml } from '../../lib/markdown';
 import { isReasoningEvent } from './streamEventsModel';
-import {
-  chatPerformanceNow,
-  isChatPerformanceTracingEnabled,
-  traceChatPerformance,
-} from './chatPerformanceTrace';
 
 // ─── Markdown / HTML ──────────────────────────────────────────────────────
 
 export function formatMessage(content) {
-  if (!isChatPerformanceTracingEnabled()) {
-    return renderMarkdownToHtml(content);
-  }
-  const startedAt = chatPerformanceNow();
-  const html = renderMarkdownToHtml(content);
-  traceChatPerformance('render.markdown_format', {
-    sourceCharacterCount: typeof content === 'string' ? content.length : 0,
-    htmlCharacterCount: html.length,
-    durationMs: chatPerformanceNow() - startedAt,
-  });
-  return html;
+  return renderMarkdownToHtml(content);
 }
 // A foreground turn and its settled historical message mount under different
 // owners. Keep a small LRU cache so that handoff or canonical reconciliation
@@ -44,23 +29,10 @@ export function renderSafeMarkdown(content) {
   if (cached !== undefined) {
     renderedMarkdownCache.delete(content);
     renderedMarkdownCache.set(content, cached);
-    traceChatPerformance('render.markdown_cache_hit', {
-      sourceCharacterCount: content.length,
-      htmlCharacterCount: cached.length,
-    });
     return cached;
   }
 
-  const tracing = isChatPerformanceTracingEnabled();
-  const startedAt = tracing ? chatPerformanceNow() : 0;
   const rendered = sanitizeHtmlFragment(formatMessage(content));
-  if (tracing) {
-    traceChatPerformance('render.markdown_cache_miss', {
-      sourceCharacterCount: content.length,
-      htmlCharacterCount: rendered.length,
-      durationMs: chatPerformanceNow() - startedAt,
-    });
-  }
   const cacheCost = content.length + rendered.length;
   if (cacheCost > MAX_RENDERED_MARKDOWN_CHARS) {
     return rendered;
@@ -166,22 +138,12 @@ function sanitizeNode(node) {
 
 export function sanitizeHtmlFragment(html) {
   if (!html) return '';
-  const tracing = isChatPerformanceTracingEnabled();
-  const startedAt = tracing ? chatPerformanceNow() : 0;
   const template = document.createElement('template');
   template.innerHTML = html;
   sanitizeNode(template.content);
   const div = document.createElement('div');
   div.appendChild(template.content.cloneNode(true));
-  const sanitized = div.innerHTML;
-  if (tracing) {
-    traceChatPerformance('render.sanitize_html', {
-      sourceCharacterCount: html.length,
-      htmlCharacterCount: sanitized.length,
-      durationMs: chatPerformanceNow() - startedAt,
-    });
-  }
-  return sanitized;
+  return div.innerHTML;
 }
 
 // Splices a blinking cursor span onto the very end of already-sanitized

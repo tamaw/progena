@@ -11,11 +11,6 @@ import {
 } from './realtimeSlice';
 import { applyUiEvent } from './uiDataSlice';
 import { publishUiEvent } from './realtimeEvents';
-import {
-  chatPerformanceNow,
-  isChatPerformanceTracingEnabled,
-  traceChatPerformance,
-} from '../components/chat/chatPerformanceTrace';
 export const startRealtimeStream = createAction('realtime/startStream');
 export const stopRealtimeStream = createAction('realtime/stopStream');
 
@@ -141,23 +136,13 @@ realtimeListenerMiddleware.startListening({
     };
 
     source.addEventListener('ui.event', (messageEvent) => {
-      const tracing = isChatPerformanceTracingEnabled();
-      const callbackStartedAt = tracing ? chatPerformanceNow() : 0;
       lastEventAt = Date.now();
       try {
         const event = JSON.parse(messageEvent.data);
-        const parsedAt = tracing ? chatPerformanceNow() : 0;
         const invalidReason = invalidEnvelopeReason(event);
         if (invalidReason) {
           listenerApi.dispatch(realtimeErrored(`Malformed ui.event: ${invalidReason}`));
           return;
-        }
-        if (tracing) {
-          traceChatPerformance('sse.frame_received', {
-            envelopeId: event.id,
-            eventType: event.type,
-            parseValidateMs: parsedAt - callbackStartedAt,
-          }, { consoleOutput: false });
         }
         const { realtime } = listenerApi.getState();
         if (realtime.receivedIds.includes(event.id)) {
