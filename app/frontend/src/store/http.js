@@ -1,3 +1,4 @@
+import { createUuid } from '../lib/uuid';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
@@ -7,7 +8,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 export function createOperationRequestId({ requestId } = {}) {
   return typeof requestId === 'string' && UUID_PATTERN.test(requestId)
     ? requestId
-    : crypto.randomUUID();
+    : createUuid();
 }
 
 export function isOperationRequestId(requestId) {

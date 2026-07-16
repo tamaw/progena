@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useConfig } from '../../context/ConfigContext';
 import { subscribeUiEvent } from '../../store/realtimeEvents';
 import { requestAcknowledged, withQuery } from '../../store/http';
+import { createUuid } from '../../lib/uuid';
 
 function normalizeInputContent(content) {
   if (typeof content === 'string') {
@@ -277,7 +278,7 @@ export function useChatApi() {
 
   const sendMessageStream = useCallback(
     async (message, history = [], onChunk, onComplete, onError, onStreamEvent, metadata = null) => {
-      const requestId = crypto.randomUUID();
+      const requestId = createUuid();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
       let resolveTerminal;
@@ -377,7 +378,7 @@ export function useChatApi() {
     const responsesUrl = getApiUrl('responses').replace(/\/$/, '');
     await requestAcknowledged(`${responsesUrl}/${encodeURIComponent(requestId)}/cancel`, {
       method: 'PUT',
-      requestId: crypto.randomUUID(),
+      requestId: createUuid(),
       errorLabel: 'cancelStream failed',
     }).catch((error) => {
       console.warn('Failed to cancel backend response stream', error);

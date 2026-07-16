@@ -1,4 +1,5 @@
 import { useCallback, useEffect } from 'react';
+import { createUuid } from '../../lib/uuid';
 
 // Acknowledgement only arms the save; the matching snapshot applies canonical content.
 export function useSnapshotSave({
@@ -18,7 +19,7 @@ export function useSnapshotSave({
 
   return useCallback(async () => {
     if (!path || content === savedContent || saving) return false;
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     setSaving(true);
     setPendingSave({ requestId, path, acknowledged: false });
     setError(null);

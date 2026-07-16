@@ -7,6 +7,7 @@ import { useLogsApi } from '../hooks/api/useLogsApi';
 import { selectLogsExport, selectLogsPage, selectLogsState } from '../store/uiDataSlice';
 import { requestAcknowledged, withQuery } from '../store/http';
 import { selectRealtime } from '../store/realtimeSlice';
+import { createUuid } from '../lib/uuid';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -612,7 +613,7 @@ function LogsPage() {
   }, []);
 
   const handleExport = useCallback(async () => {
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     const params = buildQueryParams(requestFilters, { format: 'csv', ...(level ? { level } : {}) });
     try {
       const acknowledgement = await requestAcknowledged(
