@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useConfig } from '../../context/ConfigContext';
 import { requestAcknowledged, withQuery } from '../../store/http';
+import { createUuid } from '../../lib/uuid';
 
 /** Log retrieval acknowledgement with query params (Logs page). */
 export function useLogsApi() {
@@ -14,7 +15,7 @@ export function useLogsApi() {
       }
     });
     return requestAcknowledged(withQuery(getApiUrl('logs'), filtered), {
-      requestId: crypto.randomUUID(),
+      requestId: createUuid(),
       errorLabel: 'getLogs failed',
     });
   }, [getApiUrl]);
