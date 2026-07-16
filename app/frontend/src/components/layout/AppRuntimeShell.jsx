@@ -1389,6 +1389,7 @@ function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen })
 
 function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
   const status = useSelector(selectUiStatus);
   const widgets = useSelector(selectUiWidgets);
   const [range, setRange] = useState('7d');
@@ -1398,15 +1399,24 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const ready = agentWidgets.filter((widget) => (widget.status || widget.data?.agentStatus) === 'ready').length;
   const cycleCount = status?.cycle_count ?? 0;
   const totalActivity = Math.max(1, agentWidgets.length + scheduleWidgets.length + cycleCount);
+  const runtimeOnline = Boolean(status?.progenitor_running);
+  const runtimeSubtitle = status?.last_active
+    ? `Status updated ${formatRelativeTimestamp(status.last_active)}`
+    : 'Real-time status stream';
+  const runtimeDelta = status?.last_active
+    ? `Last active ${formatRelativeTimestamp(status.last_active)}`
+    : runtimeOnline
+      ? 'Live'
+      : 'Awaiting signal';
   const refreshWidgets = useCallback(
-    () => dispatch(fetchWidgets({ widgetsUrl: '/api/ui/widgets' })),
-    [dispatch],
+    () => dispatch(fetchWidgets({ widgetsUrl: getApiUrl('widgets') })),
+    [dispatch, getApiUrl],
   );
 
   return (
     <TopNavPane
       title="Token consumption"
-      subtitle="Real-time status stream · progenitor-main"
+      subtitle={runtimeSubtitle}
       onClose={onClose}
       isPinned={isPinned}
       onTogglePin={onTogglePin}
@@ -1427,8 +1437,8 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       <div className="ins-kpis">
         <div className="ins-kpi">
           <div className="ins-kpi__label">Runtime</div>
-          <div className="ins-kpi__value">Online</div>
-          <div className="ins-kpi__delta ins-kpi__delta--muted">Live</div>
+          <div className="ins-kpi__value">{runtimeOnline ? 'Online' : 'Offline'}</div>
+          <div className="ins-kpi__delta ins-kpi__delta--muted">{runtimeDelta}</div>
         </div>
         <div className="ins-kpi">
           <div className="ins-kpi__label">Agents</div>

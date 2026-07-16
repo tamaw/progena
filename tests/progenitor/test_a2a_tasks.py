@@ -80,6 +80,70 @@ async def test_dispatch_tracked_a2a_task_persists_submitted_task(
     assert "context_id" not in kwargs
 
 
+@pytest.mark.asyncio
+async def test_dispatch_tracked_a2a_task_persists_timeout_snapshot_when_result_has_task_payload(
+    monkeypatch, state_manager
+) -> None:
+    """A streamed timeout must still persist the last valid task snapshot so
+    callers can resume polling instead of losing the remote task id/state."""
+    fake_client = MagicMock()
+    fake_client.call_agent = AsyncMock(
+        return_value={
+            "success": False,
+            "error": "Request timeout after 5.0s",
+            "result": {
+                "kind": "task",
+                "id": "builder_task_timeout",
+                "contextId": "ctx-timeout",
+                "status": {
+                    "state": "working",
+                    "message": {"parts": [{"kind": "text", "text": "Still working..."}]},
+                },
+            },
+            "progress_updates": [
+                {
+                    "status": {
+                        "state": "submitted",
+                        "message": {"parts": [{"kind": "text", "text": "Accepted."}]},
+                    }
+                },
+                {
+                    "status": {
+                        "state": "working",
+                        "message": {"parts": [{"kind": "text", "text": "Still working..."}]},
+                    }
+                },
+            ],
+        }
+    )
+    monkeypatch.setattr("app.progenitor.a2a.tasks.A2AClient", lambda: fake_client)
+
+    response, tracked_task = await dispatch_tracked_a2a_task(
+        state_manager=state_manager,
+        agent_name="builder_agent",
+        agent_config={"url": "http://localhost:8107", "transport": "http"},
+        request_text="Build a demo",
+        request_metadata={"caller": "progenitor", "dispatch_mode": "blocking"},
+        source="call_agent",
+        timeout=5.0,
+        blocking=True,
+    )
+
+    assert response["success"] is False
+    assert tracked_task is not None
+    assert tracked_task.task_id == "builder_task_timeout"
+    assert tracked_task.status == "working"
+    assert tracked_task.summary == "Still working..."
+    assert tracked_task.completed_at is None
+    assert [entry["state"] for entry in tracked_task.progress_log] == ["submitted", "working"]
+
+    saved = await state_manager.get_a2a_task("builder_task_timeout")
+    assert saved is not None
+    assert saved.latest_task == response["result"]
+    assert saved.request_metadata["a2a_task_id"] == "builder_task_timeout"
+    assert saved.request_metadata["a2a_context_id"] == "ctx-timeout"
+
+
 async def test_dispatch_tracked_a2a_task_stamps_agent_name_onto_progress_log(
     monkeypatch, state_manager
 ) -> None:

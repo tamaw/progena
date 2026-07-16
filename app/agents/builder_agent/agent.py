@@ -370,11 +370,12 @@ async def _run_build_request(
             return result
     except asyncio.CancelledError:
         # ``start_build`` creates the runner task before it awaits the
-        # acknowledgment LLM call.  Cancellation in that window leaves
-        # ``build_id`` unset, so cancel the active runner task directly as
-        # well as through the runner API, then await it to completion.
+        # acknowledgment LLM call. Cancellation in that window leaves
+        # ``build_id`` unset, and the surrounding cancellation can also
+        # interrupt ``cancel_build`` itself, so still cancel the live runner
+        # task directly and await it to completion.
         active_task = _runner._current_task
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await _runner.cancel_build(build_id)
         if active_task is not None:
             active_task.cancel()

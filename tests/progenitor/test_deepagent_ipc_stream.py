@@ -1293,3 +1293,58 @@ async def test_duplicate_update_delivery_of_same_message_id_counts_reasoning_onc
     summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
     assert len(summaries) == 1
     assert summaries[0]["metadata"]["reasoning_tokens"] == 64
+
+
+@pytest.mark.asyncio
+async def test_late_reasoning_usage_update_for_same_message_id_contributes_only_delta():
+    # Providers can first stream a low/partial token count, then later re-send
+    # the same message id with a higher finalized usage total. The turn total
+    # must advance by the delta (64-16), not add both full counts.
+    first_delivery = AIMessage(
+        id="ai-late",
+        content="",
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 20,
+            "total_tokens": 21,
+            "output_token_details": {"reasoning": 16},
+        },
+    )
+    finalized_delivery = AIMessage(
+        id="ai-late",
+        content=[
+            {
+                "type": "reasoning",
+                "summary": [{"type": "summary_text", "text": "Thought it through."}],
+            },
+            {"type": "text", "text": "Done"},
+        ],
+        usage_metadata={
+            "input_tokens": 1,
+            "output_tokens": 68,
+            "total_tokens": 69,
+            "output_token_details": {"reasoning": 64},
+        },
+    )
+    graph = _FakeGraph(
+        [
+            ("updates", {"model": {"messages": [first_delivery]}}),
+            (
+                "updates",
+                {
+                    "respond": {
+                        "pending_response": "Done",
+                        "messages": [finalized_delivery],
+                    }
+                },
+            ),
+        ]
+    )
+    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+
+    items = await _collect_items(bridge)
+
+    summaries = [item for item in items if item.get("event_type") == "reasoning_summary"]
+    assert len(summaries) == 1
+    assert summaries[0]["content"] == "Thought it through."
+    assert summaries[0]["metadata"]["reasoning_tokens"] == 64

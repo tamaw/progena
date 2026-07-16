@@ -271,6 +271,31 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.active.loading).toBe(false);
   });
 
+  it('uses the started-response registry to mark a background chat unread and errored when failure omits thread_id', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'chat.response.started',
+      payload: {
+        request_id: 'REQ_STREAM',
+        thread_id: 'thread-background',
+      },
+    }));
+
+    expect(s.chatRuntime.responseThreadsByRequestId).toEqual({ REQ_STREAM: 'thread-background' });
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['thread-background']);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.failed',
+      payload: {
+        request_id: 'REQ_STREAM',
+      },
+    }));
+
+    expect(s.chatRuntime.responseThreadsByRequestId).toEqual({});
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    expect(selectUnreadChatIds({ uiData: s })).toEqual(['thread-background']);
+    expect(selectErroredChatIds({ uiData: s })).toEqual(['thread-background']);
+  });
+
   it('clearActiveChatSession resets the active backend selection', () => {
     let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
       chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',

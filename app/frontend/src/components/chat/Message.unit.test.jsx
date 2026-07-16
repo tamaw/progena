@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Message } from './Message';
+import { normalizeStreamEvent } from './streamEventsModel';
 import MessageImageStrip from './MessageImageStrip';
 
 // Ensure React is in global scope for the component's JSX compilation
@@ -321,6 +322,73 @@ describe('Message with timelineItems', () => {
     expect(html).toContain('tabindex="0"');
     expect(html).toContain('aria-label="View image 1 full size"');
     expect(html).toContain('alt="Generated result"');
+  });
+
+  it('renders image attachments retained by normalized persisted stream events after reload', () => {
+    const normalizedEvent = normalizeStreamEvent({
+      id: 'e-image',
+      event_type: 'tool_result',
+      metadata: { tool_name: 'generate_image', result_preview: 'created image' },
+      images: [{ id: 'img-1', base64: 'AAA', media_type: 'image/png' }],
+      timestamp: '2026-07-15T02:31:08.000Z',
+    }, 0);
+    const message = baseMessage({
+      streamEvents: [normalizedEvent],
+      timelineItems: [
+        {
+          kind: 'stream_event',
+          id: 'e-image',
+          event: {
+            id: 'e-image',
+            eventType: 'tool_result',
+            metadata: { tool_name: 'generate_image', result_preview: 'created image' },
+          },
+        },
+        {
+          kind: 'assistant_message',
+          id: 'assistant-image',
+          content: 'Here is the generated image.',
+          timestamp: MS_EPOCH,
+          displayAgentName: '',
+          displayModelName: '',
+          displayToolCalls: [],
+          tokenCount: 0,
+          reasoningTokenCount: 0,
+          reasoningText: '',
+          isStreaming: false,
+          error: false,
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('msg-img-strip');
+    expect(html).toContain('View image 1 full size');
+  });
+
+  it('renders fallback body detail text for classic stream-event rows', () => {
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [
+        {
+          id: 'a2a-progress-1',
+          eventType: 'a2a_call_progress',
+          timestamp: MS_EPOCH,
+          content: '',
+          metadata: {
+            agent_name: 'greetings_agent',
+            state: 'working',
+            message_text: 'Step 1/3: prep...',
+          },
+        },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('Step 1/3: prep...');
+    expect(html).toContain('message-stream-event-detail');
   });
   it('renders a submitted task summary entry before the subagent final result', () => {
     const message = baseMessage({
@@ -680,6 +748,25 @@ describe('Message fallback layout without timelineItems', () => {
     expect(html).toContain('chat-entry-chain--connected');
     expect(html).toContain('message-stream-event');
     expect(html).toContain('Hello world');
+  });
+
+  it('keeps hidden internal stream events out of the classic fallback transcript', () => {
+    const message = baseMessage({
+      timelineItems: undefined,
+      streamEvents: [
+        normalizeStreamEvent({ id: 'meta', event_type: 'assistant_metadata', metadata: { display_agent_name: 'Coder' } }, 0),
+        normalizeStreamEvent({ id: 'delta', event_type: 'message_delta', content: 'hidden text' }, 1),
+        normalizeStreamEvent({ id: 'pending', event_type: 'node_update', metadata: { node_name: 'pending_response' } }, 2),
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('Hello world');
+    expect(html).toContain('chat-entry-chain--single');
+    expect(html).not.toContain('chat-entry-chain--connected');
+    expect(html).not.toContain('message-stream-event');
+    expect(html).not.toContain('hidden text');
   });
 
   it('handles null timelineItems as classic fallback', () => {

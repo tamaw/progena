@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useParams } from 'react-router-dom';
-import { useEntityUrlSync } from '../lib/routes';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
 import { createUuid } from '../lib/uuid';
 import {
@@ -118,11 +118,15 @@ function InfoRow({ title, sub, chip }) {
 }
 
 export default function KnowledgePage() {
+  const navigate = useNavigate();
   const { getApiUrl } = useConfig();
   const dispatch = useDispatch();
   // `titleSlug` is display context only (e.g. /knowledge/src-abc123/docs) --
   // selection is driven entirely by the id, never by the slug.
   const { baseId: urlBaseId } = useParams();
+  const selectedBaseId = typeof urlBaseId === 'string' && urlBaseId.trim().length > 0
+    ? urlBaseId
+    : null;
   // The page renders from the realtime store: `knowledge.snapshot` events keep
   // `rawBases` live; the GET on mount just seeds + triggers the first broadcast.
   const rawBases = useSelector(selectKnowledgeBases);
@@ -133,7 +137,6 @@ export default function KnowledgePage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [selectedBaseId, setSelectedBaseId] = useState(() => urlBaseId || null);
   const [detailTab, setDetailTab] = useState('Overview');
   const [testQuery, setTestQuery] = useState('');
   const [testResults, setTestResults] = useState(null);
@@ -215,15 +218,25 @@ export default function KnowledgePage() {
   const visibleBases = useMemo(() => groups.flatMap((group) => group.bases), [groups]);
 
   const selectedBase = useMemo(
-    () => bases.find((base) => base.id === selectedBaseId) || visibleBases[0] || null,
+    () => bases.find((base) => base.id === selectedBaseId)
+      || (!selectedBaseId ? visibleBases[0] || null : null),
     [bases, selectedBaseId, visibleBases],
   );
 
-  // Keep the URL in sync with whichever base is actually selected -- a
-  // deep-linked or stale id falls back to the top visible base the same way
-  // `selectedBase` already does above. The title slug is cosmetic; only the
-  // id segment is ever read back.
+  // Keep the URL in sync with whichever base is actually selected. A routed
+  // base id stays authoritative; if it disappears after hydration, the effect
+  // below clears back to /knowledge instead of rewriting stale detail state.
+  // The title slug is cosmetic; only the id segment is ever read back.
   useEntityUrlSync('/knowledge', selectedBase?.id, selectedBase?.name);
+  useEffect(() => {
+    if (!loaded || !selectedBaseId) {
+      return;
+    }
+    if (!bases.some((base) => base.id === selectedBaseId)) {
+      navigate('/knowledge', { replace: true });
+    }
+  }, [bases, loaded, navigate, selectedBaseId]);
+
 
   const connectedCount = bases.filter((base) => base.status === 'connected').length;
   const sources = selectedBase?.sources || [];
@@ -234,7 +247,7 @@ export default function KnowledgePage() {
     setConnDraft(selectedConnectionString);
     setConnError('');
     setEditingConn(false);
-  }, [selectedConnectionString, selectedBaseId]);
+  }, [selectedBase?.id, selectedConnectionString]);
 
   // Keep the editable description draft in sync with the selected store.
   const selectedDescription = selectedBase?.description || '';
@@ -242,7 +255,7 @@ export default function KnowledgePage() {
     setDescDraft(selectedDescription);
     setDescError('');
     setEditingDesc(false);
-  }, [selectedDescription, selectedBaseId]);
+  }, [selectedBase?.id, selectedDescription]);
 
   const putBases = (nextRaw) => dispatch(saveKnowledge({ knowledgeUrl, bases: nextRaw })).unwrap();
   const patchSelected = (patch) => putBases(
@@ -266,6 +279,9 @@ export default function KnowledgePage() {
     }
     const id = selectedBase.id;
     try {
+      if (selectedBaseId === id) {
+        navigate('/knowledge', { replace: true });
+      }
       await putBases(rawBases.filter((base) => base.id !== id));
     } catch (deleteError) {
       setFolderError(deleteError.message || 'Could not delete the knowledge base.');
@@ -571,7 +587,7 @@ export default function KnowledgePage() {
                       key={base.id}
                       base={base}
                       selected={selectedBase?.id === base.id}
-                      onSelect={setSelectedBaseId}
+                      onSelect={(id) => navigate(buildEntityPath('/knowledge', id, base.name), { replace: true })}
                     />
                   ))}
                 </PaneListGroup>

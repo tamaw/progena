@@ -174,7 +174,9 @@ async def test_run_build_request_cancels_runner_task_before_build_acknowledgemen
                 "app.agents.builder_agent.agent._tool_registry",
                 MagicMock(get_tool_context=MagicMock(return_value="")),
             ),
-            patch("app.agents.builder_agent.agent._normalize_build_action", return_value="build_agent"),
+            patch(
+                "app.agents.builder_agent.agent._normalize_build_action", return_value="build_agent"
+            ),
             patch(
                 "app.agents.builder_agent.runtime.decide._request_decision_data",
                 new_callable=AsyncMock,
@@ -205,7 +207,6 @@ async def test_run_build_request_cancels_runner_task_before_build_acknowledgemen
             active_task.cancel()
             with pytest.raises(asyncio.CancelledError):
                 await active_task
-
 
 
 @pytest.mark.asyncio
@@ -375,3 +376,55 @@ async def test_cancel_delegates_to_task_queue_and_suppresses_own_event_when_canc
 
     queue.cancel.assert_called_once_with("task-was-running")
     mock_event_queue.enqueue_event.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_execute_and_cancel_emit_single_terminal_canceled_event(
+    executor, mock_event_queue, mock_context_build, tmp_path
+):
+    from app.agents.builder_agent.queue_worker import BuilderTaskQueue
+    from app.agents.builder_agent.runtime.background_build import BuildResult, BuildStatus
+    from app.agents.builder_agent.runtime.time_utils import utcnow
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def handler(task_id, context_id, request_text, request_ctx, event_queue_arg):
+        assert task_id == "task-test-002"
+        assert context_id == "ctx-test-002"
+        assert request_text == "Build a hello world Python script"
+        assert request_ctx["a2a_task_id"] == "task-test-002"
+        assert event_queue_arg is mock_event_queue
+        started.set()
+        await release.wait()
+        return BuildResult(
+            build_id="build-should-not-complete",
+            status=BuildStatus.COMPLETED,
+            task_description="build_agent: hello-world",
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+
+    queue = BuilderTaskQueue(handler, log_path=tmp_path / "tasks.jsonl")
+
+    with (
+        patch("app.agents.builder_agent.agent._ensure_initialized", new_callable=AsyncMock),
+        patch("app.agents.builder_agent.agent._get_or_create_task_queue", return_value=queue),
+        patch("app.agents.builder_agent.agent._task_queue", queue),
+    ):
+        execute_task = asyncio.create_task(executor.execute(mock_context_build, mock_event_queue))
+        try:
+            await asyncio.wait_for(started.wait(), timeout=2.0)
+            await executor.cancel(mock_context_build, mock_event_queue)
+            await asyncio.wait_for(execute_task, timeout=2.0)
+        finally:
+            release.set()
+            if not execute_task.done():
+                await execute_task
+
+    events = [call.args[0] for call in mock_event_queue.enqueue_event.call_args_list]
+    states = [event.status.state for event in events]
+    terminal_states = [event.status.state for event in events if getattr(event, "final", False)]
+
+    assert states == [TaskState.submitted, TaskState.working, TaskState.canceled]
+    assert terminal_states == [TaskState.canceled]

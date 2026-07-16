@@ -5,6 +5,17 @@
 export const MAX_STREAM_EVENTS_PER_MESSAGE = 200;
 export const CANCELLED_SUFFIX = ' [Cancelled]';
 
+function normalizeStreamEventTimestamp(value) {
+  if (Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string' && value) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
 export function normalizeStreamEvent(event, index) {
   if (!event || typeof event !== 'object') {
     return null;
@@ -16,16 +27,21 @@ export function normalizeStreamEvent(event, index) {
   const metadata = event.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
     ? event.metadata
     : {};
-
-  return {
+  const normalizedEvent = {
     id: typeof event.id === 'string' ? event.id : `evt_restored_${index}_${Date.now()}`,
     eventType,
     content: typeof event.content === 'string' ? event.content : '',
     metadata: isReasoningEvent({ eventType })
       ? { source: 'stream_reasoning', ...metadata }
       : metadata,
-    timestamp: Number.isFinite(event.timestamp) ? event.timestamp : undefined,
+    timestamp: normalizeStreamEventTimestamp(event.timestamp),
   };
+
+  if (Array.isArray(event.images) && event.images.length > 0) {
+    normalizedEvent.images = event.images;
+  }
+
+  return normalizedEvent;
 }
 
 export function createStreamEvent(streamEvent) {
@@ -63,6 +79,24 @@ export function isReasoningEvent(event) {
 
 export function hasReasoningContent(event) {
   return typeof event?.content === 'string' && event.content.trim().length > 0;
+}
+
+export function isRenderableStreamEvent(event) {
+  const eventType = typeof event?.eventType === 'string'
+    ? event.eventType
+    : (typeof event?.event_type === 'string' ? event.event_type : '');
+  if (!eventType || eventType === 'message_delta' || eventType === 'assistant_metadata') {
+    return false;
+  }
+  if (eventType !== 'node_update') {
+    return true;
+  }
+  const metadata = event?.metadata && typeof event.metadata === 'object' && !Array.isArray(event.metadata)
+    ? event.metadata
+    : {};
+  return typeof metadata.node_name === 'string'
+    && metadata.node_name.length > 0
+    && metadata.node_name !== 'pending_response';
 }
 
 export function countReasoningTimelineEntries(events, reasoningText) {

@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -434,6 +434,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
 
 function ConversationPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
   // session selection is driven entirely by the id, never by the slug.
   const { threadId: urlThreadId } = useParams();
@@ -624,23 +625,24 @@ function ConversationPage() {
       requestId: createUuid(),
     })).unwrap();
   }, [activeStreamIdRef, beginForegroundStream, dispatch, getApiUrl, setIsGenerating]);
-
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
-    const requestId = createUuid();
+    const clientRequestId = createUuid();
     let resolveSession;
     const sessionEvent = new Promise((resolve) => {
       resolveSession = resolve;
     });
-    pendingDraftSessionsRef.current.set(requestId, resolveSession);
+
+    const draftRequest = dispatch(ensureDraftChatSession({
+      chatsUrl: getApiUrl('chats'),
+      threadId: requestedThreadId || createUuid(),
+      requestId: clientRequestId,
+    }));
+    pendingDraftSessionsRef.current.set(draftRequest.requestId, resolveSession);
 
     try {
-      await dispatch(ensureDraftChatSession({
-        chatsUrl: getApiUrl('chats'),
-        threadId: requestedThreadId || createUuid(),
-        requestId,
-      })).unwrap();
+      await draftRequest.unwrap();
     } catch (error) {
-      pendingDraftSessionsRef.current.delete(requestId);
+      pendingDraftSessionsRef.current.delete(draftRequest.requestId);
       throw error;
     }
 
@@ -1090,24 +1092,27 @@ function ConversationPage() {
     return true;
   }, []);
 
-  const clearBackendSelection = useCallback(() => {
+  const clearBackendSelection = useCallback(({ clearRoute = false } = {}) => {
     setSelectedBackendChatId(null);
     dispatch(clearActiveChatSession());
     lastAppliedBackendChatRequestIdRef.current = null;
-  }, [dispatch]);
+    if (clearRoute) {
+      navigate('/chat', { replace: true });
+    }
+  }, [dispatch, navigate]);
 
   const focusComposer = useCallback(() => {
     setComposerFocusTick((current) => current + 1);
   }, []);
 
-  const dismissCurrentSession = useCallback(() => {
+  const dismissCurrentSession = useCallback(({ clearRoute = false } = {}) => {
     activeStreamIdRef.current = null;
     recentScheduledContent.current.clear();
     setMessages([]);
     setIsGenerating(false);
     setLiveAssistantTurn(null);
     setIsClearingSession(false);
-    clearBackendSelection();
+    clearBackendSelection({ clearRoute });
     setCustomChatTitle('');
     setCustomChatTitleThreadId(null);
     setTitleDraft('');
@@ -1121,8 +1126,26 @@ function ConversationPage() {
     if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat || activeBackendChatState.error) {
       return;
     }
-    dismissCurrentSession();
+    dismissCurrentSession({ clearRoute: true });
   }, [activeBackendChat, activeBackendChatState.error, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
+
+  useEffect(() => {
+    if (!backendChatSessionsState.loaded) {
+      return;
+    }
+    if (urlThreadId) {
+      if (selectedBackendChatId === urlThreadId) {
+        return;
+      }
+      openBackendChat(urlThreadId).catch(() => {
+        // Keep the routed id and let the active detail error render in place.
+      });
+      return;
+    }
+    if (selectedBackendChatId) {
+      dismissCurrentSession();
+    }
+  }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, selectedBackendChatId, urlThreadId]);
 
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
     const session = await acquireDraftChat(forceFreshSession ? null : threadId);
@@ -1235,7 +1258,7 @@ function ConversationPage() {
       return;
     }
     if (sessionItem.source !== 'backend' || !sessionItem.threadId) {
-      clearBackendSelection();
+      clearBackendSelection({ clearRoute: true });
       return;
     }
 
@@ -1462,7 +1485,7 @@ function ConversationPage() {
           await selectSessionItem(nextSessionItem);
           return;
         }
-        dismissCurrentSession();
+        dismissCurrentSession({ clearRoute: true });
         if (nextSessionItem?.source === 'local') {
           focusComposer();
         }
@@ -1498,7 +1521,7 @@ function ConversationPage() {
           await selectSessionItem(nextSessionItem);
           return;
         }
-        dismissCurrentSession();
+        dismissCurrentSession({ clearRoute: true });
         if (nextSessionItem?.source === 'local') {
           focusComposer();
         }
@@ -1506,7 +1529,7 @@ function ConversationPage() {
       return;
     }
     const nextSessionItem = findAdjacentSessionItem(visibleSessionItems, sessionItem?.id);
-    dismissCurrentSession();
+    dismissCurrentSession({ clearRoute: !(nextSessionItem?.source === 'backend' && nextSessionItem.threadId) });
     if (nextSessionItem?.source === 'backend' && nextSessionItem.threadId) {
       await selectSessionItem(nextSessionItem);
       return;
