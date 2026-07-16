@@ -9,7 +9,7 @@ const highlighter = vi.hoisted(() => ({
 
 vi.mock('highlight.js/lib/common', () => ({ default: highlighter }));
 
-import { renderMarkdownToHtml } from './markdown';
+import { renderMarkdownToHtml, stripYamlFrontmatter } from './markdown';
 
 function renderCodeFence(source) {
   const container = document.createElement('div');
@@ -76,5 +76,40 @@ describe('renderMarkdownToHtml fenced text blocks', () => {
       '### Response\n- Status: complete\n- Result: retained',
     );
     expect(container.querySelectorAll('.md-heading, li.md-li, ul.md-ul').length).toBe(0);
+  });
+});
+
+describe('stripYamlFrontmatter', () => {
+  it.each([
+    {
+      name: 'LF-delimited frontmatter',
+      source: '---\ntitle: Skills preview\ntags:\n  - markdown\n---\n# Skills heading\n\nBody text.',
+      expected: '# Skills heading\n\nBody text.',
+    },
+    {
+      name: 'CRLF-delimited frontmatter',
+      source: '---\r\ntitle: Skills preview\r\ntags:\r\n  - markdown\r\n---\r\n# Skills heading\r\n\r\nBody text.',
+      expected: '# Skills heading\r\n\r\nBody text.',
+    },
+  ])('removes one leading YAML block with $name while preserving the markdown body', ({ source, expected }) => {
+    const stripped = stripYamlFrontmatter(source);
+
+    expect(stripped).toBe(expected);
+
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdownToHtml(stripped);
+    expect(container.querySelector('.md-heading')?.textContent).toBe('Skills heading');
+  });
+
+  it('leaves markdown without frontmatter unchanged', () => {
+    const markdown = '# Existing heading\n\nBody text.';
+
+    expect(stripYamlFrontmatter(markdown)).toBe(markdown);
+  });
+
+  it('leaves an unterminated leading delimiter unchanged', () => {
+    const markdown = '---\ntitle: Missing closing delimiter\n# Heading that is still body text';
+
+    expect(stripYamlFrontmatter(markdown)).toBe(markdown);
   });
 });

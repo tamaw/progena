@@ -1,5 +1,14 @@
 import hljs from 'highlight.js/lib/common';
 
+export function stripYamlFrontmatter(content) {
+  if (typeof content !== 'string' || !content.startsWith('---')) {
+    return content;
+  }
+
+  const match = content.match(/^---[ \t]*\r?\n[\s\S]*?\r?\n---[ \t]*(?:\r?\n|$)/);
+  return match ? content.slice(match[0].length) : content;
+}
+
 export function renderMarkdownToHtml(content) {
   if (!content) return '';
 

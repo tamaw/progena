@@ -45,6 +45,7 @@ import reducer, {
   setGeneratingChatIds,
   setUnreadChatIds,
 } from './uiDataSlice';
+import { CHAT_STATUS } from '../lib/chatStatus';
 
 const snapshot = (ids) => applyUiEvent({
   type: 'chat.sessions.snapshot',
@@ -507,22 +508,23 @@ describe('agent reducers', () => {
 });
 
 describe('chat indicators (nav dot)', () => {
-  it('defaults to no unread and not generating', () => {
-    const s = reducer(undefined, { type: '@@INIT' });
-    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: false });
-  });
 
-  it('derives the nav dot from shared unread and generating chat ids', () => {
-    let s = reducer(undefined, setGeneratingChatIds(['c1']));
-    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['c1']);
-    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: false, isGenerating: true });
+  it.each([
+    ['idle when runtime id lists are explicitly empty', [], [], [], 'idle'],
+    ['complete when unread chats are present', ['c2'], [], [], 'complete'],
+    ['error outranks unread chats', ['c2'], [], ['c3'], 'error'],
+    ['generating outranks error and unread chats', ['c2'], ['c1'], ['c3'], CHAT_STATUS.GENERATING],
+  ])('derives aggregate %s status', (_description, unread, generating, errored, status) => {
+    let s = reducer(undefined, setUnreadChatIds(unread));
+    s = reducer(s, setGeneratingChatIds(generating));
+    s = reducer(s, setErroredChatIds(errored));
 
-    s = reducer(s, setUnreadChatIds(['c2']));
-    expect(selectUnreadChatIds({ uiData: s })).toEqual(['c2']);
-    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: true });
-
-    s = reducer(s, clearChatGenerating('c1'));
-    expect(selectChatIndicators({ uiData: s })).toEqual({ hasUnread: true, isGenerating: false });
+    expect(selectChatIndicators({ uiData: s })).toEqual({
+      hasUnread: unread.length > 0,
+      isGenerating: generating.length > 0,
+      hasError: errored.length > 0,
+      status,
+    });
   });
 
   it('adds, clears, and dedupes chat runtime ids', () => {
