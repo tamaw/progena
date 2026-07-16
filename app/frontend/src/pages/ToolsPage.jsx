@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useParams } from 'react-router-dom';
-import { useEntityUrlSync } from '../lib/routes';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
   PaneList,
   PaneListFilters,
@@ -24,7 +24,7 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { useConfig } from '../context/ConfigContext';
-import { fetchMcp, selectMcpServers } from '../store/uiDataSlice';
+import { fetchMcp, selectMcpServers, selectMcpState } from '../store/uiDataSlice';
 import { selectRealtime } from '../store/realtimeSlice';
 
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
@@ -134,18 +134,22 @@ function MetricCard({ label, value, detail }) {
 
 export default function ToolsPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   // `titleSlug` is display context only (e.g. /tools/mcp%3Ajina/jina) --
   // selection is driven entirely by the id, never by the slug.
   const { serverId: urlServerId } = useParams();
+  const selectedServerId = typeof urlServerId === 'string' && urlServerId.trim().length > 0
+    ? urlServerId
+    : null;
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
   const mcpServers = useSelector(selectMcpServers);
+  const mcpState = useSelector(selectMcpState);
   const { updateWidget, deleteWidget } = useWidgetsApi();
 
   const [activeFilter, setActiveFilter] = useState('All');
   const [query, setQuery] = useState('');
   const [sortMode, setSortMode] = useState('Status');
-  const [selectedId, setSelectedId] = useState(() => urlServerId || null);
   const [mutating, setMutating] = useState(false);
   const [error, setError] = useState(null);
 
@@ -192,14 +196,17 @@ export default function ToolsPage() {
     return groups;
   }, [visibleServers]);
 
-  const selectedServer =
-    servers.find((server) => server.id === selectedId) || visibleServers[0] || servers[0] || null;
+  const selectedServer = useMemo(
+    () => servers.find((server) => server.id === selectedServerId)
+      || (!selectedServerId ? visibleServers[0] || servers[0] || null : null),
+    [selectedServerId, servers, visibleServers],
+  );
   const selectedStatus = selectedServer ? statusOf(selectedServer) : 'disabled';
 
-  // Keep the URL in sync with whichever server is actually selected -- a
-  // deep-linked or stale id falls back to the top visible server the same
-  // way `selectedServer` already does above. The title slug is cosmetic;
-  // only the id segment is ever read back.
+  // Keep the URL in sync with whichever server is actually selected. A routed
+  // server id stays authoritative; if it disappears after hydration, the effect
+  // below clears back to /tools instead of rewriting stale detail state.
+  // The title slug is cosmetic; only the id segment is ever read back.
   useEntityUrlSync('/tools', selectedServer?.id, selectedServer?.name);
 
   const totals = useMemo(() => ({
@@ -214,6 +221,15 @@ export default function ToolsPage() {
     if (!realtime.connected) return;
     void refreshMcp().catch((loadError) => setError(loadError.message || 'Failed to load MCP servers.'));
   }, [realtime.connected, refreshMcp]);
+  useEffect(() => {
+    if (!mcpState.loaded || !selectedServerId) {
+      return;
+    }
+    if (!servers.some((server) => server.id === selectedServerId)) {
+      navigate('/tools', { replace: true });
+    }
+  }, [mcpState.loaded, navigate, selectedServerId, servers]);
+
 
   // Leave edit mode whenever the selected server changes so a stale draft never
   // leaks across selections.
@@ -299,14 +315,16 @@ export default function ToolsPage() {
     setError(null);
     try {
       await deleteWidget(`mcp:${selectedServer.name}`);
-      setSelectedId(null);
+      if (selectedServerId === selectedServer.id) {
+        navigate('/tools', { replace: true });
+      }
       await refreshMcp();
     } catch (err) {
       setError(err.message || 'Failed to remove server.');
     } finally {
       setMutating(false);
     }
-  }, [deleteWidget, refreshMcp, selectedServer]);
+  }, [deleteWidget, navigate, refreshMcp, selectedServer, selectedServerId]);
 
   const addServer = useCallback(() => {
     // Creation is a Progenitor change request: open quick-chat primed to add an
@@ -356,7 +374,7 @@ export default function ToolsPage() {
                         key={server.id}
                         className={`sess-row tools-pane-row tools-pane-row--${status} ${selectedServer?.id === server.id ? 'is-selected' : ''}`}
                         aria-label={`${server.name}, ${statusLabel(status)}, ${server.transport || 'mcp'}`}
-                        onClick={() => setSelectedId(server.id)}
+                        onClick={() => navigate(buildEntityPath('/tools', server.id, server.name), { replace: true })}
                       >
                         <span className="sess-row__top">
                           <span className={`sess-row__dot tools-status-dot--${status}`} />

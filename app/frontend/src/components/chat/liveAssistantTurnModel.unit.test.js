@@ -952,7 +952,51 @@ describe('applySubagentEvent', () => {
     }));
     expect(original).toEqual(snapshot);
   });
+
+  it('ignores stale non-terminal subagent events after the card has completed', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_result', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1', success: true, result_preview: 'done' },
+    }));
+    const settled = items[0];
+
+    items = applySubagentEvent(items, subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_message_delta', {
+      content: 'late',
+      metadata: { tool_call_id: 'call_1' },
+    }));
+
+    expect(items[0]).toBe(settled);
+    expect(items[0]).toMatchObject({ status: 'success', resultPreview: 'done', entries: [] });
+  });
+
+  it('keeps the first terminal subagent result when a contradictory terminal update arrives later', () => {
+    let items = applySubagentEvent([], subagentEvent('subagent_start', {
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }));
+    items = applySubagentEvent(items, subagentEvent('subagent_result', {
+      metadata: { tool_call_id: 'call_1', success: false, error: 'subagent crashed' },
+    }));
+    const settled = items[0];
+
+    items = applySubagentEvent(items, subagentEvent('subagent_result', {
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_1',
+        success: true,
+        result_preview: 'late success must be ignored',
+      },
+    }));
+
+    expect(items[0]).toBe(settled);
+    expect(items[0]).toMatchObject({ status: 'error', error: 'subagent crashed', resultPreview: '' });
+  });
 });
+
 
 // ─── applyA2ACallEvent ───────────────────────────────────────────────────
 
@@ -1077,7 +1121,49 @@ describe('applyA2ACallEvent', () => {
     }));
     expect(original).toEqual(snapshot);
   });
+
+  it('ignores stale start/progress events after an A2A card has completed', () => {
+    let items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', state: 'working', message_text: 'Step 1' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('tool_result', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', result_preview: 'done' },
+    }));
+    const settled = items[0];
+
+    items = applyA2ACallEvent(items, a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1' },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('a2a_call_progress', {
+      metadata: { tool_call_id: 'call_1', state: 'working', message_text: 'late step' },
+    }));
+
+    expect(items[0]).toBe(settled);
+    expect(items[0].status).toBe('success');
+    expect(items[0].messages.map((message) => message.text)).toEqual(['Step 1']);
+  });
+
+  it('keeps the first terminal A2A outcome when a later terminal error arrives', () => {
+    let items = applyA2ACallEvent([], a2aEvent('tool_start', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', args_preview: { agent: 'greetings_agent' } },
+    }));
+    items = applyA2ACallEvent(items, a2aEvent('tool_result', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', result_preview: 'done' },
+    }));
+    const settled = items[0];
+
+    items = applyA2ACallEvent(items, a2aEvent('tool_error', {
+      metadata: { tool_name: 'call_agent', tool_call_id: 'call_1', error: 'late failure' },
+    }));
+
+    expect(items[0]).toBe(settled);
+    expect(items[0]).toMatchObject({ status: 'success', resultPreview: 'done', error: null });
+  });
 });
+
 
 // ─── applyAssistantChunk ─────────────────────────────────────────────────
 
@@ -1592,6 +1678,20 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e2')).toBeDefined();
   });
 
+  it('skips hidden pending_response node updates when rebuilding persisted timelines', () => {
+    const items = buildDefaultAssistantTimeline({
+      role: 'assistant',
+      id: 'msg_hidden',
+      content: 'done',
+      timestamp: 5000,
+      streamEvents: [
+        { id: 'hidden-node', eventType: 'node_update', timestamp: 1000, metadata: { node_name: 'pending_response' } },
+      ],
+    });
+
+    expect(items.map((item) => item.kind)).toEqual(['assistant_message']);
+  });
+
   // Malformed subagent events cannot form a grouped card and are dropped
   // rather than exposed as generic stream-event rows.
   it('drops a subagent_start with no tool_call_id instead of rendering a card or flat stream_event row', () => {
@@ -1723,6 +1823,20 @@ describe('finalizeLiveAssistantTurn', () => {
       expect(result.timelineItems).toHaveLength(1);
       expect(result.timelineItems[0].kind).toBe('assistant_message');
       expect(result.timelineItems[0].content).toBe('(No response text)');
+    });
+
+    it('ignores hidden pending_response node updates when deciding whether to show the no-response placeholder', () => {
+      const turn = applyAssistantStreamEvent(
+        baseTurn(),
+        rawStreamEvent('node_update', { metadata: { node_name: 'pending_response' } }),
+        NOW,
+      );
+      const result = finalizeLiveAssistantTurn(turn, { status: 'completed', now: NOW });
+
+      expect(result).not.toBeNull();
+      expect(result.content).toBe('(No response text)');
+      expect(result.timelineItems).toHaveLength(1);
+      expect(result.timelineItems[0].kind).toBe('assistant_message');
     });
   });
 

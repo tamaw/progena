@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useEntityUrlSync } from '../lib/routes';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
@@ -71,11 +71,14 @@ export default function InboxPage() {
   // `titleSlug` is display context only (e.g. /inbox/msg_42/weekly-digest) --
   // selection is driven entirely by the id, never by the slug.
   const { messageId: urlMessageId } = useParams();
+  const routedMessageId = typeof urlMessageId === 'string' && urlMessageId.trim().length > 0
+    ? urlMessageId
+    : null;
   const { getApiUrl } = useConfig();
   const inboxUrl = getApiUrl('inbox');
   const messages = useSelector(selectInboxMessages);
   const inboxState = useSelector(selectInboxState);
-  const [selectedId, setSelectedId] = useState(() => urlMessageId || null);
+  const [fallbackSelectedId, setFallbackSelectedId] = useState(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
   const [sort, setSort] = useState('Recent');
@@ -100,64 +103,62 @@ export default function InboxPage() {
   }, [messages, query, filter, sort]);
 
   const selectedMessage = useMemo(
-    () => messages.find((message) => message.id === selectedId) || null,
-    [messages, selectedId],
+    () => messages.find((message) => message.id === (routedMessageId || fallbackSelectedId)) || null,
+    [fallbackSelectedId, messages, routedMessageId],
   );
 
-  // A selectedId whose message was deleted (here or in another tab) resolves to
-  // null above, so the detail pane falls back to the empty state on its own.
+  // A routed message id that no longer exists is cleared back to /inbox above;
+  // otherwise the detail pane simply reflects the currently selected message.
 
-  // Selecting a message (including the initial auto-select below) marks it
-  // read (optimistic; the snapshot that follows reconciles).
+  // Clicking a card owns the route: mounted navigation to another id must swap
+  // detail immediately instead of waiting for mount-only state to catch up.
   const selectMessage = useCallback((message) => {
-    setSelectedId(message.id);
-    if (!message.read) {
-      dispatch(markInboxMessageRead({ inboxUrl, messageId: message.id, read: true }));
-    }
-  }, [dispatch, inboxUrl]);
+    navigate(buildEntityPath('/inbox', message.id, message.title), { replace: true });
+  }, [navigate]);
 
-  // On mount, a URL that already names a message (bookmark, reload, shared
-  // link) selects that message directly instead of auto-selecting the top
-  // card. Otherwise, default to the top of the (filtered/sorted) card list
-  // once, the same way the Chat page opens onto its top session — only on
-  // initial load, so it doesn't fight a selection the user already made.
+  // On mount, a bare /inbox route auto-selects the top visible card once so the
+  // page opens onto useful content. A routed message id stays authoritative on
+  // every change instead of being treated as mount-only state.
   const hasAutoSelectedRef = useRef(false);
   useEffect(() => {
-    if (hasAutoSelectedRef.current || !inboxState.loaded) {
+    if (!inboxState.loaded) {
+      return;
+    }
+    if (routedMessageId) {
+      hasAutoSelectedRef.current = true;
+      if (!messages.some((message) => message.id === routedMessageId)) {
+        setFallbackSelectedId(null);
+        navigate('/inbox', { replace: true });
+      }
+      return;
+    }
+    if (hasAutoSelectedRef.current) {
       return;
     }
     hasAutoSelectedRef.current = true;
-    if (urlMessageId) {
-      const target = messages.find((message) => message.id === urlMessageId);
-      if (target) {
-        if (selectedId !== target.id) {
-          Promise.resolve().then(() => selectMessage(target));
-        } else if (!target.read) {
-          dispatch(markInboxMessageRead({ inboxUrl, messageId: target.id, read: true }));
-        }
-        return;
-      }
-      // The linked message doesn't exist (deleted, or never real) - fall
-      // back to auto-selecting the top card below.
-      Promise.resolve().then(() => setSelectedId(null));
-      navigate('/inbox', { replace: true });
-    }
     if (visibleMessages.length === 0) {
       return;
     }
-    const topMessage = visibleMessages[0];
-    // Deferred a tick so the state update happens in a callback rather than
-    // synchronously in the effect body (react-hooks/set-state-in-effect).
-    Promise.resolve().then(() => selectMessage(topMessage));
-  }, [dispatch, inboxUrl, inboxState.loaded, messages, navigate, selectMessage, selectedId, urlMessageId, visibleMessages]);
+    Promise.resolve().then(() => setFallbackSelectedId(visibleMessages[0].id));
+  }, [inboxState.loaded, messages, navigate, routedMessageId, visibleMessages]);
+
+  // Selecting a message (whether by route, auto-select, or a click above) marks
+  const selectedMessageId = selectedMessage?.id;
+  const selectedMessageRead = selectedMessage?.read;
+  const selectedMessageTitle = selectedMessage?.title;
+
+  // Selecting a message (whether by route, auto-select, or a click above) marks
+  // it read optimistically; the snapshot that follows reconciles.
+  useEffect(() => {
+    if (!selectedMessageId || selectedMessageRead) {
+      return;
+    }
+    dispatch(markInboxMessageRead({ inboxUrl, messageId: selectedMessageId, read: true }));
+  }, [dispatch, inboxUrl, selectedMessageId, selectedMessageRead]);
 
   // Keep the URL in sync with whichever message is selected. The title slug
   // is cosmetic; only the id segment is ever read back.
   useEntityUrlSync('/inbox', selectedMessage?.id, selectedMessage?.title);
-
-  const selectedMessageId = selectedMessage?.id;
-  const selectedMessageRead = selectedMessage?.read;
-  const selectedMessageTitle = selectedMessage?.title;
 
   const toggleRead = useCallback(() => {
     if (!selectedMessageId) return;
@@ -171,8 +172,9 @@ export default function InboxPage() {
   const removeMessage = useCallback(() => {
     if (!selectedMessageId) return;
     dispatch(deleteInboxMessage({ inboxUrl, messageId: selectedMessageId }));
-    setSelectedId(null);
-  }, [dispatch, inboxUrl, selectedMessageId]);
+    setFallbackSelectedId(null);
+    navigate('/inbox', { replace: true });
+  }, [dispatch, inboxUrl, navigate, selectedMessageId]);
 
   // Composing/editing is delegated to the Progenitor agent via quick chat (same
   // pattern as Tasks and Schedules): the agent writes /inbox/<id>.md and the
@@ -229,10 +231,10 @@ export default function InboxPage() {
             visibleMessages.map((message) => (
               <article
                 key={message.id}
-                className={`chat-session-card${message.id === selectedId ? ' is-selected' : ''}${message.read ? '' : ' is-unread'}`}
+                className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${message.read ? '' : ' is-unread'}`}
                 role="button"
                 tabIndex={0}
-                aria-current={message.id === selectedId ? 'true' : undefined}
+                aria-current={message.id === selectedMessageId ? 'true' : undefined}
                 onClick={() => selectMessage(message)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' || event.key === ' ') {

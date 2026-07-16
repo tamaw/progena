@@ -1,7 +1,7 @@
 import { Fragment, memo, useMemo } from 'react';
 import { collectMessageImages } from './conversationModel';
 import { formatDisplayToolCalls } from './messageDisplayModel';
-import { hasReasoningContent, isReasoningEvent } from './streamEventsModel';
+import { hasReasoningContent, isReasoningEvent, isRenderableStreamEvent } from './streamEventsModel';
 import TimelineItem from './TimelineItem';
 import MessageImageStrip from './MessageImageStrip';
 import NormalToolContent from './NormalToolContent';
@@ -19,7 +19,7 @@ import {
 } from './messageRenderUtils';
 
 function isTimelineStreamEvent(event) {
-  return event?.eventType !== 'message_delta';
+  return isRenderableStreamEvent(event);
 }
 
 function buildSyntheticReasoningEvent(
@@ -394,6 +394,9 @@ function StreamEvents({ events }) {
                   className="message-stream-event-body entry__content"
                   dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
                 />
+              )}
+              {description.bodyDetail && !tool && !description.bodyHtml && (
+                <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
               )}
               {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
                 <div className="tool chat-event-tool">

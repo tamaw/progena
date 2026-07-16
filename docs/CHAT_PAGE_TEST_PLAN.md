@@ -10,30 +10,27 @@ run against `PROGENITOR_MOCK_LLM=true` for determinism. Background-error cases
 inject a canonical `chat.response.failed` `ui.event` envelope after a matching
 `chat.response.started` event; they MUST NOT mock a response-body SSE stream.
 
-**Architecture note:** All chat data arrives through the event-stream
-architecture. Finite HTTP requests return HTTP `202 Accepted`
-(`{request_id, event_types}`) — no application data in response bodies. Chat
-events (`chat.sessions.snapshot`, `chat.session.upserted`,
-`chat.session.selected`, etc.) arrive on `/api/ui/stream` and hydrate Redux.
-Tests MUST NOT assert that chat data appears in HTTP response bodies; instead
-they assert the `202` acknowledgement and/or the matching stream event.
+**Architecture note:** Chat still follows the event-driven browser contract. Finite HTTP requests return HTTP `202 Accepted` (`{request_id, event_types}`) with no application data in response bodies. Chat session state and chat response lifecycle events (`chat.sessions.snapshot`, `chat.session.upserted`, `chat.response.started`, `chat.response.completed`, etc.) arrive on canonical `/api/ui/stream` and hydrate Redux. Active streaming response content (`chat.response.delta` and `chat.response.event`) arrives on the request-scoped `/api/ui/responses/{request_id}/stream`. Tests MUST NOT assert chat data in HTTP response bodies or canonical delta frames; instead they assert the `202` acknowledgement, canonical lifecycle events, and the dedicated response stream.
 
 ## Scope
 The chat page and its event-driven dependencies:
 `pages/ConversationPage.jsx`, `components/chat/*`, chat request helpers,
 `hooks/useChatSessionPrefs.js`, `store/*`, `chat_routes.py` /
-`chat_sessions.py`, and the finite `/api/ui/responses` acknowledgement route
-whose results are published through `/api/ui/stream`.
+`chat_sessions.py`, the canonical `/api/ui/stream` lifecycle contract, and the
+request-scoped `/api/ui/responses/{request_id}/stream` contract used by active
+chat responses.
 
 ## Test layers & tooling
 - **unit** — pure functions/models (`conversationModel`, `chatSessionsModel`,
   event reducers, filters, `chatStorage`). Vitest.
 - **comp** — React component behavior (`Message`, `ChatInput`,
   `StreamFilterMenu`, `QuickActions`). Vitest + React Testing Library.
-- **hook** — request helpers, `RealtimeBridge`, reducers, and page lifecycle
-  with a mocked canonical `EventSource` + Redux store.
+- **hook** — request helpers, `RealtimeBridge`, `useChatApi`, reducers, and
+  page lifecycle with mocked canonical and dedicated `EventSource` instances +
+  Redux store.
 - **e2e** — full chat page against a running/mock stack. Playwright.
-- **api** — backend FastAPI routes plus captured canonical stream events.
+- **api** — backend FastAPI routes plus captured canonical lifecycle events and
+  dedicated response-stream frames.
 
 ## Legend
 - Priority: **P1** core/high-risk · **P2** important UX · **P3** cosmetic/edge.
@@ -79,22 +76,24 @@ whose results are published through `/api/ui/stream`.
 | CO-10 | Autofocus / focusToken | Focuses on mount and when `focusToken` changes | comp | P3 | ◻ |
 | CO-11 | Keep focus after send | Focus retained when `keepFocusAfterSend` | comp | P3 | ◻ |
 
-## C. Generation lifecycle — canonical `chat.response.*` events
+## C. Generation lifecycle — canonical lifecycle + dedicated response stream
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| ST-01 | Acknowledged dispatch remains pending | `POST /api/ui/responses` returns only an HTTP `202` acknowledgement; no transcript is hydrated until a matching event | hook/api | P1 | ◻ |
-| ST-02 | Started event | Matching `chat.response.started` creates/marks the in-progress assistant state | hook | P1 | ◻ |
-| ST-03 | Delta and token accumulation | Matching `chat.response.delta` events append content and token metadata in order | hook | P1 | ◻ |
-| ST-04 | Metadata and reasoning | Canonical event payload metadata sets model/reasoning state without a response parser | hook/unit | P2 | ◻ |
-| ST-05 | Normal completion | Matching `chat.response.completed` finalizes the message and refreshes durable chat state through a correlated snapshot/event | hook | P1 | ◻ |
-| ST-06 | Failure path | Matching `chat.response.failed` shows an error and clears the operation/generation state | hook | P1 | ◻ |
-| ST-07 | Cancellation | `PUT /api/ui/responses/{generation_id}/cancel` returns `202`; matching `chat.response.cancelled` finalizes cancellation | hook/api | P2 | ◻ |
-| ST-08 | Concurrent attribution | Interleaved response events remain attached to their request/thread; no response overwrites another | hook | P1 | ◻ |
-| ST-09 | No response-body stream | `/api/ui/responses` never returns token SSE or response data, including `stream: true` | api | P1 | ◻ |
-| ST-10 | Thread routing | A generation request includes the selected session `thread_id` and its stream events preserve that thread context | api | P1 | ◻ |
-| ST-11 | Event replay | Replayed delta/terminal events are deduplicated/idempotent and do not double-finalize a message | unit | P1 | ◻ |
-| ST-12 | Request-ID correlation | Only matching event types with the submitted `request_id` resolve pending generation state | hook/api | P1 | ◻ |
+| ST-01 | Acknowledged dispatch remains pending | `POST /api/ui/responses` returns only an HTTP `202` acknowledgement; no transcript is hydrated until matching lifecycle/content events arrive | hook/api | P1 | ◻ |
+| ST-02 | Started lifecycle event | Canonical `chat.response.started` creates/marks the in-progress assistant state | hook | P1 | ◻ |
+| ST-03 | Dedicated stream opens by request ID | After acknowledgement, the client opens `/api/ui/responses/{request_id}/stream` for that request | hook/e2e | P1 | ◻ |
+| ST-04 | Delta accumulation | Dedicated `chat.response.delta` frames append visible content and token metadata in order | hook | P1 | ◻ |
+| ST-05 | Structured live events | Dedicated `chat.response.event` frames preserve metadata, reasoning/tool events, and optional images without a response-body parser | hook/unit | P2 | ◻ |
+| ST-06 | Normal completion | Canonical `chat.response.completed` finalizes the message and refreshes durable chat state through correlated canonical events | hook | P1 | ◻ |
+| ST-07 | Failure path | Canonical `chat.response.failed` shows an error and clears the operation/generation state | hook | P1 | ◻ |
+| ST-08 | Cancellation semantics | `PUT /api/ui/responses/{generation_id}/cancel` returns `202`/`chat.response.cancel_requested`; only canonical `chat.response.cancelled` finalizes cancellation | hook/api | P2 | ◻ |
+| ST-09 | Concurrent attribution | Interleaved lifecycle events and dedicated content frames remain attached to their request/thread; no response overwrites another | hook | P1 | ◻ |
+| ST-10 | No response-body stream | `/api/ui/responses` never returns token SSE or response data, including `stream: true` | api | P1 | ◻ |
+| ST-11 | Thread routing | A generation request includes the selected session `thread_id`; canonical lifecycle and dedicated content frames preserve that thread context | api | P1 | ◻ |
+| ST-12 | Dedicated replay | Reconnecting `/api/ui/responses/{request_id}/stream?after=<frame-id>` replays only newer retained frames and does not double-append content | hook/api | P1 | ◻ |
+| ST-13 | Dedicated resync_required | Invalid/expired dedicated cursors emit `chat.response.resync_required`; the UI stops appending live content and waits for canonical terminal reconciliation | hook/api | P1 | ◻ |
+| ST-14 | Request-ID correlation | Only matching canonical lifecycle events and dedicated frames for the submitted `request_id` resolve pending generation state | hook/api | P1 | ◻ |
 
 ## D. Background canonical generation
 
@@ -165,7 +164,7 @@ whose results are published through `/api/ui/stream`.
 
 | ID | Behavior | Expected | Layer | Pri | Status |
 |----|----------|----------|-------|-----|--------|
-| RT-01 | Single stream + dedupe | One EventSource targets `/api/ui/stream`; duplicate envelope ids are ignored | hook | P1 | ◻ |
+| RT-01 | Canonical stream + dedupe | One canonical `EventSource` targets `/api/ui/stream`; duplicate envelope ids are ignored and active chat may additionally own a request-scoped response stream | hook | P1 | ◻ |
 | RT-02 | sessions snapshot | `chat.sessions.snapshot` replaces the chat list from its envelope payload | unit | P1 | ◻ |
 | RT-03 | Durable chat mutations | Created, metadata-updated, and upserted events update Redux whether locally requested or global | unit | P1 | ◻ |
 | RT-04 | Global event does not resolve local work | An event from another request/tab updates state but leaves this tab's unrelated pending operation pending | unit | P1 | ◻ |
@@ -231,20 +230,25 @@ These guard the specific defects found and fixed during development.
 
 ## Coverage summary
 - **Total:** update this count when tests are implemented; contract rows above
-  deliberately test canonical-stream behavior rather than historical direct SSE.
+  deliberately test canonical lifecycle plus dedicated response-stream
+  behavior rather than historical direct SSE.
 - **Backend (api):** assert HTTP `202` acknowledgements, persistence-before-event,
-  causal request IDs, and no response-body data.
-- **Frontend (unit/comp/hook/e2e):** assert one EventSource, event-only Redux
-  hydration, bounded-replay resync, and pending-operation correlation.
+  causal request IDs, dedicated replay/resync behavior, and no response-body
+  data.
+- **Frontend (unit/comp/hook/e2e):** assert one canonical `EventSource`, a
+  request-scoped response `EventSource` during active chat, event-only Redux
+  hydration, bounded replay/resync, and pending-operation correlation.
 
 ### Suggested build order
 1. **Harness:** add Vitest + RTL (and Playwright config) to `app/frontend`.
-2. **Unit:** event reducers, pending-operation correlation, replay/dedup,
-   session models, filters, and storage rules.
-3. **Hook:** canonical `EventSource` lifecycle plus foreground/background
-   generation events; never mock a response-body stream.
+2. **Unit:** event reducers, pending-operation correlation, canonical replay,
+   dedicated response-frame dedup/replay, session models, filters, and storage
+   rules.
+3. **Hook:** canonical `EventSource` lifecycle plus dedicated response-stream
+   ownership for foreground generation; never mock a response-body stream.
 4. **Component:** `Message`, `ChatInput`, `StreamFilterMenu`, and
    `QuickActions`.
-5. **E2E:** event-driven background generation, reconnect/resync, auto-select,
-   ghost-card prevention, tabs, and thread routing.
-6. **Backend:** table-drive acknowledgement/event correlation and failures.
+5. **E2E:** event-driven background generation, dedicated reconnect/resync,
+   auto-select, ghost-card prevention, tabs, and thread routing.
+6. **Backend:** table-drive acknowledgement/event correlation, dedicated replay,
+   and failures.

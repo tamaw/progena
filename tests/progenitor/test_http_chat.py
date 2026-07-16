@@ -344,6 +344,26 @@ async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
     assert not loop_runner.queues.cycle_complete_event.is_set()
 
 
+async def test_chat_bridge_cancellation_does_not_synthesize_done_frame() -> None:
+    loop_runner = FakeLoopRunner()
+    script = [
+        {"type": "stream_chunk", "content": "partial", "is_final": False},
+        _Raise(asyncio.CancelledError()),
+    ]
+    server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
+    try:
+        async with _client() as client:
+            frames = await _post_chat(client, server.base_url, "hi", "req-bridge-cancel")
+    finally:
+        await _stop_chat_server(server)
+
+    assert frames[0][0] == "stream_chunk"
+    assert frames[0][1]["content"] == "partial"
+    assert not any(name == "done" for name, _ in frames)
+    assert loop_runner.state_manager.saved_checkpoints == []
+    assert not loop_runner.queues.cycle_complete_event.is_set()
+
+
 async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeypatch) -> None:
     """A long silent gap in bridge.stream() must not starve the response body.
 

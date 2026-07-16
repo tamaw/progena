@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -180,7 +180,30 @@ function upsertSubagentToolEntry(entries, nestedToolCallId, patch) {
   return entries.map((entry, idx) => (idx === index ? { ...entry, ...patch } : entry));
 }
 
+function isTerminalLifecycleStatus(status) {
+  return status === 'success' || status === 'error';
+}
+
+function hasVisibleTimelineOutput(timelineItems) {
+  return (Array.isArray(timelineItems) ? timelineItems : []).some((item) => {
+    if (!item || typeof item !== 'object') {
+      return false;
+    }
+    if (item.kind === 'assistant_message') {
+      return typeof item.content === 'string' && item.content.trim().length > 0;
+    }
+    if (item.kind === 'stream_event') {
+      return isRenderableStreamEvent(item.event);
+    }
+    return item.kind === 'subagent' || item.kind === 'a2a_call';
+  });
+}
+
 function applySubagentEventToItem(item, nextEvent) {
+  if (isTerminalLifecycleStatus(item.status)) {
+    return item;
+  }
+
   const metadata = nextEvent.metadata || {};
   const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
   const taskSummary = taskSummaryFromMetadata(metadata);
@@ -312,6 +335,10 @@ function createA2ACallItem(toolCallId, agentName, startedAt) {
 }
 
 function applyA2ACallEventToItem(item, nextEvent) {
+  if (isTerminalLifecycleStatus(item.status)) {
+    return item;
+  }
+
   const metadata = nextEvent.metadata || {};
   const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
 
@@ -522,11 +549,7 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
   // checkpoints threaded through the transcript. Falls through to the
   // generic append path below.
 
-  // All other visible events.
-  const isVisibleKind = nextEvent.eventType !== 'node_update' || (
-    nextEvent.metadata?.node_name && nextEvent.metadata.node_name !== 'pending_response'
-  );
-  if (isVisibleKind) {
+  if (isRenderableStreamEvent(nextEvent)) {
     next.timelineItems = [...next.timelineItems, { kind: 'stream_event', id: nextEvent.id, event: nextEvent }];
   }
 
@@ -729,7 +752,9 @@ export function buildDefaultAssistantTimeline(message) {
       }
     }
 
-    items.push({ kind: 'stream_event', id: event.id, event, timestamp: event.timestamp });
+    if (isRenderableStreamEvent(event)) {
+      items.push({ kind: 'stream_event', id: event.id, event, timestamp: event.timestamp });
+    }
 
     if (event?.eventType !== 'tool_result' || event?.metadata?.tool_name !== 'write_todos') {
       continue;
@@ -824,8 +849,7 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
 
   const hasVisibleOutput = (
     turn.content.trim().length > 0
-    || turn.timelineItems.length > 0
-    || turn.streamEvents.length > 0
+    || hasVisibleTimelineOutput(turn.timelineItems)
   );
 
   if (status === 'cancelled' && !hasVisibleOutput) {

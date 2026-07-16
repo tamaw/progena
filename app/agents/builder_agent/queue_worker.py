@@ -58,6 +58,13 @@ class TaskRecord:
     error_message: str | None = None
 
 
+@dataclass
+class _RunningTaskState:
+    task: asyncio.Task[None]
+    terminal_event_sent: bool = False
+    record_written: bool = False
+
+
 def _resolve_log_path(log_path: Path | None) -> Path:
     return log_path if log_path is not None else get_task_log_path()
 
@@ -192,7 +199,40 @@ class BuilderTaskQueue:
         self._handler = handler
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._log_path = _resolve_log_path(log_path)
-        self._running_tasks: dict[str, asyncio.Task[None]] = {}
+        self._running_tasks: dict[str, _RunningTaskState] = {}
+
+    async def _enqueue_terminal_event_once(
+        self,
+        task_id: str,
+        context_id: str,
+        state: TaskState,
+        message_text: str,
+        event_queue: Any,
+    ) -> bool:
+        running = self._running_tasks.get(task_id)
+        if running is None:
+            return False
+        if running.terminal_event_sent:
+            return False
+        running.terminal_event_sent = True
+        try:
+            await event_queue.enqueue_event(
+                _status_event(task_id, context_id, state, message_text, final=True)
+            )
+        except BaseException:
+            running.terminal_event_sent = False
+            raise
+        return True
+
+    def _append_record_once(self, task_id: str, record: TaskRecord) -> bool:
+        running = self._running_tasks.get(task_id)
+        if running is None:
+            return False
+        if running.record_written:
+            return False
+        running.record_written = True
+        append_task_record(record, self._log_path)
+        return True
 
     async def run(
         self,
@@ -213,7 +253,7 @@ class BuilderTaskQueue:
         inner = asyncio.create_task(
             self._run_task(task_id, context_id, request_text, request_ctx, event_queue)
         )
-        self._running_tasks[task_id] = inner
+        self._running_tasks[task_id] = _RunningTaskState(task=inner)
         try:
             await inner
         except asyncio.CancelledError:
@@ -221,16 +261,17 @@ class BuilderTaskQueue:
             # the event loop -- asyncio then completes it as cancelled
             # without ever entering _run_task's body, so its own
             # try/except (and the terminal event it pushes on that path)
-            # never runs. Push the same fallback here so callers still see
-            # a terminal event and this coroutine still returns normally
-            # instead of propagating the cancellation into
-            # BuilderAgentExecutor.execute() (see its docstring).
-            await event_queue.enqueue_event(
-                _status_event(
-                    task_id, context_id, TaskState.canceled, "Build task cancelled.", final=True
-                )
+            # never runs. Push the same fallback here only when the inner
+            # coroutine has not already delivered a terminal outcome.
+            await self._enqueue_terminal_event_once(
+                task_id,
+                context_id,
+                TaskState.canceled,
+                "Build task cancelled.",
+                event_queue,
             )
-            append_task_record(
+            self._append_record_once(
+                task_id,
                 TaskRecord(
                     task_id=task_id,
                     status="cancelled",
@@ -240,21 +281,20 @@ class BuilderTaskQueue:
                     timestamp_utc=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
                     error_message="Build task cancelled",
                 ),
-                self._log_path,
             )
         finally:
             self._running_tasks.pop(task_id, None)
 
     def cancel(self, task_id: str) -> bool:
-        task = self._running_tasks.get(task_id)
-        if task is None or task.done():
+        running = self._running_tasks.get(task_id)
+        if running is None or running.task.done():
             return False
-        task.cancel()
+        running.task.cancel()
         return True
 
     async def shutdown(self) -> None:
         """Cancel any in-flight builds. Called on process shutdown."""
-        running = list(self._running_tasks.values())
+        running = [state.task for state in self._running_tasks.values()]
         for task in running:
             task.cancel()
         for task in running:
@@ -322,27 +362,31 @@ class BuilderTaskQueue:
                     summary = result.output_summary or "Build completed."
                     if result.pr_url:
                         summary = f"{summary}\nPR: {result.pr_url}"
-                    await event_queue.enqueue_event(
-                        _status_event(task_id, context_id, TaskState.completed, summary, final=True)
+                    await self._enqueue_terminal_event_once(
+                        task_id,
+                        context_id,
+                        TaskState.completed,
+                        summary,
+                        event_queue,
                     )
                 elif status == "cancelled":
-                    await event_queue.enqueue_event(
-                        _status_event(
-                            task_id,
-                            context_id,
-                            TaskState.canceled,
-                            "Build task cancelled.",
-                            final=True,
-                        )
+                    await self._enqueue_terminal_event_once(
+                        task_id,
+                        context_id,
+                        TaskState.canceled,
+                        "Build task cancelled.",
+                        event_queue,
                     )
                 else:
                     failure_text = (
                         result.error_message or result.output_summary or "Build task failed."
                     )
-                    await event_queue.enqueue_event(
-                        _status_event(
-                            task_id, context_id, TaskState.failed, failure_text, final=True
-                        )
+                    await self._enqueue_terminal_event_once(
+                        task_id,
+                        context_id,
+                        TaskState.failed,
+                        failure_text,
+                        event_queue,
                     )
                 logger.info(
                     "BuilderTaskQueue: task completed task_id=%s status=%s pr_url=%s",
@@ -354,10 +398,12 @@ class BuilderTaskQueue:
             record.status = "cancelled"
             record.phase_completed = "cancelled"
             record.error_message = "Build task cancelled"
-            await event_queue.enqueue_event(
-                _status_event(
-                    task_id, context_id, TaskState.canceled, "Build task cancelled.", final=True
-                )
+            await self._enqueue_terminal_event_once(
+                task_id,
+                context_id,
+                TaskState.canceled,
+                "Build task cancelled.",
+                event_queue,
             )
             logger.info("BuilderTaskQueue: task cancelled task_id=%s", task_id)
             # Deliberately not re-raised: this coroutine runs inside its
@@ -370,16 +416,14 @@ class BuilderTaskQueue:
             record.status = "failure"
             record.phase_completed = "failed"
             record.error_message = str(exc)
-            await event_queue.enqueue_event(
-                _status_event(
-                    task_id,
-                    context_id,
-                    TaskState.failed,
-                    record.error_message or "Build task failed.",
-                    final=True,
-                )
+            await self._enqueue_terminal_event_once(
+                task_id,
+                context_id,
+                TaskState.failed,
+                record.error_message or "Build task failed.",
+                event_queue,
             )
             logger.exception("BuilderTaskQueue: task failed task_id=%s", task_id)
         finally:
             record.timestamp_utc = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-            append_task_record(record, self._log_path)
+            self._append_record_once(task_id, record)

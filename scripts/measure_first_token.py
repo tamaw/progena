@@ -208,10 +208,9 @@ async def measure_runtime(base_url: str) -> dict[str, Any]:
 
 
 async def measure_backend(base_url: str) -> dict[str, Any]:
-    """Measure backend POST /api/ui/responses to browser-facing UI SSE."""
+    """Measure POST /api/ui/responses plus its dedicated response SSE."""
     request_id = f"measure-backend-{uuid.uuid4().hex[:12]}"
     thread_id = f"measure-backend-thread-{uuid.uuid4().hex[:12]}"
-    stream_url = f"{base_url.rstrip('/')}/api/ui/stream"
     response_url = f"{base_url.rstrip('/')}/api/ui/responses"
     body = {
         "model": "progenitor-v1",
@@ -219,26 +218,7 @@ async def measure_backend(base_url: str) -> dict[str, Any]:
         "stream": True,
         "metadata": {"thread_id": thread_id},
     }
-    async with (
-        httpx.AsyncClient(timeout=None) as client,
-        client.stream(
-            "GET",
-            stream_url,
-            headers={"Accept": "text/event-stream"},
-        ) as stream_response,
-    ):
-        stream_response.raise_for_status()
-        events = iter_sse(stream_response)
-        debug("SSE connected; waiting for connection.ready")
-        async for event_name, data in events:
-            if (
-                event_name == "ui.event"
-                and isinstance(data, dict)
-                and data.get("type") == "connection.ready"
-            ):
-                debug("received connection.ready")
-                break
-
+    async with httpx.AsyncClient(timeout=None) as client:
         started_ns = now_ns()
         acknowledgement = await client.post(
             response_url,
@@ -250,43 +230,71 @@ async def measure_backend(base_url: str) -> dict[str, Any]:
         effective_request_id = str(acknowledgement_payload.get("request_id") or request_id)
         debug(f"effective request ID: {effective_request_id}")
         acknowledgement_ms = round((now_ns() - started_ns) / 1_000_000, 3)
+        stream_url = f"{base_url.rstrip('/')}/api/ui/responses/{effective_request_id}/stream"
         first_token_ns: int | None = None
         delta_count = 0
         response_text = ""
-        async for event_name, data in events:
-            if event_name != "ui.event" or not isinstance(data, dict):
-                continue
-            if data.get("type") != "chat.response.delta":
-                continue
-            payload = data.get("payload")
-            if not isinstance(payload, dict):
-                continue
-            if data.get("type", "").startswith("chat.response"):
+        async with client.stream(
+            "GET",
+            stream_url,
+            headers={"Accept": "text/event-stream"},
+        ) as stream_response:
+            stream_response.raise_for_status()
+            async for event_name, data in iter_sse(stream_response):
+                if not isinstance(data, dict):
+                    continue
+                if event_name == "chat.response.heartbeat":
+                    continue
+                if event_name == "chat.response.resync_required":
+                    raise RuntimeError(
+                        "backend response stream requested resync: "
+                        f"{data.get('reason') or 'unknown'}"
+                    )
+                if event_name == "chat.response.event":
+                    debug(
+                        "received structured response event "
+                        f"type={data.get('event_type')} request_id={data.get('request_id')}"
+                    )
+                    continue
+                if event_name != "chat.response.delta":
+                    continue
                 debug(
-                    f"received {data.get('type')} request_id={payload.get('request_id')} "
+                    f"received dedicated delta request_id={data.get('request_id')} "
                     f"expected={effective_request_id}"
                 )
-            if payload.get("request_id") != effective_request_id:
-                continue
-            delta = str(payload.get("delta") or "")
-            if not delta:
-                continue
-            debug(f"received matching delta: {delta[:40]!r}")
-            delta_count += 1
-            response_text += delta
-            first_token_ns = now_ns()
-            return result(
-                "backend_ui_sse",
-                started_ns,
-                first_token_ns,
-                acknowledgement_ms=acknowledgement_ms,
-                delta_count=delta_count,
-                response_preview=response_text[:120],
-                request_id=effective_request_id,
-                thread_id=thread_id,
-                endpoint=response_url,
-                stream_endpoint=stream_url,
-            )
+                if data.get("request_id") != effective_request_id:
+                    continue
+                delta = str(data.get("delta") or "")
+                if not delta:
+                    continue
+                debug(f"received matching delta: {delta[:40]!r}")
+                delta_count += 1
+                response_text += delta
+                first_token_ns = now_ns()
+                return result(
+                    "backend_ui_sse",
+                    started_ns,
+                    first_token_ns,
+                    acknowledgement_ms=acknowledgement_ms,
+                    delta_count=delta_count,
+                    response_preview=response_text[:120],
+                    request_id=effective_request_id,
+                    thread_id=thread_id,
+                    endpoint=response_url,
+                    stream_endpoint=stream_url,
+                )
+        return result(
+            "backend_ui_sse",
+            started_ns,
+            first_token_ns,
+            acknowledgement_ms=acknowledgement_ms,
+            delta_count=delta_count,
+            response_preview=response_text[:120],
+            request_id=effective_request_id,
+            thread_id=thread_id,
+            endpoint=response_url,
+            stream_endpoint=stream_url,
+        )
 
 
 async def main() -> None:

@@ -565,4 +565,29 @@ describe('appendStreamingCursor', () => {
     expect(paragraphs[1].textContent).toBe('Second▋');
     expect(container.querySelectorAll('.stream-cursor')).toHaveLength(1);
   });
+
+  it('places the cursor after trailing text nodes instead of inside the last inline element', () => {
+    const container = parse(appendStreamingCursor('<p><strong>bold</strong> tail</p>'));
+    const paragraph = container.querySelector('p');
+    const strong = container.querySelector('strong');
+    const cursor = container.querySelector('.stream-cursor');
+
+    expect(cursor).not.toBeNull();
+    expect(cursor.parentElement).toBe(paragraph);
+    expect(strong.querySelector('.stream-cursor')).toBeNull();
+    expect(paragraph.textContent).toBe('bold tail▋');
+  });
+
+  it('keeps the cursor attached to trailing text inside the final list item of structured markup', () => {
+    const container = parse(appendStreamingCursor('<ul><li>First</li><li><code>npm</code> install</li></ul>'));
+    const listItems = container.querySelectorAll('li');
+    const code = container.querySelector('code');
+    const cursor = container.querySelector('.stream-cursor');
+
+    expect(cursor).not.toBeNull();
+    expect(cursor.parentElement).toBe(listItems[1]);
+    expect(code.querySelector('.stream-cursor')).toBeNull();
+    expect(listItems[1].textContent).toBe('npm install▋');
+    expect(container.querySelectorAll('.stream-cursor')).toHaveLength(1);
+  });
 });
