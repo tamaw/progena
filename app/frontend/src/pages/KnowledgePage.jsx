@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { useEntityUrlSync } from '../lib/routes';
 import { useConfig } from '../context/ConfigContext';
+import { createUuid } from '../lib/uuid';
 import {
   fetchKnowledge,
   indexKnowledgeSource,
@@ -278,7 +279,7 @@ export default function KnowledgePage() {
     if (!selectedBase || !testQuery.trim() || testLoading) {
       return;
     }
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     setTestLoading(true);
     setTestError('');
     setTestResults(null);

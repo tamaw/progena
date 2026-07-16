@@ -7,6 +7,7 @@ import { useNotifications } from '../context/NotificationContext';
 import { useChatStream } from '../hooks/useChatStream';
 import { useChatSessionPrefs, usePrunedSelection } from '../hooks/useChatSessionPrefs';
 import { subscribeUiEvent } from '../store/realtimeEvents';
+import { createUuid } from '../lib/uuid';
 import {
   clearChatErrored,
   clearChatGenerating,
@@ -538,7 +539,7 @@ function ConversationPage() {
   // without marking the open chat unread).
   const reloadOpenChat = useCallback((threadId) => {
     lastAppliedBackendChatRequestIdRef.current = null;
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
@@ -620,12 +621,12 @@ function ConversationPage() {
     return dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
-      requestId: crypto.randomUUID(),
+      requestId: createUuid(),
     })).unwrap();
   }, [activeStreamIdRef, beginForegroundStream, dispatch, getApiUrl, setIsGenerating]);
 
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     let resolveSession;
     const sessionEvent = new Promise((resolve) => {
       resolveSession = resolve;
@@ -635,7 +636,7 @@ function ConversationPage() {
     try {
       await dispatch(ensureDraftChatSession({
         chatsUrl: getApiUrl('chats'),
-        threadId: requestedThreadId || crypto.randomUUID(),
+        threadId: requestedThreadId || createUuid(),
         requestId,
       })).unwrap();
     } catch (error) {
@@ -843,7 +844,7 @@ function ConversationPage() {
     const request = dispatch(requestChatSessionReconciliation({
       chatsUrl: getApiUrl('chats'),
       threadId: foregroundReconciliationIntent.threadId,
-      requestId: crypto.randomUUID(),
+      requestId: createUuid(),
     }));
     reconciliationIntentRef.current = {
       ...foregroundReconciliationIntent,

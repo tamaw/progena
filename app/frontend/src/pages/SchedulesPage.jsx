@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
 import { useParams } from 'react-router-dom';
 import { useEntityUrlSync } from '../lib/routes';
+import { createUuid } from '../lib/uuid';
 import {
   PaneList,
   PaneListFilters,
@@ -313,7 +314,7 @@ function SchedulesPage() {
       return undefined;
     }
     let cancelled = false;
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     setLoading(true);
     setError(null);
     setPendingScheduleRequestId(requestId);
