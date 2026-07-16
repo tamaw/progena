@@ -429,7 +429,10 @@ function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, o
       </div>
       <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
         <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
-        <input name="prompt" type="text" placeholder="Ask Progenitor AI to explain, plan, or build..." aria-label="Ask Progenitor AI" autoComplete="off" />
+        <input name="prompt" type="text" placeholder="Ask Progenitor AI" aria-label="Ask Progenitor AI" autoComplete="off" />
+        <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control K">
+          <kbd>Ctrl</kbd><kbd>K</kbd>
+        </span>
       </form>
       <div className="app-shell__actions">
         <ChromeIconButton
@@ -563,7 +566,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
                     <span className="app-shell__nav-label">{item.label}</span>
                     {showDot ? (
                       <span
-                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}${chatStatus === CHAT_STATUS.ERROR ? ' app-shell__nav-dot--error' : ''}`}
+                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}${chatStatus === CHAT_STATUS.COMPLETE ? ' app-shell__nav-dot--complete' : ''}${chatStatus === CHAT_STATUS.ERROR ? ' app-shell__nav-dot--error' : ''}`}
                         aria-hidden="true"
                       />
                     ) : null}

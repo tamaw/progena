@@ -372,6 +372,11 @@
 .detail-status--info {
     color: var(--color-info);
 }
+.inbox-detail__status--read .detail-status__dot {
+    background: transparent;
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
 
 .detail-status--warning {
     color: var(--color-warning);
