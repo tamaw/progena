@@ -3,7 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
-import { renderMarkdownToHtml } from '../lib/markdown';
+import { renderMarkdownToHtml, stripYamlFrontmatter } from '../lib/markdown';
 import { createUuid } from '../lib/uuid';
 import {
   fetchSkills,
@@ -231,7 +231,10 @@ export default function SkillsPage() {
     [selectedPath, skills],
   );
   const hasUnsavedChanges = selectedSkill ? draftContent !== (selectedSkill.content || '') : false;
-  const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
+  const renderedDraftContent = useMemo(
+    () => renderMarkdownToHtml(stripYamlFrontmatter(draftContent)),
+    [draftContent],
+  );
 
   const handleSave = useSnapshotSave({
     items: skills,
@@ -462,7 +465,7 @@ export default function SkillsPage() {
               )}
             />
 
-            <div className="skills-detail__body">
+            <div className={`skills-detail__body${editorMode === 'preview' && !creating ? ' skills-detail__body--preview' : ''}`}>
               {creating ? (
                 <div className="skills-create-form">
                   <label>
@@ -482,15 +485,10 @@ export default function SkillsPage() {
                     />
                   </label>
                 </div>
-              ) : (
-                <p className="task-description skills-detail__description">
-                  {selectedSkill.description || 'No description yet.'}
-                </p>
-              )}
 
-              {editorMode === 'preview' && !creating ? (
+              ) : editorMode === 'preview' && !creating ? (
                 <div
-                  className="prompts-markdown-preview message-content"
+                  className="markdown-content"
                   dangerouslySetInnerHTML={{ __html: renderedDraftContent }}
                 />
               ) : (

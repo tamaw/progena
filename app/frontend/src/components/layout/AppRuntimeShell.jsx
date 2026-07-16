@@ -16,6 +16,7 @@ import {
 import { selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
+import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
@@ -41,7 +42,6 @@ import {
   DashboardNavIcon,
   InsightsIcon,
   KnowledgeNavIcon,
-  ModelsNavIcon,
   MoonIcon,
   OpenChatIcon,
   PinIcon,
@@ -134,7 +134,6 @@ const navGroups = [
     label: 'Integrate',
     items: [
       { to: '/channels', icon: <ChannelsNavIcon />, label: 'Channels' },
-      { to: '/models', icon: <ModelsNavIcon />, label: 'Models' },
       { to: '/repositories', icon: <RepositoriesNavIcon />, label: 'Repositories' },
     ],
   },
@@ -428,9 +427,12 @@ function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, o
         </span>
         <span className="app-shell__crumb">{pageLabel}</span>
       </div>
-      <form className="app-shell__search app-shell__search--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
-        <span className="app-shell__search-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
-        <input name="search" type="text" placeholder="Ask Progenitor AI to explain, plan, or build..." aria-label="Ask Progenitor AI" autoComplete="off" />
+      <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
+        <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
+        <input name="prompt" type="text" placeholder="Ask Progenitor AI" aria-label="Ask Progenitor AI" autoComplete="off" />
+        <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control K">
+          <kbd>Ctrl</kbd><kbd>K</kbd>
+        </span>
       </form>
       <div className="app-shell__actions">
         <ChromeIconButton
@@ -544,11 +546,12 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
             <div className="app-shell__nav-group-label">{group.label}</div>
             <div className="app-shell__nav-group-items">
               {group.items.map((item) => {
-                // One "unseen activity" dot, regardless of which signal backs
-                // it: Chat's own generating/unread state, Inbox's real unread
-                // count, or the generic per-route activity tracker.
-                const isGenerating = item.dot && chatIndicators.isGenerating;
-                const showDot = (item.dot && (isGenerating || chatIndicators.hasUnread))
+                // Chat's global dot is the highest-priority status across all
+                // conversations; other nav dots retain their own activity rules.
+                const chatStatus = item.dot ? chatIndicators.status : null;
+                const isGenerating = chatStatus === CHAT_STATUS.GENERATING;
+                const showChatDot = item.dot && chatStatus !== CHAT_STATUS.IDLE;
+                const showDot = showChatDot
                   || (item.unreadDot && inboxUnread > 0)
                   || (item.trackActivity && unseenNavRoutes[item.to]);
                 return (
@@ -563,7 +566,7 @@ function PrimaryNav({ isCollapsed, isOpen, onClose, onToggleCollapse, onOpenSett
                     <span className="app-shell__nav-label">{item.label}</span>
                     {showDot ? (
                       <span
-                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}`}
+                        className={`app-shell__nav-dot${isGenerating ? ' app-shell__nav-dot--generating' : ''}${chatStatus === CHAT_STATUS.COMPLETE ? ' app-shell__nav-dot--complete' : ''}${chatStatus === CHAT_STATUS.ERROR ? ' app-shell__nav-dot--error' : ''}`}
                         aria-hidden="true"
                       />
                     ) : null}
@@ -1684,10 +1687,11 @@ function AppRuntimeShell() {
   const handleQuickChatSubmit = useCallback((event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const prompt = normalizeAiPrompt(form.get('search'));
+    const prompt = normalizeAiPrompt(form.get('prompt'));
     if (!prompt) {
       return;
     }
+    event.currentTarget.reset();
     quickChatSubmissionIdRef.current += 1;
     setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
     setQuickChatConfig(defaultQuickChatConfig);

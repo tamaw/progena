@@ -219,7 +219,7 @@ button:not(:disabled) {
 :where(
     .field-shell,
     .task-comment-input,
-    .app-shell__search,
+    .app-shell__quick-chat,
     .chrome-search-panel__input
 ) :where(input, textarea):focus-visible {
     box-shadow: none;

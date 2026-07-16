@@ -372,6 +372,11 @@
 .detail-status--info {
     color: var(--color-info);
 }
+.inbox-detail__status--read .detail-status__dot {
+    background: transparent;
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
 
 .detail-status--warning {
     color: var(--color-warning);
@@ -440,4 +445,12 @@
     .detail-header__separator {
         display: none;
     }
+}
+.inbox-detail .detail-header-action--danger.inbox-detail__delete {
+    color: var(--color-text-secondary);
+}
+
+.inbox-detail .detail-header-action--danger.inbox-detail__delete:hover,
+.inbox-detail .detail-header-action--danger.inbox-detail__delete:focus-visible {
+    color: var(--color-text-primary);
 }
