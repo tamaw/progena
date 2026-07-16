@@ -194,6 +194,27 @@ body,
   font: inherit;
   font-size: 13px;
 }
+.app-shell__quick-chat-shortcut {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.app-shell__quick-chat-shortcut kbd {
+  min-width: 18px;
+  padding: 1px 4px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-tertiary);
+  border-color: var(--color-border);
+  border-radius: 4px;
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--color-border-strong) 45%, transparent);
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: center;
+}
 
 .app-shell__quick-chat input::-webkit-search-decoration,
 .app-shell__quick-chat input::-webkit-search-cancel-button,
@@ -791,6 +812,10 @@ body,
   background: #f97316;
   box-shadow: 0 0 8px rgba(249, 115, 22, 0.6);
   animation: nav-dot-pulse 1.2s ease-in-out infinite;
+}
+.app-shell__nav-dot--complete {
+  background: var(--color-success);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-success) 35%, transparent);
 }
 .app-shell__nav-dot--error {
   background: var(--color-error, #ef4444);

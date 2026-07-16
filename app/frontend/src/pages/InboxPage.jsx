@@ -241,11 +241,11 @@ export default function InboxPage() {
                   }
                 }}
               >
-                <span
-                  className={`chat-session-card__dot${message.read ? '' : ' chat-session-card__dot--unread'}`}
-                  aria-hidden="true"
-                />
                 <div className="chat-session-card__top">
+                  <span
+                    className={`chat-session-card__dot${message.read ? ' chat-session-card__dot--read' : ' chat-session-card__dot--unread'}`}
+                    aria-hidden="true"
+                  />
                   <span className="chat-session-card__title">{message.title || message.id}</span>
                   <span className="chat-session-card__age">{formatRelativeTime(message.created_at)}</span>
                 </div>
@@ -264,7 +264,11 @@ export default function InboxPage() {
             ? (selectedMessage.title || selectedMessage.id)
             : (messages.length === 0 ? 'Inbox is empty' : 'No message selected')}
           meta={selectedMessage ? [
-            <DetailStatus key="status" tone={selectedMessage.read ? 'ok' : 'info'}>
+            <DetailStatus
+              key="status"
+              tone={selectedMessage.read ? 'muted' : 'ok'}
+              className={selectedMessage.read ? 'inbox-detail__status--read' : 'inbox-detail__status--unread'}
+            >
               {selectedMessage.read ? 'Read' : 'Unread'}
             </DetailStatus>,
             selectedMessage.created_at

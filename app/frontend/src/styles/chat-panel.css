@@ -1615,12 +1615,16 @@
     background: transparent;
 }
 .chat-session-card__dot--idle {
-    border: 1.5px solid var(--color-text-secondary);
+    border: 1.5px solid var(--color-text-muted);
     box-sizing: border-box;
 }
 
 .chat-session-card__dot--complete {
     background: var(--color-success);
+}
+.chat-session-card__dot--read {
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
 }
 .chat-session-card__dot--unread {
     background: var(--color-success);
@@ -1759,6 +1763,14 @@
     flex: 0 0 8px;
     border: 1.5px solid var(--color-text-secondary);
     box-sizing: border-box;
+}
+
+.chat-page-header__status--idle {
+    color: var(--color-text-muted);
+}
+
+.chat-page-header__status--complete {
+    color: var(--color-success);
 }
 
 .chat-page-header__status--complete .chat-page-header__status-dot {
