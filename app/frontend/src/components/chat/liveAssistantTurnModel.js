@@ -789,6 +789,9 @@ export function buildDefaultAssistantTimeline(message) {
  */
 export function toCommittedAssistantMessage(turn) {
   return {
+    streamId: turn.streamId,
+    assistantMessageId: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    startedAt: turn.startedAt,
     id: turn.assistantMessageId || `${turn.streamId}-assistant`,
     role: 'assistant',
     content: turn.content,

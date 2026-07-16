@@ -1,7 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  CHAT_AGENT_NAME,
-  DEFAULT_CHAT_TITLE,
   shouldShowChatContentLoading,
   shouldShowNewChatEmptyState,
   toValidTimestamp,
@@ -16,8 +14,214 @@ import {
   getTimeBucket,
   groupSessionItems,
   getActiveRouteThreadId,
+  areChatTranscriptsEquivalent,
+  shouldRetireLiveOwnerAfterCanonicalReconciliation,
+  mergeCanonicalMessages,
+  excludeLiveOwnedMessage,
 } from './conversationModel';
 
+
+describe('areChatTranscriptsEquivalent', () => {
+  const localTranscript = [
+    {
+      id: 'local-user-id',
+      role: 'user',
+      content: 'Explain the handoff.',
+      timestamp: 100,
+      createdAt: 100,
+      timelineIndex: 0,
+    },
+    {
+      id: 'local-assistant-id',
+      role: 'assistant',
+      content: 'The final answer is visible.',
+      timestamp: 200,
+      createdAt: 200,
+      timelineIndex: 1,
+    },
+  ];
+
+  it('treats persisted transcript copies as equal when only identities and derived timeline fields differ', () => {
+    const persistedTranscript = [
+      {
+        id: 'server-user-id',
+        role: 'user',
+        content: 'Explain the handoff.',
+        timestamp: 1000,
+        createdAt: 1000,
+        timelineIndex: 19,
+      },
+      {
+        id: 'server-assistant-id',
+        role: 'assistant',
+        content: 'The final answer is visible.',
+        timestamp: 2000,
+        createdAt: 2000,
+        timelineIndex: 20,
+      },
+    ];
+
+    expect(areChatTranscriptsEquivalent(localTranscript, persistedTranscript)).toBe(true);
+  });
+
+  it('detects a persisted final assistant-content difference', () => {
+    const persistedTranscript = [
+      { id: 'server-user-id', role: 'user', content: 'Explain the handoff.' },
+      { id: 'server-assistant-id', role: 'assistant', content: 'The final answer is stale.' },
+    ];
+
+    expect(areChatTranscriptsEquivalent(localTranscript, persistedTranscript)).toBe(false);
+  });
+
+  it.each([
+    {
+      name: 'the persisted transcript has an extra message',
+      persistedTranscript: [
+        ...localTranscript,
+        { id: 'server-extra-id', role: 'assistant', content: 'Unexpected extra turn.' },
+      ],
+    },
+    {
+      name: 'a persisted message changes role',
+      persistedTranscript: [
+        { id: 'server-user-id', role: 'assistant', content: 'Explain the handoff.' },
+        { id: 'server-assistant-id', role: 'assistant', content: 'The final answer is visible.' },
+      ],
+    },
+  ])('rejects reconciliation when $name', ({ persistedTranscript }) => {
+    expect(areChatTranscriptsEquivalent(localTranscript, persistedTranscript)).toBe(false);
+  });
+});
+
+describe('mergeCanonicalMessages', () => {
+  const localMessages = [
+    {
+      id: 'local-user-id',
+      role: 'user',
+      content: 'Show the terminal output.',
+      timestamp: 100,
+      timelineIndex: 0,
+    },
+    {
+      id: 'local-assistant-id',
+      role: 'assistant',
+      content: '```js\nconst answer = 42;\n```',
+      timestamp: 200,
+      timelineIndex: 1,
+    },
+  ];
+
+  it('keeps rendering-equivalent row objects while replacing only a changed terminal row', () => {
+    const canonicalMessages = [
+      {
+        id: 'canonical-user-id',
+        role: 'user',
+        content: 'Show the terminal output.',
+        timestamp: 1000,
+        timelineIndex: 10,
+      },
+      {
+        id: 'canonical-assistant-id',
+        role: 'assistant',
+        content: '```js\nconst answer = 43;\n```',
+        timestamp: 2000,
+        timelineIndex: 11,
+      },
+    ];
+
+    const merged = mergeCanonicalMessages(localMessages, canonicalMessages);
+
+    expect(merged).not.toBe(localMessages);
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged[1]).toBe(canonicalMessages[1]);
+  });
+
+  it('returns the original local array when every canonical row renders equivalently', () => {
+    const canonicalMessages = localMessages.map((message, index) => ({
+      ...message,
+      id: `canonical-${index}`,
+      timestamp: message.timestamp + 1000,
+      timelineIndex: message.timelineIndex + 10,
+    }));
+
+    const merged = mergeCanonicalMessages(localMessages, canonicalMessages);
+
+    expect(merged).toBe(localMessages);
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged[1]).toBe(localMessages[1]);
+  });
+});
+
+describe('canonical assistant visual ownership', () => {
+  it('shows exactly the backend canonical assistant row after non-equivalent reconciliation retires a completed client live owner', () => {
+    const localMessages = [
+      { id: 'client-user-id', role: 'user', content: 'Show the corrected answer.', timestamp: 100 },
+      { id: 'client-assistant-id', role: 'assistant', content: 'Provisional answer.', timestamp: 200 },
+    ];
+    const canonicalMessages = [
+      { id: 'backend-user-id', role: 'user', content: 'Show the corrected answer.', timestamp: 1000 },
+      { id: 'backend-assistant-id', role: 'assistant', content: 'Corrected canonical answer.', timestamp: 2000 },
+    ];
+    const completedClientLiveTurn = {
+      assistantMessageId: 'client-assistant-id',
+      content: 'Provisional answer.',
+      isStreaming: false,
+      streamId: 'terminal-stream-id',
+    };
+
+    expect(shouldRetireLiveOwnerAfterCanonicalReconciliation(
+      completedClientLiveTurn,
+      'terminal-stream-id',
+    )).toBe(true);
+    expect(shouldRetireLiveOwnerAfterCanonicalReconciliation(
+      completedClientLiveTurn,
+      'different-stream-id',
+    )).toBe(false);
+    expect(shouldRetireLiveOwnerAfterCanonicalReconciliation(
+      { ...completedClientLiveTurn, assistantMessageId: null },
+      'terminal-stream-id',
+    )).toBe(false);
+
+    const reconciledMessages = mergeCanonicalMessages(localMessages, canonicalMessages);
+    const retainedLiveOwner = shouldRetireLiveOwnerAfterCanonicalReconciliation(
+      completedClientLiveTurn,
+      'terminal-stream-id',
+    ) ? null : completedClientLiveTurn;
+    const visibleAssistantRows = [
+      ...excludeLiveOwnedMessage(reconciledMessages, retainedLiveOwner?.assistantMessageId)
+        .filter((message) => message.role === 'assistant'),
+      ...(retainedLiveOwner ? [retainedLiveOwner] : []),
+    ];
+
+    expect(visibleAssistantRows).toEqual([canonicalMessages[1]]);
+    expect(visibleAssistantRows).toHaveLength(1);
+    expect(visibleAssistantRows[0].id).toBe('backend-assistant-id');
+  });
+});
+
+describe('excludeLiveOwnedMessage', () => {
+  const messages = [
+    { id: 'user-1', role: 'user', content: 'Explain terminal ownership.' },
+    { id: 'assistant-1', role: 'assistant', content: 'Settled live response.' },
+    { id: 'assistant-2', role: 'assistant', content: 'Earlier response.' },
+  ];
+
+  it('suppresses the committed row while a matching finalized live turn owns it', () => {
+    const visibleMessages = excludeLiveOwnedMessage(messages, 'assistant-1');
+
+    expect(visibleMessages).toEqual([messages[0], messages[2]]);
+    expect(visibleMessages).not.toBe(messages);
+    expect(visibleMessages[0]).toBe(messages[0]);
+    expect(visibleMessages[1]).toBe(messages[2]);
+  });
+
+  it.each([null, undefined, '', 'missing-live-owner'])(
+    'returns the original transcript after the live owner is gone or does not match (%j)',
+    (liveAssistantMessageId) => {
+      expect(excludeLiveOwnedMessage(messages, liveAssistantMessageId)).toBe(messages);
+    },
+  );
+});
 describe('chat content loading state', () => {
   it('shows loading while a selected chat detail request is in flight', () => {
     expect(shouldShowChatContentLoading({
@@ -182,10 +386,6 @@ describe('toValidTimestamp', () => {
 });
 
 describe('deriveChatTitle', () => {
-  it('defaults when there is no user message', () => {
-    expect(deriveChatTitle([])).toBe(DEFAULT_CHAT_TITLE);
-    expect(deriveChatTitle([{ role: 'assistant', content: 'hi' }])).toBe(DEFAULT_CHAT_TITLE);
-  });
   it('uses the first user message, whitespace-collapsed', () => {
     expect(deriveChatTitle([{ role: 'user', content: '  hello   world ' }])).toBe('hello world');
   });
@@ -428,14 +628,3 @@ describe('groupSessionItems', () => {
   });
 });
 
-describe('CHAT_AGENT_NAME', () => {
-  it('is Progenitor', () => {
-    expect(CHAT_AGENT_NAME).toBe('Progenitor');
-  });
-});
-
-describe('DEFAULT_CHAT_TITLE', () => {
-  it('keeps empty draft conversations consistent across the page', () => {
-    expect(DEFAULT_CHAT_TITLE).toBe('New chat');
-  });
-});

@@ -28,9 +28,7 @@
 
 import { memo } from 'react';
 import {
-  formatMessage,
-  sanitizeHtmlFragment,
-  appendStreamingCursor,
+  renderSafeMarkdown,
   formatArgsPreview,
   formatToolInputSummary,
   formatDuration,
@@ -166,14 +164,16 @@ const SubagentChild = memo(function SubagentChild({ child, isLast }) {
 
 // One burst of the subagent's own streamed text = one mini entry in the
 // chain, rendered in the same compact header row as an A2A progress update.
-// `isStreaming` only ever applies to the chain's trailing entry.
+// `isStreaming` only ever applies to the chain's trailing entry. Render that
+// entry as literal text until it settles: parsing the growing response here
+// would re-highlight an already-closed fenced block for every later delta.
 //
-// Memoized for the same reason as SubagentChild above -- this is the
-// component that actually does the expensive work (markdown parse +
-// sanitize per entry), so skipping re-renders here is what matters most.
+// Memoized for the same reason as SubagentChild above -- settled entries keep
+// their identity while the trailing entry updates, so they never re-render.
 const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast, isStreaming }) {
-  const bodyHtml = entry.text ? sanitizeHtmlFragment(formatMessage(entry.text)) : '';
-  const formattedBody = isStreaming ? appendStreamingCursor(bodyHtml) : bodyHtml;
+  const bodyHtml = !isStreaming && entry.text
+    ? renderSafeMarkdown(entry.text)
+    : '';
 
   return (
     <div className={`entry subagent-child ${isLast ? 'entry--chain-end' : 'entry--chain-item'}`}>
@@ -183,11 +183,18 @@ const SubagentMessageEntry = memo(function SubagentMessageEntry({ entry, isLast,
         </span>
       </div>
       <div className="entry__main">
-        {formattedBody && (
+        {isStreaming ? (
+          <div className="entry__head">
+            <div className="message-stream-event-body message-content--streaming-text">
+              {entry.text || ''}
+              <span className="stream-cursor" aria-hidden="true">▋</span>
+            </div>
+          </div>
+        ) : bodyHtml && (
           <div className="entry__head">
             <div
               className="message-stream-event-body"
-              dangerouslySetInnerHTML={{ __html: formattedBody }}
+              dangerouslySetInnerHTML={{ __html: bodyHtml }}
             />
           </div>
         )}

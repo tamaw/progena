@@ -1,11 +1,59 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from 'vitest';
-import { appendStreamingCursor, describeStreamEvent, toolDetailsForEvent, extractCallAgentSummary, formatTimestamp } from './messageRenderUtils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+const markdownRenderer = vi.hoisted(() => ({
+  renderMarkdownToHtml: vi.fn((content) => (
+    `<pre><code class="language-js">${content}</code></pre><img src="x" onerror="alert(1)">`
+  )),
+}));
+
+vi.mock('../../lib/markdown', () => ({
+  renderMarkdownToHtml: markdownRenderer.renderMarkdownToHtml,
+}));
+
+import {
+  appendStreamingCursor,
+  describeStreamEvent,
+  toolDetailsForEvent,
+  extractCallAgentSummary,
+  formatTimestamp,
+  renderSafeMarkdown,
+} from './messageRenderUtils';
 
 function todosEvent(todos) {
   return { eventType: 'todos_update', metadata: { todos } };
 }
 
+
+describe('renderSafeMarkdown terminal cache', () => {
+  beforeEach(() => {
+    markdownRenderer.renderMarkdownToHtml.mockClear();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('reuses the sanitized fenced-code result across a terminal remount and invalidates when the source changes', () => {
+    const terminalFence = '```js\nconst answer = 42;\n```';
+    const changedFence = '```js\nconst answer = 43;\n```';
+    const createElement = vi.spyOn(document, 'createElement');
+
+    const initialHtml = renderSafeMarkdown(terminalFence);
+    const remountedHtml = renderSafeMarkdown(terminalFence);
+    const changedHtml = renderSafeMarkdown(changedFence);
+
+    expect(initialHtml).toBe(remountedHtml);
+    expect(changedHtml).not.toBe(initialHtml);
+    expect(initialHtml).toContain('<pre><code class="language-js">');
+    expect(initialHtml).not.toContain('<img');
+    expect(markdownRenderer.renderMarkdownToHtml).toHaveBeenCalledTimes(2);
+    expect(markdownRenderer.renderMarkdownToHtml).toHaveBeenNthCalledWith(1, terminalFence);
+    expect(markdownRenderer.renderMarkdownToHtml).toHaveBeenNthCalledWith(2, changedFence);
+    expect(createElement.mock.calls.filter(([tagName]) => tagName === 'template')).toHaveLength(2);
+
+});
+});
 describe('describeStreamEvent (todos_update)', () => {
   it('titles the entry after the in_progress todo when one exists', () => {
     const description = describeStreamEvent(todosEvent([
@@ -359,6 +407,34 @@ describe('normal tool detail rendering', () => {
     expect(details.command).toBe('');
     expect(details.body).toBe('{"content":"raw result"}');
     expect(details.summary).not.toContain(details.body);
+  });
+
+  it('preserves an already-annotated omitted-line summary for a truncated file preview', () => {
+    const event = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'read_file',
+        artifact: { kind: 'file', summary: 'src/main.py: 5 lines · 2 more lines not shown', count: 5 },
+        result_preview: 'line 1\nline 2\nline 3',
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('src/main.py: 5 lines · 2 more lines not shown');
+  });
+
+  it('keeps a file artifact summary unchanged when all preview lines are present', () => {
+    const event = {
+      eventType: 'tool_result',
+      metadata: {
+        tool_name: 'read_file',
+        artifact: { kind: 'file', summary: 'src/main.py: 3 lines', count: 3 },
+        result_preview: 'line 1\nline 2\nline 3',
+      },
+    };
+    const details = toolDetailsForEvent(event, describeStreamEvent(event));
+
+    expect(details.summary).toBe('src/main.py: 3 lines');
   });
 
   it('keeps serialized todo results out of the human-readable summary', () => {

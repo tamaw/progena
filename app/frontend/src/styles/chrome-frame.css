@@ -4052,8 +4052,11 @@ body,
 .tool__summary.tool-event-disclosure__summary {
   margin: 0;
   padding: 0;
+  overflow: hidden;
   font-size: var(--font-size-md);
   line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tool-event-disclosure {
   display: block;

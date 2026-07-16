@@ -471,3 +471,50 @@ def test_build_tool_result_event_projects_bounded_redacted_artifact():
     assert artifact["status"] == "ok"
     assert api_key not in repr(artifact)
     assert len(artifact["summary"].encode("utf-8")) <= DEFAULT_STREAM_PREVIEW_BYTES
+
+
+def test_build_tool_result_event_appends_omitted_file_lines_to_truncated_summary():
+    summary = "src/main.py: 5 lines"
+    content = "line 1\nline 2\nline 3" + ("x" * DEFAULT_STREAM_PREVIEW_BYTES)
+    event = build_tool_result_event(
+        "read_file",
+        "call-truncated-artifact",
+        8.0,
+        ToolMessage(
+            content=content,
+            name="read_file",
+            tool_call_id="call-truncated-artifact",
+            artifact={
+                "summary": summary,
+                "count": 5,
+                "kind": "file",
+                "status": "ok",
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert artifact["summary"] == f"{summary} · 2 more lines not shown"
+
+
+def test_build_tool_result_event_preserves_untruncated_file_summary():
+    summary = "src/main.py: 3 lines"
+    event = build_tool_result_event(
+        "read_file",
+        "call-short-artifact",
+        8.0,
+        ToolMessage(
+            content="line 1\nline 2\nline 3",
+            name="read_file",
+            tool_call_id="call-short-artifact",
+            artifact={
+                "summary": summary,
+                "count": 3,
+                "kind": "file",
+                "status": "ok",
+            },
+        ),
+    )
+
+    artifact = event["metadata"]["artifact"]
+    assert artifact["summary"] == summary

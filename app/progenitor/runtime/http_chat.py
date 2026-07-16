@@ -143,9 +143,7 @@ class RuntimeChatService:
             # backend's httpx read timeout. Consume it from a background task
             # so this loop can keep writing SSE keepalive comments while
             # waiting, the same pattern handle_events() uses.
-            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(
-                maxsize=DIRECT_STREAM_QUEUE_SIZE
-            )
+            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=DIRECT_STREAM_QUEUE_SIZE)
 
             async def _produce() -> None:
                 try:
@@ -160,6 +158,7 @@ class RuntimeChatService:
 
             producer = asyncio.create_task(_produce())
             try:
+                stream_sequence = 0
                 while True:
                     if cancel_event.is_set():
                         cancelled = True
@@ -199,6 +198,8 @@ class RuntimeChatService:
                         return
 
                     item = payload
+                    stream_sequence += 1
+                    runtime_emitted_at_ms = int(time.time() * 1000)
                     item_type = str(item.get("type", "stream_chunk"))
                     if item_type == "stream_event":
                         event_payload: dict[str, Any] = {
@@ -207,6 +208,8 @@ class RuntimeChatService:
                             "content": str(item.get("content", "")),
                             "metadata": item.get("metadata"),
                             "request_id": request_id,
+                            "runtime_emitted_at_ms": runtime_emitted_at_ms,
+                            "runtime_stream_seq": stream_sequence,
                         }
                         images = item.get("images")
                         if isinstance(images, list) and images:
@@ -223,6 +226,8 @@ class RuntimeChatService:
                             "content": str(item.get("content", "")),
                             "is_final": is_final,
                             "request_id": request_id,
+                            "runtime_emitted_at_ms": runtime_emitted_at_ms,
+                            "runtime_stream_seq": stream_sequence,
                         },
                     )
                     if is_final:

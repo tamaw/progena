@@ -21,6 +21,28 @@ import {
 } from '../components/chat/liveAssistantTurnModel';
 import { createLiveAssistantTurnStore } from '../components/chat/liveAssistantTurnStore';
 import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
+import {
+  chatPerformanceNow,
+  isChatPerformanceTracingEnabled,
+  traceChatPerformance,
+} from '../components/chat/chatPerformanceTrace';
+
+const noop = () => {};
+
+function streamEventTraceDetails(streamEvent) {
+  const metadata = streamEvent?.metadata && typeof streamEvent.metadata === 'object'
+    ? streamEvent.metadata
+    : {};
+  return {
+    eventType: typeof streamEvent?.event_type === 'string' ? streamEvent.event_type : 'unknown',
+    contentLength: typeof streamEvent?.content === 'string' ? streamEvent.content.length : 0,
+    toolName: typeof metadata.tool_name === 'string' ? metadata.tool_name : '',
+    toolCallId: typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id : '',
+    subagentName: typeof metadata.subagent_name === 'string' ? metadata.subagent_name : '',
+    nestedToolName: typeof metadata.nested_tool_name === 'string' ? metadata.nested_tool_name : '',
+    durationMs: Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null,
+  };
+}
 
 function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
   if (!selectedBackendChatId) {
@@ -58,6 +80,8 @@ export function useChatStream({
   show,
   selectedBackendChatIdRef,
   reloadOpenChat,
+  onForegroundStreamStarted = noop,
+  requestForegroundReconciliation = noop,
 }) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [liveTurnStore] = useState(createLiveAssistantTurnStore);
@@ -72,13 +96,33 @@ export function useChatStream({
   const liveTurnRef = useRef(null);
   const pendingTextRef = useRef({ streamId: null, content: '' });
   const liveTurnFrameRef = useRef(null);
+  const tracePendingTextRef = useRef({ streamId: null, queuedAt: null, deltaCount: 0 });
+  // Completion must not replace the live turn in the same task that flushes
+  // its final text. Two animation frames guarantee the browser paints that
+  // final live snapshot before the committed Markdown/history tree takes over.
+  const terminalHandoffFrameRef = useRef(null);
 
   const setLiveAssistantTurn = useCallback((nextTurn) => {
+    const tracing = isChatPerformanceTracingEnabled();
+    const startedAt = tracing ? chatPerformanceNow() : 0;
+    const previousTurn = liveTurnRef.current;
     const resolvedTurn = typeof nextTurn === 'function'
-      ? nextTurn(liveTurnRef.current)
+      ? nextTurn(previousTurn)
       : nextTurn;
     liveTurnRef.current = resolvedTurn;
     liveTurnStore.set(resolvedTurn);
+    if (tracing) {
+      const isTextOnlyUpdate = previousTurn?.timelineItems?.length === resolvedTurn?.timelineItems?.length
+        && previousTurn?.isStreaming === resolvedTurn?.isStreaming
+        && previousTurn?.content !== resolvedTurn?.content;
+      traceChatPerformance('live_turn.store_published', {
+        streamId: resolvedTurn?.streamId || previousTurn?.streamId || '',
+        contentLength: resolvedTurn?.content?.length || 0,
+        timelineItemCount: resolvedTurn?.timelineItems?.length || 0,
+        isStreaming: Boolean(resolvedTurn?.isStreaming),
+        publishDurationMs: chatPerformanceNow() - startedAt,
+      }, { consoleOutput: !isTextOnlyUpdate });
+    }
   }, [liveTurnStore]);
 
   const flushPendingText = useCallback((streamId) => {
@@ -86,23 +130,45 @@ export function useChatStream({
     if (!pending.content || pending.streamId !== streamId) {
       return;
     }
+    const tracePending = tracePendingTextRef.current;
     pendingTextRef.current = { streamId: null, content: '' };
+    tracePendingTextRef.current = { streamId: null, queuedAt: null, deltaCount: 0 };
     if (
       activeStreamIdRef.current !== streamId
       || liveTurnRef.current?.streamId !== streamId
     ) {
       return;
     }
+    const tracing = isChatPerformanceTracingEnabled();
+    const reducerStartedAt = tracing ? chatPerformanceNow() : 0;
     setLiveAssistantTurn((turn) => (
       turn ? applyAssistantChunk(turn, pending.content, Date.now()) : turn
     ));
+    if (tracing) {
+      const flushedAt = chatPerformanceNow();
+      traceChatPerformance('stream.delta_flushed', {
+        streamId,
+        pendingCharacterCount: pending.content.length,
+        pendingDeltaCount: tracePending.deltaCount,
+        queueWaitMs: tracePending.queuedAt === null ? null : flushedAt - tracePending.queuedAt,
+        reducerAndPublishMs: flushedAt - reducerStartedAt,
+      });
+    }
   }, [setLiveAssistantTurn]);
 
   const discardPendingText = useCallback(() => {
     pendingTextRef.current = { streamId: null, content: '' };
+    tracePendingTextRef.current = { streamId: null, queuedAt: null, deltaCount: 0 };
     if (liveTurnFrameRef.current !== null) {
       cancelAnimationFrame(liveTurnFrameRef.current);
       liveTurnFrameRef.current = null;
+    }
+  }, []);
+
+  const cancelTerminalHandoff = useCallback(() => {
+    if (terminalHandoffFrameRef.current !== null) {
+      cancelAnimationFrame(terminalHandoffFrameRef.current);
+      terminalHandoffFrameRef.current = null;
     }
   }, []);
 
@@ -111,10 +177,26 @@ export function useChatStream({
     if (pending.streamId && pending.streamId !== streamId) {
       return;
     }
+    const tracing = isChatPerformanceTracingEnabled();
+    const receivedAt = tracing ? chatPerformanceNow() : null;
+    const tracePending = tracePendingTextRef.current;
     pendingTextRef.current = {
       streamId,
       content: pending.content + chunk,
     };
+    tracePendingTextRef.current = {
+      streamId,
+      queuedAt: tracePending.streamId === streamId ? tracePending.queuedAt : receivedAt,
+      deltaCount: tracePending.streamId === streamId ? tracePending.deltaCount + 1 : 1,
+    };
+    if (tracing) {
+      traceChatPerformance('stream.delta_queued', {
+        streamId,
+        deltaLength: chunk.length,
+        pendingCharacterCount: pending.content.length + chunk.length,
+        pendingDeltaCount: tracePendingTextRef.current.deltaCount,
+      }, { consoleOutput: false });
+    }
     if (liveTurnFrameRef.current !== null) {
       return;
     }
@@ -143,6 +225,12 @@ export function useChatStream({
   // Called whenever the caller is about to stop treating that stream as the
   // foreground one — switching chats, starting a new chat, or unmounting.
   const preserveStreamInBackground = useCallback(() => {
+    // The terminal event already reached this browser. If the user leaves in
+    // the two-frame visual handoff, the persisted reply will load normally;
+    // do not resurrect a completed stream as background generation.
+    if (terminalHandoffFrameRef.current !== null) {
+      return;
+    }
     if (shouldPreserveStreamInBackground({
       streamingOriginId: backgroundOriginChatIdRef.current,
       activeStreamId: activeStreamIdRef.current,
@@ -161,9 +249,10 @@ export function useChatStream({
     return () => {
       preserveStreamInBackground();
       discardPendingText();
+      cancelTerminalHandoff();
       activeStreamIdRef.current = null;
     };
-  }, [discardPendingText, preserveStreamInBackground]);
+  }, [cancelTerminalHandoff, discardPendingText, preserveStreamInBackground]);
 
   // Dispatches the redux side effects for a resolveBackgroundStreamOutcome()
   // result whose action isn't 'foreground' (that case is handled inline by
@@ -203,6 +292,7 @@ export function useChatStream({
     const streamId = `stream_${Date.now()}`;
     discardPendingText();
     activeStreamIdRef.current = streamId;
+    onForegroundStreamStarted();
 
     // Start the live turn — no assistant message created yet.
     const initialTurn = createLiveAssistantTurn({ streamId, startedAt: Date.now() });
@@ -211,6 +301,14 @@ export function useChatStream({
       ? applyAssistantMetadata(initialTurn, { display_agent_name: directAgentName })
       : initialTurn;
     setLiveAssistantTurn(initialTurnWithMetadata);
+    if (isChatPerformanceTracingEnabled()) {
+      traceChatPerformance('stream.foreground_started', {
+        streamId,
+        directAgent: directAgentName || '',
+        historyMessageCount: Math.min(messages.length, 10),
+        promptCharacterCount: content.length,
+      });
+    }
 
     const history = messages.slice(-10).map(m => ({
       role: m.role,
@@ -255,17 +353,35 @@ export function useChatStream({
     const updateTextTurn = (chunk) => {
       if (!liveTurnRef.current?.content) {
         flushPendingText(streamId);
+        const tracing = isChatPerformanceTracingEnabled();
+        const reducerStartedAt = tracing ? chatPerformanceNow() : 0;
         setLiveAssistantTurn((turn) => (
           turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn
         ));
+        if (tracing) {
+          traceChatPerformance('stream.delta_first_immediate', {
+            streamId,
+            deltaLength: chunk.length,
+            reducerAndPublishMs: chatPerformanceNow() - reducerStartedAt,
+          });
+        }
         return;
       }
       queueTextChunk(streamId, chunk);
     };
 
-    const updateStreamEventTurn = (updater) => {
+    const updateStreamEventTurn = (streamEvent, updater) => {
+      const tracing = isChatPerformanceTracingEnabled();
+      const reducerStartedAt = tracing ? chatPerformanceNow() : 0;
       flushPendingText(streamId);
       setLiveAssistantTurn((turn) => (turn ? updater(turn) : turn));
+      if (tracing) {
+        traceChatPerformance('stream.structural_event_applied', {
+          streamId,
+          ...streamEventTraceDetails(streamEvent),
+          reducerAndPublishMs: chatPerformanceNow() - reducerStartedAt,
+        });
+      }
     };
 
     const isStale = () => activeStreamIdRef.current !== streamId;
@@ -281,6 +397,8 @@ export function useChatStream({
         // onComplete
         (status) => {
           const stale = isStale();
+          const tracing = isChatPerformanceTracingEnabled();
+          const terminalReceivedAt = tracing ? chatPerformanceNow() : 0;
           if (!stale) {
             flushPendingText(streamId);
           }
@@ -301,31 +419,68 @@ export function useChatStream({
           if (!isCurrentLiveTurn(streamId)) {
             return;
           }
-          // Foreground stream finished — finalise the live turn.
-          backgroundOriginChatIdRef.current = null;
-          const turn = liveTurnRef.current;
-          if (turn) {
-            const committed = finalizeLiveAssistantTurn(turn, {
-              status,
-              now: Date.now(),
+          // Foreground completion has to hand off ownership without erasing
+          // the final streamed aggregate before it can paint. In particular,
+          // do not reload the selected detail here: its pending reducer swaps
+          // the transcript for a loading screen and defeats the live handoff.
+          const terminalTurn = liveTurnRef.current;
+          if (tracing) {
+            traceChatPerformance('stream.terminal_received', {
+              streamId,
+              status: status || 'completed',
+              contentLength: terminalTurn?.content?.length || 0,
+              timelineItemCount: terminalTurn?.timelineItems?.length || 0,
+              handoffSetupMs: chatPerformanceNow() - terminalReceivedAt,
             });
-            if (committed) {
-              setMessages(prevMessages => [...prevMessages, committed]);
+          }
+          terminalHandoffFrameRef.current = requestAnimationFrame(() => {
+            if (tracing) {
+              traceChatPerformance('stream.terminal_first_frame', {
+                streamId,
+                waitMs: chatPerformanceNow() - terminalReceivedAt,
+              });
             }
-          }
-          flushPendingText(streamId);
-          clearLiveTurnForStream(streamId);
-          if (activeStreamIdRef.current === streamId) {
-            activeStreamIdRef.current = null;
-            backgroundOriginChatIdRef.current = null;
-          }
-          if (originChatId) {
-            reloadOpenChat?.(originChatId);
-          }
-          // Reconcile the completed turn with the persisted session. The
-          // terminal SSE envelope has no response content, so this repairs a
-          // missed final delta without trusting volatile live state.
-          setIsGenerating(false);
+            // The first frame gives React and the browser a chance to render
+            // the synchronously flushed final text. In the following frame,
+            // freeze that same live owner in place so its cursor can stop
+            // without replacing the visible transcript row.
+            terminalHandoffFrameRef.current = requestAnimationFrame(() => {
+              terminalHandoffFrameRef.current = null;
+              if (tracing) {
+                traceChatPerformance('stream.terminal_second_frame', {
+                  streamId,
+                  waitMs: chatPerformanceNow() - terminalReceivedAt,
+                });
+              }
+              if (!isCurrentLiveTurn(streamId)) {
+                return;
+              }
+              flushPendingText(streamId);
+              const finalTurn = liveTurnRef.current;
+              const committed = finalTurn
+                ? finalizeLiveAssistantTurn(finalTurn, { status, now: Date.now() })
+                : null;
+              if (committed) {
+                setMessages((prevMessages) => [...prevMessages, committed]);
+                setLiveAssistantTurn(committed);
+              } else {
+                clearLiveTurnForStream(streamId);
+              }
+              if (activeStreamIdRef.current === streamId) {
+                activeStreamIdRef.current = null;
+                backgroundOriginChatIdRef.current = null;
+              }
+              setIsGenerating(false);
+              requestForegroundReconciliation({ threadId: originChatId, streamId });
+              if (tracing) {
+                traceChatPerformance('stream.terminal_frozen', {
+                  streamId,
+                  totalHandoffMs: chatPerformanceNow() - terminalReceivedAt,
+                  committed: Boolean(committed),
+                });
+              }
+            });
+          });
         },
         // onError
         (error) => {
@@ -359,9 +514,11 @@ export function useChatStream({
             });
             if (committed) {
               setMessages(prevMessages => [...prevMessages, committed]);
+              setLiveAssistantTurn(committed);
+            } else {
+              clearLiveTurnForStream(streamId);
             }
           }
-          clearLiveTurnForStream(streamId);
           if (activeStreamIdRef.current === streamId) {
             activeStreamIdRef.current = null;
             backgroundOriginChatIdRef.current = null;
@@ -377,11 +534,17 @@ export function useChatStream({
           }
 
           if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
-            updateStreamEventTurn((prev) => applyAssistantMetadata(prev, streamEvent.metadata));
+            updateStreamEventTurn(
+              streamEvent,
+              (prev) => applyAssistantMetadata(prev, streamEvent.metadata),
+            );
             return;
           }
 
-          updateStreamEventTurn((prev) => applyAssistantStreamEvent(prev, streamEvent));
+          updateStreamEventTurn(
+            streamEvent,
+            (prev) => applyAssistantStreamEvent(prev, streamEvent),
+          );
         },
         threadMetadata,
       );
@@ -399,6 +562,8 @@ export function useChatStream({
     flushPendingText,
     queueTextChunk,
     reloadOpenChat,
+    onForegroundStreamStarted,
+    requestForegroundReconciliation,
     clearLiveTurnForStream,
     isCurrentLiveTurn,
     activeBackendChat,

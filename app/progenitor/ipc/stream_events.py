@@ -17,6 +17,7 @@ from langgraph.types import Command
 from app.progenitor.ipc.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
+    TRUNCATION_SUFFIX,
     truncate_json_safe,
     truncate_text,
 )
@@ -338,6 +339,7 @@ def _extract_artifact(result: Any) -> dict[str, Any] | None:
         elif isinstance(value, str):
             projection[field] = truncate_text(redact_secrets(value), _ARTIFACT_STRING_BYTES)
 
+    _append_remaining_file_lines(projection, result)
     if not projection:
         return None
     safe = truncate_json_safe(projection, _ARTIFACT_TOTAL_BYTES)
@@ -345,6 +347,37 @@ def _extract_artifact(result: Any) -> dict[str, Any] | None:
         return safe
     summary = projection.get("summary")
     return {"summary": summary} if isinstance(summary, str) else None
+
+
+def _append_remaining_file_lines(
+    projection: dict[str, Any],
+    result: Any,
+) -> None:
+    """Annotate truncated file summaries with the omitted line count."""
+    summary = projection.get("summary")
+    count = projection.get("count")
+    if (
+        not isinstance(summary, str)
+        or not summary
+        or projection.get("kind") != "file"
+        or isinstance(count, bool)
+        or not isinstance(count, int)
+        or count <= 0
+    ):
+        return
+
+    preview = _redact_preview(result)
+    if not preview.endswith(TRUNCATION_SUFFIX):
+        return
+
+    visible_text = preview[: -len(TRUNCATION_SUFFIX)]
+    visible_lines = len(visible_text.splitlines())
+    remaining = count - visible_lines
+    if remaining > 0:
+        projection["summary"] = truncate_text(
+            f"{summary} · {remaining} more lines not shown",
+            _ARTIFACT_STRING_BYTES,
+        )
 
 
 def _unwrap_command_result(value: Any) -> Any:

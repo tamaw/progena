@@ -12,7 +12,7 @@ import {
   toolDetailsForEvent,
   tokenMetaItemsForEvent,
   tagClassForEventType,
-  formatMessage,
+  renderSafeMarkdown,
   sanitizeHtmlFragment,
   appendStreamingCursor,
   formatTimestamp,
@@ -125,7 +125,6 @@ function MessageView({
   hideContent = false,
   showImages = true,
   onRegenerate,
-  regenerateDisabled = false,
 }) {
   const {
     role,
@@ -165,7 +164,7 @@ function MessageView({
 
   const formattedContent = useMemo(() => {
     if (!content || hasTimelineItems) return '';
-    const sanitized = sanitizeHtmlFragment(formatMessage(content));
+    const sanitized = renderSafeMarkdown(content);
     return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
   }, [content, hasTimelineItems, isStreaming]);
 
@@ -241,7 +240,6 @@ function MessageView({
             <MessageActions
               content={content}
               onRegenerate={role === 'assistant' ? onRegenerate : undefined}
-              regenerateDisabled={regenerateDisabled}
             />
             {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
           </span>
@@ -307,7 +305,6 @@ function MessageView({
             item={item}
             itemIndex={idx}
             onRegenerate={onRegenerate}
-            regenerateDisabled={regenerateDisabled}
           />
         ))}
         {showImages && !hideContent && messageImages.length > 0 && (

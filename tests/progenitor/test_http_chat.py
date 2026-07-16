@@ -190,7 +190,27 @@ async def test_chat_stream_envelope_order_and_done() -> None:
     finally:
         await _stop_chat_server(server)
 
-    assert frames == [
+    stream_payloads = [
+        payload for event_name, payload in frames if event_name in {"stream_event", "stream_chunk"}
+    ]
+    assert [payload["runtime_stream_seq"] for payload in stream_payloads] == list(
+        range(1, len(stream_payloads) + 1)
+    )
+    assert all(
+        type(payload["runtime_emitted_at_ms"]) is int and payload["runtime_emitted_at_ms"] > 0
+        for payload in stream_payloads
+    )
+    assert [
+        (
+            event_name,
+            {
+                field: value
+                for field, value in payload.items()
+                if field not in {"runtime_emitted_at_ms", "runtime_stream_seq"}
+            },
+        )
+        for event_name, payload in frames
+    ] == [
         (
             "stream_event",
             {
@@ -281,6 +301,14 @@ async def test_chat_serializes_requests_and_emits_queued_event() -> None:
     assert frames_a[-1] == ("done", {"request_id": "req-a", "status": "completed"})
     assert frames_b[0] == ("queued", {"request_id": "req-b", "streaming": True})
     assert frames_b[-1] == ("done", {"request_id": "req-b", "status": "completed"})
+    assert [
+        [
+            payload["runtime_stream_seq"]
+            for event_name, payload in request_frames
+            if event_name in {"stream_event", "stream_chunk"}
+        ]
+        for request_frames in (frames_a, frames_b)
+    ] == [[1], [1]]
 
 
 async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
@@ -394,9 +422,7 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
     )
     response = _SlowResponse()
     stream_task = asyncio.create_task(
-        service._stream_chat(
-            response, "hello", "request-queue-bound", None, asyncio.Event(), 123.0
-        )
+        service._stream_chat(response, "hello", "request-queue-bound", None, asyncio.Event(), 123.0)
     )
     try:
         await asyncio.wait_for(first_write_started.wait(), timeout=2.0)
@@ -408,7 +434,6 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
     finally:
         release_first_write.set()
         await asyncio.wait_for(stream_task, timeout=2.0)
-
 
 
 async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> None:

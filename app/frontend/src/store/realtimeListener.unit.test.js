@@ -141,35 +141,41 @@ describe('realtimeListener heartbeat watchdog', () => {
     expect(source.closed).toBe(false);
   });
 
-  it('FIFO-publishes high-rate response frames without adding them to Redux', async () => {
+  it('routes canonical response lifecycle envelopes through Redux and publishUiEvent', async () => {
     store.dispatch(startRealtimeStream({ streamUrl: STREAM_URL }));
     await Promise.resolve();
 
     const source = MockEventSource.instances[0];
-    const receivedFrames = [];
-    const unsubscribe = subscribeUiEvent((event) => receivedFrames.push(event));
-    const frames = Array.from({ length: 128 }, (_, index) => ({
-      id: `response-${index + 1}`,
-      seq: index + 1,
-      type: index % 2 === 0 ? 'chat.response.delta' : 'chat.response.event',
-      scope: 'request',
-      payload: {
-        request_id: 'request-high-rate',
-        ...(index % 2 === 0 ? { delta: String(index) } : { event_type: 'tool_call' }),
+    const publishedEvents = [];
+    const unsubscribe = subscribeUiEvent((event) => publishedEvents.push(event));
+    const lifecycleEvents = [
+      {
+        id: 'response-started-1',
+        seq: 1,
+        type: 'chat.response.started',
+        scope: 'chat',
+        payload: { request_id: 'request-lifecycle', thread_id: 'thread-background' },
       },
-    }));
+      {
+        id: 'response-completed-2',
+        seq: 2,
+        type: 'chat.response.completed',
+        scope: 'chat',
+        payload: { request_id: 'request-lifecycle', thread_id: 'thread-background' },
+      },
+    ];
 
-    for (const frame of frames) {
-      source.emit('ui.event', JSON.stringify(frame));
+    for (const event of lifecycleEvents) {
+      source.emit('ui.event', JSON.stringify(event));
     }
     unsubscribe();
 
-    expect(receivedFrames).toEqual(frames);
+    expect(publishedEvents).toEqual(lifecycleEvents);
     expect(store.getState().realtime).toMatchObject({
-      eventQueue: [],
-      eventSequence: 0,
-      receivedIds: [],
-      lastEvent: null,
+      eventSequence: 2,
+      receivedIds: lifecycleEvents.map((event) => event.id),
+      lastEvent: lifecycleEvents[1],
+      eventQueue: lifecycleEvents.map((event, index) => ({ sequence: index + 1, event })),
     });
   });
 });

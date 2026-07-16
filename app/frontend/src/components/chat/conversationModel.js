@@ -54,6 +54,102 @@ export function getActiveRouteThreadId({
   );
 }
 
+function eventRenderSignature(event) {
+  const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
+  return {
+    eventType: typeof event?.eventType === 'string' ? event.eventType : '',
+    content: typeof event?.content === 'string' ? event.content : '',
+    toolCallId: typeof metadata.tool_call_id === 'string' ? metadata.tool_call_id : '',
+    toolName: typeof metadata.tool_name === 'string' ? metadata.tool_name : '',
+    success: metadata.success === true ? true : metadata.success === false ? false : null,
+    resultPreview: typeof metadata.result_preview === 'string' ? metadata.result_preview : '',
+    imageCount: Array.isArray(event?.images) ? event.images.length : 0,
+  };
+}
+
+function messageRenderSignature(message) {
+  return {
+    role: typeof message?.role === 'string' ? message.role : '',
+    content: typeof message?.content === 'string' ? message.content : '',
+    tokenCount: Number.isFinite(message?.tokenCount) ? message.tokenCount : 0,
+    reasoningTokenCount: Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0,
+    reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
+    agentName: typeof message?.agentName === 'string' ? message.agentName : '',
+    model: typeof message?.model === 'string' ? message.model : '',
+    streamEvents: Array.isArray(message?.streamEvents)
+      ? message.streamEvents.map(eventRenderSignature)
+      : [],
+  };
+}
+
+// Persisted messages have backend IDs and rebuilt timeline items, while a
+// foreground live turn has client IDs and incremental timeline state. Compare
+// only fields that affect rendering before replacing the local transcript.
+export function areChatMessagesRenderEquivalent(localMessage, persistedMessage) {
+  if (localMessage?.role !== persistedMessage?.role) {
+    return false;
+  }
+  return JSON.stringify(messageRenderSignature(localMessage))
+    === JSON.stringify(messageRenderSignature(persistedMessage));
+}
+
+export function areChatTranscriptsEquivalent(localMessages, persistedMessages) {
+  if (!Array.isArray(localMessages) || !Array.isArray(persistedMessages)) {
+    return false;
+  }
+  if (localMessages.length !== persistedMessages.length) {
+    return false;
+  }
+  return localMessages.every((message, index) => (
+    areChatMessagesRenderEquivalent(message, persistedMessages[index])
+  ));
+}
+
+// Canonical reconciliation may correct one terminal row. Keep every unchanged
+// local object so memoized historical cards retain their rendered Markdown and
+// do not re-highlight earlier code blocks when only another row changed.
+export function mergeCanonicalMessages(localMessages, canonicalMessages) {
+  if (!Array.isArray(localMessages) || !Array.isArray(canonicalMessages)) {
+    return canonicalMessages;
+  }
+
+  const merged = canonicalMessages.map((canonicalMessage, index) => (
+    areChatMessagesRenderEquivalent(localMessages[index], canonicalMessage)
+      ? localMessages[index]
+      : canonicalMessage
+  ));
+  const unchanged = merged.length === localMessages.length
+    && merged.every((message, index) => message === localMessages[index]);
+  return unchanged ? localMessages : merged;
+}
+
+// A non-equivalent canonical transcript carries backend identities. Retire a
+// finalized live owner for that same terminal stream before both can render.
+export function shouldRetireLiveOwnerAfterCanonicalReconciliation(liveTurn, streamId) {
+  return Boolean(
+    liveTurn?.assistantMessageId
+    && liveTurn.streamId === streamId,
+  );
+}
+
+// A settled foreground turn remains mounted briefly as the visual owner of its
+// final row. Hide its committed history twin until that owner changes or is
+// cleared, so terminal completion does not render the same assistant message
+// twice.
+export function excludeLiveOwnedMessage(messages, liveAssistantMessageId) {
+  if (!Array.isArray(messages) || !liveAssistantMessageId) {
+    return messages;
+  }
+  const liveMessageIndex = messages.findIndex((message) => message?.id === liveAssistantMessageId);
+  if (liveMessageIndex < 0) {
+    return messages;
+  }
+  return [
+    ...messages.slice(0, liveMessageIndex),
+    ...messages.slice(liveMessageIndex + 1),
+  ];
+}
+
 const SIDEBAR_GROUPS = [
   { key: 'pinned', label: 'Pinned' },
   { key: 'today', label: 'Today' },
