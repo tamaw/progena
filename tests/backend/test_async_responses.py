@@ -448,14 +448,14 @@ class TestAsyncResponseHandling:
             with (
                 _live_backend() as base_url,
                 httpx.Client(base_url=base_url, timeout=5) as live_client,
-            ):
-                with live_client.stream(
+                live_client.stream(
                     "GET", f"/api/ui/responses/{request_id}/stream?after={first.id}"
-                ) as response_stream:
-                    assert response_stream.status_code == 200
-                    response_lines = response_stream.iter_lines()
-                    replayed_frames = [_next_response_sse_frame(response_lines) for _ in range(2)]
-                    assert list(response_lines) == []
+                ) as response_stream,
+            ):
+                assert response_stream.status_code == 200
+                response_lines = response_stream.iter_lines()
+                replayed_frames = [_next_response_sse_frame(response_lines) for _ in range(2)]
+                assert list(response_lines) == []
         finally:
             backend_main._response_streams.pop(request_id, None)
 
