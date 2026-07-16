@@ -190,7 +190,27 @@ async def test_chat_stream_envelope_order_and_done() -> None:
     finally:
         await _stop_chat_server(server)
 
-    assert frames == [
+    stream_payloads = [
+        payload for event_name, payload in frames if event_name in {"stream_event", "stream_chunk"}
+    ]
+    assert [payload["runtime_stream_seq"] for payload in stream_payloads] == list(
+        range(1, len(stream_payloads) + 1)
+    )
+    assert all(
+        type(payload["runtime_emitted_at_ms"]) is int and payload["runtime_emitted_at_ms"] > 0
+        for payload in stream_payloads
+    )
+    assert [
+        (
+            event_name,
+            {
+                field: value
+                for field, value in payload.items()
+                if field not in {"runtime_emitted_at_ms", "runtime_stream_seq"}
+            },
+        )
+        for event_name, payload in frames
+    ] == [
         (
             "stream_event",
             {
@@ -281,6 +301,14 @@ async def test_chat_serializes_requests_and_emits_queued_event() -> None:
     assert frames_a[-1] == ("done", {"request_id": "req-a", "status": "completed"})
     assert frames_b[0] == ("queued", {"request_id": "req-b", "streaming": True})
     assert frames_b[-1] == ("done", {"request_id": "req-b", "status": "completed"})
+    assert [
+        [
+            payload["runtime_stream_seq"]
+            for event_name, payload in request_frames
+            if event_name in {"stream_event", "stream_chunk"}
+        ]
+        for request_frames in (frames_a, frames_b)
+    ] == [[1], [1]]
 
 
 async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
@@ -358,6 +386,54 @@ async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeyp
         await _stop_chat_server(server)
 
     assert raw.count(b": keepalive\n\n") >= 2
+
+
+async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
+    """A slow response writer must bound how far the bridge producer gets ahead."""
+    monkeypatch.setattr("app.progenitor.runtime.http_chat.DIRECT_STREAM_QUEUE_SIZE", 2)
+
+    loop_runner = FakeLoopRunner()
+    first_write_started = asyncio.Event()
+    release_first_write = asyncio.Event()
+    produced = 0
+
+    class _FloodBridge:
+        async def stream(self, _message: str, *, thread_id: str, received_at: float | None = None):
+            del thread_id, received_at
+            nonlocal produced
+            for index in range(30):
+                produced += 1
+                yield {"type": "stream_chunk", "content": str(index), "is_final": False}
+            yield {"type": "stream_chunk", "content": "done", "is_final": True}
+
+    class _SlowResponse:
+        def __init__(self) -> None:
+            self.writes: list[bytes] = []
+
+        async def write(self, payload: bytes) -> None:
+            self.writes.append(payload)
+            if len(self.writes) == 1:
+                first_write_started.set()
+                await release_first_write.wait()
+
+    service = RuntimeChatService(
+        loop_runner,
+        bridge_factory=lambda *_args, **_kwargs: _FloodBridge(),
+    )
+    response = _SlowResponse()
+    stream_task = asyncio.create_task(
+        service._stream_chat(response, "hello", "request-queue-bound", None, asyncio.Event(), 123.0)
+    )
+    try:
+        await asyncio.wait_for(first_write_started.wait(), timeout=2.0)
+        await asyncio.sleep(0)
+        # One item is being written and at most two are buffered; the producer
+        # may have fetched the next item before blocking on queue.put().
+        assert produced <= 4
+        assert produced > 1
+    finally:
+        release_first_write.set()
+        await asyncio.wait_for(stream_task, timeout=2.0)
 
 
 async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> None:

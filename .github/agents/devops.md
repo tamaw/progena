@@ -74,8 +74,8 @@ curl http://localhost/healthz
 # Frontend static server
 curl http://localhost/
 
-# Progenitor runtime health (a distinct internal service endpoint)
-curl http://localhost:9501/health
+# Progenitor runtime health (internal service; run through its container)
+docker compose -f docker/docker-compose.progenitor.yml exec -T progenitor curl -fsS http://127.0.0.1:9501/health
 ```
 
 Do not reintroduce browser-facing `/ready`, `/live`, or response-body health routes; browser application data remains on `/api/ui/stream`.

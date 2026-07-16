@@ -2,6 +2,24 @@
  * Logs domain: result pages, source metadata, and export chunks are hydrated
  * exclusively from canonical `/api/ui/stream` events.
  */
+
+const MAX_COMPLETED_EXPORTS = 10;
+
+function pruneCompletedExports(state, keepRequestId = null) {
+  const completedRequestIds = Object.entries(state.logs.exportsByRequestId)
+    .filter(([requestId, exportState]) => exportState.completed && requestId !== keepRequestId)
+    .map(([requestId]) => requestId);
+  const completedCount = Object.values(state.logs.exportsByRequestId)
+    .filter((exportState) => exportState.completed)
+    .length;
+  const excessCount = completedCount - MAX_COMPLETED_EXPORTS;
+  if (excessCount > 0) {
+    for (const requestId of completedRequestIds.slice(0, excessCount)) {
+      delete state.logs.exportsByRequestId[requestId];
+    }
+  }
+}
+
 export const initialState = {
   logs: {
     page: null,
@@ -77,6 +95,7 @@ export const eventHandlers = {
     const exportState = exportStateFor(state, payload.request_id, payload);
     if (exportState) {
       exportState.completed = true;
+      pruneCompletedExports(state, payload.request_id);
     }
   },
 };

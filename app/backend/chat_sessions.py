@@ -16,8 +16,89 @@ from app.progenitor.runtime.messages import (
     extract_reasoning_trace,
     get_last_ai_message,
 )
+from app.progenitor.state.models import redact_secrets
 
 from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
+
+# History must not replay arbitrary tool artifacts (which may contain raw files,
+# images, or credentials). Keep only the SSE-compatible user-facing projection.
+_ARTIFACT_STRING_LIMIT = 1024
+_ARTIFACT_KEYS = ("summary", "count", "kind", "status")
+
+
+def _tool_call_audit_index(store: BackendDocumentStore | None) -> dict[str, dict[str, Any]]:
+    """Read one bounded audit-log page and index normal tool calls by id."""
+    if store is None:
+        return {}
+    query_logs = getattr(store, "query_logs", None)
+    if not callable(query_logs):
+        return {}
+    try:
+        rows = query_logs(source="tool_calls", limit=500)
+    except Exception:  # nosec B110 - old/test stores may not expose audit logs
+        return {}
+    if not isinstance(rows, list):
+        return {}
+    indexed: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        raw_payload = row.get("payload")
+        if isinstance(raw_payload, dict):
+            payload = dict(raw_payload)
+            for key in ("tool_id", "duration_ms"):
+                if key not in payload and key in row:
+                    payload[key] = row[key]
+        else:
+            payload = row
+        tool_id = payload.get("tool_id")
+        if tool_id is None:
+            tool_id = row.get("tool_id")
+        if tool_id is None:
+            continue
+        indexed[str(tool_id)] = payload
+    return indexed
+
+
+def _artifact_mapping(artifact: Any) -> dict[str, Any] | None:
+    if isinstance(artifact, dict):
+        return artifact
+    model_dump = getattr(artifact, "model_dump", None)
+    if callable(model_dump):
+        try:
+            dumped = model_dump(mode="json")
+        except Exception:  # nosec B110 - an optional artifact must never break history
+            return None
+        return dumped if isinstance(dumped, dict) else None
+    return None
+
+
+def _curated_tool_artifact(artifact: Any) -> dict[str, Any] | None:
+    """Return a bounded, JSON-safe, redacted artifact projection."""
+    source = _artifact_mapping(artifact)
+    if source is None:
+        return None
+    projection: dict[str, Any] = {}
+    for key in _ARTIFACT_KEYS:
+        if key not in source:
+            continue
+        value = source[key]
+        if key == "count":
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int | float) and abs(float(value)) <= 1_000_000_000_000:
+                projection[key] = value
+            continue
+        if isinstance(value, str):
+            projection[key] = redact_secrets(value)[:_ARTIFACT_STRING_LIMIT]
+    if not projection:
+        return None
+    try:
+        json.dumps(projection, allow_nan=False)
+    except (TypeError, ValueError):
+        return None
+    return projection
+
 
 CHAT_METADATA_PREFIX = "backend.chat.sessions"
 CHAT_INDEX_KEY = "__index__"
@@ -35,6 +116,7 @@ class ChatMessage(BaseModel):
     role: str
     content: str
     created_at: str | None = None
+    reasoning_timestamp: str | None = None
     token_count: int = 0
     reasoning_token_count: int = 0
     reasoning_text: str = ""
@@ -605,14 +687,16 @@ def _chat_message_from_raw(
         content = extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
     if not content and role == "assistant":
         return None
+    reasoning_text = extract_reasoning_trace(raw) or ""
     return ChatMessage(
         id=_raw_message_id(raw, index),
         role=role,
         content=content,
         created_at=_raw_message_created_at(raw),
+        reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
-        reasoning_text=extract_reasoning_trace(raw) or "",
+        reasoning_text=reasoning_text,
         display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
@@ -656,9 +740,16 @@ def _synthetic_pending_tool_call_message(
     )
 
 
-def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list[ChatMessage]:
+def _messages_from_checkpoint(
+    snapshot: CheckpointThreadSnapshot | None,
+    *,
+    store: BackendDocumentStore | None = None,
+    tool_call_audit: dict[str, dict[str, Any]] | None = None,
+) -> list[ChatMessage]:
     if snapshot is None:
         return []
+
+    audit_index = tool_call_audit if tool_call_audit is not None else _tool_call_audit_index(store)
 
     # First pass: index ToolMessage results by tool_call_id.
     tool_results: dict[str, dict[str, Any]] = {}
@@ -679,6 +770,10 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
         result_entry: dict[str, Any] = {
             "result": result_text[:400] + "…" if len(result_text) > 400 else result_text,
         }
+        artifact = raw.get("artifact") if isinstance(raw, dict) else getattr(raw, "artifact", None)
+        curated_artifact = _curated_tool_artifact(artifact)
+        if curated_artifact is not None:
+            result_entry["artifact"] = curated_artifact
         if images:
             result_entry["images"] = images
         if progress_log:
@@ -687,35 +782,74 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
 
     # Second pass: build messages, accumulating tool calls from tool-only AIMessages
     # and attaching them to the next AIMessage that produces visible text.
+    # Token usage folds the same way: tool-call-only AIMessages never become
+    # ChatMessages, so their per-call usage (output AND reasoning tokens) must
+    # roll into the text-bearing AIMessage that claims the turn — otherwise a
+    # multi-step turn reports only its final model call and the header totals
+    # undercount.
     messages: list[ChatMessage] = []
     pending_tool_calls: list[dict[str, Any]] = []
+    pending_token_count = 0
+    pending_reasoning_token_count = 0
+    pending_reasoning_parts: list[str] = []
+    pending_reasoning_timestamp: str | None = None
 
     for index, raw in enumerate(snapshot.messages):
         role = _raw_message_role(raw)
         if role == "tool":
             continue
 
-        if role == "user" and pending_tool_calls:
-            # A new human turn is starting but the previous turn's tool calls
-            # were never claimed by a text-bearing AIMessage. Flush them now,
-            # ahead of the new question, instead of letting the reset just
-            # below silently drop them.
-            messages.append(_synthetic_pending_tool_call_message(pending_tool_calls, index))
-            pending_tool_calls = []
+        if role == "user":
+            if pending_tool_calls or pending_reasoning_parts:
+                # A new human turn ends the previous assistant turn. Preserve
+                # reasoning emitted before an interrupted/tool-only turn
+                # instead of dropping it with the unmaterialized AIMessage.
+                synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, index)
+                synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                synthetic.reasoning_timestamp = pending_reasoning_timestamp
+                synthetic.token_count = pending_token_count
+                synthetic.reasoning_token_count = pending_reasoning_token_count
+                messages.append(synthetic)
+                pending_tool_calls = []
+            pending_reasoning_parts = []
+            pending_token_count = 0
+            pending_reasoning_token_count = 0
+            pending_reasoning_timestamp = None
 
         if role == "assistant":
+            pending_token_count += _raw_message_token_count(raw)
+            pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
+            reasoning_text = extract_reasoning_trace(raw)
+            if reasoning_text:
+                pending_reasoning_parts.append(reasoning_text)
+                if pending_reasoning_timestamp is None:
+                    pending_reasoning_timestamp = _raw_message_created_at(raw)
             for tc in _extract_raw_tool_calls(raw):
                 entry = tool_results.get(tc["id"], {})
                 tc_with_result = {**tc, "result": entry.get("result", "")}
+                if "artifact" in entry:
+                    tc_with_result["artifact"] = entry["artifact"]
                 if "images" in entry:
                     tc_with_result["images"] = entry["images"]
                 if "progress_log" in entry:
                     tc_with_result["progress_log"] = entry["progress_log"]
+                audit_entry = audit_index.get(tc["id"])
+                if audit_entry is not None and "duration_ms" in audit_entry:
+                    tc_with_result["duration_ms"] = audit_entry.get("duration_ms")
                 pending_tool_calls.append(tc_with_result)
 
         tool_calls_to_attach = list(pending_tool_calls) if role == "assistant" else None
         message = _chat_message_from_raw(raw, index, tool_calls=tool_calls_to_attach)
         if message is not None:
+            if role == "assistant":
+                message.reasoning_text = "\n\n".join(pending_reasoning_parts)
+                message.token_count = pending_token_count
+                message.reasoning_token_count = pending_reasoning_token_count
+                message.reasoning_timestamp = pending_reasoning_timestamp
+                pending_reasoning_parts = []
+                pending_token_count = 0
+                pending_reasoning_token_count = 0
+                pending_reasoning_timestamp = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
             messages.append(message)
@@ -724,9 +858,12 @@ def _messages_from_checkpoint(snapshot: CheckpointThreadSnapshot | None) -> list
         # The checkpoint's tip is itself a dangling tool-call-only AIMessage --
         # same flush, just past the end of the loop instead of ahead of the
         # next human turn.
-        messages.append(
-            _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
-        )
+        synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
+        synthetic.token_count = pending_token_count
+        synthetic.reasoning_token_count = pending_reasoning_token_count
+        synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
+        synthetic.reasoning_timestamp = pending_reasoning_timestamp
+        messages.append(synthetic)
 
     return messages
 
@@ -841,6 +978,7 @@ def list_chat_sessions(
     include_archived: bool = False,
 ) -> list[ChatSessionSummary]:
     sessions: list[ChatSessionSummary] = []
+    tool_call_audit = _tool_call_audit_index(store)
     checkpoint_snapshots = store.list_checkpoint_thread_snapshots(limit=100)
     snapshots_by_thread_id = {snapshot.thread_id: snapshot for snapshot in checkpoint_snapshots}
     covered_threads: set[str] = set()
@@ -870,7 +1008,7 @@ def list_chat_sessions(
         snapshot = _checkpoint_snapshot_for_metadata(
             store, metadata, cached_snapshots=snapshots_by_thread_id
         )
-        fallback_messages = _messages_from_checkpoint(snapshot)
+        fallback_messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
         if snapshot is not None:
             covered_threads.add(snapshot.thread_id)
             metadata = _metadata_with_checkpoint(metadata, snapshot)
@@ -885,7 +1023,7 @@ def list_chat_sessions(
     for snapshot in checkpoint_snapshots:
         if snapshot.thread_id in covered_threads or snapshot.thread_id in hidden_threads:
             continue
-        messages = _messages_from_checkpoint(snapshot)
+        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
         if not messages:
             continue
         metadata = _checkpoint_metadata(snapshot)
@@ -906,11 +1044,12 @@ def get_chat_detail(
     thread_id: str,
 ) -> ChatSessionDetail | None:
     metadata = _get_metadata(store, thread_id)
+    tool_call_audit = _tool_call_audit_index(store)
     messages: list[ChatMessage] = []
     snapshot: CheckpointThreadSnapshot | None = None
     if metadata is not None:
         snapshot = _checkpoint_snapshot_for_metadata(store, metadata)
-        messages = _messages_from_checkpoint(snapshot)
+        messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
         metadata = _metadata_with_checkpoint(metadata, snapshot)
     else:
         for candidate_thread_id in _thread_id_candidates_for_thread_id(thread_id):
@@ -922,7 +1061,7 @@ def get_chat_detail(
             if snapshot is not None:
                 break
         if snapshot is not None:
-            messages = _messages_from_checkpoint(snapshot)
+            messages = _messages_from_checkpoint(snapshot, tool_call_audit=tool_call_audit)
             metadata = _checkpoint_metadata(snapshot)
     if metadata is None or metadata.get("deleted") is True:
         return None

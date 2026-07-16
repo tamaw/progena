@@ -26,7 +26,11 @@ from app.backend.chat_sessions import (
     materialize_chat_metadata,
     patch_chat_metadata,
 )
-from app.backend.document_store import CheckpointThreadSnapshot, InMemoryDocumentStore
+from app.backend.document_store import (
+    PROGENITOR_LOG_PREFIX,
+    CheckpointThreadSnapshot,
+    InMemoryDocumentStore,
+)
 
 
 class _CountingDocumentStore(InMemoryDocumentStore):
@@ -484,6 +488,266 @@ class TestPendingToolCallFlush:
         assert reply.tool_calls[0]["result"] == "HELLO_FROM_SUBAGENT"
 
 
+class TestTurnTokenAccounting:
+    """A multi-step turn runs the model once per tool round-trip, and each
+    call reports usage on its own AIMessage -- but only the text-bearing
+    AIMessage that claims the turn ever becomes a ChatMessage. Its token
+    counts must be the SUM across all the turn's model calls (output AND
+    reasoning tokens); otherwise reloading a chat undercounts every
+    multi-step turn to just its final model call.
+    """
+
+    def test_folded_turn_sums_output_and_reasoning_tokens_across_model_calls(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_token_fold"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_token_fold",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "search for x"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [{"id": "call_1", "name": "search", "args": {"q": "x"}}],
+                        "usage_metadata": {
+                            "output_tokens": 81,
+                            "output_token_details": {"reasoning": 30},
+                        },
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "result text",
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here you go",
+                        "usage_metadata": {
+                            "output_tokens": 57,
+                            "output_token_details": {"reasoning": 10},
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_token_fold")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert len(assistants) == 1
+        reply = assistants[0]
+        assert reply.token_count == 81 + 57
+        assert reply.reasoning_token_count == 30 + 10
+        assert [tc["name"] for tc in reply.tool_calls] == ["search"]
+
+    def test_tool_only_responses_reasoning_is_attached_to_follow_up_reply(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_reasoning_fold"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_reasoning_fold",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "search for x"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": [
+                            {
+                                "type": "reasoning",
+                                "summary": [
+                                    {
+                                        "type": "summary_text",
+                                        "text": "Need to search before answering.",
+                                    }
+                                ],
+                            }
+                        ],
+                        "tool_calls": [{"id": "call_1", "name": "search", "args": {"q": "x"}}],
+                        "usage_metadata": {
+                            "output_tokens": 81,
+                            "output_token_details": {"reasoning": 30},
+                        },
+                        "response_metadata": {"created_at": "2026-07-14T00:00:01Z"},
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "result text",
+                    },
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "Here you go",
+                        "usage_metadata": {
+                            "output_tokens": 57,
+                            "output_token_details": {"reasoning": 10},
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_reasoning_fold")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert len(assistants) == 1
+        reply = assistants[0]
+        assert reply.content == "Here you go"
+        assert [tc["name"] for tc in reply.tool_calls] == ["search"]
+        assert reply.tool_calls[0]["result"] == "result text"
+        assert reply.reasoning_text.strip()
+        assert "Need to search before answering." in reply.reasoning_text
+        assert reply.reasoning_timestamp == "2026-07-14T00:00:01Z"
+        assert reply.token_count == 81 + 57
+        assert reply.reasoning_token_count == 30 + 10
+
+    def test_each_turns_assistant_reply_carries_only_its_own_usage(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_token_reset"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_token_reset",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "first question"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "first answer",
+                        "usage_metadata": {
+                            "output_tokens": 20,
+                            "output_token_details": {"reasoning": 5},
+                        },
+                    },
+                    {"id": "u2", "type": "human", "content": "second question"},
+                    {
+                        "id": "a2",
+                        "type": "ai",
+                        "content": "second answer",
+                        "usage_metadata": {
+                            "output_tokens": 30,
+                            "output_token_details": {"reasoning": 7},
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_token_reset")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert [(m.token_count, m.reasoning_token_count) for m in assistants] == [
+            (20, 5),
+            (30, 7),
+        ]
+
+    def test_unclaimed_tool_less_fragments_usage_does_not_leak_into_the_next_turn(self):
+        """A content-less, tool-call-less AIMessage never becomes a ChatMessage
+        and flushes no synthetic either -- the human message starting the next
+        turn must zero its accumulated usage instead of letting it inflate the
+        next turn's reply.
+        """
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_token_leak"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_token_leak",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "first question"},
+                    {
+                        "id": "a0",
+                        "type": "ai",
+                        "content": "",
+                        "usage_metadata": {
+                            "output_tokens": 99,
+                            "output_token_details": {"reasoning": 40},
+                        },
+                    },
+                    {"id": "u2", "type": "human", "content": "second question"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "second answer",
+                        "usage_metadata": {
+                            "output_tokens": 30,
+                            "output_token_details": {"reasoning": 7},
+                        },
+                    },
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_token_leak")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert len(assistants) == 1
+        assert assistants[0].token_count == 30
+        assert assistants[0].reasoning_token_count == 7
+
+    def test_dangling_tool_call_turns_synthetic_message_carries_its_usage(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_token_dangling"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_token_dangling",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-14T00:00:00Z",
+                messages=[
+                    {"id": "u1", "type": "human", "content": "spawn a subagent"},
+                    {
+                        "id": "a1",
+                        "type": "ai",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "name": "task",
+                                "args": {"subagent_type": "hello-world"},
+                            }
+                        ],
+                        "usage_metadata": {
+                            "output_tokens": 44,
+                            "output_token_details": {"reasoning": 12},
+                        },
+                    },
+                    {
+                        "id": "t1",
+                        "type": "tool",
+                        "tool_call_id": "call_1",
+                        "content": "HELLO_FROM_SUBAGENT",
+                    },
+                    # Turn cut short -- no trailing text-bearing AIMessage.
+                ],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_token_dangling")
+
+        assert detail is not None
+        assistants = [message for message in detail.messages if message.role == "assistant"]
+        assert len(assistants) == 1
+        synthetic = assistants[0]
+        assert synthetic.content == ""
+        assert [tc["name"] for tc in synthetic.tool_calls] == ["task"]
+        assert synthetic.token_count == 44
+        assert synthetic.reasoning_token_count == 12
+
+
 class TestExtractProgressLogFromContent:
     """agent_name must survive this extraction -- it's what lets a reloaded
     chat repopulate the A2A card's header (see the matching agent_name param
@@ -592,3 +856,81 @@ class TestExtractProgressLogFromContent:
         monkeypatch.setattr(chat_sessions_module.json, "loads", _raise_recursion_error)
         content = '{"progress_log": [{"state": "submitted"}]}'
         assert _extract_progress_log_from_content(content) == []
+
+
+def test_hydrates_normal_tool_duration_and_artifact_by_tool_id():
+    store = InMemoryDocumentStore()
+    create_chat_metadata(store, ChatCreateRequest(thread_id="thread-tool-metadata"))
+    store.save_document(
+        f"{PROGENITOR_LOG_PREFIX}.tool_calls",
+        "audit-1",
+        {
+            "payload": {
+                "tool_id": "call-1",
+                "duration_ms": 123.4,
+                "timestamp": "2026-07-14T12:00:00Z",
+            }
+        },
+    )
+    store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="thread-tool-metadata",
+            checkpoint_id="checkpoint-1",
+            checkpoint_ts="2026-07-14T12:00:00Z",
+            messages=[
+                {"id": "u1", "type": "human", "content": "read the file"},
+                {
+                    "id": "a1",
+                    "type": "ai",
+                    "content": "Here is the file.",
+                    "tool_calls": [
+                        {"id": "call-1", "name": "read_file", "args": {"path": "README.md"}}
+                    ],
+                },
+                {
+                    "id": "t1",
+                    "type": "tool",
+                    "tool_call_id": "call-1",
+                    "content": "file contents",
+                    "artifact": {"summary": "README.md: 12 lines", "count": 12, "raw": "discard"},
+                },
+            ],
+        )
+    )
+
+    detail = get_chat_detail(store, "thread-tool-metadata")
+
+    assert detail is not None
+    tool_call = detail.messages[1].tool_calls[0]
+    assert tool_call["id"] == "call-1"
+    assert tool_call["duration_ms"] == 123.4
+    assert tool_call["artifact"] == {"summary": "README.md: 12 lines", "count": 12}
+
+
+def test_normal_tool_history_falls_back_when_audit_duration_is_missing():
+    store = InMemoryDocumentStore()
+    create_chat_metadata(store, ChatCreateRequest(thread_id="thread-tool-no-log"))
+    store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="thread-tool-no-log",
+            checkpoint_id="checkpoint-1",
+            checkpoint_ts="2026-07-14T12:00:00Z",
+            messages=[
+                {
+                    "id": "a1",
+                    "type": "ai",
+                    "content": "Done.",
+                    "tool_calls": [{"id": "call-2", "name": "glob", "args": {"pattern": "*.py"}}],
+                },
+                {"id": "t1", "type": "tool", "tool_call_id": "call-2", "content": "a.py\nb.py"},
+            ],
+        )
+    )
+
+    detail = get_chat_detail(store, "thread-tool-no-log")
+
+    assert detail is not None
+    tool_call = detail.messages[0].tool_calls[0]
+    assert tool_call["result"] == "a.py\nb.py"
+    assert "duration_ms" not in tool_call
+    assert "artifact" not in tool_call

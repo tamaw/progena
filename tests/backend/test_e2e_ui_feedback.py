@@ -461,7 +461,7 @@ class TestRealTimeSSEFeedback:
 
         # Add test subscriber
         queue = asyncio.Queue()
-        _ui_stream_subscribers.add(queue)
+        _ui_stream_subscribers[queue] = None
 
         try:
             # Broadcast test event
@@ -482,7 +482,7 @@ class TestRealTimeSSEFeedback:
             assert event["type"] == "ui.event"
             assert event["envelope"].type == "alien_contact"
         finally:
-            _ui_stream_subscribers.discard(queue)
+            _ui_stream_subscribers.pop(queue, None)
 
 
 class TestChatFlowFeedback:

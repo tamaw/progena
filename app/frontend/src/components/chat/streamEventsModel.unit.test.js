@@ -36,10 +36,18 @@ describe('isReasoningEvent / hasReasoningContent', () => {
 });
 
 describe('countReasoningTimelineEntries', () => {
-  it('counts rendered reasoning events from stream events', () => {
+  it('does not count delta-only reasoning as a rendered timeline entry', () => {
     const events = [
       { eventType: 'reasoning_delta', content: 'abc' },
       { eventType: 'tool_start', content: 'search' },
+    ];
+    expect(countReasoningTimelineEntries(events, 'fallback')).toBe(0);
+  });
+
+  it('counts one terminal reasoning summary after deltas', () => {
+    const events = [
+      { eventType: 'reasoning_delta', content: 'abc' },
+      { eventType: 'reasoning_summary', content: 'complete reasoning' },
     ];
     expect(countReasoningTimelineEntries(events, 'fallback')).toBe(1);
   });
@@ -145,6 +153,58 @@ describe('appendStreamEvent', () => {
     events = appendStreamEvent(events, evt({ id: 'r2', eventType: 'reasoning_delta', content: 'bar' }));
     expect(events).toHaveLength(1);
     expect(events[0].content).toBe('foobar');
+  });
+
+  it('merges a delta then terminal summary with complete content and summary metadata', () => {
+    let events = appendStreamEvent([], evt({
+      id: 'r1',
+      eventType: 'reasoning_delta',
+      content: 'partial thought',
+      metadata: { reasoning_tokens: 5, summary: 'delta fragment' },
+    }));
+    events = appendStreamEvent(events, evt({
+      id: 'r2',
+      eventType: 'reasoning_summary',
+      content: 'complete reasoning trace',
+      metadata: {
+        reasoning_tokens: 42,
+        summary: 'Final reasoning summary',
+        detail: 'Provider detail',
+      },
+    }));
+
+    expect(events[0].id).toBe('r1');
+    expect(events).toHaveLength(1);
+    expect(events[0].eventType).toBe('reasoning_summary');
+    expect(events[0].content).toBe('complete reasoning trace');
+    expect(events[0].metadata).toEqual(expect.objectContaining({
+      reasoning_tokens: 42,
+      summary: 'Final reasoning summary',
+      detail: 'Provider detail',
+    }));
+  });
+
+  it('ignores a reasoning delta that arrives after the terminal summary', () => {
+    const summary = evt({
+      id: 'summary',
+      eventType: 'reasoning_summary',
+      content: 'final reasoning',
+      metadata: { reasoning_tokens: 10 },
+    });
+    const lateDelta = evt({
+      id: 'late-delta',
+      eventType: 'reasoning_delta',
+      content: 'late fragment that must be ignored',
+      metadata: { reasoning_tokens: 11 },
+    });
+
+    const withSummary = appendStreamEvent([], summary);
+    const afterDelta = appendStreamEvent(withSummary, lateDelta);
+
+    expect(afterDelta).toHaveLength(1);
+    expect(afterDelta[0].id).toBe('summary');
+    expect(afterDelta[0].eventType).toBe('reasoning_summary');
+    expect(afterDelta[0].content).toBe('final reasoning');
   });
 
   it('skips an empty reasoning event with no prior reasoning', () => {

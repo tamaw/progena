@@ -1,11 +1,11 @@
-import { useEffect, useRef, useSyncExternalStore } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useSyncExternalStore } from 'react';
 import { Message } from './Message';
 import { toCommittedAssistantMessage } from './liveAssistantTurnModel';
 import PendingAssistantCursor from './PendingAssistantCursor';
-
-export default function LiveAssistantTurn({
+const LiveAssistantTurn = memo(function LiveAssistantTurn({
   store,
-  messagesEndRef,
+  messagesContainerRef,
+  isPinnedToBottomRef,
   streamEventFilter,
   hideContent,
   showImages,
@@ -16,21 +16,49 @@ export default function LiveAssistantTurn({
     store.getSnapshot,
   );
   const scrollFrameRef = useRef(null);
+  const wasStreamingRef = useRef(Boolean(liveAssistantTurn?.isStreaming));
 
-  useEffect(() => {
-    if (!liveAssistantTurn || scrollFrameRef.current !== null) {
+  // The terminal handoff replaces literal streaming text with its final
+  // rendered form. Tail it after that DOM commit so the final answer cannot
+  // land below the viewport while preserving a user's scroll-back position.
+  useLayoutEffect(() => {
+    const wasStreaming = wasStreamingRef.current;
+    wasStreamingRef.current = Boolean(liveAssistantTurn?.isStreaming);
+    if (!liveAssistantTurn || liveAssistantTurn.isStreaming || !wasStreaming || !isPinnedToBottomRef.current) {
       return;
     }
 
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight;
+    }
+  }, [liveAssistantTurn, messagesContainerRef, isPinnedToBottomRef]);
+
+  useEffect(() => {
+    if (
+      !liveAssistantTurn
+      || !isPinnedToBottomRef.current
+      || scrollFrameRef.current !== null
+    ) {
+      return;
+    }
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
     scrollFrameRef.current = requestAnimationFrame(() => {
       scrollFrameRef.current = null;
-      messagesEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+      const currentContainer = messagesContainerRef.current;
+      if (currentContainer && isPinnedToBottomRef.current) {
+        currentContainer.scrollTop = currentContainer.scrollHeight;
+      }
     });
-  }, [liveAssistantTurn, messagesEndRef]);
+  }, [liveAssistantTurn, messagesContainerRef, isPinnedToBottomRef]);
 
   useEffect(() => () => {
     if (scrollFrameRef.current !== null) {
       cancelAnimationFrame(scrollFrameRef.current);
+      scrollFrameRef.current = null;
     }
   }, []);
 
@@ -51,4 +79,6 @@ export default function LiveAssistantTurn({
       showImages={showImages}
     />
   );
-}
+});
+
+export default LiveAssistantTurn;

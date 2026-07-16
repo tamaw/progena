@@ -11,7 +11,12 @@ export function subscribeUiEvent(listener) {
 }
 
 export function publishUiEvent(event) {
+  // Snapshot the set so subscribers can safely unsubscribe while handling an event.
   for (const listener of [...subscribers]) {
-    listener(event);
+    try {
+      listener(event);
+    } catch {
+      // One consumer must not prevent the remaining subscribers from receiving the event.
+    }
   }
 }

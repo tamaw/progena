@@ -166,7 +166,7 @@ async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
     from app.backend import ui_routes
 
     queue = asyncio.Queue()
-    ui_routes._ui_stream_subscribers.add(queue)
+    ui_routes._ui_stream_subscribers[queue] = None
     try:
         with TestClient(app) as client:
             workflow_id = "workflow_rest_move"
@@ -212,4 +212,4 @@ async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(
             matches = [item.model_dump(mode="json") for item in items]
             assert len(matches) == 1
     finally:
-        ui_routes._ui_stream_subscribers.discard(queue)
+        ui_routes._ui_stream_subscribers.pop(queue, None)

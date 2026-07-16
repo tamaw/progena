@@ -106,6 +106,10 @@
     line-height: 1.6;
 }
 
+.message-content--streaming-text {
+    white-space: pre-wrap;
+}
+
 .message-content p {
     margin-bottom: var(--spacing-sm);
 }
@@ -158,6 +162,34 @@
 
 .message-stream-event-body p:last-child {
     margin-bottom: 0;
+}
+
+.reasoning-event-disclosure {
+    margin-top: var(--spacing-xs);
+}
+
+.reasoning-event-disclosure > summary {
+    align-items: flex-start;
+}
+
+.reasoning-event-disclosure__summary {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-top: 0;
+}
+
+.reasoning-event-disclosure__summary strong {
+    font-weight: 400;
+}
+
+.reasoning-event-content {
+    margin-top: var(--spacing-xs);
+}
+
+.reasoning-event-disclosure__detail {
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--color-border);
 }
 
 .message-stream-event.reasoning_delta,
@@ -415,6 +447,16 @@
     animation: fadeIn 0.2s ease;
 }
 
+.subagent-card__summary {
+    max-width: 100%;
+    margin-top: 4px;
+    color: var(--color-text-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    white-space: normal;
+}
+
 /* Compounded with the shared .entry__badge/.entry__tag base class (not just
    the modifier class alone) so these deterministically win the cascade --
    chrome-frame.css is imported after chat-panel.css and its .entry__badge/
@@ -573,6 +615,11 @@
 .a2a-call-card__subchain .entry__head {
     margin-bottom: 2px;
 }
+.subagent-card__children .subagent-child > .entry__main > .tool-event-disclosure > summary .tool__summary {
+    padding: 0;
+    font-size: var(--font-size-sm);
+    line-height: 1.45;
+}
 
 .subagent-card__children .entry__tag,
 .a2a-call-card__subchain .entry__tag {
@@ -586,18 +633,25 @@
 
 .subagent-card__children .message-stream-event-body,
 .a2a-sub-entry__text {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
     color: var(--color-text-secondary);
     font-size: var(--font-size-sm);
     line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.subagent-card__children .message-stream-event-body {
+    height: 1.45em;
+    margin-top: 0;
 }
 
 /* Each sub-entry's badge glyph and color are keyed off its own status (see
    glyphForA2AState in A2ACallCard.jsx) so submitted/working/completed/failed
-   read as distinct visual events instead of one repeated icon -- the label
-   text is already the raw state string (.a2a-call-card__subchain .entry__role
-   above), this is just the graphic/color half of "styled individually".
+   read as distinct visual events instead of one repeated icon. The status
+   text is intentionally omitted because the gutter badge already conveys it.
    Compounded with .entry__badge.a2a-call-card__badge (not a bare modifier
    class) for the same specificity-tie-then-source-order reason as
    .entry__badge.a2a-call-card__badge--error above -- both are two classes,
@@ -1350,51 +1404,6 @@
     color: #e45649;
 }
 
-/* ============================================================================
-   Message Actions Styles
-   ============================================================================ */
-
-.message-actions {
-    display: flex;
-    gap: var(--spacing-xs);
-    margin-top: var(--spacing-xs);
-    opacity: 0;
-    transition: opacity var(--transition-fast);
-}
-
-.message-wrapper:hover .message-actions {
-    opacity: 1;
-}
-
-.msg-action-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 4px 8px;
-    border: none;
-    border-radius: var(--border-radius-sm);
-    background-color: var(--color-bg-tertiary);
-    color: var(--color-text-secondary);
-    font-size: var(--font-size-xs);
-    cursor: pointer;
-    transition: all var(--transition-fast);
-}
-
-.msg-action-btn:hover {
-    background-color: var(--color-bg-hover);
-    color: var(--color-text-primary);
-}
-
-.msg-action-btn.copied {
-    background-color: var(--color-success);
-    color: white;
-}
-
-.msg-action-btn svg {
-    width: 14px;
-    height: 14px;
-    margin-right: 4px;
-}
 
 /* Context Menu */
 .context-menu {
@@ -1736,10 +1745,12 @@
 }
 
 .chat-session-id {
-    max-width: 220px;
+    max-width: 260px;
     overflow: hidden;
     color: var(--color-text-muted);
     font-family: var(--font-family-mono);
+    font-size: 11px;
+    letter-spacing: -0.015em;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -2234,27 +2245,32 @@
     }
 }
 
-.msg--user .message-actions {
-    margin-left: 0;
-}
 
 .msg-action-btn {
-    width: auto;
     height: 22px;
+    max-width: 22px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 4px;
-    padding: 0 6px;
+    gap: 0;
+    padding: 0 5px;
+    overflow: visible;
     border: 0;
     border-radius: 5px;
     background: transparent;
     font-size: 11px;
     font-weight: 500;
+    line-height: 1;
     color: var(--color-text-tertiary);
+    cursor: pointer;
+    transition: max-width var(--transition-fast), gap var(--transition-fast), padding var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
 }
 
-.msg-action-btn:hover {
+.msg-action-btn:hover,
+.msg-action-btn:focus-visible {
+    gap: 4px;
+    max-width: 104px;
+    padding: 0 7px;
     background: var(--color-bg-hover);
     color: var(--color-text-primary);
 }
@@ -2262,16 +2278,41 @@
 .msg-action-btn svg {
     width: 12px;
     height: 12px;
-    margin: 0;
+    flex: none;
+}
+
+.msg-action-btn__label {
+    max-width: 0;
+    overflow: hidden;
+    opacity: 0;
+    white-space: nowrap;
+    transition: max-width var(--transition-fast), opacity var(--transition-fast);
+}
+
+.msg-action-btn:hover .msg-action-btn__label,
+.msg-action-btn:focus-visible .msg-action-btn__label {
+    max-width: 80px;
+    opacity: 1;
+}
+
+.msg-action-btn.is-feedback-visible[data-tooltip]::before,
+.msg-action-btn.is-feedback-visible[data-tooltip]::after {
+    opacity: 1;
+    transform: translate(-50%, 0);
+}
+
+.msg-action-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
 }
 
 @media (max-width: 720px) {
     .msg-action-btn {
-        width: 22px;
-        padding: 0;
+        max-width: 22px;
+        padding: 0 5px;
     }
 
-    .msg-action-btn span {
+    .msg-action-btn__label {
         display: none;
     }
 }

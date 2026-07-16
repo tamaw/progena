@@ -139,6 +139,43 @@ body,
   box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
+.app-shell__search--ai {
+  width: min(340px, 32vw);
+  gap: 8px;
+  padding: 5px 10px;
+  background:
+    linear-gradient(var(--color-bg-secondary), var(--color-bg-secondary)) padding-box,
+    linear-gradient(120deg, color-mix(in oklab, var(--color-accent) 65%, var(--color-border)), var(--color-border), color-mix(in oklab, var(--color-accent) 35%, var(--color-border))) border-box;
+  border-color: transparent;
+}
+
+.app-shell__search--ai:hover {
+  border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
+}
+
+.app-shell__search--ai:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 4px var(--color-accent-soft), 0 0 20px color-mix(in oklab, var(--color-accent) 18%, transparent);
+}
+
+.app-shell__search-ai-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  color: var(--color-accent);
+  filter: drop-shadow(0 0 5px color-mix(in oklab, var(--color-accent) 35%, transparent));
+}
+
+.app-shell__search-ai-icon svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+}
+
+
 .app-shell__search > svg {
   flex: 0 0 auto;
 }
@@ -778,9 +815,12 @@ body,
   justify-content: center;
 }
 
-.app-shell__sidebar.is-collapsed .app-shell__nav-dot,
-.app-shell__sidebar.is-collapsed .app-shell__sidebar-section {
-  display: none;
+.app-shell__sidebar.is-collapsed .app-shell__nav-dot {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: block;
+  margin-left: 0;
 }
 
 /* Collapsed rail: groups become clusters of icons threaded on a short strand,
@@ -1906,6 +1946,7 @@ body,
   transform: translateX(0);
 }
 
+
 /* Pinned: exits fixed positioning and occupies the third grid column */
 .topnav-pane.is-pinned {
   position: static;
@@ -1922,9 +1963,11 @@ body,
   box-shadow: -4px 0 24px rgba(0, 0, 0, 0.4);
 }
 
+
 [data-theme="dark"] .topnav-pane.is-pinned {
   box-shadow: none;
 }
+
 
 /* Settings & Account are centered modal popups, not the right-side slide-in used
    by the other chrome tools (quick chat, alerts, search, insights). This reverts
@@ -3812,6 +3855,11 @@ body,
   display: none;
 }
 
+/* Work-stream entries stay connected across their wrapper boundaries. */
+.chat-detail-body .entry--chain-item > .entry__gutter::before {
+  display: block;
+}
+
 .entry__badge {
   position: relative;
   z-index: 1;
@@ -3994,6 +4042,138 @@ body,
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.tool__summary {
+  padding: 10px 14px;
+  color: var(--color-text-primary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.tool__summary.tool-event-disclosure__summary {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tool-event-disclosure {
+  display: block;
+}
+.tool-event-disclosure:not([open]) > .tool {
+  display: none;
+}
+
+.tool-event-disclosure[open] > .tool {
+  display: block;
+}
+
+.tool-event-disclosure > summary {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  list-style: none;
+}
+
+.tool-event-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool-event-disclosure > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+.tool-event-disclosure > summary .tool__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tool-event-disclosure__state {
+  flex: 0 0 auto;
+  color: var(--color-text-muted);
+  font-family: var(--font-family-mono);
+  font-size: 10px;
+}
+
+.tool-event-disclosure__state--collapse {
+  display: none;
+}
+
+.tool-event-disclosure[open] .tool-event-disclosure__state--expand {
+  display: none;
+}
+
+.tool-event-disclosure[open] .tool-event-disclosure__state--collapse {
+  display: inline;
+}
+
+.tool-event-disclosure__chevron {
+  width: 6px;
+  height: 6px;
+  margin: 0 14px 0 0;
+  flex: 0 0 auto;
+  border-right: 1px solid currentcolor;
+  border-bottom: 1px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.tool-event-disclosure[open] .tool-event-disclosure__chevron {
+  transform: rotate(45deg);
+}
+
+.tool__payload {
+  border-top: 1px solid var(--color-border);
+}
+
+.tool__payload > summary {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  padding: 7px 12px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-family: var(--font-family-mono);
+  font-size: 10.5px;
+  line-height: 1.4;
+  list-style: none;
+  user-select: none;
+}
+
+.tool__payload > summary::-webkit-details-marker {
+  display: none;
+}
+
+.tool__payload > summary:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
+}
+
+.tool__payload-chevron {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-right: 1px solid currentcolor;
+  border-bottom: 1px solid currentcolor;
+  transform: rotate(-45deg);
+  transition: transform 120ms ease;
+}
+
+.tool__payload[open] .tool__payload-chevron {
+  transform: rotate(45deg);
+}
+
+.tool__payload-content {
+  border-top: 1px solid var(--color-border);
+}
+
+.tool__payload-content > .tool__cmd,
+.tool__payload-content > .tool__body {
+  border-top: 0;
 }
 
 .tool__status {

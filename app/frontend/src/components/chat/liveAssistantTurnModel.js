@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -33,6 +33,7 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     tokenCount: 0,
     reasoningText: '',
     reasoningTokenCount: 0,
+    reasoningSummaryReceived: false,
     streamEvents: [],
     displayAgentName: '',
     displayModelName: '',
@@ -58,6 +59,21 @@ export function applyAssistantMetadata(turn, metadata) {
   return next;
 }
 
+
+// Streamed subagent deltas are independently meaningful, even when two
+// adjacent payloads happen to have identical content and metadata. The shared
+// append helper intentionally coalesces value-identical events for ordinary
+// stream rows, so bypass that value-based deduplication for this event type
+// while retaining the same bounded history semantics.
+function appendLiveStreamEvent(events, nextEvent) {
+  if (nextEvent?.eventType !== 'subagent_message_delta') {
+    return appendStreamEvent(events, nextEvent);
+  }
+  const currentEvents = Array.isArray(events) ? events : [];
+  const next = currentEvents.concat(nextEvent);
+  const overflow = Math.max(0, next.length - MAX_STREAM_EVENTS_PER_MESSAGE);
+  return overflow > 0 ? next.slice(overflow) : next;
+}
 // Subagent execution events (nested `task` tool delegation). Unlike the
 // reasoning/assistant-message rows below (at most one per turn), the agent
 // can delegate to several subagents in parallel within one turn, so these
@@ -76,9 +92,36 @@ function subagentItemId(toolCallId) {
   return `subagent-${toolCallId}`;
 }
 
+export const TASK_SUMMARY_MAX_LENGTH = 140;
+
+/** Normalize a task description into the bounded summary shown on subagent cards. */
+export function normalizeTaskSummary(value) {
+  if (typeof value !== 'string') return '';
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  return normalized.length > TASK_SUMMARY_MAX_LENGTH
+    ? `${normalized.slice(0, TASK_SUMMARY_MAX_LENGTH - 1)}…`
+    : normalized;
+}
+
+function taskSummaryFromMetadata(metadata) {
+  return normalizeTaskSummary(metadata?.task_summary);
+}
+
+function addTaskSummaryMetadata(event) {
+  if (!event || (event.eventType !== 'subagent_start' && event.eventType !== 'subagent_result')) {
+    return event;
+  }
+  const metadata = event.metadata || {};
+  const taskSummary = taskSummaryFromMetadata(metadata);
+  if (!taskSummary || metadata.task_summary === taskSummary) return event;
+  return { ...event, metadata: { ...metadata, task_summary: taskSummary } };
+}
+
 function createSubagentItem(toolCallId, subagentName, startedAt) {
   return {
     kind: 'subagent',
+    taskSummary: '',
     id: subagentItemId(toolCallId),
     toolCallId,
     subagentName: subagentName || '',
@@ -140,11 +183,13 @@ function upsertSubagentToolEntry(entries, nestedToolCallId, patch) {
 function applySubagentEventToItem(item, nextEvent) {
   const metadata = nextEvent.metadata || {};
   const durationMs = Number.isFinite(metadata.duration_ms) ? metadata.duration_ms : null;
-
+  const taskSummary = taskSummaryFromMetadata(metadata);
   switch (nextEvent.eventType) {
+
     case 'subagent_start':
       return {
         ...item,
+        taskSummary: taskSummary || item.taskSummary || '',
         subagentName: metadata.subagent_name || item.subagentName,
         status: 'running',
       };
@@ -188,6 +233,7 @@ function applySubagentEventToItem(item, nextEvent) {
     case 'subagent_result':
       return {
         ...item,
+        taskSummary: taskSummary || item.taskSummary || '',
         subagentName: metadata.subagent_name || item.subagentName,
         status: metadata.success === false ? 'error' : 'success',
         finishedAt: nextEvent.timestamp ?? item.finishedAt,
@@ -210,20 +256,21 @@ function applySubagentEventToItem(item, nextEvent) {
  * through to their own generic handling.
  */
 export function applySubagentEvent(timelineItems, nextEvent) {
-  if (!nextEvent || !SUBAGENT_EVENT_TYPES.has(nextEvent.eventType)) return null;
-  const toolCallId = nextEvent.metadata?.tool_call_id;
+  const normalizedEvent = addTaskSummaryMetadata(nextEvent);
+  if (!normalizedEvent || !SUBAGENT_EVENT_TYPES.has(normalizedEvent.eventType)) return null;
+  const toolCallId = normalizedEvent.metadata?.tool_call_id;
   if (!toolCallId) return null;
 
   const itemId = subagentItemId(toolCallId);
   const index = timelineItems.findIndex((entry) => entry.kind === 'subagent' && entry.id === itemId);
 
   if (index === -1) {
-    const seed = createSubagentItem(toolCallId, nextEvent.metadata?.subagent_name, nextEvent.timestamp);
-    return [...timelineItems, applySubagentEventToItem(seed, nextEvent)];
+    const seed = createSubagentItem(toolCallId, normalizedEvent.metadata?.subagent_name, normalizedEvent.timestamp);
+    return [...timelineItems, applySubagentEventToItem(seed, normalizedEvent)];
   }
 
   return timelineItems.map((entry, idx) => (
-    idx === index ? applySubagentEventToItem(entry, nextEvent) : entry
+    idx === index ? applySubagentEventToItem(entry, normalizedEvent) : entry
   ));
 }
 
@@ -242,6 +289,7 @@ function isCallAgentToolEvent(event) {
     && event?.metadata?.tool_name === 'call_agent'
   );
 }
+
 
 function a2aCallItemId(toolCallId) {
   return `a2a-${toolCallId}`;
@@ -352,7 +400,7 @@ export function applyA2ACallEvent(timelineItems, nextEvent) {
 
 /** Apply a non-visual stream event (control event like node metadata). */
 export function applyAssistantStreamEvent(turn, streamEvent) {
-  const nextEvent = createStreamEvent(streamEvent);
+  const nextEvent = addTaskSummaryMetadata(createStreamEvent(streamEvent));
   if (!nextEvent) return turn;
 
   // assistant_metadata is handled by applyAssistantMetadata, not here.
@@ -364,10 +412,27 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
   }
 
   const next = { ...turn };
-  next.streamEvents = appendStreamEvent(next.streamEvents, nextEvent);
-  next.reasoningText = appendReasoningText(next.reasoningText, nextEvent);
+  const summaryAlreadyReceived = next.reasoningSummaryReceived
+    || next.streamEvents.some((event) => event?.eventType === 'reasoning_summary');
+  if (nextEvent.eventType === 'reasoning_delta' && summaryAlreadyReceived) {
+    return next;
+  }
+  next.streamEvents = appendLiveStreamEvent(next.streamEvents, nextEvent);
+  if (nextEvent.eventType === 'reasoning_summary') {
+    next.reasoningSummaryReceived = true;
+    next.reasoningText = nextEvent.content || next.reasoningText;
+  } else {
+    next.reasoningText = appendReasoningText(next.reasoningText, nextEvent);
+  }
   const rt = extractReasoningTokenCount(nextEvent);
   if (rt !== null) next.reasoningTokenCount = rt;
+  if (
+    typeof nextEvent.eventType === 'string'
+    && nextEvent.eventType.startsWith('subagent_')
+    && !nextEvent.metadata?.tool_call_id
+  ) {
+    return next;
+  }
 
   const updatedSubagentItems = applySubagentEvent(next.timelineItems, nextEvent);
   if (updatedSubagentItems) {
@@ -408,36 +473,44 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
     return next;
   }
 
-  // Reasoning events (reasoning_delta / reasoning_summary) share a single slot
-  // in the timeline: the first delta seeds the row (so live reasoning is
-  // visible while it streams, not just once a terminal summary lands), and
-  // later deltas/summaries merge into that same row instead of replacing it
-  // outright or creating duplicates. Since the backend can emit the final
-  // reasoning_summary after the answer text has already started streaming,
-  // a freshly-seeded row is inserted ahead of the assistant_message row
-  // (reasoning belongs above the answer) rather than appended after it.
+  // Keep one reasoning row live: each delta updates the accumulated content,
+  // and the terminal summary replaces that same row without duplication.
   const isReasoningKind = nextEvent.eventType === 'reasoning_delta' || nextEvent.eventType === 'reasoning_summary';
   if (isReasoningKind) {
-    const reasoningIndex = next.timelineItems.findIndex((entry) =>
-      entry.kind === 'stream_event'
-      && (entry.event.eventType === 'reasoning_delta' || entry.event.eventType === 'reasoning_summary')
+
+    const reasoningEvent = next.streamEvents.find((event) => isReasoningEvent(event) && hasReasoningContent(event));
+    const reasoningTimestamp = Number.isFinite(reasoningEvent?.timestamp)
+      ? reasoningEvent.timestamp
+      : Date.parse(reasoningEvent?.timestamp || '');
+    const existingReasoningIndex = next.timelineItems.findIndex((entry) =>
+      entry.kind === 'stream_event' && isReasoningEvent(entry.event)
     );
-    if (reasoningIndex >= 0) {
-      const merged = mergeReasoningEvents(next.timelineItems[reasoningIndex].event, nextEvent);
-      next.timelineItems = next.timelineItems.map((entry, idx) => (
-        idx === reasoningIndex ? { kind: 'stream_event', id: merged.id, event: merged } : entry
-      ));
-    } else {
-      const reasoningItem = { kind: 'stream_event', id: nextEvent.id, event: nextEvent };
-      const assistantIndex = next.timelineItems.findIndex((entry) => entry.kind === 'assistant_message');
-      next.timelineItems = assistantIndex >= 0
-        ? [
-          ...next.timelineItems.slice(0, assistantIndex),
-          reasoningItem,
-          ...next.timelineItems.slice(assistantIndex),
-        ]
-        : [...next.timelineItems, reasoningItem];
-    }
+    const timelineWithoutReasoning = existingReasoningIndex >= 0
+      ? next.timelineItems.filter((_, index) => index !== existingReasoningIndex)
+      : next.timelineItems;
+    const chronologicalIndex = Number.isFinite(reasoningTimestamp)
+      ? timelineWithoutReasoning.findIndex((entry) => {
+        const timestamp = entry.timestamp ?? entry.event?.timestamp;
+        const itemTimestamp = Number.isFinite(timestamp) ? timestamp : Date.parse(timestamp || '');
+        return Number.isFinite(itemTimestamp) && itemTimestamp >= reasoningTimestamp;
+      })
+      : -1;
+    const assistantIndex = timelineWithoutReasoning.findIndex((entry) => entry.kind === 'assistant_message');
+    const insertAt = chronologicalIndex >= 0
+      ? chronologicalIndex
+      : (assistantIndex >= 0 ? assistantIndex : timelineWithoutReasoning.length);
+    const reasoningItem = {
+      kind: 'stream_event',
+      id: existingReasoningIndex >= 0 ? next.timelineItems[existingReasoningIndex].id : (reasoningEvent?.id || nextEvent.id),
+      event: existingReasoningIndex >= 0
+        ? mergeReasoningEvents(next.timelineItems[existingReasoningIndex].event, nextEvent)
+        : (reasoningEvent || nextEvent),
+    };
+    next.timelineItems = [
+      ...timelineWithoutReasoning.slice(0, insertAt),
+      reasoningItem,
+      ...timelineWithoutReasoning.slice(insertAt),
+    ];
     return next;
   }
 
@@ -488,19 +561,27 @@ export function applyAssistantChunk(turn, chunk, materialiseAt) {
       },
     ];
   } else {
-    // Update existing assistant row in timelineItems.
-    next.timelineItems = next.timelineItems.map((item) => {
+    // Update existing assistant row in timelineItems without rebuilding every item.
+    const timelineItems = next.timelineItems.slice();
+    let assistantIndex = -1;
+    for (let index = 0; index < timelineItems.length; index += 1) {
+      const item = timelineItems[index];
       if (item.kind === 'assistant_message' && item.id === next.assistantMessageId) {
-        return {
-          ...item,
-          content: next.content,
-          tokenCount: next.tokenCount,
-          reasoningTokenCount: next.reasoningTokenCount,
-          reasoningText: next.reasoningText,
-        };
+        assistantIndex = index;
+        break;
       }
-      return item;
-    });
+    }
+    if (assistantIndex >= 0) {
+      const item = timelineItems[assistantIndex];
+      timelineItems[assistantIndex] = {
+        ...item,
+        content: next.content,
+        tokenCount: next.tokenCount,
+        reasoningTokenCount: next.reasoningTokenCount,
+        reasoningText: next.reasoningText,
+      };
+    }
+    next.timelineItems = timelineItems;
   }
 
   return next;
@@ -529,16 +610,18 @@ function collectTodosByToolCallId(streamEvents) {
 }
 
 // Reconstructs grouped subagent cards from a flat, persisted stream_events
-// array (e.g. backend-loaded history). Rather than a hand-written parallel
-// reconstruction algorithm, this replays applySubagentEvent over the flat
-// events in order, so the live and reload code paths structurally can't
-// drift apart. Keyed by tool_call_id (the same key applySubagentEvent uses).
+// array. Any event with a usable correlation id can seed a recoverable card;
+// events without one cannot be associated with a subagent and are ignored.
 function collectSubagentGroups(streamEvents) {
   let items = [];
   for (const event of streamEvents) {
     if (typeof event?.eventType !== 'string' || !event.eventType.startsWith('subagent_')) {
       continue;
     }
+    const toolCallId = typeof event.metadata?.tool_call_id === 'string'
+      ? event.metadata.tool_call_id.trim()
+      : '';
+    if (!toolCallId) continue;
     const updated = applySubagentEvent(items, event);
     if (updated) items = updated;
   }
@@ -594,16 +677,13 @@ export function buildDefaultAssistantTimeline(message) {
   const insertedA2ACallIds = new Set();
   let todosSeq = 0;
   for (const event of streamEvents) {
-    // Grouped subagent cards replace their flat subagent_* events entirely --
-    // spliced in once, at the earliest event's timestamp, rather than once
-    // per underlying event. Only skip the flat event when a group was
-    // actually found: a missing/empty tool_call_id (malformed persisted
-    // data) means no group could ever be built for it, and it must fall
-    // through to the generic stream_event push below instead of silently
-    // vanishing -- unconditionally `continue`-ing group-or-not used to drop
-    // it entirely, with no card and no fallback row.
+    // Correlated subagent events are folded into one card, seeded by the
+    // earliest recoverable event (not only subagent_start). Events missing a
+    // usable correlation id are unrecoverable and remain omitted.
     if (typeof event?.eventType === 'string' && event.eventType.startsWith('subagent_')) {
-      const toolCallId = event.metadata?.tool_call_id;
+      const toolCallId = typeof event.metadata?.tool_call_id === 'string'
+        ? event.metadata.tool_call_id.trim()
+        : '';
       const group = toolCallId ? subagentGroups.get(toolCallId) : undefined;
       if (group) {
         if (!insertedSubagentIds.has(group.id)) {
@@ -612,7 +692,9 @@ export function buildDefaultAssistantTimeline(message) {
         }
         continue;
       }
+      if (!toolCallId) continue;
     }
+
 
     // The grouped A2A call card splices in once, right after the earliest
     // call_agent tool_start/tool_result/tool_error event carrying its
@@ -707,6 +789,9 @@ export function buildDefaultAssistantTimeline(message) {
  */
 export function toCommittedAssistantMessage(turn) {
   return {
+    streamId: turn.streamId,
+    assistantMessageId: turn.assistantMessageId || `${turn.streamId}-assistant`,
+    startedAt: turn.startedAt,
     id: turn.assistantMessageId || `${turn.streamId}-assistant`,
     role: 'assistant',
     content: turn.content,
@@ -750,24 +835,61 @@ export function finalizeLiveAssistantTurn(turn, { status, now, errorMessage }) {
   const finalTurn = { ...turn, isStreaming: false, assistantTimestamp: now || turn.startedAt };
 
   if (status === 'error') {
-    finalTurn.content = `Error: ${errorMessage || 'Unknown error'}`;
+    const errorContent = `Error: ${errorMessage || 'Unknown error'}`;
+    const priorContent = typeof turn.content === 'string' ? turn.content : '';
+    finalTurn.content = errorContent;
     finalTurn.error = true;
-    finalTurn.timelineItems = [
-      {
+
+    // Keep every event/card and any partial assistant text that was already
+    // rendered. The error is an additional terminal row, not a replacement
+    // for the trace that explains what failed.
+    const timelineItems = (Array.isArray(finalTurn.timelineItems) ? finalTurn.timelineItems : [])
+      .map((item) => item.kind === 'assistant_message'
+        ? {
+          ...item,
+          isStreaming: false,
+          tokenCount: finalTurn.tokenCount,
+          reasoningTokenCount: finalTurn.reasoningTokenCount,
+          reasoningText: finalTurn.reasoningText,
+        }
+        : item);
+
+    if (!finalTurn.assistantMessageId) {
+      finalTurn.assistantMessageId = `${finalTurn.streamId}-assistant`;
+    }
+    const hasAssistantItem = timelineItems.some((item) => item.kind === 'assistant_message');
+    if (!hasAssistantItem && priorContent.trim().length > 0) {
+      timelineItems.push({
         kind: 'assistant_message',
-        id: finalTurn.assistantMessageId || `${finalTurn.streamId}-assistant`,
-        content: finalTurn.content,
-        timestamp: finalTurn.assistantTimestamp,
+        id: finalTurn.assistantMessageId,
+        content: priorContent,
+        timestamp: turn.assistantTimestamp || finalTurn.assistantTimestamp,
         isStreaming: false,
-        error: true,
+        error: false,
         displayAgentName: finalTurn.displayAgentName || CHAT_AGENT_NAME,
         displayModelName: finalTurn.displayModelName,
         displayToolCalls: finalTurn.displayToolCalls,
         tokenCount: finalTurn.tokenCount,
         reasoningTokenCount: finalTurn.reasoningTokenCount,
         reasoningText: finalTurn.reasoningText,
-      },
-    ];
+      });
+    }
+
+    timelineItems.push({
+      kind: 'assistant_message',
+      id: `${finalTurn.assistantMessageId}-error`,
+      content: errorContent,
+      timestamp: finalTurn.assistantTimestamp,
+      isStreaming: false,
+      error: true,
+      displayAgentName: finalTurn.displayAgentName || CHAT_AGENT_NAME,
+      displayModelName: finalTurn.displayModelName,
+      displayToolCalls: finalTurn.displayToolCalls,
+      tokenCount: finalTurn.tokenCount,
+      reasoningTokenCount: finalTurn.reasoningTokenCount,
+      reasoningText: finalTurn.reasoningText,
+    });
+    finalTurn.timelineItems = timelineItems;
     return toCommittedAssistantMessage(finalTurn);
   }
 

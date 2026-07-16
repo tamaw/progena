@@ -21,9 +21,8 @@
 import { Fragment, memo } from 'react';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import {
-  formatMessage,
+  renderSafeMarkdown,
   sanitizeHtmlFragment,
-  appendStreamingCursor,
   describeStreamEvent,
   badgeForEvent,
   toolDetailsForEvent,
@@ -35,8 +34,12 @@ import {
 import TodoListPanel from './TodoListPanel';
 import SubagentCard from './SubagentCard';
 import A2ACallCard from './A2ACallCard';
+import NormalToolContent from './NormalToolContent';
+import MessageActions from './MessageActions';
 
-const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
+
+
+const TimelineItem = memo(function TimelineItem({ item, itemIndex, onRegenerate }) {
   if (item.kind === 'subagent') {
     return <SubagentCard item={item} />;
   }
@@ -46,17 +49,17 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
   }
 
   if (item.kind === 'assistant_message') {
-    const sanitizedContent = sanitizeHtmlFragment(formatMessage(item.content || ''));
-    const formattedContent = item.isStreaming && item.content
-      ? appendStreamingCursor(sanitizedContent)
-      : sanitizedContent;
+    // A stream changes far more often than a completed message. Render its
+    // literal text until terminal finalization, then run Markdown once for
+    // the committed result instead of reparsing the growing response per
+    // token/frame.
+    const formattedContent = item.isStreaming
+      ? ''
+      : renderSafeMarkdown(item.content || '');
     const formattedTime = formatTimestamp(item.timestamp);
     const tokenMeta = [
       Number.isFinite(item.tokenCount) && item.tokenCount > 0
         ? `${new Intl.NumberFormat().format(item.tokenCount)} token${item.tokenCount === 1 ? '' : 's'}`
-        : '',
-      Number.isFinite(item.reasoningTokenCount) && item.reasoningTokenCount > 0
-        ? `${new Intl.NumberFormat().format(item.reasoningTokenCount)} reasoning token${item.reasoningTokenCount === 1 ? '' : 's'}`
         : '',
     ].filter(Boolean);
 
@@ -81,11 +84,22 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
                 {Array.isArray(item.displayToolCalls) && item.displayToolCalls.length > 0 && (
                   <span className="msg__model">{formatDisplayToolCalls(item.displayToolCalls)}</span>
                 )}
+                <MessageActions
+                  content={item.content || ''}
+                  onRegenerate={onRegenerate}
+                />
                 {formattedTime && <span className="msg__time entry__time">{formattedTime}</span>}
               </span>
             </div>
             <div className={`message assistant ${item.isStreaming ? 'streaming' : ''} ${item.error ? 'error' : ''}`}>
-              <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+              {item.isStreaming ? (
+                <div className="message-content message-content--streaming-text">
+                  {item.content || ''}
+                  {item.content && <span className="stream-cursor" aria-hidden="true">▋</span>}
+                </div>
+              ) : (
+                <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+              )}
             </div>
           </div>
         </article>
@@ -116,7 +130,9 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
               <span className={tagClassForEventType(event.eventType || 'stream_event')}>{description.badge}</span>
               <span className="entry__role">{description.title}</span>
               <span className="msg__head-trailing">
-                {description.metaDetail && !tool && <span className="muted">{description.metaDetail}</span>}
+                {tool?.isNormal
+                  ? (tool.duration && <span className="muted">{tool.duration}</span>)
+                  : (description.metaDetail && <span className="muted">{description.metaDetail}</span>)}
                 {eventTokenMetaItems.map((meta, mi) => (
                   <Fragment key={`${event.id}-${meta}-${mi}`}>
                     {mi > 0 && <span className="message-meta-separator dot-sep" aria-hidden="true" />}
@@ -126,16 +142,34 @@ const TimelineItem = memo(function TimelineItem({ item, itemIndex }) {
                 {eventFormattedTime && <span className="msg__time entry__time">{eventFormattedTime}</span>}
               </span>
             </div>
-            {description.bodyHtml && (
+            {description.bodyHtml && (description.reasoningDetailHtml ? (
+              <details className="tool-event-disclosure reasoning-event-disclosure">
+                <summary>
+                  <div
+                    className="message-content reasoning-event-disclosure__summary"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
+                  />
+                  <span className="tool-event-disclosure__state tool-event-disclosure__state--expand tool-event-disclosure__label">Expand</span>
+                  <span className="tool-event-disclosure__state tool-event-disclosure__state--collapse tool-event-disclosure__label">Collapse</span>
+                  <span className="tool-event-disclosure__chevron" aria-hidden="true" />
+                </summary>
+                <div className="reasoning-event-disclosure__detail">
+                  <div
+                    className="message-content"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.reasoningDetailHtml) }}
+                  />
+                </div>
+              </details>
+            ) : (
               <div
-                className="message-stream-event-body entry__content"
+                className="message-content reasoning-event-content entry__content"
                 dangerouslySetInnerHTML={{ __html: sanitizeHtmlFragment(description.bodyHtml) }}
               />
-            )}
+            ))}
             {description.bodyDetail && !tool && !description.bodyHtml && (
               <div className="message-stream-event-detail entry__content">{description.bodyDetail}</div>
             )}
-            {tool && (
+            {tool?.isNormal ? <NormalToolContent tool={tool} /> : tool && (
               <div className="tool chat-event-tool">
                 <div className="tool__head">
                   <span className="tool__kind">{tool.kind}</span>

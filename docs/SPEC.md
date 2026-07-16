@@ -61,6 +61,22 @@ keep their non-`202` status and produce no success event. Connection loss also
 does not complete an operation: the frontend applies its explicit reconnect or
 timeout policy.
 
+## Reasoning timeline lifecycle
+
+Reasoning is streamed as `reasoning_delta` events while a response is being
+generated, followed by one terminal `reasoning_summary` event after generation
+finishes. The frontend keeps one reasoning timeline item and updates its
+accumulated content for each delta; it does not create one card per fragment.
+The terminal summary replaces that item's presentation and resets its
+disclosure to the collapsed state. If a summary is received before a delta,
+the summary is authoritative and subsequent deltas are ignored for display.
+
+The live item is positioned using the timestamp of the first reasoning event,
+so reasoning remains chronologically before tools that were invoked afterward.
+Persisted reconstruction uses the same timestamp-aware ordering. Header
+reasoning totals use provider-reported reasoning-token usage when available and
+show a `~`-prefixed text estimate only when persisted/live usage is absent.
+
 ## Canonical stream
 
 `GET /api/ui/stream` returns `text/event-stream`. Every frame uses SSE event

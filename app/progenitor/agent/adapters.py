@@ -49,11 +49,6 @@ def _normalize_langchain_base_url(base_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _resolve_reasoning_effort(config: LLMConfig) -> str:
-    """Return the configured reasoning effort for the active model."""
-    return config.reasoning_effort
-
-
 def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance routed through Azure.
 
@@ -69,18 +64,27 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
 
     base_url = _normalize_langchain_base_url(config.base_url)
 
-    # Azure's ChatOpenAI adapter exposes the final reasoning summary reliably
-    # when effort is passed via `reasoning_effort` and summary mode rides
-    # through `extra_body.reasoning.summary`.
+    # Azure's Responses-compatible endpoint returns reliable reasoning usage
+    # when effort is passed through ChatOpenAI's legacy reasoning_effort option
+    # and the summary is supplied in the request body. The OpenAI SDK shallowly
+    # merges extra_body into its generated request, so extra_body must repeat
+    # effort or it replaces the generated {"effort": ...} reasoning object.
+    # Keep this shape because the native reasoning parameter produced summaries
+    # with zero usage counts.
     reasoning_effort: str | None = None
     extra_body: dict[str, dict[str, str]] | None = None
     if config.reasoning_enabled:
-        reasoning_effort = _resolve_reasoning_effort(config)
-        extra_body = {"reasoning": {"summary": config.reasoning_summary}}
+        reasoning_effort = config.reasoning_effort
+        extra_body = {
+            "reasoning": {
+                "effort": config.reasoning_effort,
+                "summary": config.reasoning_summary,
+            }
+        }
         logger.info(
             "Reasoning enabled for model %s (effort=%s, summary=%s)",
             model_name,
-            reasoning_effort,
+            config.reasoning_effort,
             config.reasoning_summary,
         )
 

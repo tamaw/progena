@@ -602,3 +602,48 @@ async def test_call_agent_only_requests_streaming_when_on_progress_is_given(monk
         on_progress=_on_progress,
     )
     assert captured_kwargs[-1]["streaming"] is True
+
+
+@pytest.mark.asyncio
+async def test_call_agent_bounds_raw_progress_updates_to_recent_events(monkeypatch) -> None:
+    """Blocking calls retain only a bounded recent status-update trail."""
+    client = A2AClient()
+    events = [
+        (
+            {"kind": "task", "id": "task-bounded", "status": {"state": "working"}},
+            {"message": f"phase {index}"},
+        )
+        for index in range(80)
+    ]
+    events.append(
+        (
+            {"kind": "task", "id": "task-bounded", "status": {"state": "completed"}},
+            {"message": "done"},
+        )
+    )
+
+    class _FakeContext:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def send_message(self, message, configuration):
+            del message, configuration
+            for item in events:
+                yield item
+
+    monkeypatch.setattr(client, "_sdk_client", lambda *args, **kwargs: _FakeContext())
+
+    result = await client.call_agent(
+        {"url": "http://localhost:8109", "transport": "http", "status": "running"},
+        "hello",
+        blocking=True,
+        timeout=5,
+    )
+
+    updates = result["progress_updates"]
+    assert len(updates) == 50
+    assert updates[0]["message"] == "phase 31"
+    assert updates[-1]["message"] == "done"

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createLiveAssistantTurn,
   applyAssistantMetadata,
@@ -9,6 +9,7 @@ import {
   buildDefaultAssistantTimeline,
   finalizeLiveAssistantTurn,
   toCommittedAssistantMessage,
+  normalizeTaskSummary,
 } from './liveAssistantTurnModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
@@ -49,6 +50,7 @@ describe('createLiveAssistantTurn', () => {
       tokenCount: 0,
       reasoningText: '',
       reasoningTokenCount: 0,
+      reasoningSummaryReceived: false,
       streamEvents: [],
       displayAgentName: '',
       displayModelName: '',
@@ -277,7 +279,7 @@ describe('applyAssistantStreamEvent', () => {
   });
 
   // Reasoning events
-  it('handles reasoning_delta: updates reasoningText/reasoningTokenCount and seeds a timeline row', () => {
+  it('handles reasoning_delta: accumulates text and token count in one visible timeline row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('reasoning_delta', {
       content: 'thinking step 1',
@@ -286,34 +288,124 @@ describe('applyAssistantStreamEvent', () => {
     const next = applyAssistantStreamEvent(turn, evt, NOW);
     expect(next.reasoningText).toBe('thinking step 1');
     expect(next.reasoningTokenCount).toBe(5);
-    // The first reasoning_delta seeds a row so live reasoning is visible while
-    // it streams, instead of waiting for a terminal reasoning_summary.
     expect(next.timelineItems).toHaveLength(1);
     expect(next.timelineItems[0].kind).toBe('stream_event');
     expect(next.timelineItems[0].event.eventType).toBe('reasoning_delta');
     expect(next.timelineItems[0].event.content).toBe('thinking step 1');
   });
 
-  it('reasoning_delta: merges into an existing reasoning row instead of replacing its content', () => {
+  it('reasoning_delta: accumulates multiple fragments in one stable visible reasoning row', () => {
     const turn = baseTurn();
-    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
-      content: 'initial',
-      metadata: { reasoning_tokens: 3 },
+    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+      content: 'thinking step 1',
+      metadata: { reasoning_tokens: 5 },
     }), NOW);
-    // reasoning_summary adds a timeline item.
-    expect(first.timelineItems).toHaveLength(1);
-    expect(first.timelineItems[0].event.eventType).toBe('reasoning_summary');
-
+    const firstReasoningItem = first.timelineItems[0];
     const second = applyAssistantStreamEvent(first, rawStreamEvent('reasoning_delta', {
-      content: ' step 2',
+      content: ' and step 2',
       metadata: { reasoning_tokens: 7 },
     }), NOW);
-    // Still 1 item, with the delta concatenated onto the existing content
-    // rather than replacing it outright.
+
+    expect(second.reasoningText).toBe('thinking step 1 and step 2');
+    expect(second.reasoningTokenCount).toBe(7);
     expect(second.timelineItems).toHaveLength(1);
-    expect(second.reasoningText).toBe('initial step 2');
-    expect(second.timelineItems[0].event.content).toBe('initial step 2');
+    expect(second.timelineItems[0].id).toBe(firstReasoningItem.id);
+    expect(second.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(second.timelineItems[0].event.content).toBe('thinking step 1 and step 2');
   });
+
+  it('reasoning_summary before a later delta keeps one summary row and ignores the delta', () => {
+    const turn = baseTurn();
+    const summary = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+      content: 'final reasoning',
+      metadata: { reasoning_tokens: 10 },
+    }), NOW);
+    const summaryRow = summary.timelineItems[0];
+    const afterDelta = applyAssistantStreamEvent(summary, rawStreamEvent('reasoning_delta', {
+      content: 'late fragment that must be ignored',
+      metadata: { reasoning_tokens: 11 },
+    }), NOW);
+
+    expect(afterDelta.timelineItems).toHaveLength(1);
+    expect(afterDelta.timelineItems[0].id).toBe(summaryRow.id);
+    expect(afterDelta.timelineItems[0].event.eventType).toBe('reasoning_summary');
+    expect(afterDelta.timelineItems[0].event.content).toBe('final reasoning');
+    expect(afterDelta.reasoningText).toBe('final reasoning');
+    expect(afterDelta.reasoningTokenCount).toBe(10);
+    expect(afterDelta.streamEvents).toHaveLength(1);
+    expect(afterDelta.streamEvents[0].eventType).toBe('reasoning_summary');
+  });
+
+  it('reasoning_delta then reasoning_summary: replaces one stable row with complete terminal summary', () => {
+    const turn = baseTurn();
+    const withDelta = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+      content: 'partial thought',
+      metadata: { reasoning_tokens: 5, summary: 'delta fragment' },
+    }), NOW);
+    expect(withDelta.timelineItems).toHaveLength(1);
+    expect(withDelta.timelineItems[0].event.eventType).toBe('reasoning_delta');
+    expect(withDelta.timelineItems[0].event.content).toBe('partial thought');
+    const reasoningRowId = withDelta.timelineItems[0].id;
+
+    const withTool = applyAssistantStreamEvent(
+      withDelta,
+      rawStreamEvent('tool_start', { content: 'searching' }),
+      NOW,
+    );
+    const completeReasoning = 'complete reasoning trace';
+    const summary = applyAssistantStreamEvent(withTool, rawStreamEvent('reasoning_summary', {
+      content: completeReasoning,
+      metadata: {
+        reasoning_tokens: 42,
+        summary: 'Final reasoning summary',
+        detail: 'Provider detail',
+      },
+    }), NOW);
+
+    const reasoningItems = summary.timelineItems.filter((item) => item.event.eventType === 'reasoning_summary');
+    expect(reasoningItems).toHaveLength(1);
+    expect(reasoningItems[0].id).toBe(reasoningRowId);
+    expect(reasoningItems[0].event.content).toBe(completeReasoning);
+    expect(reasoningItems[0].event.metadata).toEqual(expect.objectContaining({
+      reasoning_tokens: 42,
+      summary: 'Final reasoning summary',
+      detail: 'Provider detail',
+    }));
+    expect(summary.reasoningText).toBe(completeReasoning);
+    expect(summary.reasoningTokenCount).toBe(42);
+  });
+  it('places a terminal reasoning summary before later tool rows using the delta timestamp', () => {
+    vi.useFakeTimers({ now: NOW });
+    try {
+      let turn = baseTurn();
+
+      vi.setSystemTime(NOW + 100);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
+        content: 'early thought',
+        metadata: { reasoning_tokens: 3 },
+      }));
+
+      vi.setSystemTime(NOW + 200);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }));
+      vi.setSystemTime(NOW + 300);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('tool_result', { content: 'result' }));
+
+      vi.setSystemTime(NOW + 400);
+      turn = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_summary', {
+        content: 'complete reasoning trace',
+        metadata: { reasoning_tokens: 42 },
+      }));
+
+      expect(turn.timelineItems.map((item) => item.event.eventType)).toEqual([
+        'reasoning_summary',
+        'tool_start',
+        'tool_result',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
 
   it('reasoning_summary: adds a timeline item when there is no prior reasoning item', () => {
     const turn = baseTurn();
@@ -328,30 +420,6 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.reasoningTokenCount).toBe(10);
   });
 
-  it('reasoning_summary: merges into the row seeded by an earlier reasoning_delta', () => {
-    const turn = baseTurn();
-    const first = applyAssistantStreamEvent(turn, rawStreamEvent('reasoning_delta', {
-      content: 'thinking...',
-      metadata: { reasoning_tokens: 2 },
-    }), NOW);
-    // reasoning_delta with no prior item seeds a new row.
-    expect(first.timelineItems).toHaveLength(1);
-    expect(first.timelineItems[0].event.eventType).toBe('reasoning_delta');
-
-    // Now push a non-reasoning event so there's another row after it.
-    const withTool = applyAssistantStreamEvent(first, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
-    expect(withTool.timelineItems).toHaveLength(2);
-
-    const summary = applyAssistantStreamEvent(withTool, rawStreamEvent('reasoning_summary', {
-      content: 'summary',
-      metadata: { reasoning_tokens: 42 },
-    }), NOW);
-    // Merges into the existing reasoning row (still at its original position)
-    // instead of appending a duplicate row after tool_start.
-    expect(summary.timelineItems).toHaveLength(2);
-    expect(summary.timelineItems[0].event.eventType).toBe('reasoning_delta');
-    expect(summary.reasoningTokenCount).toBe(42);
-  });
 
   it('reasoning arriving after the assistant_message row is inserted before it, not appended after', () => {
     const turn = baseTurn();
@@ -372,7 +440,7 @@ describe('applyAssistantStreamEvent', () => {
   });
 
   // Subagent execution events (nested `task` tool delegation) get their own
-  // grouped card rather than a flat stream_event row.
+  // grouped card while the task's outer lifecycle remains a flat tool row.
   it('subagent_start creates a subagent timeline item, not a stream_event row', () => {
     const turn = baseTurn();
     const evt = rawStreamEvent('subagent_start', {
@@ -387,6 +455,119 @@ describe('applyAssistantStreamEvent', () => {
     expect(next.timelineItems[0].subagentName).toBe('researcher');
     expect(next.timelineItems[0].status).toBe('running');
   });
+  it('normalizes bounded task summaries on live subagent cards', () => {
+    expect(normalizeTaskSummary('  Read   the\n README.md\tand summarize its purpose  '))
+      .toBe('Read the README.md and summarize its purpose');
+    expect(normalizeTaskSummary('x'.repeat(200))).toBe(`${'x'.repeat(139)}…`);
+    expect(normalizeTaskSummary('   \n\t ')).toBe('');
+  });
+
+  it('carries task_summary from start and preserves it through the final result', () => {
+    const turn = baseTurn();
+    const withStart = applyAssistantStreamEvent(turn, rawStreamEvent('subagent_start', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_summary',
+        task_summary: '  Read   the README.md and summarize its purpose  ',
+      },
+    }), NOW);
+    const withResult = applyAssistantStreamEvent(withStart, rawStreamEvent('subagent_result', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_summary',
+        success: true,
+        result_preview: 'Final answer',
+      },
+    }), NOW + 100);
+
+    expect(withResult.timelineItems[0]).toMatchObject({
+      kind: 'subagent',
+      taskSummary: 'Read the README.md and summarize its purpose',
+      status: 'success',
+      resultPreview: 'Final answer',
+    });
+  });
+
+  it('does not promote args_preview.description when task_summary is absent', () => {
+    const next = applyAssistantStreamEvent(baseTurn(), rawStreamEvent('subagent_start', {
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_no_summary',
+        args_preview: { description: 'legacy description must stay hidden' },
+      },
+    }), NOW);
+    expect(next.timelineItems[0].taskSummary).toBe('');
+  });
+  it('task lifecycle keeps outer tool rows alongside its grouped subagent card', () => {
+    const turn = baseTurn();
+    let next = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', {
+      content: 'task',
+      metadata: {
+        tool_name: 'task',
+        tool_call_id: 'call_1',
+        args_preview: { subagent_type: 'researcher' },
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_start', {
+      content: 'researcher',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_1' },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('tool_result', {
+      content: 'task',
+      metadata: {
+        tool_name: 'task',
+        tool_call_id: 'call_1',
+        result_preview: 'Found it',
+        success: true,
+      },
+    }), NOW);
+    next = applyAssistantStreamEvent(next, rawStreamEvent('subagent_result', {
+      content: 'researcher',
+      metadata: {
+        subagent_name: 'researcher',
+        tool_call_id: 'call_1',
+        result_preview: 'Found it',
+        success: true,
+      },
+    }), NOW);
+
+    expect(next.streamEvents.map((event) => event.eventType)).toEqual([
+      'tool_start', 'subagent_start', 'tool_result', 'subagent_result',
+    ]);
+    expect(next.timelineItems.map((item) => item.kind)).toEqual([
+      'stream_event', 'subagent', 'stream_event',
+    ]);
+    expect(next.timelineItems.find((item) => item.kind === 'stream_event').event.metadata.tool_name).toBe('task');
+    expect(next.timelineItems.find((item) => item.kind === 'subagent')).toMatchObject({
+      toolCallId: 'call_1',
+      subagentName: 'researcher',
+      status: 'success',
+      resultPreview: 'Found it',
+    });
+  });
+  it('keeps identical adjacent subagent deltas as distinct persisted events while accumulating grouped text', () => {
+    const turn = baseTurn();
+    const delta = rawStreamEvent('subagent_message_delta', {
+      content: 'same',
+      metadata: { subagent_name: 'researcher', tool_call_id: 'call_duplicate' },
+    });
+    const first = applyAssistantStreamEvent(turn, delta, NOW);
+    const next = applyAssistantStreamEvent(first, delta, NOW);
+
+    expect(next.streamEvents).toHaveLength(2);
+    expect(next.streamEvents.map((event) => event.content)).toEqual(['same', 'same']);
+    expect(next.streamEvents[0].id).not.toBe(next.streamEvents[1].id);
+    expect(next.timelineItems).toEqual([
+      expect.objectContaining({
+        kind: 'subagent',
+        toolCallId: 'call_duplicate',
+        entries: [{ kind: 'message', id: 'msg-0', text: 'samesame' }],
+      }),
+    ]);
+  });
+
 
   it('two concurrent subagents update independently with no cross-contamination', () => {
     const turn = baseTurn();
@@ -952,6 +1133,33 @@ describe('applyAssistantChunk', () => {
     expect(second.timelineItems[0].tokenCount).toBe(2);
   });
 
+  it('on subsequent chunks: preserves stream-event identity while replacing the assistant row immutably', () => {
+    const turn = baseTurn();
+    const withEvent = applyAssistantStreamEvent(turn, rawStreamEvent('tool_start', { content: 'searching' }), NOW);
+    const first = applyAssistantChunk(withEvent, 'Answer', NOW + 100);
+    const priorTimelineItems = first.timelineItems;
+    const priorStreamEvent = priorTimelineItems.find((item) => item.kind === 'stream_event');
+    const priorAssistant = priorTimelineItems.find((item) => item.kind === 'assistant_message');
+
+    const second = applyAssistantChunk(first, ' more', NOW + 200);
+    const nextStreamEvent = second.timelineItems.find((item) => item.kind === 'stream_event');
+    const nextAssistant = second.timelineItems.find((item) => item.kind === 'assistant_message');
+
+    expect(second.content).toBe('Answer more');
+    expect(second.tokenCount).toBe(2);
+    expect(second.timelineItems).not.toBe(priorTimelineItems);
+    expect(nextStreamEvent).toBe(priorStreamEvent);
+    expect(nextAssistant).not.toBe(priorAssistant);
+    expect(nextAssistant.content).toBe('Answer more');
+    expect(nextAssistant.tokenCount).toBe(2);
+
+    expect(first.content).toBe('Answer');
+    expect(first.tokenCount).toBe(1);
+    expect(first.timelineItems).toBe(priorTimelineItems);
+    expect(priorAssistant.content).toBe('Answer');
+    expect(priorAssistant.tokenCount).toBe(1);
+  });
+
   it('does NOT overwrite assistantMessageId or assistantTimestamp on subsequent chunks', () => {
     const turn = baseTurn();
     const first = applyAssistantChunk(turn, 'A', NOW);
@@ -1203,6 +1411,55 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(subagentItems[0].timestamp).toBe(1000);
   });
 
+  it('reconstructs a correlated subagent card when a delta arrives before subagent_start', () => {
+    const message = {
+      role: 'assistant',
+      id: 'msg_1',
+      content: 'All done.',
+      timestamp: 5000,
+      streamEvents: [
+        {
+          id: 'e1',
+          eventType: 'subagent_message_delta',
+          content: 'Recovered text',
+          timestamp: 1000,
+          metadata: { tool_call_id: 'call_late' },
+        },
+        {
+          id: 'e2',
+          eventType: 'subagent_start',
+          timestamp: 1010,
+          metadata: { subagent_name: 'researcher', tool_call_id: 'call_late' },
+        },
+        {
+          id: 'e3',
+          eventType: 'subagent_result',
+          timestamp: 1020,
+          metadata: {
+            subagent_name: 'researcher',
+            tool_call_id: 'call_late',
+            success: true,
+            result_preview: 'Recovered result',
+          },
+        },
+      ],
+    };
+
+    const items = buildDefaultAssistantTimeline(message);
+    const subagentItems = items.filter((item) => item.kind === 'subagent');
+
+    expect(subagentItems).toHaveLength(1);
+    expect(subagentItems[0]).toMatchObject({
+      id: 'subagent-call_late',
+      toolCallId: 'call_late',
+      subagentName: 'researcher',
+      status: 'success',
+      resultPreview: 'Recovered result',
+      entries: [{ kind: 'message', id: 'msg-0', text: 'Recovered text' }],
+    });
+    expect(items.map((item) => item.kind)).toEqual(['subagent', 'assistant_message']);
+  });
+
   it('keeps two concurrent subagents as two separate grouped cards on reload', () => {
     const message = {
       role: 'assistant',
@@ -1335,9 +1592,9 @@ describe('buildDefaultAssistantTimeline', () => {
     expect(items.find((item) => item.kind === 'stream_event' && item.id === 'e2')).toBeDefined();
   });
 
-  // Same regression for the subagent grouping block (identical pre-existing
-  // pattern, fixed the same way).
-  it('falls through to a flat stream_event row for a subagent_start with no tool_call_id, instead of dropping it', () => {
+  // Malformed subagent events cannot form a grouped card and are dropped
+  // rather than exposed as generic stream-event rows.
+  it('drops a subagent_start with no tool_call_id instead of rendering a card or flat stream_event row', () => {
     const message = {
       role: 'assistant',
       id: 'msg_1',
@@ -1349,8 +1606,7 @@ describe('buildDefaultAssistantTimeline', () => {
     };
     const items = buildDefaultAssistantTimeline(message);
     expect(items.filter((item) => item.kind === 'subagent')).toHaveLength(0);
-    const flatItem = items.find((item) => item.kind === 'stream_event' && item.id === 'e1');
-    expect(flatItem).toBeDefined();
+    expect(items.filter((item) => item.kind === 'stream_event')).toHaveLength(0);
   });
 });
 
@@ -1376,6 +1632,9 @@ describe('toCommittedAssistantMessage', () => {
     };
     const msg = toCommittedAssistantMessage(turn);
     expect(msg).toEqual({
+      streamId: STREAM_ID,
+      assistantMessageId: 'msg_42',
+      startedAt: NOW - 1000,
       id: 'msg_42',
       role: 'assistant',
       content: 'Hello',
@@ -1398,6 +1657,22 @@ describe('toCommittedAssistantMessage', () => {
     const msg = toCommittedAssistantMessage(turn);
     expect(msg.id).toBe(`${STREAM_ID}-assistant`);
     expect(msg.timestamp).toBe(NOW - 1000);
+  });
+
+  it('preserves live ownership identity on the terminal committed copy', () => {
+    const streamingTurn = applyAssistantChunk(baseTurn(), 'Terminal answer', NOW);
+    const committed = finalizeLiveAssistantTurn(streamingTurn, {
+      status: 'completed',
+      now: NOW + 100,
+    });
+
+    expect(committed).toMatchObject({
+      id: streamingTurn.assistantMessageId,
+      assistantMessageId: streamingTurn.assistantMessageId,
+      streamId: STREAM_ID,
+      startedAt: NOW - 1000,
+      isStreaming: false,
+    });
   });
 });
 
@@ -1529,6 +1804,27 @@ describe('finalizeLiveAssistantTurn', () => {
       expect(result.timelineItems[0].isStreaming).toBe(false);
     });
   });
+
+    it('retains the streamed timeline before appending the terminal error row', () => {
+      const turn = applyAssistantStreamEvent(
+        baseTurn(),
+        rawStreamEvent('tool_start', { content: 'searching' }),
+        NOW,
+      );
+      const result = finalizeLiveAssistantTurn(turn, {
+        status: 'error',
+        now: NOW + 100,
+        errorMessage: 'backend unavailable',
+      });
+
+      expect(result.error).toBe(true);
+      expect(result.timelineItems.map((item) => item.kind)).toEqual([
+        'stream_event',
+        'assistant_message',
+      ]);
+      expect(result.timelineItems[0].event.eventType).toBe('tool_start');
+      expect(result.timelineItems[1].content).toBe('Error: backend unavailable');
+    });
 
   // Integration: full lifecycle — metadata, then events, then chunks, then finalize.
   it('full lifecycle: metadata → events → chunks → complete materializes correctly', () => {

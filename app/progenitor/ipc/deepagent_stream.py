@@ -43,6 +43,30 @@ _NESTED_TOOL_EVENT_REMAP = {
     "tool_result": "subagent_tool_result",
     "tool_error": "subagent_tool_error",
 }
+_TASK_SUMMARY_MAX_LENGTH = 140
+
+
+def _normalize_task_summary(value: Any) -> str | None:
+    """Normalize a task description for compact, readable card metadata."""
+    if not isinstance(value, str):
+        return None
+    summary = " ".join(value.split())
+    if not summary:
+        return None
+    if len(summary) > _TASK_SUMMARY_MAX_LENGTH:
+        return summary[: _TASK_SUMMARY_MAX_LENGTH - 1] + "…"
+    return summary
+
+
+def _extract_task_summary(metadata: dict[str, Any]) -> str | None:
+    """Extract a bounded summary from dedicated or structured task metadata."""
+    task_summary = metadata.get("task_summary")
+    if isinstance(task_summary, str):
+        return _normalize_task_summary(task_summary)
+    args_preview = metadata.get("args_preview")
+    if not isinstance(args_preview, dict):
+        return None
+    return _normalize_task_summary(args_preview.get("description"))
 
 
 def _extract_tool_call_id_from_task_input(payload: Any) -> str | None:
@@ -89,6 +113,7 @@ class DeepAgentIPCStream:
         self._response_was_streamed = False
         self._reasoning_was_streamed = False
         self._task_subagent_calls: dict[str, str] = {}
+        self._task_subagent_summaries: dict[str, str] = {}
         # Pregel push-task id -> triggering tool_call_id, harvested from
         # stream_mode="tasks" start events at the outer namespace. A nested
         # subgraph's own namespace segment is "<node_name>:<task_id>", so this
@@ -102,6 +127,12 @@ class DeepAgentIPCStream:
         # turn -- no cross-turn leakage, so no eviction is needed.
         self._subagent_namespace_bindings: dict[tuple[Any, ...], tuple[str, str]] = {}
         self._last_emitted_assistant_metadata: dict[str, Any] | None = None
+        # Per-turn reasoning-token accumulator. A multi-step turn runs the
+        # model once per tool round-trip; each call reports its own usage on
+        # its own AIMessage. The finalize summary must carry the SUM across
+        # calls, not just the last call's count (the UI header totals it).
+        self._turn_reasoning_tokens = 0
+        self._counted_usage_message_ids: set[str] = set()
 
     async def stream(
         self,
@@ -234,18 +265,40 @@ class DeepAgentIPCStream:
             if isinstance(images, list) and images:
                 item["images"] = images
 
-        # The top-level `task` tool's own generic tool_start/tool_result/
-        # tool_error goes out *alongside* its richer subagent_* translation,
-        # not instead of it -- the same "plain row + rich card" pairing
-        # call_agent already gets (its own tool_start/tool_result render
-        # unmodified right next to the a2a_call card; see TimelineItem.jsx).
-        # Both the live frontend's grouping logic (applySubagentEvent) and
-        # reload reconstruction (buildToolStreamEvents in
-        # chatSessionsModel.js) consume the raw pair into an ordinary "Tool:
-        # task" row and independently fold the subagent_* events into the
-        # SubagentCard, so neither is redundant.
+        # Valid top-level ``task`` lifecycle events fan out as both the normal
+        # readable tool event and the richer subagent_* translation. Keeping
+        # the raw item preserves the outer task row while the expanded event
+        # drives the grouped subagent card.
         expanded = self._expand_task_subagent_events(envelope, images=item.get("images"))
+        metadata = envelope.get("metadata")
+        tool_name = metadata.get("tool_name") if isinstance(metadata, dict) else None
+        if str(tool_name or envelope.get("content") or "") == "task":
+            # Malformed task events with no valid expansion must not leak the
+            # generic raw item either.
+            return [item, *expanded] if expanded else []
         return [item, *expanded]
+
+    def _accumulate_reasoning_usage(self, messages: Any) -> None:
+        """Add each unseen AI message's reasoning-token usage to the turn total."""
+        if not isinstance(messages, list):
+            return
+        for msg in messages:
+            msg_type = msg.get("type") if isinstance(msg, dict) else getattr(msg, "type", None)
+            role = msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)
+            if msg_type != "ai" and role != "assistant":
+                continue
+            msg_id = msg.get("id") if isinstance(msg, dict) else getattr(msg, "id", None)
+            # Dedupe by provider message id; id-less messages (some direct/A2A
+            # replies, unit fixtures) fall back to object identity — the state
+            # dict holds the coerced objects for the whole turn, so identity is
+            # stable between the update event and finalize.
+            key = msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
+            if key in self._counted_usage_message_ids:
+                continue
+            self._counted_usage_message_ids.add(key)
+            count = extract_reasoning_token_count(msg)
+            if isinstance(count, int) and count > 0:
+                self._turn_reasoning_tokens += count
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():
@@ -261,6 +314,7 @@ class DeepAgentIPCStream:
                     **node_output,
                     "messages": coerce_messages_list(node_output.get("messages")),
                 }
+                self._accumulate_reasoning_usage(node_output["messages"])
             self.state.update(node_output)
 
             if "todos" in node_output:
@@ -335,6 +389,12 @@ class DeepAgentIPCStream:
         reasoning_tokens = (
             extract_reasoning_token_count(last_ai_msg) if last_ai_msg is not None else None
         )
+        # Some paths (e.g. a pending_response short-circuit) bypass update
+        # events; count the final message here too — the id dedupe makes this
+        # a no-op when its usage was already accumulated.
+        if last_ai_msg is not None:
+            self._accumulate_reasoning_usage([last_ai_msg])
+        turn_reasoning_tokens = self._turn_reasoning_tokens or reasoning_tokens
         reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
         if not reasoning_trace and self._streamed_reasoning_content:
             reasoning_trace = self._streamed_reasoning_content
@@ -356,7 +416,7 @@ class DeepAgentIPCStream:
         if last_ai_msg is not None and bool(reasoning_trace) and not self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or "",
-                metadata={"reasoning_tokens": reasoning_tokens},
+                metadata={"reasoning_tokens": turn_reasoning_tokens},
             )
             yield {
                 "type": "stream_event",
@@ -367,7 +427,7 @@ class DeepAgentIPCStream:
         elif last_ai_msg is not None and self._reasoning_was_streamed:
             summary_event = build_reasoning_summary_event(
                 reasoning_trace or self._streamed_reasoning_content,
-                metadata={"reasoning_tokens": reasoning_tokens},
+                metadata={"reasoning_tokens": turn_reasoning_tokens},
             )
             yield {
                 "type": "stream_event",
@@ -456,6 +516,8 @@ class DeepAgentIPCStream:
 
         tool_call_id = str(metadata.get("tool_call_id") or "")
         event_type = str(envelope.get("event_type") or "")
+        if not tool_call_id:
+            return []
 
         if event_type == "tool_start":
             # Read from the dedicated `subagent_type` field (build_tool_start_event,
@@ -470,36 +532,46 @@ class DeepAgentIPCStream:
                 subagent_name = raw_name
             if not subagent_name:
                 return []
-            if tool_call_id:
-                self._task_subagent_calls[tool_call_id] = subagent_name
+            task_summary = _extract_task_summary(metadata)
+            self._task_subagent_calls[tool_call_id] = subagent_name
+            if task_summary:
+                self._task_subagent_summaries[tool_call_id] = task_summary
+            else:
+                self._task_subagent_summaries.pop(tool_call_id, None)
+            start_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+            }
+            if task_summary:
+                start_metadata["task_summary"] = task_summary
             return [
                 {
                     "type": "stream_event",
                     "event_type": "subagent_start",
                     "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                    },
+                    "metadata": start_metadata,
                 }
             ]
-
         subagent_name = self._task_subagent_calls.pop(tool_call_id, "")
+        task_summary = self._task_subagent_summaries.pop(tool_call_id, None)
         if not subagent_name:
             return []
 
         if event_type == "tool_result":
+            result_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+                "success": bool(metadata.get("success", True)),
+                "duration_ms": metadata.get("duration_ms"),
+                "result_preview": metadata.get("result_preview"),
+            }
+            if task_summary:
+                result_metadata["task_summary"] = task_summary
             result_item: dict[str, Any] = {
                 "type": "stream_event",
                 "event_type": "subagent_result",
                 "content": subagent_name,
-                "metadata": {
-                    "subagent_name": subagent_name,
-                    "tool_call_id": tool_call_id,
-                    "success": bool(metadata.get("success", True)),
-                    "duration_ms": metadata.get("duration_ms"),
-                    "result_preview": metadata.get("result_preview"),
-                },
+                "metadata": result_metadata,
             }
             # The raw tool_result's own top-level images (see
             # _handle_custom_stream_event) would otherwise be lost entirely --
@@ -510,20 +582,22 @@ class DeepAgentIPCStream:
             if images:
                 result_item["images"] = images
             return [result_item]
-
         if event_type == "tool_error":
+            error_metadata: dict[str, Any] = {
+                "subagent_name": subagent_name,
+                "tool_call_id": tool_call_id,
+                "success": False,
+                "duration_ms": metadata.get("duration_ms"),
+                "error": metadata.get("error"),
+            }
+            if task_summary:
+                error_metadata["task_summary"] = task_summary
             return [
                 {
                     "type": "stream_event",
                     "event_type": "subagent_result",
                     "content": subagent_name,
-                    "metadata": {
-                        "subagent_name": subagent_name,
-                        "tool_call_id": tool_call_id,
-                        "success": False,
-                        "duration_ms": metadata.get("duration_ms"),
-                        "error": metadata.get("error"),
-                    },
+                    "metadata": error_metadata,
                 }
             ]
 

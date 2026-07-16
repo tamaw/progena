@@ -13,10 +13,12 @@ import reducer, {
   markChatUnread,
   requestAgentDetail,
   requestChatSessionDetail,
+  requestChatSessionReconciliation,
   updateChatSessionMetadata,
   selectActiveAgentProfile,
   selectAgentProfiles,
   selectChatIndicators,
+  selectChatReconciliationState,
   selectErroredChatIds,
   selectGeneratingChatIds,
   selectChatSessions,
@@ -206,6 +208,65 @@ describe('applyUiEvent reducer', () => {
     expect(s.chats.active.detail.messages).toEqual(existingMessages);
     expect(s.chats.active.requestId).toBe('REQ1');
     expect(s.chats.active.threadId).toBe('a');
+    expect(s.chats.active.loading).toBe(false);
+  });
+
+  it('reconciles only the matching request without replacing or loading the active chat', () => {
+    const activeMessages = [
+      { role: 'user', content: 'Continue the existing chat.' },
+      { role: 'assistant', content: 'The locally committed reply remains visible.' },
+    ];
+    let s = reducer(undefined, requestChatSessionDetail.pending('ACTIVE1', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'ACTIVE1',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'ACTIVE1',
+        session: { thread_id: 'a', messages: activeMessages },
+      },
+    }));
+    const activeBeforeReconciliation = s.chats.active;
+
+    s = reducer(s, requestChatSessionReconciliation.pending('REC1', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'REC1',
+    }));
+    expect(selectChatReconciliationState({ uiData: s })).toMatchObject({
+      threadId: 'a',
+      detail: null,
+      requestId: 'REC1',
+    });
+    expect(s.chats.active).toEqual(activeBeforeReconciliation);
+    expect(s.chats.active.loading).toBe(false);
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'STALE1',
+        session: { thread_id: 'a', messages: [{ role: 'assistant', content: 'Stale reply.' }] },
+      },
+    }));
+    expect(selectChatReconciliationState({ uiData: s }).detail).toBeNull();
+    expect(s.chats.active).toEqual(activeBeforeReconciliation);
+    expect(s.chats.active.loading).toBe(false);
+
+    const reconciledMessages = [
+      ...activeMessages,
+      { role: 'assistant', content: 'Persisted metadata is now available.' },
+    ];
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'REC1',
+        session: { thread_id: 'a', messages: reconciledMessages },
+      },
+    }));
+    expect(selectChatReconciliationState({ uiData: s })).toMatchObject({
+      threadId: 'a',
+      detail: { thread_id: 'a', messages: reconciledMessages },
+      requestId: 'REC1',
+    });
+    expect(s.chats.active).toEqual(activeBeforeReconciliation);
     expect(s.chats.active.loading).toBe(false);
   });
 

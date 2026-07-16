@@ -1,25 +1,9 @@
-import { Suspense, lazy } from 'react';
+import { createElement, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider } from './context/ConfigContext';
 import { NotificationProvider } from './context/NotificationContext';
 import AppRuntimeShell from './components/layout/AppRuntimeShell';
 import RealtimeBridge from './store/RealtimeBridge';
-import ConversationPage from './pages/ConversationPage';
-import InboxPage from './pages/InboxPage';
-import DashboardPage from './pages/DashboardPage';
-import TasksPage from './pages/TasksPage';
-import KanbanPage from './pages/KanbanPage';
-import LogsPage from './pages/LogsPage';
-import PromptsPage from './pages/PromptsPage';
-import SkillsPage from './pages/SkillsPage';
-import SessionsPage from './pages/SessionsPage';
-import RepositoriesPage from './pages/RepositoriesPage';
-import KnowledgePage from './pages/KnowledgePage';
-import ToolsPage from './pages/ToolsPage';
-import SchedulesPage from './pages/SchedulesPage';
-import ProjectPage from './pages/ProjectPage';
-import ModelsPage from './pages/ModelsPage';
-import ChannelsPage from './pages/ChannelsPage';
 
 // Import styles
 import './styles/main.css';
@@ -34,8 +18,32 @@ import './styles/chrome-frame.css';
 import './styles/detail-header.css';
 import './styles/forms.css';
 
+const ConversationPage = lazy(() => import('./pages/ConversationPage'));
+const InboxPage = lazy(() => import('./pages/InboxPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const TasksPage = lazy(() => import('./pages/TasksPage'));
+const KanbanPage = lazy(() => import('./pages/KanbanPage'));
+const LogsPage = lazy(() => import('./pages/LogsPage'));
+const PromptsPage = lazy(() => import('./pages/PromptsPage'));
+const SkillsPage = lazy(() => import('./pages/SkillsPage'));
+const SessionsPage = lazy(() => import('./pages/SessionsPage'));
+const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'));
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
+const ToolsPage = lazy(() => import('./pages/ToolsPage'));
+const SchedulesPage = lazy(() => import('./pages/SchedulesPage'));
+const ProjectPage = lazy(() => import('./pages/ProjectPage'));
+const ModelsPage = lazy(() => import('./pages/ModelsPage'));
+const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
+
+function DeferredRoute({ Page, fallback, ...pageProps }) {
+  return (
+    <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
+      {createElement(Page, pageProps)}
+    </Suspense>
+  );
+}
 
 function App() {
   return (
@@ -46,47 +54,26 @@ function App() {
                 <Routes>
                   <Route element={<AppRuntimeShell />}>
                     <Route path="/" element={<Navigate to="/chat" replace />} />
-                    <Route path="/chat/:threadId?/:titleSlug?" element={<ConversationPage />} />
-                    <Route path="/inbox/:messageId?/:titleSlug?" element={<InboxPage />} />
-                    <Route path="/dashboard" element={<DashboardPage />} />
-                    <Route path="/models" element={<ModelsPage />} />
-                    <Route path="/channels" element={<ChannelsPage />} />
-                    <Route
-                      path="/agents/:agentId?/:tab?"
-                      element={(
-                        <Suspense fallback={<div className="chrome-route-loading">Loading agents...</div>}>
-                          <AgentsPage variant="agents" />
-                        </Suspense>
-                      )}
-                    />
-                    <Route
-                      path="/sequences/:agentId?"
-                      element={(
-                        <Suspense fallback={<div className="chrome-route-loading">Loading sequences...</div>}>
-                          <AgentsPage variant="sequences" />
-                        </Suspense>
-                      )}
-                    />
-                    <Route path="/tools/:serverId?/:titleSlug?" element={<ToolsPage />} />
-                    <Route path="/tasks/:cardId?/:titleSlug?" element={<TasksPage />} />
+                    <Route path="/chat/:threadId?/:titleSlug?" element={<DeferredRoute Page={ConversationPage} fallback="Loading chat..." />} />
+                    <Route path="/inbox/:messageId?/:titleSlug?" element={<DeferredRoute Page={InboxPage} fallback="Loading inbox..." />} />
+                    <Route path="/dashboard" element={<DeferredRoute Page={DashboardPage} fallback="Loading dashboard..." />} />
+                    <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
+                    <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
+                    <Route path="/agents/:agentId?/:tab?" element={<DeferredRoute Page={AgentsPage} fallback="Loading agents..." variant="agents" />} />
+                    <Route path="/sequences/:agentId?" element={<DeferredRoute Page={AgentsPage} fallback="Loading sequences..." variant="sequences" />} />
+                    <Route path="/tools/:serverId?/:titleSlug?" element={<DeferredRoute Page={ToolsPage} fallback="Loading tools..." />} />
+                    <Route path="/tasks/:cardId?/:titleSlug?" element={<DeferredRoute Page={TasksPage} fallback="Loading tasks..." />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />
-                    <Route path="/kanban" element={<KanbanPage />} />
-                    <Route path="/solutions/:solutionId/projects/:projectId" element={<ProjectPage />} />
-                    <Route path="/logs" element={<LogsPage />} />
-                    <Route path="/skills" element={<SkillsPage />} />
-                    <Route path="/prompts" element={<PromptsPage />} />
-                    <Route path="/sessions" element={<SessionsPage />} />
-                    <Route path="/schedules/:scheduleId?/:titleSlug?" element={<SchedulesPage />} />
-                    <Route path="/repositories" element={<RepositoriesPage />} />
-                    <Route path="/knowledge/:baseId?/:titleSlug?" element={<KnowledgePage />} />
-                    <Route
-                      path="/workflows"
-                      element={(
-                        <Suspense fallback={<div className="chrome-route-loading">Loading workflows...</div>}>
-                          <WorkflowsPage />
-                        </Suspense>
-                      )}
-                    />
+                    <Route path="/kanban" element={<DeferredRoute Page={KanbanPage} fallback="Loading kanban..." />} />
+                    <Route path="/solutions/:solutionId/projects/:projectId" element={<DeferredRoute Page={ProjectPage} fallback="Loading project..." />} />
+                    <Route path="/logs" element={<DeferredRoute Page={LogsPage} fallback="Loading logs..." />} />
+                    <Route path="/skills" element={<DeferredRoute Page={SkillsPage} fallback="Loading skills..." />} />
+                    <Route path="/prompts" element={<DeferredRoute Page={PromptsPage} fallback="Loading prompts..." />} />
+                    <Route path="/sessions" element={<DeferredRoute Page={SessionsPage} fallback="Loading sessions..." />} />
+                    <Route path="/schedules/:scheduleId?/:titleSlug?" element={<DeferredRoute Page={SchedulesPage} fallback="Loading schedules..." />} />
+                    <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
+                    <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
+                    <Route path="/workflows" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>
