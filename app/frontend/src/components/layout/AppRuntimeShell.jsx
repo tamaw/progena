@@ -19,6 +19,7 @@ import { useConfig } from '../../context/ConfigContext';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
 import { renderMarkdownToHtml } from '../../lib/markdown';
+import { createUuid } from '../../lib/uuid';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
 import {
@@ -821,8 +822,8 @@ function QuickChatPanel({
     pendingDraftRef.current?.resolve(null);
     pendingDraftRef.current = null;
 
-    const proposedThreadId = crypto.randomUUID();
-    const requestId = crypto.randomUUID();
+    const proposedThreadId = createUuid();
+    const requestId = createUuid();
     let resolveSession;
     const sessionPromise = new Promise((resolve) => {
       resolveSession = resolve;

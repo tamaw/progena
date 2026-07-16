@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
 import { renderMarkdownToHtml } from '../lib/markdown';
+import { createUuid } from '../lib/uuid';
 import {
   fetchSkills,
   saveSkill,
@@ -302,7 +303,7 @@ export default function SkillsPage() {
     if (saving) {
       return;
     }
-    const requestId = crypto.randomUUID();
+    const requestId = createUuid();
     setSaving(true);
     setPendingCreatedSkill({
       requestId,
