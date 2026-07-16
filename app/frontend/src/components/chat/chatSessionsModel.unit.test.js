@@ -12,6 +12,7 @@ import {
 import { getAgentMentionContext } from './chatInputModel';
 import { groupSessionItems } from './conversationModel';
 import { formatDisplayToolCalls } from './messageDisplayModel';
+import { CHAT_STATUS } from '../../lib/chatStatus';
 
 describe('compareSessionItems', () => {
   it('orders pinned before unpinned', () => {
@@ -516,41 +517,46 @@ describe('buildChatSessionItems', () => {
     backgroundErrorChatIds: new Set(),
   };
 
-  it('threads selected / unread / generating / errored flags onto backend cards', () => {
+  it('derives backend card status with generating, error, complete, and idle precedence', () => {
     const items = buildChatSessionItems({
       ...base,
       backendChatSessions: [
-        { thread_id: 'c1', title: 'One' },
-        { thread_id: 'c2', title: 'Two' },
+        { thread_id: 'c1', title: 'Running' },
+        { thread_id: 'c2', title: 'Error' },
+        { thread_id: 'c3', title: 'Complete' },
+        { thread_id: 'c4', title: 'Idle' },
       ],
       selectedBackendChatId: 'c1',
-      unreadChatIds: new Set(['c2']),
+      unreadChatIds: new Set(['c2', 'c3']),
       backgroundGeneratingChatIds: new Set(['c1']),
       backgroundErrorChatIds: new Set(['c2']),
     });
-    const byId = Object.fromEntries(items.map((i) => [i.id, i]));
-    expect(items.every((i) => i.source === 'backend')).toBe(true); // no local card when a backend chat is selected
-    expect(byId.c1.selected).toBe(true);
-    expect(byId.c1.generating).toBe(true);
-    expect(byId.c2.unread).toBe(true);
-    expect(byId.c2.erroredInBackground).toBe(true);
+    const byId = Object.fromEntries(items.map((item) => [item.id, item]));
+
+    expect(byId.c1).toMatchObject({ generating: true, status: CHAT_STATUS.GENERATING });
+    expect(byId.c2).toMatchObject({ unread: true, erroredInBackground: true, status: 'error' });
+    expect(byId.c3).toMatchObject({ unread: true, status: 'complete' });
+    expect(byId.c4).toMatchObject({ status: 'idle' });
   });
 
-  it('marks the selected card as generating while it streams in the foreground', () => {
+  it('exposes generating status for a selected local foreground generation', () => {
     const items = buildChatSessionItems({
       ...base,
-      backendChatSessions: [
-        { thread_id: 'c1', title: 'One' },
-        { thread_id: 'c2', title: 'Two' },
-      ],
-      selectedBackendChatId: 'c1',
+      messages: [{ role: 'user', content: 'hi', timestamp: 1 }],
+      threadId: 'local-1',
+      firstMessageTime: 1,
+      backendChatSessions: [{ thread_id: 'older', title: 'Earlier chat' }],
+      selectedBackendChatId: null,
       isGenerating: true,
     });
-    const byId = Object.fromEntries(items.map((i) => [i.id, i]));
-    // Foreground stream on the viewed chat shows the dot without ever entering
-    // the background-generating set.
-    expect(byId.c1.generating).toBe(true);
-    expect(byId.c2.generating).toBe(false);
+    const byId = Object.fromEntries(items.map((item) => [item.id, item]));
+
+    expect(byId['local-1']).toMatchObject({
+      source: 'local',
+      selected: true,
+      generating: true,
+      status: CHAT_STATUS.GENERATING,
+    });
   });
 
   it('dedupes a backend card that matches the local current session', () => {

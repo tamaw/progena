@@ -7,6 +7,7 @@ import {
 } from './conversationModel';
 import { buildDefaultAssistantTimeline, normalizeTaskSummary } from './liveAssistantTurnModel';
 import { extractCallAgentSummary } from './messageRenderUtils';
+import { deriveChatStatus } from '../../lib/chatStatus';
 export function compareSessionItems(left, right) {
   const pinnedDelta = Number(Boolean(right.pinned)) - Number(Boolean(left.pinned));
   if (pinnedDelta !== 0) {
@@ -344,6 +345,15 @@ function buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, bac
     erroredInBackground: backgroundErrorChatIds instanceof Set
       ? backgroundErrorChatIds.has(chat.thread_id)
       : false,
+    status: deriveChatStatus({
+      generating: (backgroundGeneratingChatIds instanceof Set
+        && backgroundGeneratingChatIds.has(chat.thread_id))
+        || (Boolean(isGenerating) && selected),
+      errored: backgroundErrorChatIds instanceof Set
+        ? backgroundErrorChatIds.has(chat.thread_id)
+        : false,
+      unread: unreadChatIds instanceof Set ? unreadChatIds.has(chat.thread_id) : false,
+    }),
     pinned: Boolean(chat.pinned),
     shared: Boolean(chat.shared),
     archived: Boolean(chat.archived),
@@ -423,6 +433,7 @@ export function buildChatSessionItems({
       // The live local session is the active chat, so it generates in the
       // foreground exactly when the composer is streaming.
       generating: Boolean(isGenerating) && item.selected,
+      status: deriveChatStatus({ generating: Boolean(isGenerating) && item.selected }),
     }));
 
   const localIds = new Set(localItems.map((item) => item.pinKey));

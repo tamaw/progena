@@ -294,6 +294,7 @@ export default function InboxPage() {
                 icon={<DeleteActionIcon />}
                 label="Delete"
                 variant="danger"
+                className="inbox-detail__delete"
                 onClick={removeMessage}
                 disabled={!selectedMessage}
               />

@@ -8,6 +8,7 @@
 import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged } from './async';
 import { withQuery } from '../http';
+import { deriveChatStatus } from '../../lib/chatStatus';
 
 
 const emptyActive = () => ({
@@ -242,7 +243,6 @@ export const reducers = {
     };
   },
 };
-
 export const eventHandlers = {
   'chat.response.started': (state, payload) => {
     const requestId = responseRequestIdFor(payload);
@@ -251,6 +251,10 @@ export const eventHandlers = {
       : null;
     if (requestId && threadId) {
       state.chatRuntime.responseThreadsByRequestId[requestId] = threadId;
+    }
+    if (threadId) {
+      state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
     if (threadId && state.chats.active.threadId !== threadId) {
       state.chatRuntime.generatingChatIds = addChatRuntimeId(
@@ -271,6 +275,8 @@ export const eventHandlers = {
     );
     if (threadId && state.chats.active.threadId !== threadId) {
       state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+    }
+    if (threadId) {
       state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
     }
   },
@@ -284,9 +290,11 @@ export const eventHandlers = {
       state.chatRuntime.generatingChatIds,
       threadId,
     );
-    if (threadId && state.chats.active.threadId !== threadId) {
-      state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+    if (threadId) {
       state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+      if (state.chats.active.threadId !== threadId) {
+        state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+      }
     }
   },
   'chat.response.cancelled': (state, payload) => {
@@ -338,9 +346,6 @@ export const eventHandlers = {
     state.chats.active.threadId = payload.session?.thread_id || null;
     state.chats.active.loading = false;
     state.chats.active.error = null;
-    // Keep the applied request ID until ConversationPage copies the event-owned
-    // detail into its rendered message list. Clearing it here makes the page's
-    // null-initialized hydration guard treat the new detail as already applied.
     state.chats.active.requestId = payload.request_id || state.chats.active.requestId;
   },
   'chat.session.deleted': (state, payload) => {
@@ -401,11 +406,22 @@ export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadCha
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
 export const selectErroredChatIds = (state) => state.uiData.chatRuntime.erroredChatIds;
 export const selectChatIndicators = createSelector(
-  [selectUnreadChatIds, selectGeneratingChatIds],
-  (unreadChatIds, generatingChatIds) => ({
-    hasUnread: unreadChatIds.length > 0,
-    isGenerating: generatingChatIds.length > 0,
-  }),
+  [selectUnreadChatIds, selectGeneratingChatIds, selectErroredChatIds],
+  (unreadChatIds, generatingChatIds, erroredChatIds) => {
+    const hasUnread = unreadChatIds.length > 0;
+    const isGenerating = generatingChatIds.length > 0;
+    const hasError = erroredChatIds.length > 0;
+    return {
+      hasUnread,
+      isGenerating,
+      hasError,
+      status: deriveChatStatus({
+        unread: hasUnread,
+        generating: isGenerating,
+        errored: hasError,
+      }),
+    };
+  },
 );
 export const selectActiveChatSession = (state) => state.uiData.chats.active.detail;
 export const selectActiveChatSessionState = (state) => state.uiData.chats.active;
