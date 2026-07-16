@@ -46,7 +46,6 @@ import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
-  CHAT_AGENT_NAME,
   DEFAULT_CHAT_TITLE,
   collectMessageImages,
   areChatTranscriptsEquivalent,
@@ -286,6 +285,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
   streamFiltersStorageKey,
   updateStreamFilters,
   threadId,
+  chatStatus,
   isEditingTitle,
   titleInputRef,
   titleDraft,
@@ -401,7 +401,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
                 tooltip={action.label}
                 ariaLabel={action.label}
                 variant={action.danger ? 'danger' : 'default'}
-                className={action.active ? 'is-active' : ''}
+                className={[action.active ? 'is-active' : '', action.key === 'delete' ? 'chat-detail-header__delete' : ''].filter(Boolean).join(' ')}
                 disabled={action.disabled}
                 aria-pressed={action.role === 'menuitemcheckbox' ? action.checked : undefined}
                 onClick={action.onClick}
@@ -410,9 +410,9 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
           </DetailHeaderActions>
         )}
         meta={isContentLoading || isEmptyConversationPane ? [] : [
-          <span key="model" className="chat-page-header__model">
-            <span className="agent-dot agent-dot--purple" />
-            {CHAT_AGENT_NAME}
+          <span key="status" className={`chat-page-header__status chat-page-header__status--${chatStatus}`}>
+            <span className="chat-page-header__status-dot" aria-hidden="true" />
+            {chatStatus}
           </span>,
           <span key="started" className="muted">Started {formatStartedTime(firstMessageTime) || 'not started'}</span>,
           <span key="tokens" className="muted">{new Intl.NumberFormat().format(totalTokenCount)} tokens</span>,
@@ -1661,19 +1661,11 @@ function ConversationPage() {
                     }
                   }}
                 >
-                  <span
-                    className={`chat-session-card__dot${
-                      item.generating
-                        ? ' chat-session-card__dot--generating'
-                        : item.erroredInBackground
-                          ? ' chat-session-card__dot--error'
-                          : item.unread
-                            ? ' chat-session-card__dot--unread'
-                            : ''
-                    }`}
-                    aria-hidden="true"
-                  />
                   <div className="chat-session-card__top">
+                    <span
+                      className={`chat-session-card__dot chat-session-card__dot--${item.status || 'idle'}`}
+                      aria-hidden="true"
+                    />
                     <span className="chat-session-card__title">{item.title}</span>
                     <span className="chat-session-card__age">{item.meta}</span>
                   </div>
@@ -1714,6 +1706,7 @@ function ConversationPage() {
           streamFilters={streamFilters}
           streamFiltersStorageKey={config.storage.streamFilters}
           updateStreamFilters={updateStreamFilters}
+          chatStatus={currentSessionItem?.status || 'idle'}
           threadId={threadId}
           isEditingTitle={isEditingTitle}
           titleInputRef={titleInputRef}

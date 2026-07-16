@@ -120,7 +120,7 @@ body,
   line-height: 1;
 }
 
-.app-shell__search {
+.app-shell__quick-chat {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -134,12 +134,12 @@ body,
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
 }
 
-.app-shell__search:focus-within {
+.app-shell__quick-chat:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
-.app-shell__search--ai {
+.app-shell__quick-chat--ai {
   width: min(340px, 32vw);
   gap: 8px;
   padding: 5px 10px;
@@ -149,16 +149,16 @@ body,
   border-color: transparent;
 }
 
-.app-shell__search--ai:hover {
+.app-shell__quick-chat--ai:hover {
   border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
 }
 
-.app-shell__search--ai:focus-within {
+.app-shell__quick-chat--ai:focus-within {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 4px var(--color-accent-soft), 0 0 20px color-mix(in oklab, var(--color-accent) 18%, transparent);
 }
 
-.app-shell__search-ai-icon {
+.app-shell__quick-chat-ai-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -169,18 +169,18 @@ body,
   filter: drop-shadow(0 0 5px color-mix(in oklab, var(--color-accent) 35%, transparent));
 }
 
-.app-shell__search-ai-icon svg {
+.app-shell__quick-chat-ai-icon svg {
   display: block;
   width: 17px;
   height: 17px;
 }
 
 
-.app-shell__search > svg {
+.app-shell__quick-chat > svg {
   flex: 0 0 auto;
 }
 
-.app-shell__search input {
+.app-shell__quick-chat input {
   flex: 1;
   min-width: 0;
   padding: 0;
@@ -195,15 +195,15 @@ body,
   font-size: 13px;
 }
 
-.app-shell__search input::-webkit-search-decoration,
-.app-shell__search input::-webkit-search-cancel-button,
-.app-shell__search input::-webkit-search-results-button,
-.app-shell__search input::-webkit-search-results-decoration {
+.app-shell__quick-chat input::-webkit-search-decoration,
+.app-shell__quick-chat input::-webkit-search-cancel-button,
+.app-shell__quick-chat input::-webkit-search-results-button,
+.app-shell__quick-chat input::-webkit-search-results-decoration {
   -webkit-appearance: none;
   appearance: none;
 }
 
-.app-shell__search input:focus-visible {
+.app-shell__quick-chat input:focus-visible {
   box-shadow: none;
 }
 
@@ -791,6 +791,10 @@ body,
   background: #f97316;
   box-shadow: 0 0 8px rgba(249, 115, 22, 0.6);
   animation: nav-dot-pulse 1.2s ease-in-out infinite;
+}
+.app-shell__nav-dot--error {
+  background: var(--color-error, #ef4444);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--color-error, #ef4444) 60%, transparent);
 }
 
 @keyframes nav-dot-pulse {
@@ -5753,16 +5757,16 @@ body,
   font-size: 11px;
 }
 
-/* Tools detail keeps the primary surface (generic .detail-pane is secondary).
-   Compound selector so it wins regardless of source order vs .detail-pane. */
+/* Tools detail matches the shared Agents detail-pane surface. */
 .detail-pane.tools-detail {
-  background: var(--color-bg-primary);
+  background: var(--color-bg-secondary);
 }
 
-.tools-detail__body {
+.detail-pane.tools-detail .detail-pane__body {
   width: 100%;
   max-width: none;
   padding: 20px 28px 34px;
+  background: var(--color-bg-secondary);
 }
 
 .tools-metrics {
@@ -7340,7 +7344,7 @@ body,
     cursor: default;
   }
 
-  .app-shell__search {
+  .app-shell__quick-chat {
     width: min(300px, 50vw);
   }
 
@@ -7361,10 +7365,11 @@ body,
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .tools-detail__body {
+  .detail-pane.tools-detail .detail-pane__body {
     max-width: none;
     padding-right: 20px;
     padding-left: 20px;
+
   }
 
   .detail-pane__body {
@@ -7428,11 +7433,11 @@ body,
     max-height: none;
     border-bottom: 0;
   }
-  .app-shell__search {
+  .app-shell__quick-chat {
     display: none;
   }
 
-  /* search hidden — push actions to the right edge instead */
+  /* quick chat hidden — push actions to the right edge instead */
   .app-shell__actions {
     margin-left: auto;
   }
@@ -7522,7 +7527,7 @@ body,
     justify-self: start;
   }
 
-  .tools-detail__body {
+  .detail-pane.tools-detail .detail-pane__body {
     padding: 16px;
   }
 

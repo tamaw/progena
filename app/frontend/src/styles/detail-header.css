@@ -441,3 +441,11 @@
         display: none;
     }
 }
+.inbox-detail .detail-header-action--danger.inbox-detail__delete {
+    color: var(--color-text-secondary);
+}
+
+.inbox-detail .detail-header-action--danger.inbox-detail__delete:hover,
+.inbox-detail .detail-header-action--danger.inbox-detail__delete:focus-visible {
+    color: var(--color-text-primary);
+}

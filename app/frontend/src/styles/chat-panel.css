@@ -1580,8 +1580,7 @@
 
 .chat-session-card {
     display: grid;
-    grid-template-columns: 10px minmax(0, 1fr);
-    column-gap: 6px;
+    grid-template-columns: minmax(0, 1fr);
     align-items: start;
     margin-bottom: 1px;
     padding: 7px 10px 8px;
@@ -1606,20 +1605,23 @@
     background: var(--color-accent-soft);
 }
 
-/* Leading status dot — its own left rail, aligned with the title line. It only
-   carries colour when there's something worth surfacing (unread, generating,
-   error); idle cards leave the rail empty so the live ones genuinely pop. */
+/* Inline status dot, matching the compact agent/session rows. */
 .chat-session-card__dot {
-    grid-column: 1;
-    grid-row: 1;
+    flex: 0 0 7px;
     align-self: center;
-    justify-self: center;
     width: 7px;
     height: 7px;
     border-radius: 50%;
     background: transparent;
 }
+.chat-session-card__dot--idle {
+    border: 1.5px solid var(--color-text-secondary);
+    box-sizing: border-box;
+}
 
+.chat-session-card__dot--complete {
+    background: var(--color-success);
+}
 .chat-session-card__dot--unread {
     background: var(--color-success);
 }
@@ -1639,11 +1641,11 @@
 }
 
 .chat-session-card__top {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
     display: flex;
     align-items: baseline;
-    gap: 8px;
+    gap: 6px;
     min-width: 0;
 }
 
@@ -1675,7 +1677,7 @@
 }
 
 .chat-session-card__preview {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
     margin-top: 2px;
     overflow: hidden;
@@ -1736,12 +1738,40 @@
     box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent) 24%, transparent);
 }
 
-.chat-page-header__model {
+.chat-page-header__status {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     color: var(--color-text-secondary);
     font-weight: 500;
+    text-transform: capitalize;
+}
+
+.chat-page-header__status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: transparent;
+}
+.chat-page-header__status--idle .chat-page-header__status-dot {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
+    border: 1.5px solid var(--color-text-secondary);
+    box-sizing: border-box;
+}
+
+.chat-page-header__status--complete .chat-page-header__status-dot {
+    background: var(--color-success);
+}
+
+.chat-page-header__status--error .chat-page-header__status-dot {
+    background: var(--color-error, #ef4444);
+}
+
+.chat-page-header__status--generating .chat-page-header__status-dot {
+    background: #f97316;
+    animation: status-dot-pulse 1.2s ease-in-out infinite;
 }
 
 .chat-session-id {
@@ -2341,4 +2371,12 @@
     .msg--user {
         max-width: 92%;
     }
+}
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete {
+    color: var(--color-text-secondary);
+}
+
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete:hover,
+.chat-detail-header .detail-header-action--danger.chat-detail-header__delete:focus-visible {
+    color: var(--color-text-primary);
 }
