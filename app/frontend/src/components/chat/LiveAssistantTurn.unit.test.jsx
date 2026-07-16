@@ -35,7 +35,6 @@ const reactHarness = vi.hoisted(() => {
 vi.mock('react', () => ({
   useLayoutEffect: reactHarness.useEffect,
   memo: (component) => component,
-  Profiler: ({ children }) => children,
   useEffect: reactHarness.useEffect,
   useRef: reactHarness.useRef,
   useSyncExternalStore: (_subscribe, getSnapshot) => getSnapshot(),
@@ -45,11 +44,6 @@ vi.mock('./Message', () => ({
   Message: () => null,
 }));
 
-vi.mock('./chatPerformanceTrace', () => ({
-  chatPerformanceNow: () => 0,
-  isChatPerformanceTracingEnabled: () => false,
-  traceChatPerformance: vi.fn(),
-}));
 
 import LiveAssistantTurn from './LiveAssistantTurn';
 import { createLiveAssistantTurnStore } from './liveAssistantTurnStore';

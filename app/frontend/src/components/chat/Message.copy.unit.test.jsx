@@ -2,11 +2,11 @@ import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from 'vitest
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Message } from './Message';
-import { RegenerateAvailabilityContext } from './MessageActions';
+import { RegenerateDisabledContext } from './RegenerateDisabledContext';
 
 const actionHarness = {
   feedback: '',
-  regenerateDisabled: false,
+  regenerateDisabledWhileGenerating: false,
   useRenderedContext: false,
 };
 
@@ -27,13 +27,14 @@ vi.mock('react', async (importOriginal) => {
     useContext: (context) => (
       actionHarness.useRenderedContext
         ? actual.useContext(context)
-        : actionHarness.regenerateDisabled
+        : actionHarness.regenerateDisabledWhileGenerating
     ),
   };
 });
 
 vi.mock('./messageRenderUtils', () => ({
   formatMessage: (content) => content,
+  renderSafeMarkdown: (content) => content,
   sanitizeHtmlFragment: (content) => content,
   appendStreamingCursor: (content) => content,
   describeStreamEvent: () => ({ badge: '', title: '', metaDetail: '', bodyHtml: '', bodyDetail: '' }),
@@ -109,13 +110,13 @@ function renderAssistantActions(message, onRegenerate) {
   return Message({ message, onRegenerate });
 }
 
-function renderWithRegenerateAvailability(value, element) {
+function renderWithRegenerateDisabledContext(value, element) {
   actionHarness.useRenderedContext = true;
   try {
     return renderToStaticMarkup(
-      <RegenerateAvailabilityContext.Provider value={value}>
+      <RegenerateDisabledContext.Provider value={value}>
         {element}
-      </RegenerateAvailabilityContext.Provider>,
+      </RegenerateDisabledContext.Provider>,
     );
   } finally {
     actionHarness.useRenderedContext = false;
@@ -124,7 +125,7 @@ function renderWithRegenerateAvailability(value, element) {
 
 afterEach(() => {
   actionHarness.feedback = '';
-  actionHarness.regenerateDisabled = false;
+  actionHarness.regenerateDisabledWhileGenerating = false;
   actionHarness.useRenderedContext = false;
   vi.unstubAllGlobals();
   vi.useRealTimers();
@@ -200,7 +201,7 @@ describe('assistant message actions', () => {
     { name: 'disables the historical-card action while generation is active', contextValue: true, staleProp: false, isDisabled: true },
     { name: 'enables the historical-card action after generation ends', contextValue: false, staleProp: true, isDisabled: false },
   ])('$name', ({ contextValue, staleProp, isDisabled }) => {
-    const markup = renderWithRegenerateAvailability(
+    const markup = renderWithRegenerateDisabledContext(
       contextValue,
       <Message
         message={assistantMessage('Historical response', true)}

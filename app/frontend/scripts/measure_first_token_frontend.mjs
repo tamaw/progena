@@ -1,8 +1,9 @@
 import { chromium } from '@playwright/test';
+import { randomUUID } from 'node:crypto';
 
 const baseUrl = process.env.FRONTEND_BASE_URL || 'http://127.0.0.1:5173';
 const prompt = process.env.MEASURE_PROMPT || 'Say exactly READY and nothing else.';
-const threadId = `measure-frontend-${crypto.randomUUID()}`;
+const threadId = `measure-frontend-${randomUUID()}`;
 const timeoutMs = Number(process.env.MEASURE_TIMEOUT_MS || 90000);
 
 const browser = await chromium.launch({ headless: true });

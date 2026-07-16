@@ -136,61 +136,11 @@ these boundaries when changing chat state or presentation:
    rendering-equivalent canonical rows. Fences above the highlighter budget
    remain escaped visual code blocks without synchronous syntax coloring.
 7. Do not pass generation-wide changing values through every historical message
-   or timeline item. `RegenerateAvailabilityContext` updates only
+   or timeline item. `RegenerateDisabledContext` updates only
    `MessageActions`; historical `Message` and `TimelineItem` memo boundaries
    stay intact when generation begins or ends. The page-level regenerate
    dispatcher must keep a stable identity and read current transcript state at
    click time rather than close over `messages`.
-
-### Opt-in streaming performance trace
-
-The client has a **default-off**, browser-only diagnostic trace for reproducing
-stalls without putting every response delta through Redux or normal application
-logging. Enable it by navigating directly to a chat URL with:
-
-```text
-?chatPerformanceTrace=1
-```
-
-The parameter is read synchronously from the initial visible URL, before React
-routing can normalize it. It is not persisted, cannot be toggled at runtime,
-and must be supplied again for each traced navigation.
-
-The ring retains at most 2,000 primitive-only entries. It never retains or
-prints prompt text, assistant/subagent/reasoning deltas, tool arguments,
-results, errors, or images. Normal text deltas are retained for correlation
-but only logged to the console at frame flushes or when an SSE arrival gap is
-at least 50 ms; structural events and terminal phases log individually. This
-keeps tracing useful without letting DevTools logging manufacture the stall.
-
-Trace phases are intentionally end-to-end:
-
-- `sse.frame_received` records canonical envelope parsing/validation only. It
-  does not receive `chat.response.delta` or `chat.response.event`.
-- `chat_sse.connect_started`, `chat_sse.connected`, `chat_sse.frame_received`,
-  `chat_sse.heartbeat`, `chat_sse.onerror_reconnect`,
-  `chat_sse.stale_reconnect`, and `chat_sse.resync_required` isolate the
-  request-scoped transport. `chat_sse.frame_received` records response type,
-  runtime sequence, and runtime-to-browser elapsed time; direct runtime frames
-  carry additive `runtime_emitted_at_ms` and `runtime_stream_seq`.
-- `chat_api.*`, `stream.delta_queued`, `stream.delta_flushed`, and
-  `live_turn.store_published` isolate callback fan-out, rAF batching delay,
-  reducer cost, and external-store notification.
-- `stream.structural_event_applied` identifies tool, subagent, A2A, metadata,
-  and agent-message phases by type/name/ID/length/status only. It preserves any
-  backend-reported `duration_ms` without copying tool payloads.
-- `react.live_turn_commit` and `react.live_turn_paint_proxy` show the isolated
-  live-owner React work and next-frame paint opportunity. The latter is a
-  browser-frame proxy, not a compositor-paint guarantee.
-- `render.*` distinguishes Markdown cache, Markdown, sanitization, code-highlighting,
-  and terminal rendering costs. `browser.long_task` is emitted when the browser
-  supports the Long Tasks API.
-
-Compare a reproduction against a trace from `main` using the same prompt and
-tool workload. Start with the largest `browser.long_task`, render, or
-`react.live_turn_commit` span, then use its surrounding `sse.frame_received`
-and batching phases to decide whether the delay is producer/transport cadence,
-main-thread work, or the terminal rendering path.
 
 ### Performance regression checks
 
@@ -198,7 +148,7 @@ When modifying these paths, run:
 
 ```bash
 cd app/frontend
-npm test -- src/components/chat/chatPerformanceTrace.unit.test.js src/hooks/useChatStream.test.js src/store/realtimeListener.unit.test.js src/components/chat/Message.copy.unit.test.jsx src/components/chat/conversationModel.unit.test.js src/components/chat/messageRenderUtils.unit.test.js src/components/chat/TimelineItem.unit.test.jsx src/components/chat/SubagentCard.unit.test.jsx src/lib/markdown.unit.test.js src/store/uiDataSlice.unit.test.js
+npm test -- src/hooks/useChatStream.test.js src/store/realtimeListener.unit.test.js src/components/chat/Message.copy.unit.test.jsx src/components/chat/conversationModel.unit.test.js src/components/chat/messageRenderUtils.unit.test.js src/components/chat/TimelineItem.unit.test.jsx src/components/chat/SubagentCard.unit.test.jsx src/lib/markdown.unit.test.js src/store/uiDataSlice.unit.test.js
 npm run build
 ```
 

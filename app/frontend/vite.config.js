@@ -58,6 +58,25 @@ const backendProxyPlugin = {
   },
 }
 
+function manualChunks(id) {
+  if (!id.includes('/node_modules/')) return undefined
+
+  if (id.includes('/highlight.js/')) return 'syntax-highlighting'
+  if (id.includes('/@xyflow/')) return 'flow-vendor'
+  if (id.includes('/chart.js/') || id.includes('/react-chartjs-2/')) return 'charts-vendor'
+  if (id.includes('/@reduxjs/') || id.includes('/react-redux/')) return 'state-vendor'
+  if (
+    id.includes('/react/')
+    || id.includes('/react-dom/')
+    || id.includes('/react-router-dom/')
+    || id.includes('/react-router/')
+    || id.includes('/scheduler/')
+  ) return 'react-vendor'
+
+  return undefined
+}
+
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [backendProxyPlugin, react()],
@@ -66,6 +85,11 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        manualChunks,
+      },
+    },
   },
   server: {
     port: 5173,
