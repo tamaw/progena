@@ -195,7 +195,10 @@ async def dispatch_tracked_a2a_task(
 
     task_record: A2ATaskRecord | None = None
     payload = response.get("result") if isinstance(response, dict) else None
-    if response.get("success") and is_task_payload(payload):
+    # A streamed dispatch can time out after yielding a valid live task
+    # snapshot/progress trail. Persist that resumable task state even when the
+    # enclosing response reports success=False.
+    if is_task_payload(payload):
         task_payload = cast(dict[str, Any], payload)
         tracked_metadata = dict(metadata)
         tracked_metadata["a2a_task_id"] = str(task_payload.get("id") or "")

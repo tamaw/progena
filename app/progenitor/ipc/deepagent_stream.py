@@ -131,8 +131,11 @@ class DeepAgentIPCStream:
         # model once per tool round-trip; each call reports its own usage on
         # its own AIMessage. The finalize summary must carry the SUM across
         # calls, not just the last call's count (the UI header totals it).
+        # Track the highest reasoning-token count observed per message id so a
+        # later repeated update can fill in or increase usage without double-
+        # counting already-accounted tokens.
         self._turn_reasoning_tokens = 0
-        self._counted_usage_message_ids: set[str] = set()
+        self._counted_usage_by_message_id: dict[str, int] = {}
 
     async def stream(
         self,
@@ -279,7 +282,7 @@ class DeepAgentIPCStream:
         return [item, *expanded]
 
     def _accumulate_reasoning_usage(self, messages: Any) -> None:
-        """Add each unseen AI message's reasoning-token usage to the turn total."""
+        """Accumulate only positive per-message reasoning-usage deltas."""
         if not isinstance(messages, list):
             return
         for msg in messages:
@@ -293,12 +296,14 @@ class DeepAgentIPCStream:
             # dict holds the coerced objects for the whole turn, so identity is
             # stable between the update event and finalize.
             key = msg_id if isinstance(msg_id, str) and msg_id else f"obj:{id(msg)}"
-            if key in self._counted_usage_message_ids:
-                continue
-            self._counted_usage_message_ids.add(key)
             count = extract_reasoning_token_count(msg)
-            if isinstance(count, int) and count > 0:
-                self._turn_reasoning_tokens += count
+            if not isinstance(count, int) or count <= 0:
+                continue
+            previous = self._counted_usage_by_message_id.get(key, 0)
+            if count <= previous:
+                continue
+            self._counted_usage_by_message_id[key] = count
+            self._turn_reasoning_tokens += count - previous
 
     async def _handle_update_event(self, event: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
         for node_name, node_output in event.items():

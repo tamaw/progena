@@ -8,6 +8,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from app.progenitor.a2a.payloads import (
+    _MAX_PROGRESS_LOG_ENTRIES as _REPLAYED_PROGRESS_LOG_ENTRY_LIMIT,
+)
+from app.progenitor.a2a.payloads import (
+    _MAX_PROGRESS_MESSAGE_TEXT_LENGTH as _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT,
+)
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
     extract_display_metadata,
@@ -542,6 +548,8 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
             continue
         state = str(item.get("state") or "")
         message_text = str(item.get("message_text") or "")
+        if len(message_text) > _REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT:
+            message_text = message_text[:_REPLAYED_PROGRESS_MESSAGE_TEXT_LIMIT] + "…"
         agent_name = str(item.get("agent_name") or "")
         timestamp = str(item.get("timestamp") or "")
         if state or message_text:
@@ -553,6 +561,8 @@ def _extract_progress_log_from_content(content: Any) -> list[dict[str, str]]:
                     "timestamp": timestamp,
                 }
             )
+    if len(entries) > _REPLAYED_PROGRESS_LOG_ENTRY_LIMIT:
+        entries = entries[-_REPLAYED_PROGRESS_LOG_ENTRY_LIMIT:]
     return entries
 
 

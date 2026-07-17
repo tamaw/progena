@@ -162,8 +162,8 @@ export function appendStreamingCursor(html) {
   container.innerHTML = html || '';
 
   let host = container;
-  while (host.lastElementChild) {
-    host = host.lastElementChild;
+  while (host.lastChild?.nodeType === Node.ELEMENT_NODE) {
+    host = host.lastChild;
   }
   host.appendChild(cursor);
 

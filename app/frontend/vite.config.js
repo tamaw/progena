@@ -1,15 +1,16 @@
 import http from 'node:http'
 import https from 'node:https'
-import { defineConfig } from 'vite'
+import { fileURLToPath } from 'node:url'
+import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 
-const backendBaseUrl = new URL(globalThis.process?.env?.VITE_BACKEND_BASE_URL || 'http://127.0.0.1:8000')
+const frontendDir = fileURLToPath(new URL('.', import.meta.url))
 
 function shouldProxy(pathname) {
   return pathname.startsWith('/api/') || pathname.startsWith('/v1/')
 }
 
-function createBackendProxyMiddleware() {
+function createBackendProxyMiddleware(backendBaseUrl) {
   return (req, res, next) => {
     const requestUrl = req.url || '/'
     const pathname = new URL(requestUrl, backendBaseUrl).pathname
@@ -47,15 +48,17 @@ function createBackendProxyMiddleware() {
   }
 }
 
-const backendProxyPlugin = {
-  name: 'backend-proxy',
-  enforce: 'pre',
-  configureServer(server) {
-    server.middlewares.use(createBackendProxyMiddleware())
-  },
-  configurePreviewServer(server) {
-    server.middlewares.use(createBackendProxyMiddleware())
-  },
+function createBackendProxyPlugin(backendBaseUrl) {
+  return {
+    name: 'backend-proxy',
+    enforce: 'pre',
+    configureServer(server) {
+      server.middlewares.use(createBackendProxyMiddleware(backendBaseUrl))
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(createBackendProxyMiddleware(backendBaseUrl))
+    },
+  }
 }
 
 function manualChunks(id) {
@@ -76,35 +79,43 @@ function manualChunks(id) {
   return undefined
 }
 
-
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [backendProxyPlugin, react()],
-  base: '/',
-  build: {
-    outDir: 'dist',
-    assetsDir: 'assets',
-    sourcemap: false,
-    rollupOptions: {
-      output: {
-        manualChunks,
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, frontendDir, 'VITE_')
+  const backendBaseUrl = new URL(
+    env.VITE_BACKEND_BASE_URL
+    || globalThis.process?.env?.VITE_BACKEND_BASE_URL
+    || 'http://127.0.0.1:8000'
+  )
+
+  return {
+    plugins: [createBackendProxyPlugin(backendBaseUrl), react()],
+    base: '/',
+    build: {
+      outDir: 'dist',
+      assetsDir: 'assets',
+      sourcemap: false,
+      rollupOptions: {
+        output: {
+          manualChunks,
+        },
       },
     },
-  },
-  server: {
-    port: 5173,
-    watch: {
-      usePolling: true,
-      interval: 150,
-      awaitWriteFinish: {
-        stabilityThreshold: 120,
-        pollInterval: 20,
+    server: {
+      port: 5173,
+      watch: {
+        usePolling: true,
+        interval: 150,
+        awaitWriteFinish: {
+          stabilityThreshold: 120,
+          pollInterval: 20,
+        },
       },
+      proxy: {}
     },
-    proxy: {}
-  },
-  preview: {
-    port: 4173,
-    proxy: {}
+    preview: {
+      port: 4173,
+      proxy: {}
+    }
   }
 })

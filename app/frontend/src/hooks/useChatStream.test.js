@@ -21,6 +21,7 @@ vi.mock('../components/chat/liveAssistantTurnModel', async (importOriginal) => {
 
 
 import { useChatStream } from './useChatStream';
+import { markChatGenerating } from '../store/uiDataSlice';
 import { applyAssistantChunk } from '../components/chat/liveAssistantTurnModel';
 
 
@@ -256,6 +257,32 @@ describe('useChatStream', () => {
     expect(hook.liveTurnStore.getSnapshot()).toMatchObject({
       content: 'B first B queued',
     });
+  });
+
+  it('marks the superseded origin chat as generating when a replacement stream starts', () => {
+    const dispatch = vi.fn();
+    const hook = useChatStream({
+      messages: [],
+      setMessages: vi.fn(),
+      activeBackendChat: { thread_id: 'thread-a' },
+      selectedBackendChatId: 'thread-a',
+      threadId: 'thread-a',
+      sendMessageStream: vi.fn(() => new Promise(() => {})),
+      cancelStream: vi.fn(),
+      dispatch,
+      getApiUrl: vi.fn(),
+      show: vi.fn(),
+      selectedBackendChatIdRef: { current: 'thread-a' },
+      reloadOpenChat: vi.fn(),
+      onForegroundStreamStarted: vi.fn(),
+    });
+
+    void hook.handleSend('First request');
+    dispatch.mockClear();
+
+    void hook.handleSend('Replacement request');
+
+    expect(dispatch).toHaveBeenCalledWith(markChatGenerating('thread-a'));
   });
 
   it('keeps a foreground completed turn visible through a paint before committing it locally', () => {

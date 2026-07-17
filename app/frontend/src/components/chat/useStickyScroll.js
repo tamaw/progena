@@ -31,6 +31,7 @@ export default function useStickyScroll(dep) {
   useEffect(() => () => {
     if (frameRef.current !== null) {
       cancelAnimationFrame(frameRef.current);
+      frameRef.current = null;
     }
   }, []);
 

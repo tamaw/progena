@@ -181,6 +181,65 @@ async def test_cancel_running_task_cancels_active_coroutine(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_cancel_and_outer_task_cancellation_emit_single_terminal_outcome(
+    tmp_path: Path,
+) -> None:
+    """If both cancellation paths fire, the client must still see exactly one
+    terminal cancelled outcome and one persisted log record."""
+    log_path = tmp_path / "tasks.jsonl"
+    started = asyncio.Event()
+    release = asyncio.Event()
+    event_queue = AsyncMock()
+    event_queue.enqueue_event = AsyncMock()
+
+    async def handler(
+        task_id: str,
+        context_id: str,
+        request_text: str,
+        request_ctx: dict[str, str],
+        event_queue_arg: object,
+    ) -> BuildResult:
+        del task_id, context_id, request_text, request_ctx, event_queue_arg
+        started.set()
+        await release.wait()
+        return BuildResult(
+            build_id="build-double-cancel",
+            status=BuildStatus.COMPLETED,
+            task_description="build_agent: double-cancel",
+            started_at=utcnow(),
+            completed_at=utcnow(),
+        )
+
+    queue = BuilderTaskQueue(handler, log_path=log_path)
+    run_task = asyncio.create_task(
+        queue.run("double-cancel", "ctx-double-cancel", "Build now", {}, event_queue)
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2.0)
+        assert queue.cancel("double-cancel") is True
+        run_task.cancel()
+        await asyncio.wait_for(run_task, timeout=2.0)
+    finally:
+        release.set()
+        if not run_task.done():
+            await run_task
+
+    terminal_states = [
+        call.args[0].status.state
+        for call in event_queue.enqueue_event.call_args_list
+        if call.args[0].final
+    ]
+    assert terminal_states == [TaskState.canceled]
+
+    lines = log_path.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1
+    record = sync_wait_for_completion("double-cancel", timeout_seconds=0.0, log_path=log_path)
+    assert record is not None
+    assert record["status"] == "cancelled"
+    assert record["phase_completed"] == "cancelled"
+
+
+@pytest.mark.asyncio
 async def test_second_concurrent_run_waits_for_the_semaphore(tmp_path: Path) -> None:
     """max_concurrent=1 (the default, matching BackgroundBuildRunner's own
     single-active-build contract) must make a second concurrent run() wait

@@ -857,6 +857,48 @@ class TestExtractProgressLogFromContent:
         content = '{"progress_log": [{"state": "submitted"}]}'
         assert _extract_progress_log_from_content(content) == []
 
+    def test_replays_only_bounded_progress_log_tail_with_producer_limits(self):
+        """Reloaded chats must keep only the producer-bounded tail of persisted progress updates."""
+        from app.progenitor.a2a.payloads import (
+            _MAX_PROGRESS_LOG_ENTRIES,
+            _MAX_PROGRESS_MESSAGE_TEXT_LENGTH,
+        )
+
+        overflow = 3
+        total_entries = _MAX_PROGRESS_LOG_ENTRIES + overflow
+        overlong_message = "x" * (_MAX_PROGRESS_MESSAGE_TEXT_LENGTH + 9)
+        content = json.dumps(
+            {
+                "progress_log": [
+                    {
+                        "state": f"state-{index}",
+                        "message_text": overlong_message
+                        if index == total_entries - 1
+                        else f"step {index}",
+                        "agent_name": "greetings_agent",
+                        "timestamp": f"ts-{index}",
+                    }
+                    for index in range(total_entries)
+                ],
+            }
+        )
+
+        extracted = _extract_progress_log_from_content(content)
+
+        assert len(extracted) == _MAX_PROGRESS_LOG_ENTRIES
+        assert extracted[0] == {
+            "state": f"state-{overflow}",
+            "message_text": f"step {overflow}",
+            "agent_name": "greetings_agent",
+            "timestamp": f"ts-{overflow}",
+        }
+        assert extracted[-1] == {
+            "state": f"state-{total_entries - 1}",
+            "message_text": "x" * _MAX_PROGRESS_MESSAGE_TEXT_LENGTH + "…",
+            "agent_name": "greetings_agent",
+            "timestamp": f"ts-{total_entries - 1}",
+        }
+
 
 def test_hydrates_normal_tool_duration_and_artifact_by_tool_id():
     store = InMemoryDocumentStore()

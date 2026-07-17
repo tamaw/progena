@@ -45,7 +45,8 @@ function deriveConnectionState(pendingStreams, emptyState = 'disconnected') {
   return 'connecting';
 }
 
-
+const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
+const RESPONSE_TERMINAL_DRAIN_MS = 50;
 const RESPONSE_HEARTBEAT_STALE_MS = 45000;
 const RESPONSE_WATCHDOG_POLL_MS = 15000;
 const RESPONSE_RECONNECT_DELAY_MS = 1000;
@@ -68,6 +69,10 @@ function cleanupPendingTransport(pending) {
     clearInterval(pending.watchdogTimer);
     pending.watchdogTimer = null;
   }
+  if (pending.terminalTimer !== null) {
+    clearTimeout(pending.terminalTimer);
+    pending.terminalTimer = null;
+  }
 }
 
 function rememberResponseFrameId(pending, frameId) {
@@ -84,6 +89,35 @@ function hasSeenResponseFrameId(pending, frameId) {
   return Boolean(frameId) && pending.receivedFrameIds.includes(frameId);
 }
 
+function splitResponseMetadata(metadata) {
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+    return { backendMetadata: metadata, allowDesyncedCompletion: false };
+  }
+
+  const frontendOptions = metadata[FRONTEND_RESPONSE_OPTIONS_KEY];
+  const allowDesyncedCompletion = Boolean(frontendOptions?.allowDesyncedCompletion);
+
+  if (!Object.prototype.hasOwnProperty.call(metadata, FRONTEND_RESPONSE_OPTIONS_KEY)) {
+    return { backendMetadata: metadata, allowDesyncedCompletion };
+  }
+
+  const { [FRONTEND_RESPONSE_OPTIONS_KEY]: _frontendOptions, ...backendMetadata } = metadata;
+  return {
+    backendMetadata: Object.keys(backendMetadata).length > 0 ? backendMetadata : null,
+    allowDesyncedCompletion,
+  };
+}
+
+function buildDesyncCompletionError(reason) {
+  if (reason === 'cursor_expired') {
+    return new Error('Response stream expired before completion');
+  }
+  if (reason === 'invalid_cursor') {
+    return new Error('Response stream lost synchronization before completion');
+  }
+  return new Error('Response stream disconnected before completion');
+}
+
 /**
  * Foreground Responses API lifecycle shared by the conversation page and
  * runtime shell. Canonical ui.event frames own lifecycle; each active response
@@ -96,6 +130,55 @@ export function useChatApi() {
   const activeAcknowledgementRef = useRef(null);
   const pendingStreamsRef = useRef(new Map());
 
+  const finalizePendingTerminal = useCallback((requestId, pending) => {
+    if (pending.finalized || pendingStreamsRef.current.get(requestId) !== pending) {
+      return;
+    }
+
+    pending.finalized = true;
+    const terminalEvent = pending.terminalEvent;
+    const terminalType = terminalEvent?.type;
+    const payload = terminalEvent?.payload || {};
+
+    cleanupPendingTransport(pending);
+    pendingStreamsRef.current.delete(requestId);
+    if (activeAcknowledgementRef.current?.requestId === requestId) {
+      activeAcknowledgementRef.current = null;
+    }
+    if (activeStreamRequestIdRef.current === requestId) {
+      activeStreamRequestIdRef.current = null;
+    }
+
+    if (terminalType === 'chat.response.failed') {
+      const message = typeof payload.error === 'string' && payload.error
+        ? payload.error
+        : 'Response generation failed';
+      pending.onError?.(new Error(message));
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
+    } else if (terminalType === 'chat.response.completed' && pending.desynced && !pending.allowDesyncedCompletion) {
+      pending.onError?.(buildDesyncCompletionError(pending.desyncReason));
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
+    } else {
+      pending.onComplete?.(terminalType === 'chat.response.cancelled' ? 'cancelled' : '');
+      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
+    }
+
+    pending.resolve();
+  }, []);
+
+  const scheduleTerminalFinalization = useCallback((requestId, pending, delayMs = RESPONSE_TERMINAL_DRAIN_MS) => {
+    if (!pending.terminalEvent || pending.finalized) {
+      return;
+    }
+    if (pending.terminalTimer !== null) {
+      clearTimeout(pending.terminalTimer);
+    }
+    pending.terminalTimer = setTimeout(() => {
+      pending.terminalTimer = null;
+      finalizePendingTerminal(requestId, pending);
+    }, delayMs);
+  }, [finalizePendingTerminal]);
+
   const openResponseStream = useCallback((requestId, pending, responsesUrl) => {
     const isCurrent = () => pendingStreamsRef.current.get(requestId) === pending;
 
@@ -104,7 +187,11 @@ export function useChatApi() {
       if (!isCurrent()) {
         return;
       }
+      pending.finalized = true;
       pendingStreamsRef.current.delete(requestId);
+      if (activeAcknowledgementRef.current?.requestId === requestId) {
+        activeAcknowledgementRef.current = null;
+      }
       if (activeStreamRequestIdRef.current === requestId) {
         activeStreamRequestIdRef.current = null;
       }
@@ -113,8 +200,14 @@ export function useChatApi() {
       setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
     };
 
+    const markDesynced = (reason = 'stream_unavailable') => {
+      pending.desynced = true;
+      pending.desyncReason = reason;
+      cleanupPendingTransport(pending);
+    };
+
     const scheduleReconnect = () => {
-      if (!isCurrent() || pending.cancelRequested || pending.desynced) {
+      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.terminalEvent) {
         return;
       }
       cleanupPendingTransport(pending);
@@ -123,8 +216,7 @@ export function useChatApi() {
         if (!pending.openedOnce) {
           failUnavailable();
         } else {
-          pending.desynced = true;
-          cleanupPendingTransport(pending);
+          markDesynced('stream_unavailable');
         }
         return;
       }
@@ -135,52 +227,58 @@ export function useChatApi() {
     };
 
     const connect = () => {
-      if (!isCurrent() || pending.cancelRequested || pending.desynced) {
+      if (!isCurrent() || pending.cancelRequested || pending.desynced || pending.terminalEvent) {
         return;
       }
+
       cleanupPendingTransport(pending);
       pending.lastEventAt = Date.now();
+
       const streamUrl = responseStreamUrl(responsesUrl, requestId, pending.lastEventId);
       const source = new EventSource(streamUrl);
       pending.eventSource = source;
 
       const handleContentFrame = (responseType, messageEvent) => {
-        if (!isCurrent() || pending.eventSource !== source || pending.cancelRequested) {
+        if (!isCurrent() || pending.eventSource !== source || pending.cancelRequested || pending.finalized) {
           return;
         }
+
         let payload;
         try {
           payload = JSON.parse(messageEvent.data);
         } catch {
           return;
         }
+
         const frameId = messageEvent.lastEventId;
         if (hasSeenResponseFrameId(pending, frameId)) {
           return;
         }
+
         rememberResponseFrameId(pending, frameId);
         pending.lastEventId = frameId || pending.lastEventId;
         pending.lastEventAt = Date.now();
         pending.openedOnce = true;
         pending.streamObserved = true;
+        pending.connectAttempts = 0;
         setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
-        const delta = responseType === 'chat.response.delta' && typeof payload.delta === 'string'
-          ? payload.delta
-          : '';
-
         if (responseType === 'chat.response.delta') {
+          const delta = typeof payload.delta === 'string' ? payload.delta : '';
           if (delta) {
             pending.onChunk?.(delta);
           }
-          return;
+        } else {
+          pending.onStreamEvent?.(payload);
         }
 
-        pending.onStreamEvent?.(payload);
+        if (pending.terminalEvent) {
+          scheduleTerminalFinalization(requestId, pending);
+        }
       };
 
       source.onopen = () => {
-        if (!isCurrent() || pending.eventSource !== source) {
+        if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
         pending.lastEventAt = Date.now();
@@ -192,30 +290,49 @@ export function useChatApi() {
         handleContentFrame('chat.response.event', event);
       });
       source.addEventListener('chat.response.heartbeat', () => {
-        if (!isCurrent() || pending.eventSource !== source) {
+        if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
         pending.lastEventAt = Date.now();
       });
-      source.addEventListener('chat.response.resync_required', () => {
-        if (!isCurrent() || pending.eventSource !== source) {
+      source.addEventListener('chat.response.resync_required', (event) => {
+        if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
           return;
         }
-        pending.desynced = true;
-        cleanupPendingTransport(pending);
+
+        let reason = 'unknown';
+        try {
+          const payload = JSON.parse(event.data);
+          if (typeof payload?.reason === 'string' && payload.reason) {
+            reason = payload.reason;
+          }
+        } catch {
+          // leave the fallback reason in place
+        }
+
+        markDesynced(reason);
+        if (pending.terminalEvent) {
+          scheduleTerminalFinalization(requestId, pending, 0);
+        }
       });
       source.onerror = () => {
-        if (!isCurrent() || pending.eventSource !== source) {
+        if (!isCurrent() || pending.eventSource !== source || pending.finalized) {
+          return;
+        }
+
+        if (pending.terminalEvent) {
+          scheduleTerminalFinalization(requestId, pending);
           return;
         }
         if (pending.cancelRequested) {
           cleanupPendingTransport(pending);
           return;
         }
+
         scheduleReconnect();
       };
       pending.watchdogTimer = setInterval(() => {
-        if (!isCurrent() || pending.eventSource !== source) {
+        if (!isCurrent() || pending.eventSource !== source || pending.finalized || pending.terminalEvent) {
           return;
         }
         if (Date.now() - pending.lastEventAt > RESPONSE_HEARTBEAT_STALE_MS) {
@@ -225,7 +342,7 @@ export function useChatApi() {
     };
 
     connect();
-  }, []);
+  }, [scheduleTerminalFinalization]);
 
   const consumeStreamEvent = useCallback((event) => {
     const type = event?.type;
@@ -251,28 +368,16 @@ export function useChatApi() {
       return;
     }
 
-    cleanupPendingTransport(pending);
     pending.streamObserved = true;
-    pendingStreamsRef.current.delete(requestId);
-    if (activeAcknowledgementRef.current?.requestId === requestId) {
-      activeAcknowledgementRef.current = null;
-    }
-    if (activeStreamRequestIdRef.current === requestId) {
-      activeStreamRequestIdRef.current = null;
+    pending.terminalEvent = { type, payload };
+
+    if (pending.desynced || pending.eventSource === null || pending.cancelRequested) {
+      scheduleTerminalFinalization(requestId, pending, 0);
+      return;
     }
 
-    if (type === 'chat.response.failed') {
-      const message = typeof payload.error === 'string' && payload.error
-        ? payload.error
-        : 'Response generation failed';
-      pending.onError?.(new Error(message));
-      setConnectionState(deriveConnectionState(pendingStreamsRef.current, 'error'));
-    } else {
-      pending.onComplete?.(type === 'chat.response.cancelled' ? 'cancelled' : '');
-      setConnectionState(deriveConnectionState(pendingStreamsRef.current));
-    }
-    pending.resolve();
-  }, []);
+    scheduleTerminalFinalization(requestId, pending);
+  }, [scheduleTerminalFinalization]);
 
   useEffect(() => subscribeUiEvent(consumeStreamEvent), [consumeStreamEvent]);
 
@@ -281,6 +386,8 @@ export function useChatApi() {
       const requestId = createUuid();
       const input = buildResponsesInput(history, message);
       const url = getApiUrl('responses');
+      const { backendMetadata, allowDesyncedCompletion } = splitResponseMetadata(metadata);
+
       let resolveTerminal;
       const terminal = new Promise((resolve) => {
         resolveTerminal = resolve;
@@ -292,17 +399,23 @@ export function useChatApi() {
         onError,
         onStreamEvent,
         resolve: resolveTerminal,
+        terminal,
         cancelRequested: false,
         acknowledged: false,
         streamObserved: false,
         eventSource: null,
         reconnectTimer: null,
         watchdogTimer: null,
+        terminalTimer: null,
         lastEventAt: null,
         lastEventId: null,
         connectAttempts: 0,
         openedOnce: false,
         desynced: false,
+        desyncReason: null,
+        allowDesyncedCompletion,
+        terminalEvent: null,
+        finalized: false,
         receivedFrameIds: [],
       };
 
@@ -314,8 +427,8 @@ export function useChatApi() {
       setConnectionState(deriveConnectionState(pendingStreamsRef.current));
 
       const body = { model: config.chat.defaultModel, input, stream: true };
-      if (metadata && typeof metadata === 'object') {
-        body.metadata = metadata;
+      if (backendMetadata && typeof backendMetadata === 'object') {
+        body.metadata = backendMetadata;
       }
 
       try {
@@ -329,7 +442,7 @@ export function useChatApi() {
         if (activeAcknowledgementRef.current?.requestId === requestId) {
           activeAcknowledgementRef.current = null;
         }
-        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested) {
+        if (pendingStreamsRef.current.get(requestId) === pending && !pending.cancelRequested && !pending.terminalEvent) {
           pending.acknowledged = true;
           setConnectionState(deriveConnectionState(pendingStreamsRef.current));
           openResponseStream(requestId, pending, url);
@@ -341,6 +454,7 @@ export function useChatApi() {
         const currentPending = pendingStreamsRef.current.get(requestId);
         if (currentPending === pending && !pending.cancelRequested && !pending.streamObserved) {
           cleanupPendingTransport(pending);
+          pending.finalized = true;
           pendingStreamsRef.current.delete(requestId);
           if (activeStreamRequestIdRef.current === requestId) {
             activeStreamRequestIdRef.current = null;
@@ -369,6 +483,7 @@ export function useChatApi() {
       pending.cancelRequested = true;
       setConnectionState('cancelling');
     }
+
     const acknowledgement = activeAcknowledgementRef.current;
     if (acknowledgement?.requestId === requestId) {
       acknowledgement.controller.abort();
@@ -383,8 +498,8 @@ export function useChatApi() {
     }).catch((error) => {
       console.warn('Failed to cancel backend response stream', error);
     });
-    // chat.response.cancel_requested is non-terminal. The target request's
-    // canonical chat.response.cancelled event owns cleanup.
+
+    await pending?.terminal;
   }, [getApiUrl]);
 
   return { connectionState, sendMessageStream, cancelStream };

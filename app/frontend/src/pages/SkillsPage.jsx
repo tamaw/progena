@@ -12,7 +12,7 @@ import {
   selectSkills,
   selectSkillsState,
 } from '../store/uiDataSlice';
-import { useSnapshotSave } from '../store/uiData/snapshotSave';
+import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from '../store/uiData/snapshotSave';
 import DetailHeader, {
   DetailHeaderAction,
   DetailHeaderActions,
@@ -33,6 +33,21 @@ import {
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
 
+function skillRefreshDisconnectedError() {
+  return new Error('Skill refresh could not be confirmed because the realtime stream disconnected. Reconnect and refresh again.');
+}
+
+function skillRefreshTimeoutError() {
+  return new Error('Skill refresh was acknowledged, but the updated snapshot did not arrive. Reconnect and refresh again.');
+}
+
+function skillCreateDisconnectedError() {
+  return new Error('Skill creation could not be confirmed because the realtime stream disconnected. Reconnect and refresh before trying again.');
+}
+
+function skillCreateTimeoutError() {
+  return new Error('Skill creation was acknowledged, but the updated snapshot did not arrive. Refresh before trying again so you do not create duplicates.');
+}
 const SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]*$/;
 
 function titleFromSlug(slug) {
@@ -119,6 +134,7 @@ export default function SkillsPage() {
   const [draftContent, setDraftContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState(null);
+  const [pendingLoad, setPendingLoad] = useState(null);
   const [creating, setCreating] = useState(false);
   const [pendingCreatedSkill, setPendingCreatedSkill] = useState(null);
   const [error, setError] = useState(null);
@@ -129,23 +145,97 @@ export default function SkillsPage() {
   const [newAgent, setNewAgent] = useState('progenitor');
   const [newSkillName, setNewSkillName] = useState('new-skill');
   const requestedPath = searchParams.get('path') || '';
-  const loading = skillsState.loading && !skillsState.loaded;
+  const loading = !skillsState.loaded && pendingLoad !== null;
 
   // Request the catalogue only after the canonical stream is ready; the matching
   // `skills.snapshot` event is the sole source of skill data.
   const loadSkills = useCallback(async () => {
+    if (!realtime.connected) {
+      setError(new Error('Reconnect the realtime stream before refreshing skills.'));
+      return false;
+    }
+    const requestId = createUuid();
+    setPendingLoad({ requestId, acknowledged: false });
     setError(null);
-    await dispatch(fetchSkills({ skillsUrl })).unwrap();
-  }, [dispatch, skillsUrl]);
+    try {
+      await dispatch(fetchSkills({ skillsUrl, requestId })).unwrap();
+      setPendingLoad((current) => (
+        current?.requestId === requestId ? { ...current, acknowledged: true } : current
+      ));
+      return true;
+    } catch (loadError) {
+      let failedCurrentLoad = false;
+      setPendingLoad((current) => {
+        failedCurrentLoad = current?.requestId === requestId;
+        return failedCurrentLoad ? null : current;
+      });
+      if (failedCurrentLoad) {
+        setError(loadError);
+      }
+      return false;
+    }
+  }, [dispatch, realtime.connected, skillsUrl]);
 
   useEffect(() => {
     if (!realtime.connected) {
       return;
     }
-    // The acknowledgement failure is reflected in local view state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadSkills().catch(setError);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) {
+        void loadSkills();
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [loadSkills, realtime.connected]);
+
+  useEffect(() => {
+    if (!pendingLoad?.acknowledged || skillsState.snapshotRequestId !== pendingLoad.requestId) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [pendingLoad, skillsState.snapshotRequestId]);
+
+  useEffect(() => {
+    if (!pendingLoad || realtime.connected) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(skillRefreshDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
+  }, [pendingLoad, realtime.connected]);
+
+  useEffect(() => {
+    if (!pendingLoad?.acknowledged || !realtime.connected) {
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => {
+      setPendingLoad(null);
+      setError(skillRefreshTimeoutError());
+    }, SNAPSHOT_EVENT_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  }, [pendingLoad, realtime.connected]);
+
   // Creation is durable only once its own canonical snapshot is applied.
   useEffect(() => {
     if (
@@ -169,6 +259,38 @@ export default function SkillsPage() {
     setPendingCreatedSkill(null);
     setStatusMessage(`Created ${createdSkill.path}.`);
   }, [pendingCreatedSkill, skills, skillsState.snapshotRequestId]);
+
+  useEffect(() => {
+    if (!pendingCreatedSkill || realtime.connected) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setSaving(false);
+      setPendingCreatedSkill(null);
+      setStatusMessage('');
+      setError(skillCreateDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
+  }, [pendingCreatedSkill, realtime.connected]);
+
+  useEffect(() => {
+    if (!pendingCreatedSkill?.acknowledged || !realtime.connected) {
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => {
+      setSaving(false);
+      setPendingCreatedSkill(null);
+      setStatusMessage('');
+      setError(skillCreateTimeoutError());
+    }, SNAPSHOT_EVENT_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  }, [pendingCreatedSkill, realtime.connected]);
 
   // Seed (or re-seed) the selection from the store list whenever it changes via
   // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
@@ -246,6 +368,7 @@ export default function SkillsPage() {
     content: draftContent,
     savedContent: selectedSkill?.content || '',
     saving,
+    realtimeConnected: realtime.connected,
     setDraftContent,
     setSaving,
     setPendingSave,
@@ -306,6 +429,10 @@ export default function SkillsPage() {
     if (saving) {
       return;
     }
+    if (!realtime.connected) {
+      setError(new Error('Reconnect the realtime stream before creating a skill.'));
+      return;
+    }
     const requestId = createUuid();
     setSaving(true);
     setPendingCreatedSkill({
@@ -330,22 +457,20 @@ export default function SkillsPage() {
         current?.requestId === requestId ? { ...current, acknowledged: true } : current
       ));
     } catch (createError) {
-      setPendingCreatedSkill(null);
+      let failedCurrentCreate = false;
+      setPendingCreatedSkill((current) => {
+        failedCurrentCreate = current?.requestId === requestId;
+        return failedCurrentCreate ? null : current;
+      });
       setSaving(false);
-      setError(createError);
+      if (failedCurrentCreate) {
+        setError(createError);
+      }
     }
   };
 
   const handleRefreshList = async () => {
-    if (saving) {
-      return;
-    }
-    setCreating(false);
-    try {
-      await loadSkills();
-    } catch (loadError) {
-      setError(loadError);
-    }
+    await loadSkills();
   };
 
   return (
@@ -365,15 +490,18 @@ export default function SkillsPage() {
         />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search skills" onChange={setQuery} />
-          <button type="button" className="sess-sort" onClick={handleRefreshList}>
+          <button type="button" className="sess-sort" onClick={handleRefreshList} disabled={!realtime.connected || saving || pendingLoad !== null}>
             Refresh
           </button>
         </PaneListToolbar>
 
         <PaneListScroll className="prompts-sidebar-body">
           {loading && <div className="prompts-empty-state">Loading skills...</div>}
-          {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">Failed to load skills.</div>}
-          {!loading && skills.length === 0 && (
+          {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">{error?.message || skillsState.error}</div>}
+          {!loading && !realtime.connected && skills.length === 0 && !(error || skillsState.error) && (
+            <div className="prompts-empty-state">Reconnect the realtime stream to load skills.</div>
+          )}
+          {!loading && skills.length === 0 && realtime.connected && !(error || skillsState.error) && (
             <div className="prompts-empty-state">No skills found. Create one to share reusable behavior with agents.</div>
           )}
           {!loading && visibleSkills.length === 0 && skills.length > 0 && (
@@ -431,7 +559,7 @@ export default function SkillsPage() {
                       ariaLabel="Create skill"
                       variant="primary"
                       onClick={handleCreateSkill}
-                      disabled={!canCreateSkill || saving}
+                      disabled={!canCreateSkill || saving || !realtime.connected}
                     />
                   ) : (
                     <>
@@ -457,7 +585,7 @@ export default function SkillsPage() {
                         ariaLabel="Save skill"
                         variant="primary"
                         onClick={handleSave}
-                        disabled={!hasUnsavedChanges || saving}
+                        disabled={!hasUnsavedChanges || saving || !realtime.connected}
                       />
                     </>
                   )}
@@ -504,7 +632,7 @@ export default function SkillsPage() {
 
             <div className="prompts-editor-footer">
               <span>{creating ? (saving ? 'Saving...' : 'Draft skill') : (saving ? 'Saving...' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved'))}</span>
-              <span>{statusMessage || error?.message || ''}</span>
+              <span>{statusMessage || error?.message || (!realtime.connected ? 'Reconnect the realtime stream to refresh, create, or save skills.' : '')}</span>
             </div>
           </>
         )}

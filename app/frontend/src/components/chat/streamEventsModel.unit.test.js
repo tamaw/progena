@@ -5,6 +5,7 @@ import {
   isReasoningEvent,
   hasReasoningContent,
   countReasoningTimelineEntries,
+  isRenderableStreamEvent,
   normalizeStreamEvent,
   extractReasoningTokenCount,
   appendReasoningText,
@@ -58,18 +59,43 @@ describe('countReasoningTimelineEntries', () => {
   });
 });
 
+describe('isRenderableStreamEvent', () => {
+  it('keeps hidden control events out of the visible timeline', () => {
+    expect(isRenderableStreamEvent({ eventType: 'message_delta' })).toBe(false);
+    expect(isRenderableStreamEvent({ eventType: 'assistant_metadata' })).toBe(false);
+    expect(isRenderableStreamEvent({ eventType: 'node_update', metadata: { node_name: 'pending_response' } })).toBe(false);
+    expect(isRenderableStreamEvent({ eventType: 'node_update', metadata: {} })).toBe(false);
+  });
+
+  it('renders named node updates and ordinary stream rows', () => {
+    expect(isRenderableStreamEvent({ eventType: 'node_update', metadata: { node_name: 'planner' } })).toBe(true);
+    expect(isRenderableStreamEvent({ eventType: 'tool_result', metadata: { tool_name: 'search_web' } })).toBe(true);
+  });
+});
+
 describe('normalizeStreamEvent', () => {
   it('returns null for non-objects', () => {
     expect(normalizeStreamEvent(null, 0)).toBeNull();
     expect(normalizeStreamEvent('x', 0)).toBeNull();
   });
 
-  it('maps event_type and coerces metadata/content', () => {
-    const n = normalizeStreamEvent({ id: 'k', event_type: 'tool_result', content: 7, metadata: [1] }, 0);
+  it('maps event_type, coerces metadata/content, and preserves images plus parseable timestamps', () => {
+    const isoTimestamp = '2026-07-11T02:31:08.000Z';
+    const images = [{ base64: 'abc', media_type: 'image/png' }];
+    const n = normalizeStreamEvent({
+      id: 'k',
+      event_type: 'tool_result',
+      content: 7,
+      metadata: [1],
+      images,
+      timestamp: isoTimestamp,
+    }, 0);
     expect(n.id).toBe('k');
     expect(n.eventType).toBe('tool_result');
-    expect(n.content).toBe(''); // non-string content coerced to ''
-    expect(n.metadata).toEqual({}); // array metadata coerced to {}
+    expect(n.content).toBe('');
+    expect(n.metadata).toEqual({});
+    expect(n.images).toEqual(images);
+    expect(n.timestamp).toBe(Date.parse(isoTimestamp));
   });
 
   it('defaults eventType and generates an id when absent', () => {

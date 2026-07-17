@@ -23,12 +23,18 @@ that changes, this module needs revisiting alongside it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from deepagents._messages_reducer import _messages_delta_reducer
 from langgraph._internal._typing import MISSING
 from langgraph.channels.delta import DeltaChannel
 from langgraph.checkpoint.base import DeltaChannelHistory
+
+
+def _delta_channel_messages_reducer(state: Any, writes: Sequence[Any]) -> Any:
+    """Adapt DeepAgent's list-only reducer to DeltaChannel's Sequence contract."""
+    return _messages_delta_reducer(state, list(writes))
 
 
 def replay_delta_messages(entry: DeltaChannelHistory) -> list[Any]:
@@ -40,7 +46,7 @@ def replay_delta_messages(entry: DeltaChannelHistory) -> list[Any]:
     # blob; from_checkpoint()/replay_writes() never read it, so any positive
     # value reconstructs the same messages.
     channel = DeltaChannel(
-        _messages_delta_reducer,
+        _delta_channel_messages_reducer,
         list,
         snapshot_frequency=1,
     ).from_checkpoint(entry.get("seed", MISSING))

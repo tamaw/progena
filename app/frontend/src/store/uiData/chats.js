@@ -283,6 +283,7 @@ export const eventHandlers = {
   'chat.response.failed': (state, payload) => {
     const requestId = responseRequestIdFor(payload);
     const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
+    const isActiveThread = Boolean(threadId) && state.chats.active.threadId === threadId;
     if (requestId) {
       delete state.chatRuntime.responseThreadsByRequestId[requestId];
     }
@@ -291,9 +292,12 @@ export const eventHandlers = {
       threadId,
     );
     if (threadId) {
-      state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-      if (state.chats.active.threadId !== threadId) {
+      if (isActiveThread) {
+        state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+        state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
+      } else {
         state.chatRuntime.unreadChatIds = addChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
+        state.chatRuntime.erroredChatIds = addChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
       }
     }
   },

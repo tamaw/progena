@@ -23,12 +23,12 @@ from collections import defaultdict
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.sse import EventSourceResponse, ServerSentEvent
+from fastapi.sse import EventSourceResponse, format_sse_event
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
@@ -158,6 +158,23 @@ def _ensure_response_stream(
     return state
 
 
+def _notify_response_stream_subscribers(
+    state: ResponseStreamState, frame: ResponseStreamFrame | None
+) -> None:
+    """Deliver one live frame or terminal wake-up to each subscriber queue."""
+    stale_subscribers: list[asyncio.Queue] = []
+    for queue in list(state.subscribers):
+        try:
+            queue.put_nowait(frame)
+        except asyncio.QueueFull:
+            stale_subscribers.append(queue)
+    for queue in stale_subscribers:
+        task = state.subscribers.pop(queue, None)
+        if task is not None and not task.done():
+            task.cancel()
+        logger.warning("Event queue full for response stream subscriber — closing stale connection")
+
+
 def _append_response_stream_frame(
     state: ResponseStreamState, event_type: str, payload: dict[str, Any]
 ) -> ResponseStreamFrame:
@@ -171,19 +188,18 @@ def _append_response_stream_frame(
     )
     state.frames.append(frame)
     del state.frames[:-RESPONSE_STREAM_REPLAY_LIMIT]
-
-    stale_subscribers: list[asyncio.Queue] = []
-    for queue in list(state.subscribers):
-        try:
-            queue.put_nowait(frame)
-        except asyncio.QueueFull:
-            stale_subscribers.append(queue)
-    for queue in stale_subscribers:
-        task = state.subscribers.pop(queue, None)
-        if task is not None and not task.done():
-            task.cancel()
-        logger.warning("Event queue full for response stream subscriber — closing stale connection")
+    _notify_response_stream_subscribers(state, frame)
     return frame
+
+
+def _mark_response_stream_terminal(state: ResponseStreamState) -> None:
+    """Mark a dedicated response stream terminal and wake waiting subscribers."""
+    if state.terminal_reached:
+        return
+    state.terminal_reached = True
+    state.expires_at = time.time() + RESPONSE_STREAM_TTL_SECONDS
+    _notify_response_stream_subscribers(state, None)
+    _expire_response_stream_later(state.request_id, state)
 
 
 def _expire_response_stream_later(request_id: str, state: ResponseStreamState) -> None:
@@ -1117,20 +1133,27 @@ def _request_correlation_id(request: Request, header_request_id: str | None) -> 
 async def _generate_response_stream(
     state: ResponseStreamState,
     cursor: str | None,
-) -> AsyncGenerator[ServerSentEvent, None]:
+) -> AsyncGenerator[bytes, None]:
     """Yield one request's replayable response content and live frames."""
-    queue: asyncio.Queue[ResponseStreamFrame] = asyncio.Queue(
+    queue: asyncio.Queue[ResponseStreamFrame | None] = asyncio.Queue(
         maxsize=RESPONSE_STREAM_SUBSCRIBER_QUEUE_SIZE
     )
     current_task = asyncio.current_task()
     state.subscribers[queue] = current_task
 
+    def encode_event(
+        event: str,
+        payload: dict[str, Any],
+        event_id: str | None = None,
+    ) -> bytes:
+        return cast(bytes, format_sse_event(data_str=json.dumps(payload), event=event, id=event_id))
+
     try:
         cursor_status, cursor_seq = _parse_response_stream_cursor(state.request_id, cursor)
         if cursor_status == "invalid":
-            yield ServerSentEvent(
-                event="chat.response.resync_required",
-                data={"request_id": state.request_id, "reason": "invalid_cursor"},
+            yield encode_event(
+                "chat.response.resync_required",
+                {"request_id": state.request_id, "reason": "invalid_cursor"},
             )
             return
 
@@ -1138,9 +1161,9 @@ async def _generate_response_stream(
         if cursor_status == "ok":
             assert cursor_seq is not None
             if retained_frames and cursor_seq < retained_frames[0].seq - 1:
-                yield ServerSentEvent(
-                    event="chat.response.resync_required",
-                    data={"request_id": state.request_id, "reason": "cursor_expired"},
+                yield encode_event(
+                    "chat.response.resync_required",
+                    {"request_id": state.request_id, "reason": "cursor_expired"},
                 )
                 return
         else:
@@ -1148,48 +1171,58 @@ async def _generate_response_stream(
 
         for frame in retained_frames:
             if frame.seq > cursor_seq:
-                yield ServerSentEvent(event=frame.event_type, data=frame.payload, id=frame.id)
+                yield encode_event(frame.event_type, frame.payload, frame.id)
 
-        while not (state.terminal_reached and queue.empty()):
+        while True:
+            if state.terminal_reached and queue.empty():
+                break
             try:
-                frame = await asyncio.wait_for(
-                    queue.get(), timeout=RESPONSE_STREAM_KEEPALIVE_SECONDS
-                )
-                yield ServerSentEvent(event=frame.event_type, data=frame.payload, id=frame.id)
+                async with asyncio.timeout(RESPONSE_STREAM_KEEPALIVE_SECONDS):
+                    queued_frame = await queue.get()
             except TimeoutError:
                 if state.terminal_reached and queue.empty():
                     break
-                yield ServerSentEvent(
-                    event="chat.response.heartbeat",
-                    data={"request_id": state.request_id, "timestamp": time.time()},
+                yield encode_event(
+                    "chat.response.heartbeat",
+                    {"request_id": state.request_id, "timestamp": time.time()},
                 )
+                continue
+
+            if queued_frame is None:
+                if state.terminal_reached and queue.empty():
+                    break
+                continue
+            yield encode_event(queued_frame.event_type, queued_frame.payload, queued_frame.id)
     finally:
         state.subscribers.pop(queue, None)
 
 
-@app.get(
-    "/api/ui/responses/{request_id}/stream",
-    response_class=EventSourceResponse,
-)
+@app.get("/api/ui/responses/{request_id}/stream")
 async def response_stream(
     request_id: str,
-    response: Response,
     after: str | None = Query(default=None),
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
-) -> AsyncGenerator[ServerSentEvent, None]:
+) -> EventSourceResponse:
     """Serve replayable response content without loading the global UI stream."""
     if not request_id.strip():
         raise HTTPException(status_code=404, detail="Unknown response stream")
+
     state = _response_streams.get(request_id)
-    if state is None:
+    now = time.time()
+    if state is None or (state.expires_at is not None and now >= state.expires_at):
+        if state is not None and _response_streams.get(request_id) is state:
+            _response_streams.pop(request_id, None)
         raise HTTPException(status_code=404, detail="Unknown response stream")
 
-    response.headers["X-Accel-Buffering"] = "no"
-    response.headers["Cache-Control"] = "no-cache"
-    response.headers["Connection"] = "keep-alive"
     cursor = last_event_id if last_event_id is not None else after
-    async for event in _generate_response_stream(state, cursor):
-        yield event
+    return EventSourceResponse(
+        _generate_response_stream(state, cursor),
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 @app.post("/api/ui/responses", status_code=202, response_model=UiRequestAcknowledgement)
@@ -1402,11 +1435,9 @@ async def _run_response_event_stream(
         }
 
     def mark_response_stream_terminal() -> None:
-        if response_stream_state is None or response_stream_state.terminal_reached:
+        if response_stream_state is None:
             return
-        response_stream_state.terminal_reached = True
-        response_stream_state.expires_at = time.time() + RESPONSE_STREAM_TTL_SECONDS
-        _expire_response_stream_later(request_id, response_stream_state)
+        _mark_response_stream_terminal(response_stream_state)
 
     def emit_cancelled() -> None:
         broadcast_ui_event(

@@ -50,9 +50,67 @@ function exportStateFor(state, requestId, payload = {}) {
   }
   return state.logs.exportsByRequestId[requestId];
 }
+function entryTimestampMs(entry) {
+  const rawTimestamp = entry?.timestamp ?? entry?.created_at ?? null;
+  if (typeof rawTimestamp === 'number' && Number.isFinite(rawTimestamp)) {
+    return rawTimestamp;
+  }
+  if (typeof rawTimestamp === 'string' && rawTimestamp) {
+    const parsed = Date.parse(rawTimestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function logsQueryKey(payload) {
+  const filters = payload?.filters || {};
+  return JSON.stringify({
+    level: filters.level || '',
+    search: filters.search || '',
+    source: filters.source || '',
+    folder: filters.folder || '',
+    file: filters.file || '',
+    start: filters.start || '',
+    end: filters.end || '',
+    format: filters.format || '',
+    search_mode: filters.search_mode || '',
+  });
+}
+
+function shouldApplyLogsPage(currentPage, nextPage) {
+  const currentRequestId = typeof currentPage?.request_id === 'string' && currentPage.request_id
+    ? currentPage.request_id
+    : null;
+  const nextRequestId = typeof nextPage?.request_id === 'string' && nextPage.request_id
+    ? nextPage.request_id
+    : null;
+  if (!currentPage || !currentRequestId || !nextRequestId || currentRequestId === nextRequestId) {
+    return true;
+  }
+  if (logsQueryKey(currentPage) !== logsQueryKey(nextPage)) {
+    return true;
+  }
+  const currentEntries = Array.isArray(currentPage.entries) ? currentPage.entries : [];
+  const nextEntries = Array.isArray(nextPage.entries) ? nextPage.entries : [];
+  if (!currentEntries.length) {
+    return nextEntries.length > 0;
+  }
+  if (!nextEntries.length) {
+    return false;
+  }
+  const currentTimestamp = entryTimestampMs(currentEntries[0]);
+  const nextTimestamp = entryTimestampMs(nextEntries[0]);
+  if (currentTimestamp == null || nextTimestamp == null) {
+    return false;
+  }
+  return nextTimestamp > currentTimestamp;
+}
 
 export const eventHandlers = {
   'logs.page.loaded': (state, payload) => {
+    if (!shouldApplyLogsPage(state.logs.page, payload)) {
+      return;
+    }
     state.logs.page = payload;
     state.logs.requestId = payload.request_id || null;
     state.logs.loaded = true;
