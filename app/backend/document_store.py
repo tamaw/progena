@@ -256,7 +256,7 @@ class PostgresDocumentStore:
     def database_url(self) -> str:
         return self._database_url
 
-    def _create_pool(self) -> ConnectionPool:
+    def _create_pool(self) -> ConnectionPool[psycopg.Connection[dict[str, Any]]]:
         return ConnectionPool(
             conninfo=self._database_url,
             kwargs={"autocommit": True, "row_factory": dict_row},

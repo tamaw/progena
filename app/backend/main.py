@@ -1177,9 +1177,8 @@ async def _generate_response_stream(
             if state.terminal_reached and queue.empty():
                 break
             try:
-                frame = await asyncio.wait_for(
-                    queue.get(), timeout=RESPONSE_STREAM_KEEPALIVE_SECONDS
-                )
+                async with asyncio.timeout(RESPONSE_STREAM_KEEPALIVE_SECONDS):
+                    queued_frame = await queue.get()
             except TimeoutError:
                 if state.terminal_reached and queue.empty():
                     break
@@ -1189,11 +1188,11 @@ async def _generate_response_stream(
                 )
                 continue
 
-            if frame is None:
+            if queued_frame is None:
                 if state.terminal_reached and queue.empty():
                     break
                 continue
-            yield encode_event(frame.event_type, frame.payload, frame.id)
+            yield encode_event(queued_frame.event_type, queued_frame.payload, queued_frame.id)
     finally:
         state.subscribers.pop(queue, None)
 
