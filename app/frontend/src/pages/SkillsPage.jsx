@@ -229,11 +229,11 @@ export default function SkillsPage() {
     if (!pendingLoad?.acknowledged || !realtime.connected) {
       return undefined;
     }
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setPendingLoad(null);
       setError(skillRefreshTimeoutError());
     }, SNAPSHOT_EVENT_TIMEOUT_MS);
-    return () => window.clearTimeout(timeoutId);
+    return () => clearTimeout(timeoutId);
   }, [pendingLoad, realtime.connected]);
 
   // Creation is durable only once its own canonical snapshot is applied.
@@ -283,13 +283,13 @@ export default function SkillsPage() {
     if (!pendingCreatedSkill?.acknowledged || !realtime.connected) {
       return undefined;
     }
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setSaving(false);
       setPendingCreatedSkill(null);
       setStatusMessage('');
       setError(skillCreateTimeoutError());
     }, SNAPSHOT_EVENT_TIMEOUT_MS);
-    return () => window.clearTimeout(timeoutId);
+    return () => clearTimeout(timeoutId);
   }, [pendingCreatedSkill, realtime.connected]);
 
   // Seed (or re-seed) the selection from the store list whenever it changes via
