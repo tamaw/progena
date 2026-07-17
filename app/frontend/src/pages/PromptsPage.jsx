@@ -203,23 +203,49 @@ export default function PromptsPage() {
     if (!realtime.connected) {
       return;
     }
-    void loadPrompts();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) {
+        void loadPrompts();
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [loadPrompts, realtime.connected]);
 
   useEffect(() => {
     if (!pendingLoad?.acknowledged || promptsState.snapshotRequestId !== pendingLoad.requestId) {
       return;
     }
-    setPendingLoad(null);
-    setError(null);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(null);
+    });
+    return () => {
+      active = false;
+    };
   }, [pendingLoad, promptsState.snapshotRequestId]);
 
   useEffect(() => {
     if (!pendingLoad || realtime.connected) {
       return;
     }
-    setPendingLoad(null);
-    setError(promptRefreshDisconnectedError());
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(promptRefreshDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
   }, [pendingLoad, realtime.connected]);
 
   useEffect(() => {

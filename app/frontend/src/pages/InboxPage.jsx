@@ -127,7 +127,6 @@ export default function InboxPage() {
     if (routedMessageId) {
       hasAutoSelectedRef.current = true;
       if (!messages.some((message) => message.id === routedMessageId)) {
-        setFallbackSelectedId(null);
         navigate('/inbox', { replace: true });
       }
       return;

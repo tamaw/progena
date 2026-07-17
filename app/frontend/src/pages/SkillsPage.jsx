@@ -180,23 +180,49 @@ export default function SkillsPage() {
     if (!realtime.connected) {
       return;
     }
-    void loadSkills();
+    let active = true;
+    queueMicrotask(() => {
+      if (active) {
+        void loadSkills();
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [loadSkills, realtime.connected]);
 
   useEffect(() => {
     if (!pendingLoad?.acknowledged || skillsState.snapshotRequestId !== pendingLoad.requestId) {
       return;
     }
-    setPendingLoad(null);
-    setError(null);
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(null);
+    });
+    return () => {
+      active = false;
+    };
   }, [pendingLoad, skillsState.snapshotRequestId]);
 
   useEffect(() => {
     if (!pendingLoad || realtime.connected) {
       return;
     }
-    setPendingLoad(null);
-    setError(skillRefreshDisconnectedError());
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(skillRefreshDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
   }, [pendingLoad, realtime.connected]);
 
   useEffect(() => {
@@ -238,10 +264,19 @@ export default function SkillsPage() {
     if (!pendingCreatedSkill || realtime.connected) {
       return;
     }
-    setSaving(false);
-    setPendingCreatedSkill(null);
-    setStatusMessage('');
-    setError(skillCreateDisconnectedError());
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setSaving(false);
+      setPendingCreatedSkill(null);
+      setStatusMessage('');
+      setError(skillCreateDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
   }, [pendingCreatedSkill, realtime.connected]);
 
   useEffect(() => {
