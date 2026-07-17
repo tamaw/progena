@@ -4,11 +4,13 @@ const reactHarness = vi.hoisted(() => {
   let refs = [];
   let effects = [];
   let hookIndex = 0;
+  let nextRefValues = [];
 
   return {
-    beginRender() {
+    beginRender(initialRefValues = []) {
       hookIndex = 0;
       effects = [];
+      nextRefValues = [...initialRefValues];
     },
     flushEffects() {
       const cleanups = [];
@@ -24,6 +26,7 @@ const reactHarness = vi.hoisted(() => {
       refs = [];
       effects = [];
       hookIndex = 0;
+      nextRefValues = [];
     },
     useEffect(effect) {
       effects.push(effect);
@@ -32,7 +35,9 @@ const reactHarness = vi.hoisted(() => {
       const index = hookIndex;
       hookIndex += 1;
       if (!refs[index]) {
-        refs[index] = { current: initialValue };
+        refs[index] = {
+          current: nextRefValues.length > 0 ? nextRefValues.shift() : initialValue,
+        };
       }
       return refs[index];
     },
@@ -46,10 +51,21 @@ vi.mock('react', () => ({
 
 import useStickyScroll from './useStickyScroll';
 
+function TestHarness({ dep, onResult }) {
+  const hookResult = useStickyScroll(dep);
+  onResult(hookResult);
+  return null;
+}
+
 function renderHook(dep, element) {
-  reactHarness.beginRender();
-  const result = useStickyScroll(dep);
-  result.ref.current = element;
+  reactHarness.beginRender([element]);
+  let result;
+  TestHarness({
+    dep,
+    onResult: (value) => {
+      result = value;
+    },
+  });
   const cleanups = reactHarness.flushEffects();
   return { result, cleanups };
 }
