@@ -252,11 +252,11 @@ export default function PromptsPage() {
     if (!pendingLoad?.acknowledged || !realtime.connected) {
       return undefined;
     }
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setPendingLoad(null);
       setError(promptRefreshTimeoutError());
     }, SNAPSHOT_EVENT_TIMEOUT_MS);
-    return () => window.clearTimeout(timeoutId);
+    return () => clearTimeout(timeoutId);
   }, [pendingLoad, realtime.connected]);
   // Seed (or re-seed) the selection from the store list whenever it changes via
   // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid

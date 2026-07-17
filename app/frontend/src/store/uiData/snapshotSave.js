@@ -54,13 +54,13 @@ export function useSnapshotSave({
       return undefined;
     }
     setStatusMessage(`Save acknowledged. Waiting for ${pendingSave.path} to refresh.`);
-    const timeoutId = window.setTimeout(() => {
+    const timeoutId = setTimeout(() => {
       setSaving(false);
       setPendingSave(null);
       setStatusMessage('');
       setError(saveSnapshotTimeoutError(pendingSave.path));
     }, SNAPSHOT_EVENT_TIMEOUT_MS);
-    return () => window.clearTimeout(timeoutId);
+    return () => clearTimeout(timeoutId);
   }, [pendingSave, realtimeConnected, setError, setPendingSave, setSaving, setStatusMessage]);
 
   return useCallback(async () => {
