@@ -108,19 +108,20 @@ FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 - `document_store.py` — Postgres-backed document store
 - `state_reader.py` — reads `data/state/`, `data/config/`, `logs/` for UI routes
 
-**SSE / realtime pattern (event-stream-only)**: `GET /api/ui/stream` is the single browser data transport, emitting `UiEventEnvelope` frames (`event: ui.event`). Every other retained `/api/ui/*` route returns `202` with a `UiRequestAcknowledgement` body (`request_id` + `event_types`) and never carries application data; the causal `ui.event` (correlated by the `X-Request-ID` header the frontend sends) is the only source of result data. Use `broadcast_ui_event()` for backend-owned state changes; pass the caller's `request_id`. The frontend consumes the stream through Redux Toolkit listener middleware in `app/frontend/src/store/realtimeListener.js`; reducers in `uiDataSlice.js` apply domain updates. Pages should use selectors, not open their own streams. See `EVENT_STREAM_REFACTOR_PLAN.md` and `docs/BACKEND.md` for the full contract.
+**SSE / realtime pattern**: the browser always keeps one canonical `GET /api/ui/stream` connection for `UiEventEnvelope` frames (`event: ui.event`). Retained `/api/ui/*` finite routes still return `202` with `UiRequestAcknowledgement` (`request_id` + `event_types`) and never carry application data in the success body. For browser chat requests with `stream: true`, the client also opens a request-scoped `GET /api/ui/responses/{request_id}/stream` `EventSource` that carries only `chat.response.delta` and `chat.response.event` content frames plus heartbeat/resync transport events. Canonical `/api/ui/stream` still owns chat lifecycle (`started`, `completed`, `failed`, `cancelled`) and all non-chat UI events. Use `broadcast_ui_event()` for backend-owned canonical state changes; pass the caller's `request_id`. Pages should use selectors, not open their own app-lifetime streams. See `EVENT_STREAM_REFACTOR_PLAN.md` and `docs/BACKEND.md` for the full contract.
 
-**Chat session loading**: `GET /api/ui/chats` returns a `202` acknowledgement and emits `chat.sessions.snapshot` on the stream. `GET /api/ui/chats/{id}` emits `chat.session.upserted` and `chat.session.selected` (matched by `request_id` so multiple tabs don't interfere).
+**Chat session loading**: `GET /api/ui/chats` returns a `202` acknowledgement and emits `chat.sessions.snapshot` on the canonical stream. `GET /api/ui/chats/{id}` emits `chat.session.upserted` and `chat.session.selected` (matched by `request_id` so multiple tabs don't interfere).
 
-**Chat generation**: `POST /api/ui/responses` returns a `202` acknowledgement; tokens and structured runtime stream events arrive as `chat.response.started|delta|event|completed|failed|cancelled` frames on `/api/ui/stream`. Live subagent/A2A/tool lifecycle events ride `chat.response.event` payloads (`event_type`, `content`, `metadata`, optional `images`).
+**Chat generation**: `POST /api/ui/responses` returns a `202` acknowledgement. Canonical `/api/ui/stream` carries `chat.response.started`, `chat.response.completed`, `chat.response.failed`, and `chat.response.cancelled`. Dedicated `/api/ui/responses/{request_id}/stream` carries the live `chat.response.delta` and `chat.response.event` frames for that one request; structured event payloads preserve `event_type`, `content`, `metadata`, and optional `images`.
 
 ### Frontend (`app/frontend/`)
 
 React + Vite SPA. State management via Redux Toolkit (`app/frontend/src/store/`):
 - `store.js` — Redux store
-- `realtimeListener.js` — owns the single `EventSource`, deduplicates by event id
+- `realtimeListener.js` — owns the canonical `EventSource`, deduplicates `ui.event` envelopes by event id
 - `realtimeSlice.js` — dedup state
-- `uiDataSlice.js` — domain state updated by incoming events
+- `uiDataSlice.js` — domain state updated by incoming canonical events
+- `hooks/api/useChatApi.js` — owns the request-scoped response `EventSource` used by active streaming chat requests
 
 Router in `App.jsx` wraps all routes under `AppRuntimeShell`. Pages: ConversationPage, DashboardPage, AgentsPage, WorkspacePage, and more.
 

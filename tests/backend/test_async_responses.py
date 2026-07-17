@@ -165,6 +165,65 @@ class TestAsyncResponseHandling:
             ("Last-Event-ID", "header"),
         } <= parameters
 
+    def test_missing_or_expired_response_stream_returns_404_before_sse_commit(self):
+        """Unavailable response streams must fail as HTTP 404s, not half-open SSE responses."""
+        import app.backend.main as backend_main
+
+        expired_request_id = "expired-response-stream"
+        expired_state = backend_main._ensure_response_stream(
+            expired_request_id, "resp-expired", "thread-expired", "progenitor-v1"
+        )
+        expired_state.expires_at = time.time() - 1
+
+        try:
+            with (
+                _live_backend() as base_url,
+                httpx.Client(base_url=base_url, timeout=5) as live_client,
+            ):
+                missing_response = live_client.get(
+                    "/api/ui/responses/missing-response-stream/stream"
+                )
+                expired_response = live_client.get(f"/api/ui/responses/{expired_request_id}/stream")
+        finally:
+            backend_main._response_streams.pop(expired_request_id, None)
+
+        for response in (missing_response, expired_response):
+            assert response.status_code == 404
+            assert not response.headers["content-type"].startswith("text/event-stream")
+            assert response.headers["content-type"].startswith("application/json")
+            assert response.json() == {"detail": "Unknown response stream"}
+
+        assert expired_request_id not in backend_main._response_streams
+
+    def test_terminal_response_stream_without_frames_closes_cleanly_with_sse_headers(self):
+        """A terminal request with no replayable content should return SSE headers and EOF immediately."""
+        import app.backend.main as backend_main
+
+        request_id = "terminal-empty-response-stream"
+        state = backend_main._ensure_response_stream(
+            request_id, "resp-empty", "thread-empty", "progenitor-v1"
+        )
+        state.terminal_reached = True
+
+        try:
+            with (
+                _live_backend() as base_url,
+                httpx.Client(
+                    base_url=base_url,
+                    timeout=httpx.Timeout(1.0, connect=5.0),
+                ) as live_client,
+            ):
+                response = live_client.get(f"/api/ui/responses/{request_id}/stream")
+        finally:
+            backend_main._response_streams.pop(request_id, None)
+
+        assert response.status_code == 200
+        assert response.headers["content-type"].startswith("text/event-stream")
+        assert response.headers["x-accel-buffering"] == "no"
+        assert response.headers["cache-control"] == "no-cache"
+        assert response.headers["connection"] == "keep-alive"
+        assert response.text == ""
+
     def test_streaming_responses_use_session_thread_id(self, monkeypatch):
         """Canonical SSE carries lifecycle while its response stream carries text deltas."""
         import app.backend.main as backend_main
@@ -533,6 +592,49 @@ class TestAsyncResponseHandling:
         assert expired_frame == (
             "chat.response.resync_required",
             {"request_id": expired_request_id, "reason": "cursor_expired"},
+            None,
+        )
+
+    def test_last_event_id_header_takes_precedence_over_after_query(self):
+        """When both cursors are present, the browser's Last-Event-ID must win over the query string."""
+        import app.backend.main as backend_main
+
+        request_id = "last-event-id-precedence"
+        state = backend_main._ensure_response_stream(
+            request_id, "resp-precedence", "thread-precedence", "progenitor-v1"
+        )
+        first = backend_main._append_response_stream_frame(
+            state,
+            "chat.response.delta",
+            {"request_id": request_id, "delta": "first"},
+        )
+        backend_main._append_response_stream_frame(
+            state,
+            "chat.response.delta",
+            {"request_id": request_id, "delta": "second"},
+        )
+        state.terminal_reached = True
+
+        try:
+            with (
+                _live_backend() as base_url,
+                httpx.Client(base_url=base_url, timeout=5) as live_client,
+                live_client.stream(
+                    "GET",
+                    f"/api/ui/responses/{request_id}/stream?after={first.id}",
+                    headers={"Last-Event-ID": "not-a-response-cursor"},
+                ) as response_stream,
+            ):
+                assert response_stream.status_code == 200
+                response_lines = response_stream.iter_lines()
+                frame = _next_response_sse_frame(response_lines)
+                assert list(response_lines) == []
+        finally:
+            backend_main._response_streams.pop(request_id, None)
+
+        assert frame == (
+            "chat.response.resync_required",
+            {"request_id": request_id, "reason": "invalid_cursor"},
             None,
         )
 

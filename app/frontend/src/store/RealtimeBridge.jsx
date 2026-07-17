@@ -5,12 +5,20 @@ import { startRealtimeStream, stopRealtimeStream } from './realtimeListener';
 import { selectRealtimeConnected } from './realtimeSlice';
 import { fetchChatSessions, fetchInbox, selectGeneratingChatIds } from './uiDataSlice';
 
+function selectHasActiveChatGeneration(state) {
+  const selectedGeneratingChatIds = selectGeneratingChatIds(state);
+  const generatingChatIds = Array.isArray(selectedGeneratingChatIds)
+    ? selectedGeneratingChatIds
+    : [];
+  const responseThreadsByRequestId = state?.uiData?.chatRuntime?.responseThreadsByRequestId || {};
+  return generatingChatIds.length > 0 || Object.keys(responseThreadsByRequestId).length > 0;
+}
+
 export default function RealtimeBridge() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtimeConnected = useSelector(selectRealtimeConnected);
-  const generatingChatIds = useSelector(selectGeneratingChatIds);
-  const hasActiveGeneration = generatingChatIds.length > 0;
+  const hasActiveGeneration = useSelector(selectHasActiveChatGeneration);
   const requestedChatsUrlRef = useRef(null);
   const requestedInboxUrlRef = useRef(null);
   const streamUrl = getApiUrl('stream');
@@ -30,8 +38,8 @@ export default function RealtimeBridge() {
       return;
     }
     // Reconnect recovery needs a fresh roster because EventSource cannot
-    // request replay IDs. Delay that large Redux snapshot until active chat
-    // streaming settles so it cannot block text delivery on the main thread.
+    // request replay IDs. Delay that large Redux snapshot until any foreground
+    // or background chat streaming settles so it cannot block text delivery on the main thread.
     if (hasActiveGeneration) {
       return;
     }

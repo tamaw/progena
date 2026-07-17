@@ -136,6 +136,7 @@ class RuntimeChatService:
         async with self._direct_graph_lock():
             bridge = self._create_direct_stream_bridge()
             cancelled = False
+            bridge_cancelled = False
 
             # bridge.stream() can go silent for minutes at a time (a long tool
             # call or subagent invocation with no interim output), which would
@@ -151,9 +152,13 @@ class RuntimeChatService:
                         message, thread_id=thread_id, received_at=received_at
                     ):
                         await queue.put(("item", item))
+                except asyncio.CancelledError:
+                    with contextlib.suppress(asyncio.QueueFull):
+                        queue.put_nowait(("cancelled", None))
+                    raise
                 except Exception as exc:  # noqa: BLE001 - forwarded to the consumer below
                     await queue.put(("error", exc))
-                finally:
+                else:
                     await queue.put(("done", None))
 
             producer = asyncio.create_task(_produce())
@@ -177,6 +182,10 @@ class RuntimeChatService:
                         break
 
                     if kind == "done":
+                        break
+
+                    if kind == "cancelled":
+                        bridge_cancelled = True
                         break
 
                     if kind == "error":
@@ -247,6 +256,10 @@ class RuntimeChatService:
                 producer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await producer
+
+            if bridge_cancelled and not cancel_event.is_set():
+                logger.info("Direct DeepAgent bridge cancelled for %s", request_id)
+                return
 
             if cancelled or cancel_event.is_set():
                 logger.info("Direct DeepAgent stream cancelled for %s", request_id)

@@ -81,7 +81,6 @@ export const eventHandlers = {
   },
   'agent.upserted': (state, payload) => {
     upsertAgent(state.agents, payload.agent);
-    state.agents.loaded = true;
   },
   'agent.selected': (state, payload) => {
     if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {
@@ -108,10 +107,6 @@ export function buildExtraReducers(builder) {
   addRequestLifecycle(builder, fetchAgentProfiles, {
     select: (state) => state.agents,
     errorMessage: 'Failed to load agents',
-    onFulfilled: (state) => {
-      state.agents.loading = false;
-      state.agents.loaded = true;
-    },
   });
   return addRequestLifecycle(builder, requestAgentDetail, {
     select: (state) => state.agents.active,

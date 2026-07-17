@@ -33,6 +33,7 @@ import { useChatApi } from './useChatApi';
 const RESPONSES_URL = '/api/ui/responses';
 const REQUEST_ID = '11111111-1111-4111-8111-111111111111';
 const CANCEL_REQUEST_ID = '22222222-2222-4222-8222-222222222222';
+const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 
 class MockEventSource {
   static instances = [];
@@ -197,14 +198,66 @@ describe('useChatApi dedicated response transport', () => {
     );
 
     publishLifecycle('chat.response.completed');
+    await vi.advanceTimersByTimeAsync(50);
     await terminal;
   });
 
-  it('waits for the canonical terminal lifecycle after dedicated transport requests resynchronization', async () => {
+  it('waits through the terminal drain window so late dedicated frames still reach the caller', async () => {
+    vi.useFakeTimers();
+    const observed = [];
+    const onComplete = vi.fn((result) => observed.push(['complete', result]));
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream(
+      'Finish after the last frame',
+      [],
+      (delta) => observed.push(['delta', delta]),
+      onComplete,
+      vi.fn(),
+      (event) => observed.push(['event', event.event_type, event.content]),
+    );
+    await flushMicrotasks();
+
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.delta', { delta: 'First' }, `chat-response:${REQUEST_ID}:1`);
+
+    publishLifecycle('chat.response.completed');
+    expect(onComplete).not.toHaveBeenCalled();
+
+    source.emit('chat.response.delta', { delta: ' late' }, `chat-response:${REQUEST_ID}:2`);
+    source.emit('chat.response.event', {
+      event_type: 'tool_result',
+      content: 'arrived after terminal',
+      metadata: {},
+    }, `chat-response:${REQUEST_ID}:3`);
+
+    await vi.advanceTimersByTimeAsync(49);
+    expect(onComplete).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await terminal;
+
+    expect(observed).toEqual([
+      ['delta', 'First'],
+      ['delta', ' late'],
+      ['event', 'tool_result', 'arrived after terminal'],
+      ['complete', ''],
+    ]);
+  });
+
+  it('allows opted-in chat streams to wait for the canonical terminal lifecycle after resynchronization', async () => {
+    vi.useFakeTimers();
     const onComplete = vi.fn();
     const onError = vi.fn();
     const hook = useChatApi();
-    const terminal = hook.sendMessageStream('Recover persisted reply', [], vi.fn(), onComplete, onError, vi.fn());
+    const terminal = hook.sendMessageStream(
+      'Recover persisted reply',
+      [],
+      vi.fn(),
+      onComplete,
+      onError,
+      vi.fn(),
+      { [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true } },
+    );
     let settled = false;
     terminal.then(() => {
       settled = true;
@@ -221,14 +274,39 @@ describe('useChatApi dedicated response transport', () => {
     expect(onError).not.toHaveBeenCalled();
 
     publishLifecycle('chat.response.completed');
+    await vi.runOnlyPendingTimersAsync();
     await terminal;
 
     expect(settled).toBe(true);
     expect(onComplete).toHaveBeenCalledOnce();
+    expect(onComplete).toHaveBeenCalledWith('');
     expect(onError).not.toHaveBeenCalled();
   });
 
+  it('fails desynced quick-chat completions explicitly instead of silently completing empty', async () => {
+    vi.useFakeTimers();
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+    const hook = useChatApi();
+    const terminal = hook.sendMessageStream('Recover persisted reply', [], vi.fn(), onComplete, onError, vi.fn());
+    await flushMicrotasks();
+
+    const source = MockEventSource.instances[0];
+    source.emit('chat.response.resync_required', { request_id: REQUEST_ID, reason: 'cursor_expired' });
+    publishLifecycle('chat.response.completed');
+
+    await vi.runOnlyPendingTimersAsync();
+    await terminal;
+
+    expect(onComplete).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onError.mock.calls[0][0]).toEqual(expect.objectContaining({
+      message: 'Response stream expired before completion',
+    }));
+  });
+
   it('ignores cancel_requested until the target request receives canonical cancellation', async () => {
+    vi.useFakeTimers();
     const onComplete = vi.fn();
     const hook = useChatApi();
     const terminal = hook.sendMessageStream('Stop this response', [], vi.fn(), onComplete, vi.fn(), vi.fn());
@@ -240,7 +318,8 @@ describe('useChatApi dedicated response transport', () => {
 
     const source = MockEventSource.instances[0];
     globalThis.crypto.randomUUID.mockReturnValueOnce(CANCEL_REQUEST_ID);
-    await hook.cancelStream();
+    const cancelPromise = hook.cancelStream();
+    await flushMicrotasks();
 
     expect(fetchMock).toHaveBeenLastCalledWith(
       `${RESPONSES_URL}/${REQUEST_ID}/cancel`,
@@ -262,6 +341,8 @@ describe('useChatApi dedicated response transport', () => {
     expect(onComplete).not.toHaveBeenCalled();
 
     publishLifecycle('chat.response.cancelled');
+    await vi.runOnlyPendingTimersAsync();
+    await cancelPromise;
     await terminal;
 
     expect(source.closed).toBe(true);

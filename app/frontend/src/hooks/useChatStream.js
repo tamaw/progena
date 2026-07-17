@@ -21,6 +21,7 @@ import {
 } from '../components/chat/liveAssistantTurnModel';
 import { createLiveAssistantTurnStore } from '../components/chat/liveAssistantTurnStore';
 import { resolveBackgroundStreamOutcome, shouldPreserveStreamInBackground } from './chatStreamModel';
+const FRONTEND_RESPONSE_OPTIONS_KEY = '__frontendResponse';
 const noop = () => {};
 
 function resolveSelectedBackendChat(activeBackendChat, selectedBackendChatId) {
@@ -212,6 +213,7 @@ export function useChatStream({
   }, [dispatch, getApiUrl, reloadOpenChat]);
 
   const handleSend = useCallback(async (content) => {
+    preserveStreamInBackground();
     const userMessage = {
       id: `msg_${Date.now()}`,
       role: 'user',
@@ -246,9 +248,10 @@ export function useChatStream({
       activeBackendChat,
       selectedBackendChatId,
     );
-    const threadMetadata = selectedBackendChat?.thread_id
-      ? { thread_id: selectedBackendChat.thread_id }
-      : null;
+    const threadMetadata = {
+      [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true },
+      ...(selectedBackendChat?.thread_id ? { thread_id: selectedBackendChat.thread_id } : {}),
+    };
 
     // The chat this stream belongs to, captured as a closure-local so
     // background completion can update the right sidebar card later. Falls
@@ -435,6 +438,7 @@ export function useChatStream({
     discardPendingText,
     flushPendingText,
     queueTextChunk,
+    preserveStreamInBackground,
     onForegroundStreamStarted,
     requestForegroundReconciliation,
     clearLiveTurnForStream,
@@ -452,9 +456,7 @@ export function useChatStream({
     show,
   ]);
 
-  const handleStop = useCallback(() => {
-    cancelStream();
-  }, [cancelStream]);
+  const handleStop = useCallback(() => cancelStream(), [cancelStream]);
 
   return {
     isGenerating,

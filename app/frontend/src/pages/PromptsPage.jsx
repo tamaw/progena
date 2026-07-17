@@ -4,13 +4,14 @@ import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
 import { useConfig } from '../context/ConfigContext';
 import { renderMarkdownToHtml } from '../lib/markdown';
+import { createUuid } from '../lib/uuid';
 import {
   fetchPrompts,
   savePrompt,
   selectPrompts,
   selectPromptsState,
 } from '../store/uiDataSlice';
-import { useSnapshotSave } from '../store/uiData/snapshotSave';
+import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from '../store/uiData/snapshotSave';
 import {
   PaneCollapseSeam,
   PaneExpandRail,
@@ -22,6 +23,14 @@ import {
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
+
+function promptRefreshDisconnectedError() {
+  return new Error('Prompt refresh could not be confirmed because the realtime stream disconnected. Reconnect and refresh again.');
+}
+
+function promptRefreshTimeoutError() {
+  return new Error('Prompt refresh was acknowledged, but the updated snapshot did not arrive. Reconnect and refresh again.');
+}
 
 function buildPromptTree(prompts) {
   const groups = {};
@@ -151,6 +160,7 @@ export default function PromptsPage() {
   const [draftContent, setDraftContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [pendingSave, setPendingSave] = useState(null);
+  const [pendingLoad, setPendingLoad] = useState(null);
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [expandedNodes, setExpandedNodes] = useState({});
@@ -158,23 +168,96 @@ export default function PromptsPage() {
   const [query, setQuery] = useState('');
   const [editorMode, setEditorMode] = useState('preview');
   const requestedPath = searchParams.get('path') || '';
-  const loading = promptsState.loading && !promptsState.loaded;
+  const loading = !promptsState.loaded && pendingLoad !== null;
 
   // Request the catalogue only after the canonical stream is ready; the matching
   // `prompts.snapshot` event is the sole source of prompt data.
   const loadPrompts = useCallback(async () => {
+    if (!realtime.connected) {
+      setError(new Error('Reconnect the realtime stream before refreshing prompts.'));
+      return false;
+    }
+    const requestId = createUuid();
+    setPendingLoad({ requestId, acknowledged: false });
     setError(null);
-    await dispatch(fetchPrompts({ promptsUrl })).unwrap();
-  }, [dispatch, promptsUrl]);
+    try {
+      await dispatch(fetchPrompts({ promptsUrl, requestId })).unwrap();
+      setPendingLoad((current) => (
+        current?.requestId === requestId ? { ...current, acknowledged: true } : current
+      ));
+      return true;
+    } catch (loadError) {
+      let failedCurrentLoad = false;
+      setPendingLoad((current) => {
+        failedCurrentLoad = current?.requestId === requestId;
+        return failedCurrentLoad ? null : current;
+      });
+      if (failedCurrentLoad) {
+        setError(loadError);
+      }
+      return false;
+    }
+  }, [dispatch, promptsUrl, realtime.connected]);
 
   useEffect(() => {
     if (!realtime.connected) {
       return;
     }
-    // The acknowledgement failure is reflected in local view state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void loadPrompts().catch(setError);
+    let active = true;
+    queueMicrotask(() => {
+      if (active) {
+        void loadPrompts();
+      }
+    });
+    return () => {
+      active = false;
+    };
   }, [loadPrompts, realtime.connected]);
+
+  useEffect(() => {
+    if (!pendingLoad?.acknowledged || promptsState.snapshotRequestId !== pendingLoad.requestId) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(null);
+    });
+    return () => {
+      active = false;
+    };
+  }, [pendingLoad, promptsState.snapshotRequestId]);
+
+  useEffect(() => {
+    if (!pendingLoad || realtime.connected) {
+      return;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setPendingLoad(null);
+      setError(promptRefreshDisconnectedError());
+    });
+    return () => {
+      active = false;
+    };
+  }, [pendingLoad, realtime.connected]);
+
+  useEffect(() => {
+    if (!pendingLoad?.acknowledged || !realtime.connected) {
+      return undefined;
+    }
+    const timeoutId = setTimeout(() => {
+      setPendingLoad(null);
+      setError(promptRefreshTimeoutError());
+    }, SNAPSHOT_EVENT_TIMEOUT_MS);
+    return () => clearTimeout(timeoutId);
+  }, [pendingLoad, realtime.connected]);
   // Seed (or re-seed) the selection from the store list whenever it changes via
   // fetch/snapshot, honoring a deep-linked `?path=` and keeping any still-valid
   // current selection. Runs on `prompts`/`requestedPath` changes only (not on
@@ -250,6 +333,7 @@ export default function PromptsPage() {
     content: draftContent,
     savedContent: selectedPrompt?.content || '',
     saving,
+    realtimeConnected: realtime.connected,
     setDraftContent,
     setSaving,
     setPendingSave,
@@ -286,11 +370,7 @@ export default function PromptsPage() {
 
 
   const handleRefreshList = async () => {
-    try {
-      await loadPrompts();
-    } catch (loadError) {
-      setError(loadError);
-    }
+    await loadPrompts();
   };
 
   return (
@@ -307,6 +387,7 @@ export default function PromptsPage() {
           onFilterChange={setActiveGroup}
           actionLabel="Refresh"
           onAction={handleRefreshList}
+          actionDisabled={!realtime.connected || saving || pendingLoad !== null}
         />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search prompts" onChange={setQuery} />
@@ -317,8 +398,11 @@ export default function PromptsPage() {
 
         <PaneListScroll className="prompts-sidebar-body">
           {loading && <div className="prompts-empty-state">Loading prompts...</div>}
-          {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">Failed to load prompts.</div>}
-          {!loading && prompts.length === 0 && (
+          {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">{error?.message || promptsState.error}</div>}
+          {!loading && !realtime.connected && prompts.length === 0 && !(error || promptsState.error) && (
+            <div className="prompts-empty-state">Reconnect the realtime stream to load prompts.</div>
+          )}
+          {!loading && prompts.length === 0 && realtime.connected && !(error || promptsState.error) && (
             <div className="prompts-empty-state">No prompts found.</div>
           )}
           {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
@@ -384,7 +468,7 @@ export default function PromptsPage() {
                 <button className="node-action-btn" onClick={handleReload} disabled={!hasUnsavedChanges || saving}>
                   Revert
                 </button>
-                <button className="node-action-btn primary" onClick={handleSave} disabled={!hasUnsavedChanges || saving}>
+                <button className="node-action-btn primary" onClick={handleSave} disabled={!hasUnsavedChanges || saving || !realtime.connected}>
                   {saving ? 'Saving...' : 'Save'}
                 </button>
               </div>
@@ -407,7 +491,7 @@ export default function PromptsPage() {
 
             <div className="prompts-editor-footer">
               <span>{saving ? 'Saving...' : (hasUnsavedChanges ? 'Unsaved changes' : 'Saved')}</span>
-              <span>{statusMessage || error?.message || ''}</span>
+              <span>{statusMessage || error?.message || (!realtime.connected ? 'Reconnect the realtime stream to refresh or save prompts.' : '')}</span>
             </div>
           </>
         )}

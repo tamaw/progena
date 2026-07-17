@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSelector } from 'react-redux';
-import { useParams } from 'react-router-dom';
-import { useEntityUrlSync } from '../lib/routes';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { createUuid } from '../lib/uuid';
 import {
   PaneList,
@@ -274,10 +274,14 @@ function MetricCard({ label, value, detail }) {
 }
 
 function SchedulesPage() {
+  const navigate = useNavigate();
   const { retriggerSchedule } = useSchedulesApi();
   const { getApiUrl } = useConfig();
   const { getWidgets, updateWidget, deleteWidget } = useWidgetsApi();
   const { scheduleId: urlScheduleId } = useParams();
+  const selectedScheduleId = typeof urlScheduleId === 'string' && urlScheduleId.trim().length > 0
+    ? urlScheduleId
+    : null;
   // The list is owned by the Redux store and kept live by `schedule.snapshot`
   // events on /api/ui/stream (backend mutations + runtime fires/CRUD). We only
   // seed it once after realtime connects; every change after that arrives as an
@@ -298,7 +302,6 @@ function SchedulesPage() {
   const [activeFilter, setActiveFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
-  const [selectedScheduleId, setSelectedScheduleId] = useState(() => urlScheduleId || null);
   const [mutating, setMutating] = useState(false);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -353,15 +356,13 @@ function SchedulesPage() {
   }, [getWidgets]);
 
   useEffect(() => {
-    if (loading || pendingScheduleRequestId !== null) {
+    if (loading || pendingScheduleRequestId !== null || !selectedScheduleId) {
       return;
     }
-    setSelectedScheduleId((current) => (
-      schedules.some((schedule) => schedule.id === current)
-        ? current
-        : schedules[0]?.id ?? null
-    ));
-  }, [loading, pendingScheduleRequestId, schedules]);
+    if (!schedules.some((schedule) => schedule.id === selectedScheduleId)) {
+      navigate('/schedules', { replace: true });
+    }
+  }, [loading, navigate, pendingScheduleRequestId, schedules, selectedScheduleId]);
 
   const scheduleWidgets = useMemo(() => widgets.reduce((byScheduleId, widget) => {
     const scheduleId = widget?.data?.schedule_id;
@@ -405,8 +406,11 @@ function SchedulesPage() {
     );
   }, [sortMode, visibleSchedules]);
 
-  const selectedSchedule =
-    schedules.find((schedule) => schedule.id === selectedScheduleId) || visibleSchedules[0] || null;
+  const selectedSchedule = useMemo(
+    () => schedules.find((schedule) => schedule.id === selectedScheduleId)
+      || (!selectedScheduleId ? visibleSchedules[0] || null : null),
+    [schedules, selectedScheduleId, visibleSchedules],
+  );
 
   // Keep the URL in sync with whichever schedule is actually selected after
   // the initial snapshot has hydrated. Until then, preserve a deep-linked id
@@ -459,14 +463,16 @@ function SchedulesPage() {
       setError(null);
       try {
         await deleteWidget(`schedule:${schedule.id}`);
-        if (selectedScheduleId === schedule.id) setSelectedScheduleId(null);
+        if (selectedScheduleId === schedule.id) {
+          navigate('/schedules', { replace: true });
+        }
       } catch (err) {
         setError(err.message || 'Failed to delete schedule.');
       } finally {
         setMutating(false);
       }
     },
-    [deleteWidget, selectedScheduleId],
+    [deleteWidget, navigate, selectedScheduleId],
   );
 
   // Leave edit mode whenever the selected schedule changes so a stale draft
@@ -477,7 +483,7 @@ function SchedulesPage() {
     setIsEditingIntent(false);
     setIntentDraft('');
     setIsEditingTrigger(false);
-  }, [selectedScheduleId]);
+  }, [selectedSchedule?.id]);
 
   useEffect(() => {
     if (!isEditingTitle) return undefined;
@@ -630,9 +636,7 @@ function SchedulesPage() {
                       key={schedule.id}
                       schedule={schedule}
                       selected={selectedSchedule?.id === schedule.id}
-                      onSelect={(id) => {
-                        setSelectedScheduleId(id);
-                      }}
+                      onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
                     />
                   ))}
                 </PaneListGroup>

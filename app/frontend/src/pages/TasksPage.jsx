@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useParams } from 'react-router-dom';
-import { useEntityUrlSync } from '../lib/routes';
+import { useNavigate, useParams } from 'react-router-dom';
+import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import DetailHeader, {
   DeleteActionIcon,
   DetailHeaderAction,
@@ -468,6 +468,7 @@ function buildDependencyDraft(value, board) {
 
 export default function TasksPage({ context = null }) {
   const { updateKanbanCard, deleteKanbanCard, createTaskActivity } = useTasksApi();
+  const navigate = useNavigate();
   const { getApiUrl } = useConfig();
   const { show } = useNotifications();
   const dispatch = useDispatch();
@@ -479,11 +480,12 @@ export default function TasksPage({ context = null }) {
   // own route untouched.
   const { cardId: urlCardId } = useParams();
   const isStandaloneTasksPage = context === null;
+  const routedCardId = isStandaloneTasksPage && typeof urlCardId === 'string' && urlCardId.trim().length > 0
+    ? urlCardId
+    : null;
   const board = useSelector(selectKanbanBoard);
   const tasksState = useSelector(selectTasksState);
-  const [selectedCardId, setSelectedCardId] = useState(() => (
-    isStandaloneTasksPage && urlCardId ? urlCardId : null
-  ));
+  const [selectedCardId, setSelectedCardId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [taskFilter, setTaskFilter] = useState('all');
@@ -527,19 +529,29 @@ export default function TasksPage({ context = null }) {
     [groupedColumns],
   );
 
+  const effectiveSelectedCardId = isStandaloneTasksPage ? routedCardId : selectedCardId;
   const selectedCard = useMemo(() => {
     if (!board) {
       return null;
     }
-    return board.cards.find((card) => card.id === selectedCardId) || visibleCards[0] || null;
-  }, [board, selectedCardId, visibleCards]);
+    return board.cards.find((card) => card.id === effectiveSelectedCardId)
+      || ((!isStandaloneTasksPage || !routedCardId) ? visibleCards[0] || null : null);
+  }, [board, effectiveSelectedCardId, isStandaloneTasksPage, routedCardId, visibleCards]);
 
-  // Keep the URL in sync with whichever task is actually selected (a
-  // deep-linked or stale id falls back to the top visible card the same way
-  // `selectedCard` already does above). The title slug is cosmetic; only the
-  // id segment is ever read back. Disabled when embedded in a project's
-  // kanban board, which doesn't own the /tasks URL.
+  // Keep the URL in sync with whichever task is actually selected. A routed id
+  // stays authoritative; if it disappears after hydration, the effect below
+  // clears back to /tasks instead of rewriting stale detail state. Disabled
+  // when embedded in a project's kanban board, which doesn't own the /tasks URL.
   useEntityUrlSync(isStandaloneTasksPage ? '/tasks' : null, selectedCard?.id, selectedCard?.title);
+  useEffect(() => {
+    if (!isStandaloneTasksPage || !tasksState.loaded || !routedCardId) {
+      return;
+    }
+    if (!board?.cards?.some((card) => card.id === routedCardId)) {
+      navigate('/tasks', { replace: true });
+    }
+  }, [board, isStandaloneTasksPage, navigate, routedCardId, tasksState.loaded]);
+
 
   const selectedColumn = useMemo(
     () => board?.columns.find((column) => column.id === selectedCard?.column_id) || null,
@@ -598,6 +610,17 @@ export default function TasksPage({ context = null }) {
       },
     }));
   }, [context?.projectId, context?.projectName]);
+  const selectTaskCard = useCallback((cardId, title = cardId) => {
+    if (!cardId) {
+      return;
+    }
+    if (isStandaloneTasksPage) {
+      navigate(buildEntityPath('/tasks', cardId, title), { replace: true });
+      return;
+    }
+    setSelectedCardId(cardId);
+  }, [isStandaloneTasksPage, navigate]);
+
 
   useEffect(() => {
     if (!selectedCard?.id) {
@@ -678,16 +701,20 @@ export default function TasksPage({ context = null }) {
     setSaving(true);
     try {
       await deleteKanbanCard({ cardId: selectedCard.id }, { dispatch, getApiUrl });
-      // Trust the kanban.snapshot event to remove the card from the store; clear
-      // the selection so selectedCard falls back to the first visible card.
-      setSelectedCardId(null);
+      // Trust the kanban.snapshot event to remove the card from the store; when
+      // the standalone route owned this detail, clear it back to /tasks first.
+      if (isStandaloneTasksPage && routedCardId === selectedCard.id) {
+        navigate('/tasks', { replace: true });
+      } else {
+        setSelectedCardId(null);
+      }
       show('success', 'Task deleted', deletedTitle);
     } catch (deleteError) {
       show('error', 'Delete failed', deleteError.message || 'Failed to delete task');
     } finally {
       setSaving(false);
     }
-  }, [deleteKanbanCard, dispatch, getApiUrl, selectedCard, show]);
+  }, [deleteKanbanCard, dispatch, getApiUrl, isStandaloneTasksPage, navigate, routedCardId, selectedCard, show]);
 
   const handleQuickStatusUpdate = useCallback(async (nextStatus) => {
     if (!selectedCard?.id || selectedCard.status === nextStatus) {
@@ -840,9 +867,9 @@ export default function TasksPage({ context = null }) {
       (card) => card.id === dep.ref || (card.title || '').toLowerCase() === dep.title.toLowerCase(),
     );
     if (match) {
-      setSelectedCardId(match.id);
+      selectTaskCard(match.id, match.title);
     }
-  }, [board]);
+  }, [board, selectTaskCard]);
 
   const handleAddCollaborator = useCallback(async (value) => {
     if (!selectedCard || !value) {
@@ -937,7 +964,7 @@ export default function TasksPage({ context = null }) {
                     index={index}
                     selected={selectedCard?.id === card.id}
                     compact={column.cards.length > 4 && index > 2}
-                    onSelect={setSelectedCardId}
+                    onSelect={() => selectTaskCard(card.id, card.title)}
                   />
                 ))}
               </PaneListGroup>
