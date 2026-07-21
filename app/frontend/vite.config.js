@@ -10,6 +10,9 @@ function shouldProxy(pathname) {
   return pathname.startsWith('/api/') || pathname.startsWith('/v1/')
 }
 
+const keepAliveHttpAgent = new http.Agent({ keepAlive: true })
+const keepAliveHttpsAgent = new https.Agent({ keepAlive: true })
+
 function createBackendProxyMiddleware(backendBaseUrl) {
   return (req, res, next) => {
     const requestUrl = req.url || '/'
@@ -21,15 +24,20 @@ function createBackendProxyMiddleware(backendBaseUrl) {
     }
 
     const targetUrl = new URL(requestUrl, backendBaseUrl)
-    const client = targetUrl.protocol === 'https:' ? https : http
+    const isHttps = targetUrl.protocol === 'https:'
+    const client = isHttps ? https : http
+    // Keep-alive agent: without it, every proxied request (including every
+    // chat POST) pays a fresh TCP connection setup to the backend, adding
+    // ~1s of pure connection overhead on top of actual request handling.
     const upstream = client.request(
       targetUrl,
       {
         method: req.method,
+        agent: isHttps ? keepAliveHttpsAgent : keepAliveHttpAgent,
         headers: {
           ...req.headers,
           host: targetUrl.host,
-          connection: 'close',
+          connection: 'keep-alive',
         },
       },
       (upstreamRes) => {

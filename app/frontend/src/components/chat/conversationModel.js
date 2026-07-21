@@ -73,6 +73,7 @@ function messageRenderSignature(message) {
     content: typeof message?.content === 'string' ? message.content : '',
     tokenCount: Number.isFinite(message?.tokenCount) ? message.tokenCount : 0,
     reasoningTokenCount: Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0,
+    cacheReadTokenCount: Number.isFinite(message?.cacheReadTokenCount) ? message.cacheReadTokenCount : 0,
     reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
     agentName: typeof message?.agentName === 'string' ? message.agentName : '',
     model: typeof message?.model === 'string' ? message.model : '',

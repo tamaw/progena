@@ -19,7 +19,7 @@
  * rendering a React hook.
  */
 
-import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
+import { createStreamEvent, appendStreamEvent, appendReasoningText, extractReasoningTokenCount, extractCacheReadTokenCount, mergeReasoningEvents, isReasoningEvent, hasReasoningContent, isRenderableStreamEvent, MAX_STREAM_EVENTS_PER_MESSAGE } from './streamEventsModel';
 import { CHAT_AGENT_NAME } from './conversationModel';
 
 /** Create a fresh live assistant turn with no visible output yet. */
@@ -33,6 +33,7 @@ export function createLiveAssistantTurn({ streamId, startedAt }) {
     tokenCount: 0,
     reasoningText: '',
     reasoningTokenCount: 0,
+    cacheReadTokenCount: 0,
     reasoningSummaryReceived: false,
     streamEvents: [],
     displayAgentName: '',
@@ -438,6 +439,15 @@ export function applyAssistantStreamEvent(turn, streamEvent) {
     return turn;
   }
 
+  // usage_update is a terminal, non-visual metadata event (Azure's
+  // prompt-cache-read token count for this turn) -- same treatment as
+  // assistant_metadata: apply the value, never render its own timeline row.
+  if (nextEvent.eventType === 'usage_update') {
+    const cacheReadTokens = extractCacheReadTokenCount(nextEvent);
+    if (cacheReadTokens === null) return turn;
+    return { ...turn, cacheReadTokenCount: cacheReadTokens };
+  }
+
   const next = { ...turn };
   const summaryAlreadyReceived = next.reasoningSummaryReceived
     || next.streamEvents.some((event) => event?.eventType === 'reasoning_summary');
@@ -823,6 +833,7 @@ export function toCommittedAssistantMessage(turn) {
     timestamp: turn.assistantTimestamp || turn.startedAt,
     tokenCount: turn.tokenCount,
     reasoningTokenCount: turn.reasoningTokenCount,
+    cacheReadTokenCount: turn.cacheReadTokenCount,
     reasoningText: turn.reasoningText,
     streamEvents: turn.streamEvents,
     displayAgentName: turn.displayAgentName,

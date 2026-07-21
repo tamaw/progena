@@ -122,13 +122,16 @@ async def test_reapply_disabled_tools_from_doc():
                 ]
             }
 
-    count = await reapply_mcp_disabled_tools(llm, SM())
+    count, changed = await reapply_mcp_disabled_tools(llm, SM())
     assert count == 2
+    assert changed is True
     assert runtime.disabled == {"b", "c"}
 
 
 async def test_reapply_noops_without_runtime():
-    assert await reapply_mcp_disabled_tools(SimpleNamespace(mcp_runtime=None), object()) == 0
+    count, changed = await reapply_mcp_disabled_tools(SimpleNamespace(mcp_runtime=None), object())
+    assert count == 0
+    assert changed is False
 
 
 # --------------------------------------------------------------------------
