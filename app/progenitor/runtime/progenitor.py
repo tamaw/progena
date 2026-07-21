@@ -105,7 +105,7 @@ class Progenitor:
     async def _do_mcp_reapply(self) -> None:
         from ..nodes.mcp import reapply_mcp_disabled_tools
 
-        count = await reapply_mcp_disabled_tools(self.llm_client, self.state_manager)
+        count, _changed = await reapply_mcp_disabled_tools(self.llm_client, self.state_manager)
         logger.info("Re-applied MCP tool flags from store change (%d disabled)", count)
 
     async def initialize(self) -> None:
@@ -183,7 +183,6 @@ class Progenitor:
             project_root=PROJECT_ROOT,
             log_sink=self.log_store,
         )
-
         # React to store writes (UI server/tool toggles, agent edits to
         # /state/mcp.json) by re-syncing the live MCP runtime immediately, rather
         # than waiting for the next heartbeat MCP refresh. The scheduler serializes

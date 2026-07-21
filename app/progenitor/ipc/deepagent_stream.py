@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from typing import Any, cast
@@ -15,6 +16,7 @@ from langchain_core.messages import AIMessageChunk, HumanMessage
 from ..runtime.messages import (
     attach_reasoning_trace,
     coerce_messages_list,
+    extract_cache_read_token_count,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
@@ -34,6 +36,22 @@ from .stream_payloads import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Per-node wall-time trace for the graph stream. Enable with
+# PROGENITOR_TRACE_TIMING=1; off by default so production logs are unaffected.
+# Emits one line per node boundary (via LangGraph "updates" mode), a first-
+# visible-token marker, and a turn-summary total. Use with
+# scripts/measure_first_token.py to localise where request->first-token time
+# is spent inside the DeepAgent loop.
+TRACE_TIMING = os.getenv("PROGENITOR_TRACE_TIMING", "").lower() in {"1", "true", "yes"}
+if TRACE_TIMING:
+    # Independent stderr handler so tracing survives callers that clamp the
+    # root logger (e.g. measure_first_token.py sets level=ERROR).
+    _trace_handler = logging.StreamHandler()
+    _trace_handler.setLevel(logging.INFO)
+    logger.addHandler(_trace_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 
 # Nested (subgraph-namespaced) custom event_type -> the subagent_-prefixed
 # type surfaced to the UI. Any inner custom event not in this map (e.g. a
@@ -136,6 +154,14 @@ class DeepAgentIPCStream:
         # counting already-accounted tokens.
         self._turn_reasoning_tokens = 0
         self._counted_usage_by_message_id: dict[str, int] = {}
+        # Per-node wall-time tracer (PROGENITOR_TRACE_TIMING). Reset per
+        # stream() invocation so a reused instance does not carry stale
+        # timestamps across turns.
+        self._trace_enabled = TRACE_TIMING
+        self._trace_start_ns: int | None = None
+        self._trace_prev_ns: int | None = None
+        self._trace_first_token_ns: int | None = None
+        self._trace_node_count = 0
 
     async def stream(
         self,
@@ -153,6 +179,7 @@ class DeepAgentIPCStream:
             },
         )
         graph_input: dict[str, Any] = {"messages": [human_message]}
+        self._trace_begin(thread_id=thread_id)
         self.state["current_input"] = message
         self.state["cycle_count"] = int(self.state.get("cycle_count") or 0) + 1
         astream_kwargs: dict[str, Any] = {
@@ -163,37 +190,40 @@ class DeepAgentIPCStream:
         if self._graph_accepts_kwarg("subgraphs"):
             astream_kwargs["subgraphs"] = True
 
-        async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
-            namespace, mode, event = self._unpack_stream_item(stream_item)
+        try:
+            async for stream_item in self.graph.astream(graph_input, **astream_kwargs):
+                namespace, mode, event = self._unpack_stream_item(stream_item)
 
-            if mode == "tasks":
-                self._record_pending_dispatch_task_id(namespace, event)
-                continue
+                if mode == "tasks":
+                    self._record_pending_dispatch_task_id(namespace, event)
+                    continue
 
-            if namespace:
-                async for item in self._handle_namespaced_stream_item(namespace, mode, event):
+                if namespace:
+                    async for item in self._handle_namespaced_stream_item(namespace, mode, event):
+                        yield item
+                    continue
+
+                if mode == "messages":
+                    async for item in self._handle_message_stream_event(event):
+                        yield item
+                    continue
+
+                if mode == "custom":
+                    for custom_item in self._handle_custom_stream_event(event):
+                        yield custom_item
+                    continue
+
+                if mode != "updates" or not isinstance(event, dict):
+                    logger.debug("Ignoring graph stream item for mode=%s", mode)
+                    continue
+
+                async for item in self._handle_update_event(event):
                     yield item
-                continue
 
-            if mode == "messages":
-                async for item in self._handle_message_stream_event(event):
-                    yield item
-                continue
-
-            if mode == "custom":
-                for custom_item in self._handle_custom_stream_event(event):
-                    yield custom_item
-                continue
-
-            if mode != "updates" or not isinstance(event, dict):
-                logger.debug("Ignoring graph stream item for mode=%s", mode)
-                continue
-
-            async for item in self._handle_update_event(event):
+            async for item in self._finalize_stream():
                 yield item
-
-        async for item in self._finalize_stream():
-            yield item
+        finally:
+            self._trace_end()
 
     async def collect_response(self, message: str, *, thread_id: str) -> str:
         """Run the stream and return only assistant text."""
@@ -206,6 +236,64 @@ class DeepAgentIPCStream:
                 continue
             response += str(item.get("content", ""))
         return self.last_response or response
+
+    # -- per-node wall-time tracer (PROGENITOR_TRACE_TIMING) ---------------
+    # All four are no-ops when tracing is disabled; enabled cost is a few
+    # perf_counter_ns reads and one structured log line per node boundary.
+
+    def _trace_begin(self, *, thread_id: str) -> None:
+        if not self._trace_enabled:
+            return
+        now = time.perf_counter_ns()
+        self._trace_start_ns = now
+        self._trace_prev_ns = now
+        self._trace_first_token_ns = None
+        self._trace_node_count = 0
+        logger.info("[trace] stream_start thread_id=%s", thread_id)
+
+    def _trace_node(self, node_name: Any, output_info: Any) -> None:
+        if not self._trace_enabled or self._trace_start_ns is None:
+            return
+        now = time.perf_counter_ns()
+        offset_ms = round((now - self._trace_start_ns) / 1_000_000, 3)
+        elapsed_ms = (
+            round((now - self._trace_prev_ns) / 1_000_000, 3)
+            if self._trace_prev_ns is not None
+            else None
+        )
+        self._trace_prev_ns = now
+        self._trace_node_count += 1
+        logger.info(
+            "[trace] node=%s offset_ms=%s elapsed_ms=%s output_keys=%s",
+            node_name,
+            offset_ms,
+            elapsed_ms,
+            output_info,
+        )
+
+    def _trace_first_token(self) -> None:
+        if not self._trace_enabled or self._trace_start_ns is None:
+            return
+        if self._trace_first_token_ns is not None:
+            return
+        self._trace_first_token_ns = time.perf_counter_ns()
+
+    def _trace_end(self) -> None:
+        if not self._trace_enabled or self._trace_start_ns is None:
+            return
+        now = time.perf_counter_ns()
+        total_ms = round((now - self._trace_start_ns) / 1_000_000, 3)
+        first_token_ms = (
+            round((self._trace_first_token_ns - self._trace_start_ns) / 1_000_000, 3)
+            if self._trace_first_token_ns is not None
+            else None
+        )
+        logger.info(
+            "[trace] stream_end total_ms=%s first_token_ms=%s nodes=%d",
+            total_ms,
+            first_token_ms,
+            self._trace_node_count,
+        )
 
     async def _handle_message_stream_event(self, event: Any) -> AsyncIterator[dict[str, Any]]:
         if not isinstance(event, tuple) or len(event) != 2:
@@ -238,6 +326,7 @@ class DeepAgentIPCStream:
         if chunk_text:
             self._response_was_streamed = True
             self._streamed_response_content += chunk_text
+            self._trace_first_token()
             yield {"type": "stream_chunk", "content": chunk_text, "is_final": False}
 
         yield {
@@ -310,6 +399,7 @@ class DeepAgentIPCStream:
             output_info = (
                 list(node_output.keys()) if isinstance(node_output, dict) else type(node_output)
             )
+            self._trace_node(node_name, output_info)
             logger.info("GRAPH EVENT: node=%s, output_keys=%s", node_name, output_info)
             if not isinstance(node_output, dict):
                 continue
@@ -400,6 +490,22 @@ class DeepAgentIPCStream:
         if last_ai_msg is not None:
             self._accumulate_reasoning_usage([last_ai_msg])
         turn_reasoning_tokens = self._turn_reasoning_tokens or reasoning_tokens
+        # Unlike reasoning tokens, cache-read is NOT cumulative work across a
+        # multi-step turn's tool round-trips -- each model call reports the
+        # cache-hit depth of *that call's own* (largely repeated) input, not
+        # new value on top of the last call. Report the most recent call's
+        # raw count, never summed, or a short exchange would inflate to
+        # multiples of the actual cached prefix size.
+        cache_read_tokens = (
+            extract_cache_read_token_count(last_ai_msg) if last_ai_msg is not None else None
+        )
+        if last_ai_msg is not None and cache_read_tokens is not None:
+            yield {
+                "type": "stream_event",
+                "event_type": "usage_update",
+                "content": "",
+                "metadata": {"cache_read_tokens": cache_read_tokens},
+            }
         reasoning_trace = extract_reasoning_trace(last_ai_msg) if last_ai_msg is not None else None
         if not reasoning_trace and self._streamed_reasoning_content:
             reasoning_trace = self._streamed_reasoning_content

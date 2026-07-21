@@ -116,7 +116,7 @@ class TestLLMConfig:
         """Test default values."""
         config = LLMConfig()
         assert config.base_url == ""
-        assert config.model_default == "gpt-5.1-codex-max"
+        assert config.model_default == "gpt-chat-latest"
         assert config.reasoning_enabled is True
         assert config.reasoning_effort == "low"
         assert config.reasoning_summary == "detailed"

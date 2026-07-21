@@ -85,7 +85,7 @@ export function isRenderableStreamEvent(event) {
   const eventType = typeof event?.eventType === 'string'
     ? event.eventType
     : (typeof event?.event_type === 'string' ? event.event_type : '');
-  if (!eventType || eventType === 'message_delta' || eventType === 'assistant_metadata') {
+  if (!eventType || eventType === 'message_delta' || eventType === 'assistant_metadata' || eventType === 'usage_update') {
     return false;
   }
   if (eventType !== 'node_update') {
@@ -115,6 +115,11 @@ export function countReasoningTimelineEntries(events, reasoningText) {
 
 export function extractReasoningTokenCount(event) {
   const tokenCount = event?.metadata?.reasoning_tokens;
+  return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
+}
+
+export function extractCacheReadTokenCount(event) {
+  const tokenCount = event?.metadata?.cache_read_tokens;
   return Number.isFinite(tokenCount) && tokenCount > 0 ? tokenCount : null;
 }
 

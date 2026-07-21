@@ -16,11 +16,11 @@ class TestLangChainAdapter:
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
-            model_default="gpt-5.2-chat",
+            model_default="gpt-chat-latest",
         )
         model = create_langchain_model(config)
 
-        assert model.model_name == "gpt-5.2-chat"
+        assert model.model_name == "gpt-chat-latest"
         assert "azure.com" in str(model.openai_api_base)
         assert model.streaming is True
         assert model.use_responses_api is True
@@ -62,7 +62,7 @@ class TestLangChainAdapter:
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
-            model_default="gpt-5.2-chat",
+            model_default="gpt-chat-latest",
             reasoning_enabled=True,
             reasoning_effort="medium",
             reasoning_summary="detailed",
@@ -73,7 +73,9 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"effort": "medium", "summary": "detailed"}}
+        assert kwargs["extra_body"] == {
+            "reasoning": {"effort": "medium", "summary": "detailed"},
+        }
         assert "reasoning" not in kwargs
 
     def test_reasoning_defaults_to_low_effort(self):
@@ -81,7 +83,7 @@ class TestLangChainAdapter:
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
-            model_default="gpt-5.2-chat",
+            model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
         with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
@@ -90,7 +92,9 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "low"
-        assert kwargs["extra_body"] == {"reasoning": {"effort": "low", "summary": "detailed"}}
+        assert kwargs["extra_body"] == {
+            "reasoning": {"effort": "low", "summary": "detailed"},
+        }
 
     def test_reasoning_effort_respects_config_for_gpt_5_3_chat(self):
         """gpt-5.3-chat uses the configured reasoning effort."""
@@ -107,14 +111,16 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "medium"
-        assert kwargs["extra_body"] == {"reasoning": {"effort": "medium", "summary": "detailed"}}
+        assert kwargs["extra_body"] == {
+            "reasoning": {"effort": "medium", "summary": "detailed"},
+        }
 
     def test_reasoning_summary_defaults_to_detailed(self):
         """Reasoning summary defaults to detailed when not overridden."""
         config = LLMConfig(
             base_url="https://example.openai.azure.com/openai/v1",
             api_key="test-key",
-            model_default="gpt-5.2-chat",
+            model_default="gpt-chat-latest",
             reasoning_enabled=True,
         )
         with patch("app.progenitor.agent.adapters.ChatOpenAI") as mock_chat_openai:
@@ -123,7 +129,137 @@ class TestLangChainAdapter:
 
         _, kwargs = mock_chat_openai.call_args
         assert kwargs["reasoning_effort"] == "low"
-        assert kwargs["extra_body"] == {"reasoning": {"effort": "low", "summary": "detailed"}}
+        assert kwargs["extra_body"] == {
+            "reasoning": {"effort": "low", "summary": "detailed"},
+        }
+
+
+class TestSchemaCompaction:
+    """Tests for tool-schema compaction (SchemaCompactionMiddleware / _compact_args_model).
+
+    Two distinct ``tool.args_schema`` shapes flow through here: a Pydantic
+    model class (system tools, DeepAgent built-ins) and a raw JSON-Schema
+    dict (every MCP tool -- ``langchain_mcp_adapters`` wraps ``args_schema``
+    as the server's ``inputSchema`` dict verbatim, with no Python model
+    class to subclass).
+    """
+
+    def test_compacts_pydantic_model_class_and_strips_noise(self):
+        from pydantic import BaseModel, Field
+
+        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+
+        class _Args(BaseModel):
+            query: str = Field(description="search query")
+            limit: int | None = None
+
+        compacted = _compact_args_model(_Args, {})
+
+        assert compacted is not _Args
+        assert issubclass(compacted, _Args)
+        schema = compacted.model_json_schema()
+        assert "title" not in schema
+        assert "$schema" not in schema
+        # Optional[int] flattens from anyOf([{type:integer},{type:null}]) to
+        # a plain type union -- same field still just accepts int | None.
+        assert schema["properties"]["limit"]["type"] == ["integer", "null"]
+        # The model still works normally: validation is untouched.
+        instance = compacted(query="hi")
+        assert instance.query == "hi"
+        assert instance.limit is None
+
+    def test_pydantic_model_class_compaction_is_idempotent_via_cache(self):
+        from pydantic import BaseModel
+
+        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+
+        class _Args(BaseModel):
+            query: str
+
+        cache: dict[int, object] = {}
+        first = _compact_args_model(_Args, cache)
+        second = _compact_args_model(_Args, cache)
+        assert first is second
+        # An already-compacted class passed back through is returned unchanged.
+        third = _compact_args_model(first, cache)
+        assert third is first
+
+    def test_compacts_raw_dict_schema_from_mcp_tools(self):
+        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+
+        # Shape langchain_mcp_adapters produces from an MCP server's inputSchema.
+        raw_schema = {
+            "title": "search_webArguments",
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "query": {"title": "Query", "type": "string"},
+                "limit": {
+                    "title": "Limit",
+                    "anyOf": [{"type": "integer"}, {"type": "null"}],
+                },
+            },
+            "required": ["query"],
+        }
+
+        compacted = _compact_args_model(raw_schema, {})
+
+        assert "title" not in compacted
+        assert "$schema" not in compacted
+        assert compacted["properties"]["limit"]["type"] == ["integer", "null"]
+        # The original dict (owned by the MCP tool wrapper) is never mutated.
+        assert raw_schema["title"] == "search_webArguments"
+        assert "anyOf" in raw_schema["properties"]["limit"]
+
+    def test_dict_schema_compaction_does_not_re_compact_on_repeated_calls(self):
+        """Regression: an already-compacted dict fed back in must be a cache
+        hit, not deep-copied and re-walked again -- otherwise every heartbeat
+        turn would grow an unbounded chain of throwaway dict copies for tools
+        whose ``args_schema`` is a dict (this is exactly what happens on a
+        real turn: ``tool.args_schema`` is mutated in place, so the *next*
+        turn's ``getattr(tool, "args_schema")`` reads back the already-
+        compacted dict, not the original)."""
+        from app.progenitor.agent.middleware.schema_compaction import _compact_args_model
+
+        raw_schema = {"title": "X", "type": "object", "properties": {}}
+        cache: dict[int, object] = {}
+
+        first = _compact_args_model(raw_schema, cache)
+        # Simulate the middleware re-reading tool.args_schema on the next turn:
+        # it's now `first`, not `raw_schema`.
+        second = _compact_args_model(first, cache)
+        third = _compact_args_model(second, cache)
+
+        assert first is second is third
+
+    def test_middleware_compacts_dict_args_schema_tool_in_place(self):
+        from app.progenitor.agent.middleware.schema_compaction import SchemaCompactionMiddleware
+
+        class _FakeMCPTool:
+            """Mimics a langchain_mcp_adapters StructuredTool: args_schema is a dict."""
+
+            def __init__(self) -> None:
+                self.args_schema = {
+                    "title": "search_webArguments",
+                    "type": "object",
+                    "properties": {"query": {"title": "Query", "type": "string"}},
+                }
+
+        tool = _FakeMCPTool()
+        middleware = SchemaCompactionMiddleware()
+
+        # Must not raise (this is the exact crash MCP tools hit before the fix:
+        # dict(name, bases, namespace) - dicts aren't a valid metaclass call).
+        middleware._compact_tool_in_place(tool)
+
+        assert "title" not in tool.args_schema
+        assert tool.args_schema["properties"]["query"] == {"type": "string"}
+
+        # A second pass (next model call in the same turn, or the next turn)
+        # must not re-wrap/re-copy the now-compacted schema.
+        compacted_ref = tool.args_schema
+        middleware._compact_tool_in_place(tool)
+        assert tool.args_schema is compacted_ref
 
 
 class TestDeepAgentFactory:
