@@ -210,6 +210,20 @@ class ProgenitorLoop:
         while self.running:
             try:
                 self._prepare_heartbeat_poll()
+                # Wait for queued input OUTSIDE graph_lock. This wait can
+                # block up to input_timeout (commonly idle_backoff_seconds,
+                # 30s by default, whenever nothing else is due). Doing this
+                # inside the locked ainvoke() call previously meant a live
+                # direct chat turn (RuntimeChatService.handle_chat, which
+                # awaits this same graph_lock via _direct_graph_lock) could
+                # stall for up to that long behind an unrelated idle poll
+                # cycle before the user's own message even started
+                # processing. Skip the fetch if a prior cycle left an
+                # unconsumed item in state (error-recovery retry case).
+                if self._state.get("queued_input") is None:
+                    self._state["queued_input"] = await self._queues.get_input(
+                        self._heartbeat_context.input_timeout
+                    )
                 async with self._graph_lock:
                     updates = await self._heartbeat_graph.ainvoke(
                         cast(ProgenitorState, self._state),

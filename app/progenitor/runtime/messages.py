@@ -300,6 +300,36 @@ def extract_reasoning_token_count(msg: Any) -> int | None:
     return None
 
 
+def extract_cache_read_token_count(msg: Any) -> int | None:
+    """Extract Azure's reported prompt-cache-read token count from a completed message.
+
+    Looks under ``input_token_details.cache_read`` (the LangChain
+    ``responses/v1`` output shape), mirroring
+    ``extract_reasoning_token_count``'s container-search pattern.
+    """
+    if msg is None:
+        return None
+
+    containers: list[dict[str, Any]] = []
+    if isinstance(msg, dict):
+        for key in ("usage_metadata", "response_metadata"):
+            value = msg.get(key)
+            if isinstance(value, dict):
+                containers.append(value)
+    else:
+        for attr in ("usage_metadata", "response_metadata"):
+            value = getattr(msg, attr, None)
+            if isinstance(value, dict):
+                containers.append(value)
+
+    for container in containers:
+        token_count = _extract_cache_read_token_count_from_container(container)
+        if token_count is not None:
+            return token_count
+
+    return None
+
+
 def extract_display_metadata(msg: Any) -> dict[str, Any]:
     """Extract display metadata fields from an AI message's response_metadata.
 
@@ -383,9 +413,35 @@ def _extract_reasoning_token_count_from_container(container: dict[str, Any]) -> 
     return None
 
 
+def _extract_cache_read_token_count_from_container(container: dict[str, Any]) -> int | None:
+    detail_candidates = [
+        container.get("input_token_details"),
+        container.get("input_tokens_details"),
+        container.get("prompt_tokens_details"),
+        container.get("token_usage"),
+        container.get("usage"),
+    ]
+    for details in detail_candidates:
+        if not isinstance(details, dict):
+            continue
+        token_count = _extract_cache_read_token_count_from_container(details)
+        if token_count is not None:
+            return token_count
+
+    for key in ("cache_read", "cached_tokens", "cache_read_tokens"):
+        value = container.get(key)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(value)
+
+    return None
+
+
 __all__ = [
     "attach_reasoning_trace",
     "coerce_messages_list",
+    "extract_cache_read_token_count",
     "extract_display_metadata",
     "extract_message_text",
     "extract_reasoning_trace",

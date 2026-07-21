@@ -16,6 +16,7 @@ from app.progenitor.a2a.payloads import (
 )
 from app.progenitor.runtime.messages import (
     attach_reasoning_trace,
+    extract_cache_read_token_count,
     extract_display_metadata,
     extract_message_text,
     extract_reasoning_token_count,
@@ -125,6 +126,7 @@ class ChatMessage(BaseModel):
     reasoning_timestamp: str | None = None
     token_count: int = 0
     reasoning_token_count: int = 0
+    cache_read_token_count: int = 0
     reasoning_text: str = ""
     display_agent_name: str | None = None
     display_model_name: str | None = None
@@ -706,6 +708,7 @@ def _chat_message_from_raw(
         reasoning_timestamp=_raw_message_created_at(raw) if reasoning_text else None,
         token_count=_raw_message_token_count(raw),
         reasoning_token_count=extract_reasoning_token_count(raw) or 0,
+        cache_read_token_count=extract_cache_read_token_count(raw) or 0,
         reasoning_text=reasoning_text,
         display_agent_name=_display_metadata_from_raw(raw).get("display_agent_name"),
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
@@ -796,11 +799,15 @@ def _messages_from_checkpoint(
     # ChatMessages, so their per-call usage (output AND reasoning tokens) must
     # roll into the text-bearing AIMessage that claims the turn — otherwise a
     # multi-step turn reports only its final model call and the header totals
-    # undercount.
+    # undercount. Cache-read tokens are the one exception: each call reports
+    # the cache-hit depth of *that call's own* (largely repeated) input, not
+    # new cumulative work, so it's tracked as the latest observed value, not
+    # summed across calls.
     messages: list[ChatMessage] = []
     pending_tool_calls: list[dict[str, Any]] = []
     pending_token_count = 0
     pending_reasoning_token_count = 0
+    pending_cache_read_token_count = 0
     pending_reasoning_parts: list[str] = []
     pending_reasoning_timestamp: str | None = None
 
@@ -819,16 +826,21 @@ def _messages_from_checkpoint(
                 synthetic.reasoning_timestamp = pending_reasoning_timestamp
                 synthetic.token_count = pending_token_count
                 synthetic.reasoning_token_count = pending_reasoning_token_count
+                synthetic.cache_read_token_count = pending_cache_read_token_count
                 messages.append(synthetic)
                 pending_tool_calls = []
             pending_reasoning_parts = []
             pending_token_count = 0
             pending_reasoning_token_count = 0
+            pending_cache_read_token_count = 0
             pending_reasoning_timestamp = None
 
         if role == "assistant":
             pending_token_count += _raw_message_token_count(raw)
             pending_reasoning_token_count += extract_reasoning_token_count(raw) or 0
+            pending_cache_read_token_count = (
+                extract_cache_read_token_count(raw) or pending_cache_read_token_count
+            )
             reasoning_text = extract_reasoning_trace(raw)
             if reasoning_text:
                 pending_reasoning_parts.append(reasoning_text)
@@ -855,10 +867,12 @@ def _messages_from_checkpoint(
                 message.reasoning_text = "\n\n".join(pending_reasoning_parts)
                 message.token_count = pending_token_count
                 message.reasoning_token_count = pending_reasoning_token_count
+                message.cache_read_token_count = pending_cache_read_token_count
                 message.reasoning_timestamp = pending_reasoning_timestamp
                 pending_reasoning_parts = []
                 pending_token_count = 0
                 pending_reasoning_token_count = 0
+                pending_cache_read_token_count = 0
                 pending_reasoning_timestamp = None
             if role in ("assistant", "user"):
                 pending_tool_calls = []
@@ -871,6 +885,7 @@ def _messages_from_checkpoint(
         synthetic = _synthetic_pending_tool_call_message(pending_tool_calls, len(snapshot.messages))
         synthetic.token_count = pending_token_count
         synthetic.reasoning_token_count = pending_reasoning_token_count
+        synthetic.cache_read_token_count = pending_cache_read_token_count
         synthetic.reasoning_text = "\n\n".join(pending_reasoning_parts)
         synthetic.reasoning_timestamp = pending_reasoning_timestamp
         messages.append(synthetic)

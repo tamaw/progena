@@ -44,7 +44,14 @@ class _Raise:
 class ScriptedBridge:
     """Fake DeepAgentIPCStream bridge that replays a scripted item list."""
 
-    def __init__(self, graph: Any, *, config: Any, state: dict[str, Any], script: Any) -> None:
+    def __init__(
+        self,
+        graph: Any,
+        *,
+        config: Any,
+        state: dict[str, Any],
+        script: Any,
+    ) -> None:
         self.graph = graph
         self.config = config
         self.state = state
@@ -65,7 +72,12 @@ class ScriptedBridge:
 
 def make_bridge_factory(script: Any) -> Callable[..., ScriptedBridge]:
     def factory(graph: Any, *, config: Any, state: dict[str, Any]) -> ScriptedBridge:
-        return ScriptedBridge(graph, config=config, state=state, script=script)
+        return ScriptedBridge(
+            graph,
+            config=config,
+            state=state,
+            script=script,
+        )
 
     return factory
 

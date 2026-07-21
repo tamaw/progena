@@ -13,11 +13,11 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse, ToolC
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
 
-from app.progenitor.agent.adapters import DynamicMCPToolMiddleware
 from app.progenitor.agent.middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
+    DynamicMCPToolMiddleware,
     MetricsMiddleware,
     SecretRedactionMiddleware,
 )
@@ -497,7 +497,7 @@ class TestMiddlewareIntegration:
                         prompts_dir = Path(tmpdir) / "prompts"
                         prompts_dir.mkdir()
                         fake_config = SimpleNamespace(
-                            llm=SimpleNamespace(model_default="gpt-5.2-chat"),
+                            llm=SimpleNamespace(model_default="gpt-chat-latest"),
                             storage=SimpleNamespace(
                                 prompts_dir=prompts_dir,
                             ),
