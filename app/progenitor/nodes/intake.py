@@ -27,10 +27,16 @@ async def dequeue_input_node(
     state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Dequeue one pending input item."""
-    if state.get("queued_input") is not None:
-        return {}
-    queued_input = await runtime.context.queues.get_input(runtime.context.input_timeout)
+    """Consume input already dequeued by the heartbeat loop.
+
+    ``ProgenitorLoop._input_handler_loop`` waits on the input queue BEFORE
+    acquiring ``graph_lock`` and invoking this graph, so a live direct chat
+    turn (``RuntimeChatService.handle_chat``, which shares that same lock)
+    is never blocked behind an idle poll wait of up to
+    ``idle_backoff_seconds``. This node only consumes whatever the loop
+    already found in ``state["queued_input"]`` -- it does not wait itself.
+    """
+    queued_input = state.get("queued_input")
     if queued_input is not None:
         return {"queued_input": queued_input}
 

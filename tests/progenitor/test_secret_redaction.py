@@ -161,9 +161,9 @@ class TestSecretRedaction:
 
     def test_preserve_model_names(self):
         """Test that model names are NOT redacted."""
-        text = "Using model gpt-5.1-codex-max"
+        text = "Using model gpt-chat-latest"
         result = redact_secrets(text)
-        assert "gpt-5.1-codex-max" in result
+        assert "gpt-chat-latest" in result
 
     def test_preserve_deployment_names(self):
         """Test that deployment names are NOT redacted."""

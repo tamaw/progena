@@ -13,11 +13,25 @@ from ..utils import utcnow_isoformat
 from .context import HeartbeatContext
 
 
+def _tools_content_snapshot(entries: list[Any]) -> dict[str, tuple[Any, Any, Any, Any]]:
+    """Order-insensitive comparable snapshot of a ``tools`` list (name -> content tuple)."""
+    return {
+        str(entry.get("name")): (
+            entry.get("server"),
+            entry.get("original_name"),
+            entry.get("description"),
+            entry.get("enabled"),
+        )
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("name")
+    }
+
+
 async def _sync_mcp_tool_flags(
     mcp_runtime: Any,
     state_manager: Any,
     server_status: dict[str, Any] | None = None,
-) -> None:
+) -> bool:
     """Persist discovered MCP tools (preserving user enabled flags) and apply them.
 
     The runtime owns the tool list; the backend (UI) owns the per-tool enabled
@@ -28,9 +42,15 @@ async def _sync_mcp_tool_flags(
     ``server_status`` (name -> {status, error, tool_count, checked_at}) records
     each server's last discovery outcome so the UI can show a failed state with
     a reason instead of a server that silently has no tools.
+
+    Returns whether the persisted ``tools`` (name/server/description/enabled)
+    or ``servers`` content actually changed, order-insensitively, compared to
+    the previous document — used to decide whether the agent-visible tool
+    prefix changed and the Azure prompt cache should be invalidated.
     """
     existing_doc = await state_manager.get_mcp_tools()
     existing = existing_doc.get("tools", []) if isinstance(existing_doc, dict) else []
+    existing_servers = existing_doc.get("servers", {}) if isinstance(existing_doc, dict) else {}
     enabled_by_name = {
         str(tool.get("name")): bool(tool.get("enabled", True))
         for tool in existing
@@ -59,27 +79,35 @@ async def _sync_mcp_tool_flags(
         )
 
     mcp_runtime.set_disabled_tools(disabled)
+    new_servers = server_status or {}
+    changed = _tools_content_snapshot(entries) != _tools_content_snapshot(existing) or (
+        new_servers != (existing_servers if isinstance(existing_servers, dict) else {})
+    )
     await state_manager.save_mcp_tools(
         {
             "tools": entries,
-            "servers": server_status or {},
+            "servers": new_servers,
             "updated_at": utcnow_isoformat(),
         }
     )
+    return changed
 
 
-async def reapply_mcp_disabled_tools(llm_client: Any, state_manager: Any) -> int:
+async def reapply_mcp_disabled_tools(llm_client: Any, state_manager: Any) -> tuple[int, bool]:
     """Re-apply per-tool enabled flags to the live runtime without re-discovery.
 
     The backend (UI) toggles a tool by flipping its ``enabled`` flag in the
     ``mcp_tools`` document. This reads those flags and updates the runtime's
     disabled set so the toggle takes effect immediately — without re-fetching
-    every server (which a full ``sync_mcp_runtime_context`` does). Returns the
-    number of tools left disabled.
+    every server (which a full ``sync_mcp_runtime_context`` does). Returns
+    ``(disabled_count, changed)``, where ``changed`` reports whether the newly
+    applied disabled set differs from what the runtime had before this call —
+    used to decide whether the agent-visible tool prefix changed and the Azure
+    prompt cache should be invalidated.
     """
     mcp_runtime = getattr(llm_client, "mcp_runtime", None)
     if mcp_runtime is None or state_manager is None:
-        return 0
+        return 0, False
     doc = await state_manager.get_mcp_tools()
     raw = doc.get("tools", []) if isinstance(doc, dict) else []
     disabled = {
@@ -87,8 +115,9 @@ async def reapply_mcp_disabled_tools(llm_client: Any, state_manager: Any) -> int
         for tool in raw
         if isinstance(tool, dict) and tool.get("name") and not bool(tool.get("enabled", True))
     }
+    previous_disabled = set(getattr(mcp_runtime, "disabled_tools", set()) or set())
     mcp_runtime.set_disabled_tools(disabled)
-    return len(disabled)
+    return len(disabled), disabled != previous_disabled
 
 
 async def sync_mcp_runtime_context(
@@ -122,8 +151,9 @@ async def sync_mcp_runtime_context(
     mcp_langchain_tools = await build_mcp_langchain_tool_wrappers(effective_config, mcp_tools)
     mcp_runtime.set_context(mcp_servers, mcp_tools, mcp_langchain_tools)
 
+    tool_doc_changed = False
     if state_manager is not None and hasattr(state_manager, "get_mcp_tools"):
-        await _sync_mcp_tool_flags(mcp_runtime, state_manager, server_status)
+        tool_doc_changed = await _sync_mcp_tool_flags(mcp_runtime, state_manager, server_status)
 
     if tool_registry is not None:
         entries = mcp_runtime.get_tool_registry_entries()
@@ -143,6 +173,7 @@ async def sync_mcp_runtime_context(
         "server_count": len(mcp_servers),
         "tool_count": len(mcp_tools),
         "config_reloaded": reload_config,
+        "tool_doc_changed": tool_doc_changed,
     }
 
 

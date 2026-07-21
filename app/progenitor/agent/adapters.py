@@ -11,16 +11,12 @@ Supports optional extended thinking/reasoning for models that support it
 
 import inspect
 import logging
-from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from collections.abc import Callable
 from typing import Annotated, Any, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ToolCallRequest
-from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool, InjectedToolCallId, StructuredTool
 from langchain_openai import ChatOpenAI
-from langgraph.types import Command
 from pydantic import SecretStr
 
 from ..config import LLMConfig
@@ -72,14 +68,12 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
     # Keep this shape because the native reasoning parameter produced summaries
     # with zero usage counts.
     reasoning_effort: str | None = None
-    extra_body: dict[str, dict[str, str]] | None = None
+    extra_body: dict[str, Any] = {}
     if config.reasoning_enabled:
         reasoning_effort = config.reasoning_effort
-        extra_body = {
-            "reasoning": {
-                "effort": config.reasoning_effort,
-                "summary": config.reasoning_summary,
-            }
+        extra_body["reasoning"] = {
+            "effort": config.reasoning_effort,
+            "summary": config.reasoning_summary,
         }
         logger.info(
             "Reasoning enabled for model %s (effort=%s, summary=%s)",
@@ -99,7 +93,7 @@ def create_langchain_model(config: LLMConfig | None = None) -> ChatOpenAI:
         output_version="responses/v1",
         streaming=True,
         reasoning_effort=reasoning_effort,
-        extra_body=extra_body,
+        extra_body=extra_body or None,
     )
 
     logger.info(
@@ -126,102 +120,6 @@ def create_dynamic_mcp_tools(llm_client: Any = None) -> list[BaseTool]:
     if not isinstance(raw_tools, list):
         return []
     return [tool for tool in raw_tools if isinstance(tool, BaseTool)]
-
-
-def _request_tool_name(tool: Any) -> str:
-    if hasattr(tool, "name"):
-        return str(tool.name or "").strip()
-    if isinstance(tool, dict):
-        function = tool.get("function")
-        if isinstance(function, dict):
-            return str(function.get("name") or "").strip()
-        return str(tool.get("name") or "").strip()
-    return ""
-
-
-class DynamicMCPToolMiddleware(AgentMiddleware):
-    """Inject and bind the current live external MCP tools for each agent turn."""
-
-    def __init__(self, mcp_tools_provider: Callable[[], list[BaseTool]] | None = None):
-        self._mcp_tools_provider = mcp_tools_provider or (lambda: [])
-        self._warned_name_collisions: set[str] = set()
-
-    def _dynamic_tools_by_name(self) -> dict[str, BaseTool]:
-        tools_by_name: dict[str, BaseTool] = {}
-        for tool in self._mcp_tools_provider():
-            name = _request_tool_name(tool)
-            if name:
-                tools_by_name[name] = tool
-        return tools_by_name
-
-    def _merge_request_tools(self, request: ModelRequest[Any]) -> ModelRequest[Any]:
-        dynamic_tools = self._dynamic_tools_by_name()
-        if not dynamic_tools:
-            return request
-
-        existing_tools = list(request.tools or [])
-        merged_tools = list(existing_tools)
-        seen_names: set[str] = set()
-        for tool in existing_tools:
-            name = _request_tool_name(tool)
-            if name:
-                seen_names.add(name)
-
-        for tool in dynamic_tools.values():
-            if tool.name in seen_names:
-                if tool.name not in self._warned_name_collisions:
-                    logger.warning(
-                        "Skipping dynamic MCP tool '%s' because a tool with that name already exists",
-                        tool.name,
-                    )
-                    self._warned_name_collisions.add(tool.name)
-                continue
-            seen_names.add(tool.name)
-            merged_tools.append(tool)
-
-        return request.override(tools=merged_tools)
-
-    def _bind_tool_request(self, request: ToolCallRequest) -> ToolCallRequest:
-        if request.tool is not None:
-            return request
-
-        tool_name = _request_tool_name(request.tool_call)
-        if not tool_name:
-            return request
-
-        dynamic_tool = self._dynamic_tools_by_name().get(tool_name)
-        if dynamic_tool is None:
-            return request
-
-        return replace(request, tool=dynamic_tool)
-
-    def wrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Any],
-    ) -> Any:
-        return handler(self._merge_request_tools(request))
-
-    async def awrap_model_call(
-        self,
-        request: ModelRequest[Any],
-        handler: Callable[[ModelRequest[Any]], Awaitable[Any]],
-    ) -> Any:
-        return await handler(self._merge_request_tools(request))
-
-    def wrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]],
-    ) -> ToolMessage | Command[Any]:
-        return handler(self._bind_tool_request(request))
-
-    async def awrap_tool_call(
-        self,
-        request: ToolCallRequest,
-        handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]],
-    ) -> ToolMessage | Command[Any]:
-        return await handler(self._bind_tool_request(request))
 
 
 async def _resolve_state(

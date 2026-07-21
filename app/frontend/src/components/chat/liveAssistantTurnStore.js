@@ -7,6 +7,7 @@ function createHeaderSnapshot(turn) {
   return {
     assistantMessageId: turn.assistantMessageId ?? null,
     reasoningTokenCount: turn.reasoningTokenCount ?? 0,
+    cacheReadTokenCount: turn.cacheReadTokenCount ?? 0,
     reasoningText: turn.reasoningText ?? '',
     reasoningEventCount: countReasoningTimelineEntries(
       turn.timelineItems?.map((item) => item.event),
@@ -18,6 +19,7 @@ function createHeaderSnapshot(turn) {
 function sameHeaderSnapshot(left, right) {
   return left?.assistantMessageId === right?.assistantMessageId
     && left?.reasoningTokenCount === right?.reasoningTokenCount
+    && left?.cacheReadTokenCount === right?.cacheReadTokenCount
     && left?.reasoningText === right?.reasoningText
     && left?.reasoningEventCount === right?.reasoningEventCount;
 }

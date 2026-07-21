@@ -177,8 +177,14 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
                 "pending_response": "ok",
             }
 
-    queues = _FakeQueues(input_item="hello", wait_seconds=0.25, pending_count=2)
-    live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+    queues = _FakeQueues(wait_seconds=0.25, pending_count=2)
+    live_state = {
+        "thread_id": "thread-1",
+        "messages": [],
+        "tool_calls": [],
+        "attachments": [],
+        "queued_input": "hello",
+    }
     audit_log_sink = MagicMock()
     audit_log_sink.write_log = AsyncMock()
     context = _heartbeat_context(
@@ -211,7 +217,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     assert result["heartbeat_action"] == "processed"
     assert result["current_input"] is None
     state_manager.save_current_state.assert_awaited_once()
-    assert queues.last_input_timeout == 1.0
     queues.signal_cycle_complete_mock.assert_called_once()
     state_manager.save_health.assert_awaited()
     health_payload = state_manager.save_health.await_args.args[0]
@@ -249,8 +254,14 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
             "completion_event_type": "agent_message",
         },
     }
-    queues = _FakeQueues(input_item=queued_input)
-    live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
+    queues = _FakeQueues()
+    live_state = {
+        "thread_id": "thread-1",
+        "messages": [],
+        "tool_calls": [],
+        "attachments": [],
+        "queued_input": queued_input,
+    }
     context = _heartbeat_context(
         queues=queues,
         agent_graph=_FakeAgentGraph(),
@@ -305,8 +316,14 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
         "app.progenitor.graph.heartbeat_graph.startup_audit_node",
         _raising_startup_audit,
     ):
-        live_state = {"thread_id": "thread-1", "messages": [], "tool_calls": [], "attachments": []}
-        queues = _FakeQueues(input_item="hello", wait_seconds=0.25, pending_count=2)
+        live_state = {
+            "thread_id": "thread-1",
+            "messages": [],
+            "tool_calls": [],
+            "attachments": [],
+            "queued_input": "hello",
+        }
+        queues = _FakeQueues(wait_seconds=0.25, pending_count=2)
         context = _heartbeat_context(
             queues=queues,
             agent_graph=_FakeAgentGraph(),
@@ -350,6 +367,20 @@ def test_runtime_heartbeat_graph_rejects_invalid_intervals(tmp_path) -> None:
                 input_timeout=0.0,
             )
         )
+
+
+def test_runtime_heartbeat_graph_idle_chain_excludes_prompt_cache_refresh() -> None:
+    """The periodic refresh node was removed: it shared graph_lock with live
+    direct chat turns, so its ~4s rewarm could stall a real user's message
+    behind heartbeat maintenance work. The prompt_cache_refresh node was
+    fully removed with the prompt-cache-warming feature."""
+    graph = create_runtime_heartbeat_graph().get_graph()
+    node_names = set(graph.nodes.keys())
+    assert "prompt_cache_refresh" not in node_names
+
+    edges = {(edge.source, edge.target) for edge in graph.edges}
+    # Idle maintenance chain now runs mcp_refresh directly into a2a_poll.
+    assert ("mcp_refresh", "a2a_poll") in edges
 
 
 def _heartbeat_context(**overrides):
