@@ -286,6 +286,9 @@ export function normalizeBackendChatMessage(message, index) {
     reasoningTokenCount: Number.isFinite(message.reasoning_token_count)
       ? message.reasoning_token_count
       : 0,
+    cacheReadTokenCount: Number.isFinite(message.cache_read_token_count)
+      ? message.cache_read_token_count
+      : 0,
     reasoningText: typeof message.reasoning_text === 'string' ? message.reasoning_text : '',
     reasoningTimestamp: typeof message.reasoning_timestamp === 'string'
       ? message.reasoning_timestamp

@@ -106,8 +106,7 @@ class LLMConfig:
     base_url: str = ""
     api_key: str | None = None
 
-    # Model selection
-    model_default: str = "gpt-5.1-codex-max"
+    model_default: str = "gpt-chat-latest"
 
     # Reasoning/thinking feature (for models that support it)
     reasoning_enabled: bool = True
@@ -123,7 +122,7 @@ class LLMConfig:
         return cls(
             base_url=os.getenv("AZURE_OPENAI_BASE_URL", "").rstrip("/"),
             api_key=os.getenv("AZURE_OPENAI_API_KEY"),
-            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-5.2-chat"),
+            model_default=os.getenv("PROGENITOR_MODEL_DEFAULT", "gpt-chat-latest"),
             reasoning_enabled=env_bool("PROGENITOR_REASONING_ENABLED", True),
             reasoning_effort=reasoning_effort or cls.reasoning_effort,
             reasoning_summary=reasoning_summary or cls.reasoning_summary,

@@ -21,7 +21,6 @@ from langgraph.graph.state import CompiledStateGraph
 from ..config import ProgenitorConfig, get_config
 from ..prompts import load_prompt
 from .adapters import (
-    DynamicMCPToolMiddleware,
     create_deepagent_tools,
     create_dynamic_mcp_tools,
     create_langchain_model,
@@ -31,7 +30,9 @@ from .middleware import (
     AsyncSubagentTrackingMiddleware,
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
+    DynamicMCPToolMiddleware,
     MetricsMiddleware,
+    SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
 from .subagents import (
@@ -211,10 +212,10 @@ def create_progenitor_agent(
         live_state_provider=live_state_provider,
     )
 
-    # Custom middleware stack (appended after DeepAgent's built-in middleware)
     custom_middleware = [
         DirectA2AFastPathMiddleware(tool_registry=tool_registry),
         DynamicMCPToolMiddleware(mcp_tools_provider=lambda: create_dynamic_mcp_tools(llm_client)),
+        SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_sink=log_sink),
         MetricsMiddleware(),

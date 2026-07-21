@@ -201,6 +201,9 @@ function normalizeStoredMessage(message, index) {
     reasoningTokenCount: Number.isFinite(message.reasoningTokenCount)
       ? message.reasoningTokenCount
       : 0,
+    cacheReadTokenCount: Number.isFinite(message.cacheReadTokenCount)
+      ? message.cacheReadTokenCount
+      : 0,
     reasoningText: typeof message.reasoningText === 'string' ? message.reasoningText : '',
     model: typeof message.model === 'string' ? message.model : '',
     streamEvents: filterSupportedPersistedStreamEvents(
