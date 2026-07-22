@@ -192,13 +192,11 @@ def workflow_definition_key(workflow_id: str) -> str:
 
 def workflow_run_key(run_id: str) -> str:
     """Return the runtime document key for one workflow run."""
-
     return f"{WORKFLOW_RUN_KEY_PREFIX}{run_id}"
 
 
 def workflow_queue_key(workflow_id: str) -> str:
     """Return the runtime document key for one workflow trigger queue."""
-
     return f"{WORKFLOW_QUEUE_KEY_PREFIX}{workflow_id}"
 
 

@@ -79,7 +79,8 @@ def create_chat_router(
     *,
     get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
-    get_current_state: Callable[[], dict[str, Any]] | None = None,
+    get_current_state: Callable[[str], dict[str, Any]] | None = None,
+    get_thread_messages: Callable[[str], list[Any]] | None = None,
 ) -> APIRouter:
     router = APIRouter()
 
@@ -98,13 +99,13 @@ def create_chat_router(
         if get_current_state is None:
             return None
         try:
-            state = get_current_state() or {}
+            state = get_current_state(thread_id) or {}
         except Exception:  # nosec B110 - state is best-effort; absence just means no card
             return None
-        detail = current_state_chat_detail(state)
-        if detail is not None and detail.thread_id == thread_id:
-            return detail
-        return None
+        if not state:
+            return None
+        messages = get_thread_messages(thread_id) if get_thread_messages is not None else []
+        return current_state_chat_detail({**state, "messages": messages})
 
     def detail_reasoning_score(detail: ChatSessionDetail | None) -> tuple[int, int]:
         if detail is None:

@@ -2,7 +2,11 @@ import json
 
 from fastapi.testclient import TestClient
 
-from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.backend.document_store import (
+    BACKEND_STATE_PREFIX,
+    PROGENITOR_STATE_PREFIX,
+    InMemoryDocumentStore,
+)
 from app.backend.main import app
 from app.backend.session import SessionConfig, SessionManager
 from app.backend.state_reader import StateReader
@@ -35,17 +39,10 @@ def test_deleted_session_route_does_not_restore_stale_conversation_state(monkeyp
     assert "set-cookie" not in response.headers
 
 
-def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):
-    data_dir = tmp_path / "data"
-    state_dir = data_dir / "state"
-    config_dir = data_dir / "config"
-    sessions_dir = data_dir / "sessions"
-
-    state_dir.mkdir(parents=True)
-    config_dir.mkdir(parents=True)
-    sessions_dir.mkdir(parents=True)
-
+def test_state_reader_uses_current_state_for_thread_and_messages():
     store = InMemoryDocumentStore()
+
+    # Health
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         "health",
@@ -57,44 +54,39 @@ def test_state_reader_uses_current_state_for_thread_and_messages(tmp_path):
             "pid": 4242,
         },
     )
-    (state_dir / "current_state.json").write_text(
-        json.dumps(
-            {
-                "thread_id": "thread_live",
-                "messages": [
-                    {"role": "user", "content": "hi"},
-                    {"role": "assistant", "content": "hello"},
-                    {"role": "user", "content": "again"},
-                ],
-                "cycle_count": 12,
-            }
-        ),
-        encoding="utf-8",
-    )
-    (state_dir / "build_state.json").write_text(json.dumps({}), encoding="utf-8")
-    (config_dir / "schedule.json").write_text("[]", encoding="utf-8")
-    (sessions_dir / "sessions.json").write_text(
-        json.dumps(
-            {
-                "sess_old": {
-                    "session_id": "sess_old",
-                    "last_activity": "2026-04-20T10:00:00Z",
-                },
-                "sess_new": {
-                    "session_id": "sess_new",
-                    "last_activity": "2026-04-21T09:15:00Z",
-                },
-            }
-        ),
-        encoding="utf-8",
+
+    # Current state with messages
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "current_state",
+        {
+            "thread_id": "thread_live",
+            "messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "hello"},
+                {"role": "user", "content": "again"},
+            ],
+            "cycle_count": 12,
+        },
     )
 
-    reader = StateReader(
-        state_dir=state_dir,
-        config_dir=config_dir,
-        sessions_dir=sessions_dir,
-        document_store=store,
+    # Build state (empty)
+    store.save_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+
+    # Schedule (empty)
+    store.save_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+
+    # Sessions as a list
+    store.save_document(
+        BACKEND_STATE_PREFIX,
+        "sessions",
+        [
+            {"session_id": "sess_old", "last_activity": "2026-04-20T10:00:00Z"},
+            {"session_id": "sess_new", "last_activity": "2026-04-21T09:15:00Z"},
+        ],
     )
+
+    reader = StateReader(document_store=store)
 
     health = reader.get_health()
     snapshot = reader.get_snapshot()

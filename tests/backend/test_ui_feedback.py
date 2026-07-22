@@ -37,14 +37,6 @@ def client():
     return TestClient(app)
 
 
-@pytest.fixture
-def temp_state_dir(tmp_path):
-    """Create a temporary state directory with test files."""
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    return state_dir
-
-
 class TestSSEEventStream:
     """Tests for Server-Sent Events streaming endpoint."""
 
@@ -197,22 +189,6 @@ class TestStateReader:
         assert build.score == 0.75
         assert build.message_count == 5
 
-    def test_state_reader_uses_env_storage_paths(self, monkeypatch, tmp_path):
-        """StateReader defaults should honor configured storage env vars."""
-        data_dir = tmp_path / "custom-data"
-        state_dir = data_dir / "state"
-        logs_dir = tmp_path / "custom-logs"
-        monkeypatch.delenv("PROGENITOR_STATE_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
-        monkeypatch.setenv("PROGENITOR_LOG_DIR", str(logs_dir))
-
-        reader = StateReader()
-
-        assert reader.state_dir == state_dir
-        assert reader.config_dir == state_dir.parent / "config"
-        assert reader.sessions_dir == state_dir.parent / "sessions"
-        assert reader.logs_dir == logs_dir
-
     def test_backlog_item_from_dict(self):
         """Test BacklogItem.from_dict() handles fields."""
         data = {
@@ -234,25 +210,23 @@ class TestStateReader:
 class TestStateReaderFileOperations:
     """Tests for StateReader file reading operations."""
 
-    def test_read_health_with_no_document_store(self, temp_state_dir):
+    def test_read_health_with_no_document_store(self):
         """Test reading health when there's no document store at all."""
-        reader = StateReader(state_dir=temp_state_dir)
+        reader = StateReader(document_store=InMemoryDocumentStore())
         health = reader.get_health()
-
         assert health.status == "unknown"
         assert health.last_active is None
         assert not health.is_running()
 
-    def test_read_health_document_not_yet_written(self, temp_state_dir):
+    def test_read_health_document_not_yet_written(self):
         """Before the heartbeat loop ever writes a "health" document, get_health()
         falls back to current_state (also absent here), landing on "unknown"."""
         store = InMemoryDocumentStore()
-        reader = StateReader(state_dir=temp_state_dir, document_store=store)
+        reader = StateReader(document_store=store)
         health = reader.get_health()
-
         assert health.status == "unknown"
 
-    def test_read_valid_health_document(self, temp_state_dir):
+    def test_read_valid_health_document(self):
         """Test reading a valid "health" Postgres document."""
         health_data = {
             "status": "running",
@@ -263,15 +237,14 @@ class TestStateReaderFileOperations:
         }
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
-        reader = StateReader(state_dir=temp_state_dir, document_store=store)
+        reader = StateReader(document_store=store)
         health = reader.get_health()
-
         assert health.status == "running"
         assert health.thread_id == "thread-123"
         assert health.cycle_count == 42
         assert health.pid == 9999
 
-    def test_read_registry_file(self, temp_state_dir):
+    def test_read_registry_file(self):
         """Test reading agents.json and the Progenitor MCP source config."""
         agents_data = {
             "agents": [
@@ -300,12 +273,10 @@ class TestStateReaderFileOperations:
                 }
             }
         }
-        config_dir = temp_state_dir.parent / "config"
-        config_dir.mkdir(exist_ok=True)
-        (config_dir / "agents.json").write_text(json.dumps(agents_data))
         store = InMemoryDocumentStore()
+        store.save_document(PROGENITOR_STATE_PREFIX, "registry", agents_data)
         store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
-        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir, document_store=store)
+        reader = StateReader(document_store=store)
         agents, tools = reader.get_registry()
 
         assert len(agents) == 1
@@ -313,24 +284,19 @@ class TestStateReaderFileOperations:
         assert len(tools) == 1
         assert tools[0].name == "tool-1"
 
-    def test_read_registry_merges_legacy_and_map(self, temp_state_dir):
+    def test_read_registry_merges_legacy_and_map(self):
         """Map entries should be visible even if legacy list is present."""
-        config_dir = temp_state_dir.parent / "config"
-        config_dir.mkdir(exist_ok=True)
-        (config_dir / "agents.json").write_text(
-            json.dumps(
-                {
-                    "agents": [{"name": "legacy-agent", "url": "http://legacy:8100"}],
-                    "legacy-agent": {"url": "http://map:8101"},
-                    "map-agent": {"url": "http://map:8102"},
-                }
-            )
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "registry",
+            {
+                "agents": [{"name": "legacy-agent", "url": "http://legacy:8100"}],
+                "legacy-agent": {"url": "http://map:8101"},
+                "map-agent": {"url": "http://map:8102"},
+            },
         )
-        reader = StateReader(
-            state_dir=temp_state_dir,
-            config_dir=config_dir,
-            document_store=InMemoryDocumentStore(),
-        )
+        reader = StateReader(document_store=store)
         agents, tools = reader.get_registry()
 
         by_name = {a.name: a.url for a in agents}
@@ -340,7 +306,7 @@ class TestStateReaderFileOperations:
         }
         assert tools == []
 
-    def test_state_snapshot(self, temp_state_dir):
+    def test_state_snapshot(self):
         """Test getting complete state snapshot."""
         # Seed all state as Postgres documents (health/schedule/build_state are
         # all resolved through the document store now, not disk files).
@@ -387,10 +353,7 @@ class TestStateReaderFileOperations:
                 }
             },
         )
-        config_dir = temp_state_dir.parent / "config"
-        config_dir.mkdir(exist_ok=True)
-
-        reader = StateReader(state_dir=temp_state_dir, config_dir=config_dir, document_store=store)
+        reader = StateReader(document_store=store)
         snapshot = reader.get_snapshot()
 
         assert snapshot.health.status == "running"
@@ -401,39 +364,37 @@ class TestStateReaderFileOperations:
         assert snapshot.build.in_progress is True
         assert snapshot.build.phase == "verify"
 
-    def test_workspace_payload_tolerates_scalar_json_log_lines(self, temp_state_dir):
+    def test_workspace_payload_tolerates_scalar_json_log_lines(self, tmp_path):
         """Scalar JSON log lines should not crash widget or workspace payload generation."""
-        config_dir = temp_state_dir.parent / "config"
-        logs_dir = temp_state_dir.parent / "logs"
-        config_dir.mkdir(exist_ok=True)
+        logs_dir = tmp_path / "logs"
         logs_dir.mkdir(exist_ok=True)
 
-        (config_dir / "agents.json").write_text(
-            json.dumps(
-                {
-                    "agents": [
-                        {
-                            "name": "observe_agent",
-                            "kind": "a2a_agent",
-                            "version": "1.0.0",
-                            "description": "Observer",
-                            "capabilities": [],
-                            "entrypoint": "python",
-                            "transport": "http",
-                            "enabled": True,
-                            "created_at": "2024-01-01T00:00:00Z",
-                            "updated_at": "2024-01-01T00:00:00Z",
-                            "status": "ready",
-                        }
-                    ]
-                }
-            )
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "registry",
+            {
+                "agents": [
+                    {
+                        "name": "observe_agent",
+                        "kind": "a2a_agent",
+                        "version": "1.0.0",
+                        "description": "Observer",
+                        "capabilities": [],
+                        "entrypoint": "python",
+                        "transport": "http",
+                        "enabled": True,
+                        "created_at": "2024-01-01T00:00:00Z",
+                        "updated_at": "2024-01-01T00:00:00Z",
+                        "status": "ready",
+                    }
+                ]
+            },
         )
         (logs_dir / "observe_agent.log").write_text('1\n{"message":"started"}\n', encoding="utf-8")
 
         reader = StateReader(
-            state_dir=temp_state_dir,
-            config_dir=config_dir,
+            document_store=store,
             logs_dir=logs_dir,
         )
 

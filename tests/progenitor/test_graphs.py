@@ -32,7 +32,6 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
     state_manager.get_schedule = AsyncMock(return_value=[])
     state_manager.get_active_a2a_tasks = AsyncMock(return_value=[])
     state_manager.log_conversation = AsyncMock()
-    state_manager.save_messages = AsyncMock()
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-1",
@@ -51,7 +50,6 @@ async def test_runtime_heartbeat_graph_records_a2a_completion() -> None:
     result = await graph.ainvoke({"messages": []}, context=context)
 
     state_manager.log_conversation.assert_awaited_once()
-    state_manager.save_messages.assert_awaited_once()
     state_manager.update_a2a_task.assert_awaited_once()
     assert result["messages"][0].metadata["task_id"] == "task-1"
 
@@ -64,7 +62,6 @@ async def test_runtime_heartbeat_graph_queues_same_thread_followup_for_a2a_compl
     state_manager.get_acp_tasks = AsyncMock(return_value=[])
     state_manager.dequeue_background_task = AsyncMock(return_value=None)
     state_manager.log_conversation = AsyncMock()
-    state_manager.save_messages = AsyncMock()
     state_manager.update_a2a_task = AsyncMock()
     record = A2ATaskRecord(
         task_id="task-2",
@@ -113,7 +110,6 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
         ]
     )
     state_manager.log_conversation = AsyncMock()
-    state_manager.save_messages = AsyncMock()
     state_manager.update_async_subagent_task = AsyncMock()
     queues = _FakeQueues()
     graph = create_runtime_heartbeat_graph()
@@ -144,7 +140,6 @@ async def test_runtime_heartbeat_graph_notifies_async_subagent_completion(tmp_pa
         result = await graph.ainvoke({"messages": []}, context=context)
 
     state_manager.log_conversation.assert_awaited_once()
-    state_manager.save_messages.assert_awaited_once()
     state_manager.update_async_subagent_task.assert_awaited_once()
     queues.push_event.assert_any_await(
         "agent_message",
@@ -176,6 +171,9 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
                 "messages": [{"role": "assistant", "content": "ok"}],
                 "pending_response": "ok",
             }
+
+        async def aupdate_state(self, config, values):  # noqa: ANN001
+            return config
 
     queues = _FakeQueues(wait_seconds=0.25, pending_count=2)
     live_state = {
@@ -216,7 +214,8 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     assert result["last_cycle_response"] == "ok"
     assert result["heartbeat_action"] == "processed"
     assert result["current_input"] is None
-    state_manager.save_current_state.assert_awaited_once()
+    # checkpoint_node writes per-thread document only (mirror removed)
+    assert state_manager.save_current_state.await_count == 1
     queues.signal_cycle_complete_mock.assert_called_once()
     state_manager.save_health.assert_awaited()
     health_payload = state_manager.save_health.await_args.args[0]
@@ -246,6 +245,9 @@ async def test_runtime_heartbeat_graph_emits_agent_callback_for_notified_input()
                 "messages": [{"role": "assistant", "content": "reply-token"}],
                 "pending_response": "reply-token",
             }
+
+        async def aupdate_state(self, config, values):  # noqa: ANN001
+            return config
 
     queued_input = {
         "content": "hello",
@@ -308,6 +310,9 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
                 "messages": [{"role": "assistant", "content": "ok"}],
                 "pending_response": "ok",
             }
+
+        async def aupdate_state(self, config, values):  # noqa: ANN001
+            return config
 
     async def _raising_startup_audit(_state, _runtime):  # noqa: ANN001
         raise RuntimeError("startup audit exploded")
@@ -386,7 +391,7 @@ def test_runtime_heartbeat_graph_idle_chain_excludes_prompt_cache_refresh() -> N
 def _heartbeat_context(**overrides):
     values = {
         "queues": _FakeQueues(),
-        "agent_graph": MagicMock(),
+        "agent_graph": AsyncMock(),
         "live_state": {},
         "state_manager": MagicMock(),
         "startup_audit_payload": None,

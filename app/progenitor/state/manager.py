@@ -1,30 +1,22 @@
-"""High-level state manager façade for Progenitor persistence."""
+"""High-level state manager facade for Progenitor persistence (runtime-store-only)."""
 
 import asyncio
 import logging
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
 from ..utils import utcnow_isoformat
 from ..workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
-    WORKFLOW_RUN_KEY_PREFIX,
     workflow_definition_key,
-    workflow_queue_key,
-    workflow_run_key,
 )
 from . import (
     a2a_store,
     acp_store,
     async_subagent_store,
     background_store,
-    config_store,
-    log_store,
-    session_store,
 )
 from .langgraph_store import LangGraphRuntimeStore
-from .layout import CORE_FILES, LOG_FILES, core_file_path, ensure_initial_state
 from .models import (
     A2ATaskRecord,
     ACPTaskRecord,
@@ -34,7 +26,6 @@ from .models import (
     ScheduleEntry,
     ScheduleRunRecord,
 )
-from .persistence import StatePersistence
 
 logger = logging.getLogger(__name__)
 
@@ -51,55 +42,45 @@ def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
 
 
 class StateManager:
-    """Manages persistence of Progenitor state with file locking.
+    """Manages persistence of Progenitor state via the runtime store.
 
-    Core runtime data is split across the current-state file bridge and
-    shared runtime documents:
-    - current_state.json: Progenitor agent operational state (chat, tool calls)
-    - registry/mcp/schedule: backend-managed metadata in the shared store
-
-    Provides:
-    - Atomic writes for crash safety
-    - File locking for concurrent access
-    - Cached state for performance
-    - JSONL logging with secret redaction
-    - CQ-010: Full async context manager protocol for resource handling
-
-    Usage:
-        async with StateManager(state_dir, logs_dir) as manager:
-            state = await manager.get_current_state()
-            # ... work with state ...
-        # Resources automatically cleaned up
+    All state documents live in the shared ``LangGraphRuntimeStore`` (Postgres).
+    The manager provides a cached facade over the store with per-key merge
+    serialization for concurrent tool calls within the same turn.
     """
 
-    CORE_FILES = CORE_FILES
-    LOG_FILES = LOG_FILES
+    CORE_FILES: dict[str, str] = {
+        "current_state": "current_state.json",
+        "a2a_tasks": "a2a_tasks.json",
+        "acp_tasks": "acp_tasks.json",
+        "async_subagent_tasks": "async_subagent_tasks.json",
+        "background_tasks": "background_tasks.json",
+        "registry": "agents.json",
+    }
 
     def __init__(
         self,
-        state_dir: Path,
-        logs_dir: Path,
+        runtime_store: LangGraphRuntimeStore,
         lock_timeout: int = 10,
-        runtime_store: LangGraphRuntimeStore | None = None,
     ) -> None:
-        self.state_dir = Path(state_dir)
-        self.config_dir = self.state_dir.parent / "config"
-        self.logs_dir = Path(logs_dir)
         self.lock_timeout = lock_timeout
-        self._persistence = StatePersistence(
-            self.state_dir,
-            self.logs_dir,
-            lock_timeout,
-            config_dir=self.config_dir,
-        )
         self._state_cache: dict[str, Any] = {}
         self._runtime_store = runtime_store
-        self._runtime_current_state_lock = asyncio.Lock()
+        # Per-thread-id micro-locks for atomic read-modify-write merges of
+        # the *same* thread's bookkeeping document (never held across LLM
+        # calls, never contended across different threads).
+        self._current_state_merge_locks: dict[str, asyncio.Lock] = {}
         self._initialized = False
 
-    def _core_file_path(self, name: str) -> Path:
-        """Resolve absolute path for a core state/config file."""
-        return core_file_path(name, self.state_dir, self.config_dir)
+    @staticmethod
+    def _current_state_document_key(thread_id: str | None) -> str:
+        return f"current_state:{thread_id}" if thread_id is not None else "current_state"
+
+    def _merge_lock(self, thread_id: str | None) -> asyncio.Lock:
+        key = thread_id or "__global__"
+        if key not in self._current_state_merge_locks:
+            self._current_state_merge_locks[key] = asyncio.Lock()
+        return self._current_state_merge_locks[key]
 
     async def __aenter__(self) -> "StateManager":
         """CQ-010: Async context manager entry - initialize resources."""
@@ -120,57 +101,27 @@ class StateManager:
         try:
             for name in self.CORE_FILES:
                 if name in self._state_cache:
-                    if self._runtime_store is not None:
-                        await self._runtime_store.save_document(name, self._state_cache[name])
-                        continue
-                    filepath = self._core_file_path(name)
-                    await self._atomic_write_json(filepath, self._state_cache[name])
+                    await self._runtime_store.save_document(name, self._state_cache[name])
             logger.debug("StateManager: flushed cached state on close")
         except Exception as e:
             logger.warning("StateManager: error flushing state on close: %s", e)
 
-        # Clear locks and cache
-        self._persistence.clear_locks()
-        if self._runtime_store is not None:
-            await self._runtime_store.close()
+        await self._runtime_store.close()
         self._state_cache.clear()
         self._initialized = False
 
     async def initialize(self) -> None:
-        """Initialize state directories and files."""
+        """Initialize the runtime store and ensure initial state documents."""
         if self._initialized:
             return
 
-        if self._runtime_store is None:
-            await self._persistence.initialize()
-            await self._ensure_initial_state()
-        else:
-            await self._runtime_store.open()
-            await self._ensure_runtime_store_initial_state()
+        await self._runtime_store.open()
+        await self._ensure_runtime_store_initial_state()
         self._initialized = True
-
-    async def _ensure_initial_state(self) -> None:
-        """Ensure all state files exist with defaults."""
-        self._cleanup_stale_temp_files()
-        await ensure_initial_state(
-            state_dir=self.state_dir,
-            config_dir=self.config_dir,
-            state_cache=self._state_cache,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-        )
-        from ..config import default_mcp_config_payload
-
-        self._state_cache.setdefault("mcp", default_mcp_config_payload())
-        self._state_cache.setdefault("mcp_tools", {"tools": []})
-        self._state_cache.setdefault("schedule", {})
-        self._state_cache.setdefault("schedule_runs", [])
-        self._state_cache.setdefault("health", {})
 
     async def _ensure_runtime_store_initial_state(self) -> None:
         """Ensure all state documents exist in the native runtime store."""
         from ..config import default_mcp_config_payload, default_schedule_config_payload
-        from ..utils import utcnow_isoformat
 
         conversation_thread_id = utcnow_isoformat()
         defaults = {
@@ -197,201 +148,156 @@ class StateManager:
             "schedule": default_schedule_config_payload(),
             "health": {},
         }
-        assert self._runtime_store is not None
         for name, default in defaults.items():
             self._state_cache[name] = await self._runtime_store.get_document(name, default)
-
-    def _cleanup_stale_temp_files(self) -> None:
-        """Remove leftover .tmp files from failed atomic writes."""
-        self._persistence.cleanup_stale_temp_files(self.state_dir, self.config_dir)
-
-    def _file_lock(self, name: str):
-        """Acquire async lock for a core file."""
-        return self._persistence.file_lock(name, filepath=self._core_file_path(name))
-
-    async def _atomic_write_json(self, filepath: Path, data: Any) -> None:
-        """Write JSON atomically: temp file → fsync → rename.
-
-        This ensures that either the entire write succeeds or the original
-        file remains intact. No partial writes possible.
-        """
-        await self._persistence.write_json(filepath, data)
-
-    async def _read_json(self, filepath: Path) -> Any:
-        """Read JSON file asynchronously."""
-        return await self._persistence.read_json(filepath)
 
     async def _get_runtime_document(self, name: str) -> Any:
         """Return a cached native-store-backed state document."""
         if name not in self._state_cache:
-            assert self._runtime_store is not None
             self._state_cache[name] = await self._runtime_store.get_document(name, {})
         return self._state_cache[name]
 
     async def _save_runtime_document(self, name: str, payload: Any) -> None:
         """Save and cache a native-store-backed state document."""
-        assert self._runtime_store is not None
         self._state_cache[name] = payload
         await self._runtime_store.save_document(name, payload)
 
     async def _mutate_runtime_current_state(
         self,
         mutate: Callable[[dict[str, Any]], None],
+        thread_id: str | None = None,
     ) -> dict[str, Any]:
         """Serialize native-store read/modify/write updates to current_state."""
-        async with self._runtime_current_state_lock:
-            state = await self._get_runtime_document("current_state")
+        key = self._current_state_document_key(thread_id)
+        async with self._merge_lock(thread_id):
+            state = await self._get_runtime_document(key)
             current = dict(state) if isinstance(state, dict) else {}
             mutate(current)
-            await self._save_runtime_document("current_state", current)
+            await self._save_runtime_document(key, current)
             return current
 
-    async def append_jsonl(self, log_name: str, entry: dict[str, Any]) -> None:
-        """Append a single entry to a JSONL log file with secret redaction."""
-        if log_name not in self.LOG_FILES:
-            raise ValueError(f"Unknown log: {log_name}")
-        if self._runtime_store is not None:
-            payload = dict(entry)
-            timestamp = payload.pop("timestamp", None)
-            await self._runtime_store.write_log(
-                source=log_name,
-                message=_structured_log_message(log_name, payload),
-                payload=payload,
-                timestamp=timestamp,
-                relative_path=self.LOG_FILES[log_name],
-            )
-            return
-        await log_store.append_jsonl(
-            persistence=self._persistence,
-            logs_dir=self.logs_dir,
-            log_files=self.LOG_FILES,
-            log_name=log_name,
-            entry=entry,
-            timestamp_factory=utcnow_isoformat,
+    async def log_conversation(self, message: ConversationMessage) -> None:
+        """Log a conversation message to the audit trail.
+
+        Messages live exclusively in the LangGraph checkpoint; this method
+        only persists an audit copy in the runtime store.
+        """
+        payload = message.model_dump(mode="json")
+        await self._runtime_store.write_log(
+            source="conversation",
+            message=_structured_log_message("conversation", payload),
+            level="info",
+            payload=payload,
+            timestamp=payload.pop("timestamp", None),
+            relative_path="conversation.jsonl",
         )
 
-    async def log_conversation(self, message: ConversationMessage) -> None:
-        """Log a conversation message."""
-        if self._runtime_store is not None:
-            await self.add_message(message)
-            await self.append_jsonl("conversation", message.model_dump(mode="json"))
-            return
-        await log_store.log_conversation(message=message, append_jsonl_fn=self.append_jsonl)
-
     async def log_schedule_event(self, event: dict[str, Any]) -> None:
-        """Log a schedule event."""
-        await log_store.log_schedule_event(event=event, append_jsonl_fn=self.append_jsonl)
+        """Log a schedule event to the runtime store."""
+        payload = dict(event)
+        await self._runtime_store.write_log(
+            source="schedule",
+            message=_structured_log_message("schedule", payload),
+            level="info",
+            payload=payload,
+            timestamp=payload.pop("timestamp", None),
+            relative_path="schedule.jsonl",
+        )
 
+    # ==========================================================================
     # Schedule management (database-backed in production runtime)
+    # ==========================================================================
     async def get_schedule(self) -> dict[str, ScheduleEntry]:
-        if self._runtime_store is not None:
-            # Read straight from the shared store rather than the in-memory
-            # cache: schedules are also created/paused/deleted by the backend
-            # (UI) writing the same Postgres document, so a cached copy would
-            # hide those cross-process changes from the runtime scheduler.
-            payload = await self._runtime_store.get_document("schedule", {})
-            self._state_cache["schedule"] = payload
-            return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
-        payload = self._state_cache.get("schedule", {})
+        """Return the schedule document.
+
+        Read straight from the shared store rather than the in-memory
+        cache: schedules are also created/paused/deleted by the backend
+        (UI) writing the same Postgres document, so a cached copy would
+        hide those cross-process changes from the runtime scheduler.
+        """
+        payload = await self._runtime_store.get_document("schedule", {})
+        self._state_cache["schedule"] = payload
         return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
 
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
+        """Persist the schedule document."""
         payload = {k: v.model_dump(mode="json") for k, v in schedule.items()}
-        if self._runtime_store is not None:
-            # Write straight through to the shared store (and refresh the cache)
-            # so backend reads and the runtime stay coherent. See get_schedule.
-            self._state_cache["schedule"] = payload
-            await self._runtime_store.save_document("schedule", payload)
-            return
         self._state_cache["schedule"] = payload
+        await self._runtime_store.save_document("schedule", payload)
 
-    # Health management (heartbeat-loop system status: cycle_count, idle
-    # state, queue stats, pid - liveness itself is sourced separately by the
-    # backend via the IPC heartbeat, not stored here)
+    # ==========================================================================
+    # Health management (heartbeat-loop system status)
+    # ==========================================================================
     async def get_health(self) -> dict[str, Any]:
-        if self._runtime_store is not None:
-            health = await self._get_runtime_document("health")
-            return dict(health) if isinstance(health, dict) else {}
-        payload = self._state_cache.get("health", {})
-        return dict(payload) if isinstance(payload, dict) else {}
+        """Return the health document."""
+        health = await self._get_runtime_document("health")
+        return dict(health) if isinstance(health, dict) else {}
 
     async def save_health(self, payload: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document("health", payload)
-            return
-        self._state_cache["health"] = payload
+        """Persist the health document."""
+        await self._save_runtime_document("health", payload)
 
+    # ==========================================================================
     # Registry management
+    # ==========================================================================
     async def get_registry(self) -> dict[str, Any]:
-        if self._runtime_store is not None:
-            registry = await self._get_runtime_document("registry")
-            return dict(registry) if isinstance(registry, dict) else {}
-        return await config_store.get_registry(
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            registry_path=self._core_file_path("registry"),
-        )
+        """Return the tool registry document."""
+        registry = await self._get_runtime_document("registry")
+        return dict(registry) if isinstance(registry, dict) else {}
 
     async def save_registry(self, registry: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document("registry", registry)
-            return
-        await config_store.save_registry(
-            registry=registry,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            registry_path=self._core_file_path("registry"),
-        )
+        """Persist the tool registry document."""
+        await self._save_runtime_document("registry", registry)
 
+    # ==========================================================================
+    # MCP configuration
+    # ==========================================================================
     async def get_mcp_config(self) -> dict[str, Any]:
+        """Return the MCP configuration document.
+
+        Read straight from the shared store rather than the in-memory
+        cache: the MCP config document is also created/edited by the
+        backend (UI) writing the same Postgres document, so a cached copy
+        would hide those cross-process changes from the runtime's periodic
+        MCP refresh. See get_schedule for the same rationale.
+        """
         from ..config import default_mcp_config_payload
         from ..mcp.loader import normalize_mcp_config_payload
 
-        if self._runtime_store is not None:
-            # Read straight from the shared store rather than the in-memory
-            # cache: the MCP config document is also created/edited by the
-            # backend (UI) writing the same Postgres document, so a cached copy
-            # would hide those cross-process changes from the runtime's periodic
-            # MCP refresh. See get_schedule for the same rationale.
-            payload = await self._runtime_store.get_document("mcp", default_mcp_config_payload())
-            self._state_cache["mcp"] = payload
-            return normalize_mcp_config_payload(
-                payload if isinstance(payload, dict) else default_mcp_config_payload()
-            )
-        payload = self._state_cache.get("mcp", default_mcp_config_payload())
-        return normalize_mcp_config_payload(payload if isinstance(payload, dict) else None)
+        payload = await self._runtime_store.get_document("mcp", default_mcp_config_payload())
+        self._state_cache["mcp"] = payload
+        return normalize_mcp_config_payload(
+            payload if isinstance(payload, dict) else default_mcp_config_payload()
+        )
 
     async def save_mcp_config(self, payload: dict[str, Any]) -> None:
+        """Persist the MCP configuration document."""
         from ..mcp.loader import normalize_mcp_config_payload
 
         normalized = normalize_mcp_config_payload(payload)
-        if self._runtime_store is not None:
-            await self._save_runtime_document("mcp", normalized)
-            return
-        self._state_cache["mcp"] = normalized
+        await self._save_runtime_document("mcp", normalized)
 
+    # ==========================================================================
+    # Knowledge configuration
+    # ==========================================================================
     async def get_knowledge_config(self) -> dict[str, Any]:
-        """Return the ``knowledge`` document (knowledge-base settings).
+        """Return the knowledge document (knowledge-base settings).
 
         Read straight from the shared store (not the cache): the backend (UI)
         edits this same document via ``PUT /api/ui/knowledge``, so a cached copy
         would hide cross-process changes. See get_mcp_config for the rationale.
         """
         default: dict[str, Any] = {"bases": []}
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.get_document("knowledge", default)
-            return payload if isinstance(payload, dict) else dict(default)
-        payload = self._state_cache.get("knowledge", default)
+        payload = await self._runtime_store.get_document("knowledge", default)
         return payload if isinstance(payload, dict) else dict(default)
 
     async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
-        """Persist the ``knowledge`` document (knowledge-base settings)."""
-        if self._runtime_store is not None:
-            await self._save_runtime_document("knowledge", payload)
-            return
-        self._state_cache["knowledge"] = payload
+        """Persist the knowledge document (knowledge-base settings)."""
+        await self._save_runtime_document("knowledge", payload)
 
+    # ==========================================================================
+    # Kanban board
+    # ==========================================================================
     async def get_kanban_structure(self) -> dict[str, Any]:
         """Return the kanban board structure document (columns + ``card_order``).
 
@@ -404,18 +310,12 @@ class StateManager:
             "columns": [],
             "card_order": [],
         }
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.get_document("kanban_board", default)
-            return payload if isinstance(payload, dict) else dict(default)
-        payload = self._state_cache.get("kanban_board", default)
+        payload = await self._runtime_store.get_document("kanban_board", default)
         return payload if isinstance(payload, dict) else dict(default)
 
     async def save_kanban_structure(self, structure: dict[str, Any]) -> None:
         """Persist the kanban board structure document."""
-        if self._runtime_store is not None:
-            await self._save_runtime_document("kanban_board", structure)
-            return
-        self._state_cache["kanban_board"] = structure
+        await self._save_runtime_document("kanban_board", structure)
 
     @staticmethod
     def _kanban_card_key(card_id: str) -> str:
@@ -432,19 +332,13 @@ class StateManager:
     async def get_kanban_card(self, card_id: str) -> dict[str, Any] | None:
         """Return one card document, or ``None`` if it does not exist."""
         key = self._kanban_card_key(card_id)
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.get_document(key, None)
-        else:
-            payload = self._state_cache.get(key)
+        payload = await self._runtime_store.get_document(key, None)
         return payload if isinstance(payload, dict) else None
 
     async def save_kanban_card(self, card_id: str, card: dict[str, Any]) -> None:
         """Persist one card document and ensure it is tracked in ``card_order``."""
         key = self._kanban_card_key(card_id)
-        if self._runtime_store is not None:
-            await self._save_runtime_document(key, card)
-        else:
-            self._state_cache[key] = card
+        await self._save_runtime_document(key, card)
         structure = await self.get_kanban_structure()
         order = structure.get("card_order")
         order = (
@@ -460,10 +354,7 @@ class StateManager:
     async def delete_kanban_card(self, card_id: str) -> None:
         """Remove one card document and drop it from ``card_order``."""
         key = self._kanban_card_key(card_id)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(key)
-        else:
-            self._state_cache.pop(key, None)
+        await self._runtime_store.delete_document(key)
         structure = await self.get_kanban_structure()
         order = structure.get("card_order")
         if isinstance(order, list) and card_id in order:
@@ -490,6 +381,9 @@ class StateManager:
         assembled["cards"] = cards
         return assembled
 
+    # ==========================================================================
+    # Inbox messages
+    # ==========================================================================
     @staticmethod
     def _inbox_message_key(message_id: str) -> str:
         return f"{INBOX_MESSAGE_KEY_PREFIX}{message_id}"
@@ -503,154 +397,51 @@ class StateManager:
         row would pollute.
         """
         key = self._inbox_message_key(message_id)
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.peek_document(key)
-        else:
-            payload = self._state_cache.get(key)
+        payload = await self._runtime_store.peek_document(key)
         return payload if isinstance(payload, dict) else None
 
     async def save_inbox_message(self, message_id: str, message: dict[str, Any]) -> None:
         """Persist one inbox message document (no index to maintain)."""
         key = self._inbox_message_key(message_id)
-        if self._runtime_store is not None:
-            await self._save_runtime_document(key, message)
-            return
-        self._state_cache[key] = message
+        await self._save_runtime_document(key, message)
 
     async def delete_inbox_message(self, message_id: str) -> None:
         """Remove one inbox message document."""
         key = self._inbox_message_key(message_id)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(key)
-            return
-        self._state_cache.pop(key, None)
+        await self._runtime_store.delete_document(key)
 
     async def list_inbox_messages(self) -> list[dict[str, Any]]:
         """Return all inbox message documents (unsorted; callers order them)."""
-        if self._runtime_store is not None:
-            rows = await self._runtime_store.list_documents(INBOX_MESSAGE_KEY_PREFIX)
-            return [payload for _, payload in rows if isinstance(payload, dict)]
-        return [
-            payload
-            for key, payload in self._state_cache.items()
-            if key.startswith(INBOX_MESSAGE_KEY_PREFIX) and isinstance(payload, dict)
-        ]
+        rows = await self._runtime_store.list_documents(INBOX_MESSAGE_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
 
+    # ==========================================================================
+    # Workflow definitions
+    # ==========================================================================
     async def get_workflow_definition(self, workflow_id: str) -> dict[str, Any] | None:
         """Return one workflow definition document, or ``None`` if missing."""
-
         key = workflow_definition_key(workflow_id)
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.peek_document(key)
-        else:
-            payload = self._state_cache.get(key)
+        payload = await self._runtime_store.peek_document(key)
         return payload if isinstance(payload, dict) else None
 
     async def save_workflow_definition(self, workflow_id: str, payload: dict[str, Any]) -> None:
         """Persist one workflow definition document."""
-
         key = workflow_definition_key(workflow_id)
-        if self._runtime_store is not None:
-            await self._save_runtime_document(key, payload)
-            return
-        self._state_cache[key] = payload
+        await self._save_runtime_document(key, payload)
 
     async def delete_workflow_definition(self, workflow_id: str) -> None:
         """Remove one workflow definition document."""
-
         key = workflow_definition_key(workflow_id)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(key)
-            return
-        self._state_cache.pop(key, None)
+        await self._runtime_store.delete_document(key)
 
     async def list_workflow_definitions(self) -> list[dict[str, Any]]:
         """Return all workflow definition documents."""
+        rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
 
-        if self._runtime_store is not None:
-            rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
-            return [payload for _, payload in rows if isinstance(payload, dict)]
-        return [
-            payload
-            for key, payload in self._state_cache.items()
-            if key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX) and isinstance(payload, dict)
-        ]
-
-    async def get_workflow_run(self, run_id: str) -> dict[str, Any] | None:
-        """Return one workflow run document, or ``None`` if missing."""
-
-        key = workflow_run_key(run_id)
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.peek_document(key)
-        else:
-            payload = self._state_cache.get(key)
-        return payload if isinstance(payload, dict) else None
-
-    async def save_workflow_run(self, run_id: str, payload: dict[str, Any]) -> None:
-        """Persist one workflow run document."""
-
-        key = workflow_run_key(run_id)
-        if self._runtime_store is not None:
-            await self._save_runtime_document(key, payload)
-            return
-        self._state_cache[key] = payload
-
-    async def delete_workflow_run(self, run_id: str) -> None:
-        """Remove one workflow run document."""
-
-        key = workflow_run_key(run_id)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(key)
-            return
-        self._state_cache.pop(key, None)
-
-    async def list_workflow_runs(self) -> list[dict[str, Any]]:
-        """Return all workflow run documents."""
-
-        if self._runtime_store is not None:
-            rows = await self._runtime_store.list_documents(WORKFLOW_RUN_KEY_PREFIX)
-            return [payload for _, payload in rows if isinstance(payload, dict)]
-        return [
-            payload
-            for key, payload in self._state_cache.items()
-            if key.startswith(WORKFLOW_RUN_KEY_PREFIX) and isinstance(payload, dict)
-        ]
-
-    async def get_workflow_queue(self, workflow_id: str) -> list[dict[str, Any]]:
-        """Return the queued trigger payloads for one workflow."""
-
-        key = workflow_queue_key(workflow_id)
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.peek_document(key)
-        else:
-            payload = self._state_cache.get(key)
-        if isinstance(payload, dict):
-            items = payload.get("items")
-            if isinstance(items, list):
-                return [item for item in items if isinstance(item, dict)]
-        if isinstance(payload, list):
-            return [item for item in payload if isinstance(item, dict)]
-        return []
-
-    async def save_workflow_queue(self, workflow_id: str, items: list[dict[str, Any]]) -> None:
-        """Persist the queued trigger payloads for one workflow."""
-
-        payload = {"items": [item for item in items if isinstance(item, dict)]}
-        key = workflow_queue_key(workflow_id)
-        if self._runtime_store is not None:
-            await self._save_runtime_document(key, payload)
-            return
-        self._state_cache[key] = payload
-
-    async def delete_workflow_queue(self, workflow_id: str) -> None:
-        """Remove the queued trigger payloads for one workflow."""
-
-        key = workflow_queue_key(workflow_id)
-        if self._runtime_store is not None:
-            await self._runtime_store.delete_document(key)
-            return
-        self._state_cache.pop(key, None)
-
+    # ==========================================================================
+    # MCP tools
+    # ==========================================================================
     async def get_mcp_tools(self) -> dict[str, Any]:
         """Return the runtime-owned discovered MCP tools document.
 
@@ -659,97 +450,64 @@ class StateManager:
         copy would hide those cross-process changes. See get_schedule.
         """
         default: dict[str, Any] = {"tools": []}
-        if self._runtime_store is not None:
-            payload = await self._runtime_store.get_document("mcp_tools", default)
-            self._state_cache["mcp_tools"] = payload
-            return payload if isinstance(payload, dict) else dict(default)
-        payload = self._state_cache.get("mcp_tools", default)
+        payload = await self._runtime_store.get_document("mcp_tools", default)
+        self._state_cache["mcp_tools"] = payload
         return payload if isinstance(payload, dict) else dict(default)
 
     async def save_mcp_tools(self, payload: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-            self._state_cache["mcp_tools"] = payload
-            await self._runtime_store.save_document("mcp_tools", payload)
-            return
+        """Persist the runtime-owned discovered MCP tools document."""
         self._state_cache["mcp_tools"] = payload
+        await self._runtime_store.save_document("mcp_tools", payload)
 
     # ==========================================================================
-    # Current State Management (current_state.json - Progenitor agent state)
+    # Current State Management
     # ==========================================================================
 
-    async def get_current_state(self) -> dict[str, Any]:
-        if self._runtime_store is not None:
-            state = await self._get_runtime_document("current_state")
-            return dict(state) if isinstance(state, dict) else {}
-        return await session_store.get_current_state(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
+    async def get_current_state(self, thread_id: str | None = None) -> dict[str, Any]:
+        """Return the current agent operational state document."""
+        key = self._current_state_document_key(thread_id)
+        state = await self._get_runtime_document(key)
+        return dict(state) if isinstance(state, dict) else {}
 
-    async def save_current_state(self, state: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document("current_state", state)
-            return
-        await session_store.save_current_state(
-            state=state,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
+    async def save_current_state(self, state: dict[str, Any], thread_id: str | None = None) -> None:
+        """Persist the current agent operational state document."""
+        key = self._current_state_document_key(thread_id)
+        await self._save_runtime_document(key, state)
 
-    async def update_current_state(self, updates: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-            await self._mutate_runtime_current_state(lambda current: current.update(updates))
-            return
-        await session_store.update_current_state(
-            updates=updates,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
+    async def update_current_state(
+        self, updates: dict[str, Any], thread_id: str | None = None
+    ) -> None:
+        """Apply an in-place update to the current state document."""
+        await self._mutate_runtime_current_state(
+            lambda current: current.update(updates), thread_id=thread_id
         )
 
     # ==========================================================================
-    # A2A Task Tracking (stored in a2a_tasks.json)
+    # A2A Task Tracking
     # ==========================================================================
 
     async def get_a2a_tasks(self) -> list[A2ATaskRecord]:
-        if self._runtime_store is not None:
-            payload = await self._get_runtime_document("a2a_tasks")
-            return [A2ATaskRecord.model_validate(item) for item in payload]
-        return await a2a_store.get_a2a_tasks(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            a2a_tasks_path=self._core_file_path("a2a_tasks"),
-        )
+        """Return all A2A task records."""
+        payload = await self._get_runtime_document("a2a_tasks")
+        return [A2ATaskRecord.model_validate(item) for item in payload]
 
     async def save_a2a_tasks(self, tasks: list[A2ATaskRecord]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "a2a_tasks",
-                [task.model_dump(mode="json") for task in tasks],
-            )
-            return
-        await a2a_store.save_a2a_tasks(
-            tasks=tasks,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            a2a_tasks_path=self._core_file_path("a2a_tasks"),
+        """Persist all A2A task records."""
+        await self._save_runtime_document(
+            "a2a_tasks",
+            [task.model_dump(mode="json") for task in tasks],
         )
 
     async def get_active_a2a_tasks(self) -> list[A2ATaskRecord]:
+        """Return A2A tasks that are still active (not completed/failed)."""
         return await a2a_store.get_active_a2a_tasks(get_a2a_tasks_fn=self.get_a2a_tasks)
 
     async def get_a2a_task(self, task_id: str) -> A2ATaskRecord | None:
+        """Return one A2A task by id, or ``None`` if not found."""
         return await a2a_store.get_a2a_task(task_id=task_id, get_a2a_tasks_fn=self.get_a2a_tasks)
 
     async def upsert_a2a_task(self, task: A2ATaskRecord) -> None:
+        """Insert or update an A2A task record."""
         await a2a_store.upsert_a2a_task(
             task=task,
             get_a2a_tasks_fn=self.get_a2a_tasks,
@@ -757,6 +515,7 @@ class StateManager:
         )
 
     async def update_a2a_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        """Apply partial updates to an A2A task. Returns ``True`` if the task existed."""
         return await a2a_store.update_a2a_task(
             task_id=task_id,
             updates=updates,
@@ -765,39 +524,27 @@ class StateManager:
         )
 
     # ==========================================================================
-    # ACP Task Tracking (stored in acp_tasks.json)
+    # ACP Task Tracking
     # ==========================================================================
 
     async def get_acp_tasks(self) -> list[ACPTaskRecord]:
-        if self._runtime_store is not None:
-            payload = await self._get_runtime_document("acp_tasks")
-            return [ACPTaskRecord.model_validate(item) for item in payload]
-        return await acp_store.get_acp_tasks(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            acp_tasks_path=self._core_file_path("acp_tasks"),
-        )
+        """Return all ACP task records."""
+        payload = await self._get_runtime_document("acp_tasks")
+        return [ACPTaskRecord.model_validate(item) for item in payload]
 
     async def save_acp_tasks(self, tasks: list[ACPTaskRecord]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "acp_tasks",
-                [task.model_dump(mode="json") for task in tasks],
-            )
-            return
-        await acp_store.save_acp_tasks(
-            tasks=tasks,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            acp_tasks_path=self._core_file_path("acp_tasks"),
+        """Persist all ACP task records."""
+        await self._save_runtime_document(
+            "acp_tasks",
+            [task.model_dump(mode="json") for task in tasks],
         )
 
     async def get_acp_task(self, task_id: str) -> ACPTaskRecord | None:
+        """Return one ACP task by id, or ``None`` if not found."""
         return await acp_store.get_acp_task(task_id=task_id, get_acp_tasks_fn=self.get_acp_tasks)
 
     async def upsert_acp_task(self, task: ACPTaskRecord) -> None:
+        """Insert or update an ACP task record."""
         await acp_store.upsert_acp_task(
             task=task,
             get_acp_tasks_fn=self.get_acp_tasks,
@@ -805,6 +552,7 @@ class StateManager:
         )
 
     async def update_acp_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        """Apply partial updates to an ACP task. Returns ``True`` if the task existed."""
         return await acp_store.update_acp_task(
             task_id=task_id,
             updates=updates,
@@ -813,42 +561,30 @@ class StateManager:
         )
 
     # ==========================================================================
-    # Async Subagent Task Tracking (stored in async_subagent_tasks.json)
+    # Async Subagent Task Tracking
     # ==========================================================================
 
     async def get_async_subagent_tasks(self) -> list[AsyncSubagentTaskRecord]:
-        if self._runtime_store is not None:
-            payload = await self._get_runtime_document("async_subagent_tasks")
-            return [AsyncSubagentTaskRecord.model_validate(item) for item in payload]
-        return await async_subagent_store.get_async_subagent_tasks(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            async_subagent_tasks_path=self._core_file_path("async_subagent_tasks"),
-        )
+        """Return all async subagent task records."""
+        payload = await self._get_runtime_document("async_subagent_tasks")
+        return [AsyncSubagentTaskRecord.model_validate(item) for item in payload]
 
     async def save_async_subagent_tasks(self, tasks: list[AsyncSubagentTaskRecord]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "async_subagent_tasks",
-                [task.model_dump(mode="json") for task in tasks],
-            )
-            return
-        await async_subagent_store.save_async_subagent_tasks(
-            tasks=tasks,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            async_subagent_tasks_path=self._core_file_path("async_subagent_tasks"),
+        """Persist all async subagent task records."""
+        await self._save_runtime_document(
+            "async_subagent_tasks",
+            [task.model_dump(mode="json") for task in tasks],
         )
 
     async def get_async_subagent_task(self, task_id: str) -> AsyncSubagentTaskRecord | None:
+        """Return one async subagent task by id, or ``None`` if not found."""
         return await async_subagent_store.get_async_subagent_task(
             task_id=task_id,
             get_async_subagent_tasks_fn=self.get_async_subagent_tasks,
         )
 
     async def upsert_async_subagent_task(self, task: AsyncSubagentTaskRecord) -> None:
+        """Insert or update an async subagent task record."""
         await async_subagent_store.upsert_async_subagent_task(
             task=task,
             get_async_subagent_tasks_fn=self.get_async_subagent_tasks,
@@ -856,6 +592,7 @@ class StateManager:
         )
 
     async def update_async_subagent_task(self, task_id: str, updates: dict[str, Any]) -> bool:
+        """Apply partial updates to an async subagent task. Returns ``True`` if found."""
         return await async_subagent_store.update_async_subagent_task(
             task_id=task_id,
             updates=updates,
@@ -864,36 +601,23 @@ class StateManager:
         )
 
     # ==========================================================================
-    # Background Task Queue (stored in background_tasks.json)
+    # Background Task Queue
     # ==========================================================================
 
     async def get_background_tasks(self) -> list[BackgroundTaskEntry]:
-        if self._runtime_store is not None:
-            payload = await self._get_runtime_document("background_tasks")
-            return [BackgroundTaskEntry.model_validate(item) for item in payload]
-        return await background_store.get_background_tasks(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            background_tasks_path=self._core_file_path("background_tasks"),
-        )
+        """Return all background task entries."""
+        payload = await self._get_runtime_document("background_tasks")
+        return [BackgroundTaskEntry.model_validate(item) for item in payload]
 
     async def save_background_tasks(self, tasks: list[BackgroundTaskEntry]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "background_tasks",
-                [task.model_dump(mode="json") for task in tasks],
-            )
-            return
-        await background_store.save_background_tasks(
-            tasks=tasks,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            atomic_write_json=self._atomic_write_json,
-            background_tasks_path=self._core_file_path("background_tasks"),
+        """Persist all background task entries."""
+        await self._save_runtime_document(
+            "background_tasks",
+            [task.model_dump(mode="json") for task in tasks],
         )
 
     async def enqueue_background_task(self, task: BackgroundTaskEntry) -> None:
+        """Add a background task to the queue."""
         await background_store.enqueue_background_task(
             task=task,
             get_background_tasks_fn=self.get_background_tasks,
@@ -901,39 +625,37 @@ class StateManager:
         )
 
     async def dequeue_background_task(self) -> BackgroundTaskEntry | None:
+        """Remove and return the next background task, or ``None`` if empty."""
         return await background_store.dequeue_background_task(
             get_background_tasks_fn=self.get_background_tasks,
             save_background_tasks_fn=self.save_background_tasks,
         )
 
     # ==========================================================================
-    # Schedule Run Tracking (database-backed in production runtime)
+    # Schedule Run Tracking
     # ==========================================================================
 
     async def get_schedule_runs(self) -> list[ScheduleRunRecord]:
-        if self._runtime_store is not None:
-            payload = await self._get_runtime_document("schedule_runs")
-            return [ScheduleRunRecord.model_validate(item) for item in payload]
-        payload = self._state_cache.get("schedule_runs", [])
-        rows = payload if isinstance(payload, list) else []
-        return [ScheduleRunRecord.model_validate(item) for item in rows]
+        """Return all schedule run records."""
+        payload = await self._get_runtime_document("schedule_runs")
+        return [ScheduleRunRecord.model_validate(item) for item in payload]
 
     async def save_schedule_runs(self, runs: list[ScheduleRunRecord]) -> None:
-        if self._runtime_store is not None:
-            await self._save_runtime_document(
-                "schedule_runs",
-                [run.model_dump(mode="json") for run in runs],
-            )
-            return
-        self._state_cache["schedule_runs"] = [run.model_dump(mode="json") for run in runs]
+        """Persist all schedule run records."""
+        await self._save_runtime_document(
+            "schedule_runs",
+            [run.model_dump(mode="json") for run in runs],
+        )
 
     async def get_schedule_run(self, run_id: str) -> ScheduleRunRecord | None:
+        """Return one schedule run by id, or ``None`` if not found."""
         for run in await self.get_schedule_runs():
             if run.run_id == run_id:
                 return run
         return None
 
     async def upsert_schedule_run(self, run: ScheduleRunRecord) -> None:
+        """Insert or update a schedule run record."""
         runs = await self.get_schedule_runs()
         for index, existing in enumerate(runs):
             if existing.run_id == run.run_id:
@@ -944,6 +666,7 @@ class StateManager:
         await self.save_schedule_runs(runs)
 
     async def update_schedule_run(self, run_id: str, updates: dict[str, Any]) -> bool:
+        """Apply partial updates to a schedule run. Returns ``True`` if found."""
         runs = await self.get_schedule_runs()
         for index, existing in enumerate(runs):
             if existing.run_id != run_id:
@@ -956,190 +679,12 @@ class StateManager:
         return False
 
     # ==========================================================================
-    # Messages Management (stored in current_state.json)
+    # Messages Management (stored in current_state document)
     # ==========================================================================
-
-    async def get_messages(self) -> list[ConversationMessage]:
-        if self._runtime_store is not None:
-            state = await self.get_current_state()
-            return [ConversationMessage.model_validate(item) for item in state.get("messages", [])]
-        return await session_store.get_messages(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    async def save_messages(self, messages: list[ConversationMessage]) -> None:
-        if self._runtime_store is not None:
-            payload = [message.model_dump(mode="json") for message in messages]
-            await self._mutate_runtime_current_state(
-                lambda current: current.__setitem__("messages", payload)
-            )
-            return
-        await session_store.save_messages(
-            messages=messages,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    async def add_message(self, message: ConversationMessage) -> None:
-        if self._runtime_store is not None:
-            payload = message.model_dump(mode="json")
-
-            def mutate(current: dict[str, Any]) -> None:
-                messages = current.get("messages", [])
-                if not isinstance(messages, list):
-                    messages = []
-                messages.append(payload)
-                current["messages"] = messages
-
-            await self._mutate_runtime_current_state(mutate)
-            return
-        await session_store.add_message(
-            message=message,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    # ==========================================================================
-    # Schedule Management - Convenience methods for the ``schedule`` document
-    # (a system feature persisted in Postgres, stored separately from current_state)
-    # ==========================================================================
-
-    async def add_schedule_entry(self, entry) -> None:
-        await config_store.add_schedule_entry(
-            entry=entry,
-            get_schedule_fn=self.get_schedule,
-            save_schedule_fn=self.save_schedule,
-            log_schedule_event_fn=self.log_schedule_event,
-        )
-
-    async def remove_schedule_entry(self, schedule_id: str) -> bool:
-        return await config_store.remove_schedule_entry(
-            schedule_id=schedule_id,
-            get_schedule_fn=self.get_schedule,
-            save_schedule_fn=self.save_schedule,
-            log_schedule_event_fn=self.log_schedule_event,
-        )
-
-    async def update_schedule_entry(self, schedule_id: str, updates: dict) -> bool:
-        return await config_store.update_schedule_entry(
-            schedule_id=schedule_id,
-            updates=updates,
-            get_schedule_fn=self.get_schedule,
-            save_schedule_fn=self.save_schedule,
-            log_schedule_event_fn=self.log_schedule_event,
-        )
-
-    # ==========================================================================
-    # Tool Calls Management (stored in current_state.json)
-    # ==========================================================================
-
-    async def get_tool_calls(self) -> list[dict[str, Any]]:
-        if self._runtime_store is not None:
-            state = await self.get_current_state()
-            tool_calls = state.get("tool_calls", [])
-            return list(tool_calls) if isinstance(tool_calls, list) else []
-        return await session_store.get_tool_calls(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    async def add_tool_call(self, tool_call: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-
-            def mutate(current: dict[str, Any]) -> None:
-                tool_calls = current.get("tool_calls", [])
-                if not isinstance(tool_calls, list):
-                    tool_calls = []
-                tool_calls.append(tool_call)
-                current["tool_calls"] = tool_calls
-
-            await self._mutate_runtime_current_state(mutate)
-            return
-        await session_store.add_tool_call(
-            tool_call=tool_call,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    # ==========================================================================
-    # Attachments Management (stored in current_state.json)
-    # ==========================================================================
-
-    async def get_attachments(self) -> list[dict[str, Any]]:
-        if self._runtime_store is not None:
-            state = await self.get_current_state()
-            attachments = state.get("attachments", [])
-            return list(attachments) if isinstance(attachments, list) else []
-        return await session_store.get_attachments(
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
-
-    async def add_attachment(self, attachment: dict[str, Any]) -> None:
-        if self._runtime_store is not None:
-
-            def mutate(current: dict[str, Any]) -> None:
-                attachments = current.get("attachments", [])
-                if not isinstance(attachments, list):
-                    attachments = []
-                attachments.append(attachment)
-                current["attachments"] = attachments
-
-            await self._mutate_runtime_current_state(mutate)
-            return
-        await session_store.add_attachment(
-            attachment=attachment,
-            state_cache=self._state_cache,
-            file_lock=self._file_lock,
-            read_json=self._read_json,
-            atomic_write_json=self._atomic_write_json,
-            current_state_path=self._core_file_path("current_state"),
-        )
 
     async def commit_state(self) -> None:
-        """Commit all cached state to disk."""
+        """Commit all cached state to the runtime store."""
         for name, data in self._state_cache.items():
             if name not in self.CORE_FILES:
                 continue
-
-            if self._runtime_store is not None:
-                await self._runtime_store.save_document(name, data)
-                continue
-            async with self._file_lock(name):
-                await self._atomic_write_json(self._core_file_path(name), data)
-
-    async def read_conversation_log(self, limit: int = 100) -> list[dict[str, Any]]:
-        if self._runtime_store is not None:
-            rows = await self._runtime_store.query_logs(source="conversation", limit=limit)
-            history: list[dict[str, Any]] = []
-            for row in rows:
-                payload = row.get("payload")
-                entry = dict(payload) if isinstance(payload, dict) else {"payload": payload}
-                timestamp = row.get("timestamp")
-                if timestamp is not None and "timestamp" not in entry:
-                    entry["timestamp"] = (
-                        timestamp.isoformat() if hasattr(timestamp, "isoformat") else str(timestamp)
-                    )
-                history.append(entry)
-            return history
-        return await log_store.read_conversation_log(
-            logs_dir=self.logs_dir,
-            log_files=self.LOG_FILES,
-            limit=limit,
-        )
+            await self._runtime_store.save_document(name, data)

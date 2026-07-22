@@ -85,9 +85,21 @@ def make_bridge_factory(script: Any) -> Callable[..., ScriptedBridge]:
 class FakeStateManager:
     def __init__(self) -> None:
         self.saved_checkpoints: list[dict[str, Any]] = []
+        self._current_state: dict[str, Any] = {}
 
-    async def save_current_state(self, checkpoint: dict[str, Any]) -> None:
-        self.saved_checkpoints.append(checkpoint)
+    async def get_current_state(self, thread_id: str | None = None) -> dict[str, Any]:
+        return dict(self._current_state)
+
+    async def save_current_state(
+        self, checkpoint: dict[str, Any], thread_id: str | None = None
+    ) -> None:
+        self._current_state.update(checkpoint)
+        self.saved_checkpoints.append({"thread_id": thread_id, **checkpoint})
+
+    async def update_current_state(
+        self, updates: dict[str, Any], thread_id: str | None = None
+    ) -> None:
+        self._current_state.update(updates)
 
 
 @dataclass
@@ -102,7 +114,6 @@ class FakeLoopRunner:
     thread_id: str = "progenitor_main"
 
     def __post_init__(self) -> None:
-        self.graph_lock = asyncio.Lock()
         self.config = SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=False))
         self.state: dict[str, Any] = {"thread_id": self.thread_id, "cycle_count": 0}
         self.state_manager = FakeStateManager()
@@ -479,6 +490,7 @@ async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> N
         await _stop_chat_server(server)
 
     assert frames[-1] == ("done", {"request_id": "req-checkpoint", "status": "completed"})
+    # checkpoint_node writes per-thread document only (mirror removed)
     assert len(loop_runner.state_manager.saved_checkpoints) == 1
     assert loop_runner.queues.cycle_complete_event.is_set()
 
@@ -487,7 +499,9 @@ async def test_chat_checkpoint_failure_emits_error_not_done() -> None:
     """A checkpoint failure must not be masked by an already-sent 'completed' frame."""
     loop_runner = FakeLoopRunner()
 
-    async def failing_save_current_state(checkpoint: dict[str, Any]) -> None:
+    async def failing_save_current_state(
+        checkpoint: dict[str, Any], thread_id: str | None = None
+    ) -> None:
         raise RuntimeError("disk full")
 
     loop_runner.state_manager.save_current_state = failing_save_current_state  # type: ignore[method-assign]

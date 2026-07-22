@@ -12,7 +12,6 @@ import json
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
 from typing import Any, cast
 
 from aiohttp import web
@@ -21,6 +20,7 @@ from langgraph.runtime import Runtime
 from ..ipc.deepagent_stream import DeepAgentIPCStream
 from ..ipc.stream_payloads import make_json_safe
 from ..nodes.checkpoint import checkpoint_node
+from ..runtime.thread_context import reset_current_thread_id, set_current_thread_id
 from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
@@ -45,8 +45,7 @@ class RuntimeChatService:
     def __init__(self, loop_runner: Any, *, bridge_factory: Any = None) -> None:
         self.loop_runner = loop_runner
         self._bridge_factory = bridge_factory or DeepAgentIPCStream
-        self._request_lock = asyncio.Lock()
-        self._chat_waiters = 0
+        self._inflight_by_thread: dict[str, asyncio.Task[None]] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
         self._drain_task: asyncio.Task[None] | None = None
@@ -103,24 +102,34 @@ class RuntimeChatService:
         )
         await response.prepare(request)
 
-        self._chat_waiters += 1
+        thread_id = self._thread_id_for_request(metadata)
+        cancel_event = self._cancel_events.setdefault(request_id, asyncio.Event())
         try:
-            if self._chat_waiters > 1:
+            # Serialize requests for the SAME thread_id so two concurrent
+            # ainvoke() calls on the same thread don't create divergent
+            # checkpoint branches.  Different threads run fully concurrently.
+            existing = self._inflight_by_thread.get(thread_id)
+            if existing is not None and not existing.done():
                 await self._write_frame(
                     response, "queued", {"request_id": request_id, "streaming": True}
                 )
                 await self._notify_queued_request(request_id, streaming=True)
+                with contextlib.suppress(Exception):
+                    await existing
 
-            cancel_event = self._cancel_events.setdefault(request_id, asyncio.Event())
+            task = asyncio.create_task(
+                self._stream_chat(
+                    response, message, request_id, metadata, cancel_event, received_at
+                )
+            )
+            self._inflight_by_thread[thread_id] = task
             try:
-                async with self._request_lock:
-                    await self._stream_chat(
-                        response, message, request_id, metadata, cancel_event, received_at
-                    )
+                await task
             finally:
-                self._cancel_events.pop(request_id, None)
+                if self._inflight_by_thread.get(thread_id) is task:
+                    self._inflight_by_thread.pop(thread_id, None)
         finally:
-            self._chat_waiters -= 1
+            self._cancel_events.pop(request_id, None)
         return response
 
     async def _stream_chat(
@@ -133,18 +142,20 @@ class RuntimeChatService:
         received_at: float,
     ) -> None:
         thread_id = self._thread_id_for_request(metadata)
-        async with self._direct_graph_lock():
-            bridge = self._create_direct_stream_bridge()
-            cancelled = False
-            bridge_cancelled = False
+        bridge = self._create_direct_stream_bridge()
+        cancelled = False
+        bridge_cancelled = False
 
-            # bridge.stream() can go silent for minutes at a time (a long tool
-            # call or subagent invocation with no interim output), which would
-            # otherwise starve the response body of bytes and trip the
-            # backend's httpx read timeout. Consume it from a background task
-            # so this loop can keep writing SSE keepalive comments while
-            # waiting, the same pattern handle_events() uses.
-            queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=DIRECT_STREAM_QUEUE_SIZE)
+        # bridge.stream() can go silent for minutes at a time (a long tool
+        # call or subagent invocation with no interim output), which would
+        # otherwise starve the response body of bytes and trip the
+        # backend's httpx read timeout. Consume it from a background task
+        # so this loop can keep writing SSE keepalive comments while
+        # waiting, the same pattern handle_events() uses.
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=DIRECT_STREAM_QUEUE_SIZE)
+
+        token = set_current_thread_id(thread_id)
+        try:
 
             async def _produce() -> None:
                 try:
@@ -270,7 +281,7 @@ class RuntimeChatService:
                 return
 
             try:
-                await self._complete_direct_graph_cycle(bridge)
+                await self._complete_direct_graph_cycle(bridge, thread_id)
             except Exception as exc:
                 logger.error("Checkpoint error for %s: %s", request_id, exc, exc_info=True)
                 with contextlib.suppress(ConnectionResetError, ConnectionError):
@@ -284,6 +295,8 @@ class RuntimeChatService:
             await self._write_frame(
                 response, "done", {"request_id": request_id, "status": "completed"}
             )
+        finally:
+            reset_current_thread_id(token)
 
     # -- POST /v1/chat/{request_id}/cancel -------------------------------
 
@@ -359,36 +372,43 @@ class RuntimeChatService:
         return callable(getattr(graph, "astream", None))
 
     def _thread_id_for_request(self, metadata: dict[str, Any] | None) -> str:
-        state = getattr(self.loop_runner, "state", {})
+        system_state = getattr(self.loop_runner, "state", {})
         requested_thread_id = str((metadata or {}).get("thread_id") or "").strip()
-        return requested_thread_id or str(state.get("thread_id") or "progenitor_main")
+        return requested_thread_id or str(system_state.get("thread_id") or "progenitor_main")
 
     def _create_direct_stream_bridge(self) -> DeepAgentIPCStream:
+        # Fresh empty dict per request — DeepAgentIPCStream uses this only for
+        # transient per-turn fields (current_input, cycle_count, etc.) and
+        # never reads it back across turns.
         return self._bridge_factory(
             self.loop_runner.graph,
             config=self.loop_runner.config,
-            state=getattr(self.loop_runner, "state", {}),
+            state={},
         )
 
-    @contextlib.asynccontextmanager
-    async def _direct_graph_lock(self) -> AsyncIterator[None]:
-        lock = getattr(self.loop_runner, "graph_lock", None)
-        if lock is None:
-            yield
-        else:
-            async with lock:
-                yield
-
-    async def _complete_direct_graph_cycle(self, bridge: DeepAgentIPCStream) -> None:
-        state = getattr(self.loop_runner, "state", {})
+    async def _complete_direct_graph_cycle(
+        self, bridge: DeepAgentIPCStream, thread_id: str
+    ) -> None:
         context = getattr(self.loop_runner, "heartbeat_context", None)
         if context is not None:
+            thread_state = await context.state_manager.get_current_state(thread_id=thread_id)
+            turn_state = {
+                **thread_state,
+                "thread_id": thread_id,
+                **bridge.state,
+            }
             updates = await checkpoint_node(
-                cast(ProgenitorState, state),
+                cast(ProgenitorState, turn_state),
                 Runtime(context=context),
             )
-            if isinstance(state, dict):
-                state.update(updates)
+            await context.state_manager.update_current_state(
+                {
+                    k: v
+                    for k, v in updates.items()
+                    if k in {"cycle_count", "pending_response", "last_reasoning_trace"}
+                },
+                thread_id=thread_id,
+            )
 
         queues = getattr(self.loop_runner, "queues", None)
         if queues is not None:

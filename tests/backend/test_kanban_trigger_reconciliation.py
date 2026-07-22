@@ -37,20 +37,7 @@ def workflow_env(tmp_path, monkeypatch):
         "app.backend.main.configure_default_document_store", lambda *_a, **_k: store
     )
 
-    state_dir = tmp_path / "data" / "state"
-    config_dir = tmp_path / "data" / "config"
-    sessions_dir = tmp_path / "data" / "sessions"
-    logs_dir = tmp_path / "logs"
-    for directory in (state_dir, config_dir, sessions_dir, logs_dir):
-        directory.mkdir(parents=True)
-
-    state_reader = StateReader(
-        state_dir=state_dir,
-        config_dir=config_dir,
-        sessions_dir=sessions_dir,
-        logs_dir=logs_dir,
-        document_store=store,
-    )
+    state_reader = StateReader(document_store=store)
     monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
 
     import app.backend.ui_routes as ui_routes

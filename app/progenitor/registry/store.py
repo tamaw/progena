@@ -1,8 +1,7 @@
-"""File-backed registry store and lookup helpers."""
+"""Document-store backed registry for A2A agents and MCP tools."""
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -13,8 +12,7 @@ from ..state.models import AgentRegistryEntry, AgentStatus
 from ..tools.protocol import BaseSystemTool, ToolContext, ToolResult
 from ..utils import utcnow
 
-# A store-backed registry uses these to read/write the canonical document; when
-# unset (e.g. tests), the registry falls back to the JSON file at registry_path.
+# Document-store registry read/write callbacks.
 RegistryLoader = Callable[[], Awaitable[dict[str, Any]]]
 RegistrySaver = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -43,8 +41,7 @@ class RegistryData(TypedDict):
 class ToolRegistry:
     """Registry for A2A agents and MCP tools."""
 
-    def __init__(self, registry_path: Path | str) -> None:
-        self.registry_path: Path = Path(registry_path)
+    def __init__(self) -> None:
         self._registry: RegistryData = {"agents": [], "tools": []}
         self._loader: RegistryLoader | None = None
         self._saver: RegistrySaver | None = None
@@ -97,11 +94,7 @@ class ToolRegistry:
         return {"agents": agents, "tools": list(self._registry.get("tools", []))}
 
     async def load(self) -> None:
-        """Load the registry from the bound store, else the JSON file.
-
-        When store-backed and the store is empty, a pre-existing JSON file is
-        imported once so existing agents.json entries carry over to the database.
-        """
+        """Load the registry from the bound document store."""
         runtime_tools = list(self._registry.get("tools", []))
 
         if self._loader is not None:
@@ -113,61 +106,24 @@ class ToolRegistry:
             agents = self._parse_agents(document)
             doc_tools = document.get("tools") if isinstance(document, dict) else None
             tools = doc_tools if isinstance(doc_tools, list) and doc_tools else runtime_tools
-            if not agents:
-                file_agents = self._load_agents_from_file()
-                if file_agents:
-                    logger.info(
-                        "Migrating %d agent(s) from %s into the registry store",
-                        len(file_agents),
-                        self.registry_path,
-                    )
-                    agents = file_agents
-                    self._registry = {"agents": agents, "tools": tools}
-                    await self.save()
             self._registry = {"agents": agents, "tools": tools}
         else:
-            self._registry = {
-                "agents": self._load_agents_from_file(),
-                "tools": runtime_tools,
-            }
+            self._registry = {"agents": [], "tools": runtime_tools}
 
         logger.info(
-            "Loaded registry with %d agents and %d runtime tools (%s-backed)",
+            "Loaded registry with %d agents and %d runtime tools (store-backed=%s)",
             len(self._registry.get("agents", [])),
             len(self._registry.get("tools", [])),
-            "store" if self.store_backed else "file",
+            self.store_backed,
         )
 
-    def _load_agents_from_file(self) -> list[dict[str, Any]]:
-        if not self.registry_path.exists():
-            return []
-        try:
-            with open(self.registry_path) as handle:
-                return self._parse_agents(json.load(handle))
-        except (OSError, json.JSONDecodeError) as exc:
-            logger.error("Failed to read registry file %s: %s", self.registry_path, exc)
-            return []
-
     async def save(self) -> None:
-        """Persist the registry to the bound store, else the JSON file."""
+        """Persist the registry to the bound document store."""
         if self._saver is not None:
             await self._saver(self._serialize())
             logger.debug("Saved registry to store (%d agents)", len(self._registry["agents"]))
             return
-        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        agent_map: dict[str, dict[str, Any]] = {}
-        for agent in self._registry.get("agents", []):
-            if not isinstance(agent, dict):
-                continue
-            name = str(agent.get("name") or "").strip()
-            if not name:
-                continue
-            agent_map[name] = {
-                key: value for key, value in agent.items() if key not in {"name", "agent_card"}
-            }
-        with open(self.registry_path, "w") as handle:
-            json.dump(agent_map, handle, indent=2, default=str)
-        logger.info("Saved registry to %s", self.registry_path)
+        logger.debug("Registry has no saver bound; skipping persistence")
 
     async def clear_agents(self) -> None:
         """No-op: agent registry entries are append/update-only."""
@@ -401,7 +357,7 @@ class RegistryTool(BaseSystemTool):
 
         return ToolResult.ok(
             {
-                "registry_path": str(getattr(registry, "registry_path", None)),
+                "store_backed": getattr(registry, "store_backed", False),
                 "agent_count": len(agents),
                 "tool_count": len(tools),
                 "capability_count": len(capabilities),

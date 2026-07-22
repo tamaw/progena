@@ -36,8 +36,7 @@ def test_runtime_components_wire_configured_paths(tmp_path: Path) -> None:
     config = _make_config(tmp_path)
 
     state_dir = config.storage.state_dir
-    config_dir = state_dir.parent / "config"
-    registry = AgentRegistryRuntime(config_dir, tmp_path)
+    registry = AgentRegistryRuntime()
     http = ProgenitorHTTPServer(
         state_manager=None,
         host=config.runtime.http_host,
@@ -46,8 +45,7 @@ def test_runtime_components_wire_configured_paths(tmp_path: Path) -> None:
     )
 
     assert state_dir == tmp_path / "data" / "state"
-    assert config_dir == tmp_path / "data" / "config"
-    assert registry.agent_registry.registry_path == tmp_path / "data" / "config" / "agents.json"
+    assert registry.agent_registry.store_backed is False
     assert http.host == config.runtime.http_host
     assert http.port == config.runtime.http_port
 

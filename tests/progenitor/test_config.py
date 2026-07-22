@@ -18,7 +18,6 @@ from app.progenitor.config import (
     StorageConfig,
     get_config,
     reload_config,
-    resolve_schedule_config_path,
 )
 from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
 from app.progenitor.prompts import DEFAULT_PROMPTS_DIR
@@ -266,12 +265,6 @@ class TestStorageConfig:
 class TestMCPConfig:
     """Tests for Progenitor's persisted MCP registry loader."""
 
-    def test_resolve_schedule_config_path_uses_checked_in_default(self):
-        repo_root = Path(__file__).resolve().parents[2]
-        with patch.dict(os.environ, {}, clear=False):
-            path = resolve_schedule_config_path()
-        assert path == repo_root / "data" / "config" / "schedule.json"
-
     def test_load_mcp_servers_reads_mcp_servers_map(self):
         payload = json.loads(
             """{
@@ -392,7 +385,7 @@ class TestProgenitorConfig:
         }
 
         with patch.dict(os.environ, env, clear=False):
-            config = ProgenitorConfig.load(Path("."), Path("."))
+            config = ProgenitorConfig.load(Path("."))
 
             assert config.runtime.timezone == "Asia/Tokyo"
             assert config.runtime.idle_backoff_seconds == 15

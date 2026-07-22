@@ -9,24 +9,17 @@ Covers two behaviours added for the live Tools page:
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 
 
-def _reader(tmp_path: Path, servers: dict, mcp_tools: dict | None = None):
+def _reader(servers: dict, mcp_tools: dict | None = None):
     store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": servers})
     if mcp_tools is not None:
         store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", mcp_tools)
-    for name in ("state", "config", "sessions", "logs"):
-        (tmp_path / name).mkdir()
     return StateReader(
-        state_dir=tmp_path / "state",
-        config_dir=tmp_path / "config",
-        sessions_dir=tmp_path / "sessions",
-        logs_dir=tmp_path / "logs",
         document_store=store,
     ), store
 
@@ -35,9 +28,8 @@ def _mcp_widget(reader: StateReader, name: str) -> dict:
     return next(w for w in reader.get_widgets() if w["type"] == "mcp" and w["name"] == name)
 
 
-def test_failed_server_surfaces_error_status_and_activity(tmp_path):
+def test_failed_server_surfaces_error_status_and_activity():
     reader, _store = _reader(
-        tmp_path,
         servers={"github": {"url": "https://api.githubcopilot.com/mcp/", "transport": "http"}},
         mcp_tools={
             "tools": [],
@@ -60,9 +52,8 @@ def test_failed_server_surfaces_error_status_and_activity(tmp_path):
     )
 
 
-def test_healthy_server_is_not_marked_error(tmp_path):
+def test_healthy_server_is_not_marked_error():
     reader, _store = _reader(
-        tmp_path,
         servers={"jina": {"url": "https://mcp.jina.ai/v1", "transport": "http"}},
         mcp_tools={
             "tools": [{"name": "jina_search", "server": "jina", "enabled": True}],
@@ -75,9 +66,8 @@ def test_healthy_server_is_not_marked_error(tmp_path):
     assert widget["status_message"] is None
 
 
-def test_fingerprint_changes_when_discovered_tools_change(tmp_path):
+def test_fingerprint_changes_when_discovered_tools_change():
     reader, store = _reader(
-        tmp_path,
         servers={"jina": {"url": "https://mcp.jina.ai/v1", "transport": "http"}},
         mcp_tools={"tools": []},
     )
@@ -91,6 +81,5 @@ def test_fingerprint_changes_when_discovered_tools_change(tmp_path):
         "mcp_tools",
         {"tools": [{"name": "jina_search", "server": "jina", "enabled": True}]},
     )
-    reader._cache.clear()
 
     assert reader._mcp_fingerprint() != before

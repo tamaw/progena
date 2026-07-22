@@ -15,9 +15,7 @@ Usage:
 
 import importlib
 import importlib.util
-import json
 import logging
-from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -98,17 +96,18 @@ class SemanticRegistry:
 
     def __init__(
         self,
-        registry_path: Path,
+        registry_data: dict[str, Any] | None = None,
         model_name: str | None = None,
     ):
         """Initialize semantic registry.
 
         Args:
-            registry_path: Path to registry JSON file.
+            registry_data: Registry dict with ``agents`` and ``tools`` lists.
             model_name: Sentence transformer model name.
         """
-        self.registry_path = Path(registry_path)
-        self._registry: dict[str, Any] = {"agents": [], "tools": []}
+        self._registry: dict[str, Any] = (
+            registry_data if registry_data is not None else {"agents": [], "tools": []}
+        )
         self._embeddings_cache: dict[str, Any] = {}  # capability -> embedding
         self._model_name = model_name or self.DEFAULT_MODEL
         self._encoder = None
@@ -131,24 +130,7 @@ class SemanticRegistry:
             self._encoder = None
 
     async def load(self) -> None:
-        """Load registry from disk and build embeddings."""
-        if self.registry_path.exists():
-            try:
-                with open(self.registry_path) as f:
-                    self._registry = json.load(f)
-                logger.info(
-                    "Loaded registry with %d agents and %d tools",
-                    len(self._registry.get("agents", [])),
-                    len(self._registry.get("tools", [])),
-                )
-            except (OSError, json.JSONDecodeError) as e:
-                logger.error("Failed to load registry: %s. Starting fresh.", e)
-                self._registry = {"agents": [], "tools": []}
-        else:
-            logger.info("No existing registry found, creating new one")
-            await self.save()
-
-        # Build embeddings for all capabilities
+        """Build embeddings for the current registry data."""
         if _ensure_semantic_imports():
             await self._build_embeddings()
 
@@ -171,12 +153,6 @@ class SemanticRegistry:
             logger.info("Built embeddings successfully")
         except Exception as e:
             logger.warning("Failed to build embeddings: %s", e)
-
-    async def save(self) -> None:
-        """Save registry to disk."""
-        self.registry_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.registry_path, "w") as f:
-            json.dump(self._registry, f, indent=2, default=str)
 
     def get_all_capabilities(self) -> list[str]:
         """Get all registered capabilities."""
@@ -307,11 +283,20 @@ class SemanticRegistryTool(BaseSystemTool):
         return SemanticRegistryArgs
 
     async def execute(self, context: ToolContext) -> ToolResult:
-        registry_path = getattr(context.tool_registry, "registry_path", None)
-        if not registry_path:
-            return ToolResult.fail("Tool registry has no registry_path")
+        tool_registry = context.tool_registry
+        if tool_registry is None:
+            return ToolResult.fail("Tool registry is not available")
 
-        semantic = SemanticRegistry(Path(registry_path))
+        # Read the live registry data directly (no file path needed)
+        raw = await tool_registry.load() if hasattr(tool_registry, "load") else None
+        if raw is None and hasattr(tool_registry, "_registry"):
+            registry_data = dict(tool_registry._registry)
+        elif isinstance(raw, dict):
+            registry_data = raw
+        else:
+            registry_data = {"agents": [], "tools": []}
+
+        semantic = SemanticRegistry(registry_data)
         await semantic.load()
 
         query = str((context.tool_args or {}).get("query") or "").strip()

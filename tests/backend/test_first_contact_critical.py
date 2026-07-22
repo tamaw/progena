@@ -40,17 +40,14 @@ def client():
 
 
 @pytest.fixture
-def complete_state_files(tmp_path):
+def complete_state_files():
     """
-    Create a complete set of state files simulating a fully operational
+    Create a complete set of state documents simulating a fully operational
     Progenitor agent with multiple sub-agents - ready for alien inspection.
     """
-    state_dir = tmp_path / "state"
-    config_dir = tmp_path / "config"
-    state_dir.mkdir()
-    config_dir.mkdir()
+    store = InMemoryDocumentStore()
 
-    # Health - agent is running strong (Postgres document, no file)
+    # Health - agent is running strong
     health_data = {
         "status": "running",
         "last_active": datetime.now(UTC).isoformat(),
@@ -58,7 +55,6 @@ def complete_state_files(tmp_path):
         "cycle_count": 1337,
         "pid": 42424,
     }
-    store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
     # Registry with multiple diverse agents
@@ -132,7 +128,7 @@ def complete_state_files(tmp_path):
             },
         }
     }
-    (config_dir / "agents.json").write_text(json.dumps(agents_data))
+    store.save_document(PROGENITOR_STATE_PREFIX, "registry", agents_data)
     store.save_document(PROGENITOR_STATE_PREFIX, "mcp", mcp_data)
 
     # Build state - actively working on first contact
@@ -175,7 +171,7 @@ def complete_state_files(tmp_path):
         ],
         "actions_this_cycle": 3,
     }
-    (state_dir / "build_state.json").write_text(json.dumps(build_state))
+    store.save_document(PROGENITOR_STATE_PREFIX, "build_state", build_state)
 
     # Schedule
     schedule = {
@@ -194,9 +190,9 @@ def complete_state_files(tmp_path):
             "next_run": None,
         },
     }
-    (config_dir / "schedule.json").write_text(json.dumps(schedule))
+    store.save_document(PROGENITOR_STATE_PREFIX, "schedule", schedule)
 
-    return SimpleNamespace(state_dir=state_dir, config_dir=config_dir, document_store=store)
+    return SimpleNamespace(document_store=store)
 
 
 class TestCriticalUIDataPipeline:
@@ -238,10 +234,7 @@ class TestCriticalUIDataPipeline:
 
     def test_state_reader_with_complete_state(self, complete_state_files):
         """StateReader must correctly read all state data for aliens."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
         snapshot = reader.get_snapshot()
 
         # Health
@@ -358,10 +351,7 @@ class TestRealTimeFeedbackConsistency:
 
     def test_status_changes_detected(self, complete_state_files):
         """Status changes must be detected between reads."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
 
         # Initial read
         snapshot1 = reader.get_snapshot()
@@ -375,8 +365,7 @@ class TestRealTimeFeedbackConsistency:
         health["last_active"] = datetime.now(UTC).isoformat()
         store.save_document(PROGENITOR_STATE_PREFIX, "health", health)
 
-        # Clear cache to force re-read
-        reader._cache.clear()
+        # New read should see the change (no cache to clear - reads from store directly)
 
         # New read should see the change
         snapshot2 = reader.get_snapshot()
@@ -389,59 +378,22 @@ class TestRealTimeFeedbackConsistency:
 class TestErrorRecoveryAndGracefulDegradation:
     """Test graceful handling of errors - aliens must never see crashes."""
 
-    def test_missing_health_file(self, tmp_path):
+    def test_missing_health_file(self):
         """Missing health file should return unknown status, not crash."""
-        state_dir = tmp_path / "empty_state"
-        state_dir.mkdir()
 
-        reader = StateReader(state_dir=state_dir)
+        reader = StateReader(document_store=InMemoryDocumentStore())
         health = reader.get_health()
 
         assert health.status == "unknown"
         assert not health.is_running()
         assert health.pid is None
 
-    def test_corrupt_json_files(self, tmp_path):
-        """Corrupt JSON should be handled gracefully.
+    def test_corrupt_json_files(self):
+        """Corrupt JSON file handling is obsolete - StateReader uses document store only."""
+        pytest.skip("File-based fallback removed; StateReader requires document_store")
 
-        health has no on-disk fallback anymore (Postgres-only), so with no
-        document store configured here get_health() returns "unknown" simply
-        because there's nothing to read - build_state.json/agents.json/
-        schedule.json still exercise real corrupt-JSON parsing resilience.
-        """
-        state_dir = tmp_path / "corrupt_state"
-        state_dir.mkdir()
-
-        (state_dir / "build_state.json").write_text("{this is not valid json!!!")
-        config_dir = state_dir.parent / "config"
-        config_dir.mkdir()
-        (config_dir / "agents.json").write_text("{this is not valid json!!!")
-        (config_dir / "schedule.json").write_text("{this is not valid json!!!")
-
-        reader = StateReader(state_dir=state_dir, config_dir=config_dir)
-
-        # All methods should return defaults, not crash
-        health = reader.get_health()
-        assert health.status == "unknown"
-
-        agents, tools = reader.get_registry()
-        assert agents == []
-        assert tools == []
-
-        backlog = reader.get_backlog()
-        assert backlog == []
-
-        schedule = reader.get_schedule()
-        assert schedule == []
-
-        # Snapshot should still work
-        snapshot = reader.get_snapshot()
-        assert snapshot is not None
-
-    def test_partial_state_files(self, tmp_path):
+    def test_partial_state_files(self):
         """Partial state should be handled - show what we have."""
-        state_dir = tmp_path / "partial_state"
-        state_dir.mkdir()
 
         # Only seed health (Postgres document, no file)
         health_data = {
@@ -454,7 +406,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
-        reader = StateReader(state_dir=state_dir, document_store=store)
+        reader = StateReader(document_store=store)
         snapshot = reader.get_snapshot()
 
         # Health should be correct
@@ -467,10 +419,8 @@ class TestErrorRecoveryAndGracefulDegradation:
         assert snapshot.backlog == []
         assert snapshot.schedule == []
 
-    def test_stale_health_detection(self, tmp_path):
+    def test_stale_health_detection(self):
         """Stale health (last_active too old) should report not running."""
-        state_dir = tmp_path / "stale_state"
-        state_dir.mkdir()
 
         # Seed health with old last_active (2 minutes ago)
         old_time = (datetime.now(UTC) - timedelta(minutes=2)).isoformat()
@@ -484,7 +434,7 @@ class TestErrorRecoveryAndGracefulDegradation:
         store = InMemoryDocumentStore()
         store.save_document(PROGENITOR_STATE_PREFIX, "health", health_data)
 
-        reader = StateReader(state_dir=state_dir, document_store=store)
+        reader = StateReader(document_store=store)
         health = reader.get_health()
 
         # Status says running, but is_running() should be False
@@ -506,49 +456,46 @@ class TestDataIntegrityUnderAllConditions:
 
     def test_all_build_phases_valid(self, complete_state_files):
         """All build phases must be recognized."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
 
         phases = ["observe", "think", "plan", "build", "execute", "verify", "learn"]
 
         for phase in phases:
-            build_file = complete_state_files.state_dir / "build_state.json"
-            build_state = json.loads(build_file.read_text())
+            build_doc = complete_state_files.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "build_state", {}
+            )
+            build_state = dict(build_doc.payload) if build_doc is not None else {}
             build_state["build_phase"] = phase
-            build_file.write_text(json.dumps(build_state))
+            complete_state_files.document_store.save_document(
+                PROGENITOR_STATE_PREFIX, "build_state", build_state
+            )
 
-            reader._cache.clear()
             snapshot = reader.get_snapshot()
             assert snapshot.build is not None
             assert snapshot.build.phase == phase
 
     def test_agent_status_values(self, complete_state_files):
         """All agent statuses must be valid."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
 
         valid_statuses = ["ready", "busy", "offline", "stopped", "error", "starting"]
 
         for status in valid_statuses:
-            registry_file = complete_state_files.config_dir / "agents.json"
-            registry = json.loads(registry_file.read_text())
+            registry_doc = complete_state_files.document_store.get_document(
+                PROGENITOR_STATE_PREFIX, "registry", {}
+            )
+            registry = dict(registry_doc.payload) if registry_doc is not None else {}
             registry["agents"][0]["status"] = status
-            registry_file.write_text(json.dumps(registry))
+            complete_state_files.document_store.save_document(
+                PROGENITOR_STATE_PREFIX, "registry", registry
+            )
 
-            reader._cache.clear()
             agents, _ = reader.get_registry()
             assert agents[0].status == status
 
     def test_snapshot_serialization_roundtrip(self, complete_state_files):
         """Snapshot must survive JSON serialization (for SSE transmission)."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
         snapshot = reader.get_snapshot()
 
         # Convert to dict
@@ -619,10 +566,7 @@ class TestSubAgentStatusVisibility:
 
     def test_loops_reflect_activity(self, complete_state_files):
         """Loops must reflect current activity."""
-        reader = StateReader(
-            state_dir=complete_state_files.state_dir,
-            document_store=complete_state_files.document_store,
-        )
+        reader = StateReader(document_store=complete_state_files.document_store)
 
         # With active build, loops should show activity
         health = reader.get_health()

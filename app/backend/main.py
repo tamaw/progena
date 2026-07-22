@@ -845,7 +845,9 @@ async def lifespan(app: FastAPI):
             return
 
         # Always broadcast to SSE
-        broadcast_ui_event(event_type, data, scope="chat")
+        metadata = data.get("metadata") or {}
+        thread_id = str(metadata.get("thread_id") or "").strip() or None
+        broadcast_ui_event(event_type, data, scope="chat", session_id=thread_id)
 
         # Reflect runtime-driven schedule changes on the canonical UI stream so
         # the Schedules page updates live (e.g. a one-off firing and removing
