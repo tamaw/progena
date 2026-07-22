@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 
 @dataclass(frozen=True)
@@ -24,10 +24,16 @@ async def _open_saver(
     """Open AsyncPostgresSaver with manual connection lifetime."""
     from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
     from psycopg import AsyncConnection
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
 
-    conn = await AsyncConnection.connect(
-        database_url, autocommit=True, prepare_threshold=0, row_factory=dict_row
+    conn = cast(
+        AsyncConnection[DictRow],
+        await AsyncConnection.connect(
+            database_url,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=cast(Any, dict_row),
+        ),
     )
     try:
         saver = AsyncPostgresSaver(conn=conn)
@@ -50,7 +56,7 @@ async def _open_store(
     from langgraph.store.postgres.aio import AsyncPostgresStore
     from langgraph.store.postgres.base import PoolConfig
     from psycopg import AsyncConnection
-    from psycopg.rows import dict_row
+    from psycopg.rows import DictRow, dict_row
     from psycopg_pool import AsyncConnectionPool
 
     pool_config = None
@@ -62,17 +68,20 @@ async def _open_store(
 
     if pool_config is not None:
         pc = pool_config.copy()
-        pool = AsyncConnectionPool(
-            database_url,
-            min_size=pc.pop("min_size", 1),
-            max_size=pc.pop("max_size", None),
-            kwargs={
-                "autocommit": True,
-                "prepare_threshold": 0,
-                "row_factory": dict_row,
-                **(pc.pop("kwargs", None) or {}),
-            },
-            **pc,
+        pool = cast(
+            AsyncConnectionPool[AsyncConnection[DictRow]],
+            AsyncConnectionPool(
+                database_url,
+                min_size=pc.pop("min_size", 1),
+                max_size=pc.pop("max_size", None),
+                kwargs={
+                    "autocommit": True,
+                    "prepare_threshold": 0,
+                    "row_factory": dict_row,
+                    **(pc.pop("kwargs", None) or {}),
+                },
+                **cast(dict, pc),
+            ),
         )
         try:
             store = AsyncPostgresStore(conn=pool)
@@ -83,8 +92,14 @@ async def _open_store(
             await pool.close()
             raise
     else:
-        conn = await AsyncConnection.connect(
-            database_url, autocommit=True, prepare_threshold=0, row_factory=dict_row
+        conn = cast(
+            AsyncConnection[DictRow],
+            await AsyncConnection.connect(
+                database_url,
+                autocommit=True,
+                prepare_threshold=0,
+                row_factory=cast(Any, dict_row),
+            ),
         )
         try:
             store = AsyncPostgresStore(conn=conn)

@@ -11,7 +11,6 @@ and all sub-agents. These tests verify:
 """
 
 import asyncio
-import json
 from datetime import UTC, datetime
 
 import pytest
