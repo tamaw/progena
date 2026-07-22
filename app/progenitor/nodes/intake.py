@@ -29,12 +29,11 @@ async def dequeue_input_node(
 ) -> dict[str, Any]:
     """Consume input already dequeued by the heartbeat loop.
 
-    ``ProgenitorLoop._input_handler_loop`` waits on the input queue BEFORE
-    acquiring ``graph_lock`` and invoking this graph, so a live direct chat
-    turn (``RuntimeChatService.handle_chat``, which shares that same lock)
-    is never blocked behind an idle poll wait of up to
-    ``idle_backoff_seconds``. This node only consumes whatever the loop
-    already found in ``state["queued_input"]`` -- it does not wait itself.
+    ``ProgenitorLoop._input_handler_loop`` waits on the input queue and
+    then invokes this graph directly; there is no global lock.  A live
+    direct chat turn runs fully concurrently because per-thread state is
+    isolated.  This node only consumes whatever the loop already found in
+    ``state["queued_input"]`` — it does not wait itself.
     """
     queued_input = state.get("queued_input")
     if queued_input is not None:

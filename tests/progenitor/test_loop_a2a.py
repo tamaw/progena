@@ -14,7 +14,6 @@ from app.progenitor.state.models import A2ATaskRecord
 async def test_a2a_completion_node_persists_one_tool_message() -> None:
     state_manager = MagicMock()
     state_manager.log_conversation = AsyncMock()
-    state_manager.save_messages = AsyncMock()
 
     record = A2ATaskRecord(
         task_id="observe-5",
@@ -23,10 +22,11 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
         summary="Observe task completed.",
     )
     state = {"messages": [], "a2a_completed_tasks": [record, record]}
+    agent_graph = AsyncMock()
     runtime = Runtime(
         context=HeartbeatContext(
             queues=MagicMock(),
-            agent_graph=MagicMock(),
+            agent_graph=agent_graph,
             live_state={},
             state_manager=state_manager,
             startup_audit_payload=None,
@@ -55,4 +55,3 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
     assert message.metadata["task_id"] == "observe-5"
     assert "observe agent task completed" in message.content
     state_manager.log_conversation.assert_awaited_once()
-    state_manager.save_messages.assert_awaited_once()

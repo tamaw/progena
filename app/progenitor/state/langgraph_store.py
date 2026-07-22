@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -44,8 +45,9 @@ class AsyncLangGraphStore(Protocol):
 class LangGraphRuntimeStore:
     """Persist Progenitor runtime documents and logs in LangGraph's native store."""
 
-    def __init__(self, store: AsyncLangGraphStore) -> None:
+    def __init__(self, store: AsyncLangGraphStore, *, debug_mode: bool = False) -> None:
         self._store = store
+        self._debug_mode = debug_mode
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -133,6 +135,12 @@ class LangGraphRuntimeStore:
         }
         key = f"{timestamp_text}_{uuid.uuid4().hex}"
         await self._store.aput((*LOG_NAMESPACE_PREFIX, source), key, value)
+        if self._debug_mode:
+            print(
+                f"[LOG {source}] {timestamp_text} {level}: {message}",
+                file=sys.stderr,
+                flush=True,
+            )
 
     async def query_logs(
         self,

@@ -65,26 +65,6 @@ def _default_prompts_dir(project_root: Path | None = None) -> Path:
     return _default_data_dir(project_root) / "prompts"
 
 
-def _default_config_dir(project_root: Path | None = None) -> Path:
-    """Return the live config directory derived from the active data/state roots."""
-    data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(_default_data_dir(project_root))))
-    default_state_dir = data_dir / "state"
-    state_dir = Path(os.getenv("PROGENITOR_STATE_DIR", str(default_state_dir)))
-    return state_dir.parent / "config"
-
-
-def resolve_schedule_config_path(config_dir: Path | str | None = None) -> Path:
-    """Resolve the logical schedule document identifier.
-
-    The returned value is a routing key for the state document store (which
-    persists to Postgres), not a file that is read or written in normal
-    operation. The path shape is retained only so the StateReader bridge can map
-    it to the ``("progenitor", "state")`` / ``schedule`` document.
-    """
-    base_dir = Path(config_dir) if config_dir is not None else _default_config_dir()
-    return base_dir / "schedule.json"
-
-
 def default_mcp_config_payload() -> dict[str, Any]:
     """Return the default MCP server configuration stored in the shared state document."""
     return {"mcpServers": {}}
@@ -310,7 +290,6 @@ class ProgenitorConfig:
     def load(
         cls,
         project_root: Path | None = None,
-        _config_dir: Path | None = None,
         *,
         validate: bool = True,
     ) -> "ProgenitorConfig":
@@ -535,37 +514,31 @@ def _log_validation_issues(config: ProgenitorConfig) -> None:
 _config: ProgenitorConfig | None = None
 
 
-def get_config(
-    project_root: Path | None = None, config_dir: Path | None = None, validate: bool = True
-) -> ProgenitorConfig:
+def get_config(project_root: Path | None = None, validate: bool = True) -> ProgenitorConfig:
     """Get or create the global configuration instance.
 
     Args:
         project_root: Root directory of the project.
-        config_dir: Directory containing config files.
         validate: Whether to validate configuration at load time (default True).
                   Set to False for testing or when loading partial configs.
     """
     global _config
     if _config is None:
-        _config = ProgenitorConfig.load(project_root, config_dir, validate=validate)
+        _config = ProgenitorConfig.load(project_root, validate=validate)
         if validate:
             _log_validation_issues(_config)
     return _config
 
 
-def reload_config(
-    project_root: Path | None = None, config_dir: Path | None = None, validate: bool = True
-) -> ProgenitorConfig:
+def reload_config(project_root: Path | None = None, validate: bool = True) -> ProgenitorConfig:
     """Reload configuration (useful for testing or dynamic updates).
 
     Args:
         project_root: Root directory of the project.
-        config_dir: Directory containing config files.
         validate: Whether to validate configuration at load time (default True).
     """
     global _config
-    _config = ProgenitorConfig.load(project_root, config_dir, validate=validate)
+    _config = ProgenitorConfig.load(project_root, validate=validate)
     if validate:
         _log_validation_issues(_config)
     return _config

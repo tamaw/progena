@@ -1,10 +1,7 @@
-"""Tests for active StateManager persistence paths."""
+"""Tests for active StateManager persistence paths (runtime-store-only)."""
 
 import asyncio
 import copy
-import json
-import tempfile
-from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +12,7 @@ from app.progenitor.state.langgraph_store import (
     LangGraphRuntimeStore,
 )
 from app.progenitor.state.manager import StateManager
+from tests.progenitor.conftest import _FakeRuntimeStore
 from app.progenitor.state.models import (
     A2ATaskRecord,
     AsyncSubagentTaskRecord,
@@ -26,6 +24,8 @@ from app.progenitor.state.models import (
 
 
 class FakeLangGraphStore:
+    """In-memory fake implementing the LangGraph native store interface."""
+
     def __init__(self) -> None:
         self.items: dict[tuple[tuple[str, ...], str], dict] = {}
         self.search_queries: list[str | None] = []
@@ -51,8 +51,13 @@ class FakeLangGraphStore:
             rows.append(SimpleNamespace(namespace=namespace, key=key, value=value))
         return rows[offset : offset + limit]
 
+    async def adelete(self, namespace, key, **kwargs):
+        self.items.pop((tuple(namespace), key), None)
+
 
 class SlowFakeLangGraphStore(FakeLangGraphStore):
+    """Fake store with tiny artificial delay to expose races."""
+
     async def aget(self, namespace, key, **kwargs):
         await asyncio.sleep(0)
         return await super().aget(namespace, key, **kwargs)
@@ -63,31 +68,34 @@ class SlowFakeLangGraphStore(FakeLangGraphStore):
 
 
 class TestStateManager:
-    """Tests for the StateManager class."""
+    """Tests for the StateManager class (runtime-store-only)."""
 
-    @pytest.fixture
-    def temp_dirs(self):
-        """Create temporary state and logs directories."""
-        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
-            yield Path(state_dir), Path(logs_dir)
+    # ------------------------------------------------------------------
+    # Initialization
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_initialize_creates_files(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_initialize_creates_documents(self):
+        """StateManager.initialize() populates the runtime store with document defaults."""
+        store = _FakeRuntimeStore()
+        manager = StateManager(runtime_store=store)
         await manager.initialize()
 
-        assert (state_dir / "current_state.json").exists()
-        assert (state_dir / "a2a_tasks.json").exists()
-        assert (state_dir / "async_subagent_tasks.json").exists()
-        assert (state_dir / "background_tasks.json").exists()
-        assert (state_dir.parent / "config" / "agents.json").exists()
-        assert not (state_dir / "build_state.json").exists()
+        assert "current_state" in store._documents
+        assert "a2a_tasks" in store._documents
+        assert "async_subagent_tasks" in store._documents
+        assert "background_tasks" in store._documents
+        assert "mcp" in store._documents
+        assert "schedule_runs" in store._documents
+        assert "health" in store._documents
+
+    # ------------------------------------------------------------------
+    # Schedule
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_schedule_management(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_schedule_management(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         from app.progenitor.utils import utcnow
@@ -105,10 +113,13 @@ class TestStateManager:
         assert len(schedule) == 1
         assert schedule["schedule-1"].id == "schedule-1"
 
+    # ------------------------------------------------------------------
+    # A2A tasks
+    # ------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_a2a_task_persistence(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_a2a_task_persistence(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         record = A2ATaskRecord(
@@ -139,10 +150,13 @@ class TestStateManager:
         assert refreshed.status == "completed"
         assert refreshed.summary == "Observe task completed."
 
+    # ------------------------------------------------------------------
+    # Background task queue
+    # ------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_background_task_queue_persistence(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_background_task_queue_persistence(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         entry = BackgroundTaskEntry(
@@ -161,10 +175,13 @@ class TestStateManager:
         assert dequeued.content == "Reply exactly BG_TOKEN"
         assert await manager.get_background_tasks() == []
 
+    # ------------------------------------------------------------------
+    # Schedule runs
+    # ------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_schedule_run_persistence(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_schedule_run_persistence(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         record = ScheduleRunRecord(
@@ -194,21 +211,28 @@ class TestStateManager:
         assert refreshed.status == "completed"
         assert refreshed.response == "TEST"
 
+    # ------------------------------------------------------------------
+    # Native-store document round-trip
+    # ------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_native_runtime_store_replaces_file_documents(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
+    async def test_native_runtime_store_replaces_file_documents(self):
+        """StateManager writes to the native store; current_state round-trips."""
         native_store = FakeLangGraphStore()
         runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
+        manager = StateManager(runtime_store=runtime_store)
         await manager.initialize()
 
         message = ConversationMessage(id="msg-native", role="user", content="Hello native store")
-        await manager.add_message(message)
-        await manager.add_tool_call({"id": "tool-1", "name": "demo"})
-        await manager.add_attachment({"id": "att-1", "content": b"bytes".hex()})
+        await manager.update_current_state(
+            {
+                "messages": [message.model_dump(mode="json")],
+                "tool_calls": [{"id": "tool-1", "name": "demo"}],
+                "attachments": [{"id": "att-1", "content": b"bytes".hex()}],
+            }
+        )
 
         state = await manager.get_current_state()
-        assert not (state_dir / "current_state.json").exists()
         assert state["messages"][0]["content"] == "Hello native store"
         assert state["tool_calls"] == [{"id": "tool-1", "name": "demo"}]
         assert state["attachments"] == [{"id": "att-1", "content": b"bytes".hex()}]
@@ -217,14 +241,16 @@ class TestStateManager:
         current_state = native_store.items[(STATE_NAMESPACE, "current_state")]["payload"]
         assert current_state["messages"][0]["id"] == "msg-native"
 
-        await manager.close()
+    # ------------------------------------------------------------------
+    # MCP config cross-process write visibility
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_get_mcp_config_reflects_cross_process_store_writes(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
+    async def test_get_mcp_config_reflects_cross_process_store_writes(self):
+        """get_mcp_config reads fresh from the store, not from a stale cache."""
         native_store = FakeLangGraphStore()
         runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
+        manager = StateManager(runtime_store=runtime_store)
         await manager.initialize()
 
         # Startup seeds an empty config and caches it.
@@ -242,22 +268,34 @@ class TestStateManager:
         assert "jina" in config["mcpServers"]
         assert config["mcpServers"]["jina"]["url"] == "https://x"
 
-        await manager.close()
+    # ------------------------------------------------------------------
+    # Serialized mutations (concurrent tool calls, same turn)
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_native_runtime_store_serializes_current_state_mutations(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
+    async def test_native_runtime_store_serializes_current_state_mutations(self):
+        """Concurrent add_message / add_tool_call / add_attachment are serialized."""
         native_store = SlowFakeLangGraphStore()
         runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(state_dir, logs_dir, runtime_store=runtime_store)
+        manager = StateManager(runtime_store=runtime_store)
         await manager.initialize()
 
         await asyncio.gather(
-            manager.add_message(
-                ConversationMessage(id="msg-concurrent", role="user", content="Concurrent")
+            manager.update_current_state(
+                {
+                    "messages": [
+                        ConversationMessage(
+                            id="msg-concurrent", role="user", content="Concurrent"
+                        ).model_dump(mode="json")
+                    ],
+                }
             ),
-            manager.add_tool_call({"id": "tool-concurrent", "name": "demo"}),
-            manager.add_attachment({"id": "att-concurrent", "content": "payload"}),
+            manager.update_current_state(
+                {"tool_calls": [{"id": "tool-concurrent", "name": "demo"}]}
+            ),
+            manager.update_current_state(
+                {"attachments": [{"id": "att-concurrent", "content": "payload"}]}
+            ),
         )
 
         state = await manager.get_current_state()
@@ -265,10 +303,13 @@ class TestStateManager:
         assert state["tool_calls"] == [{"id": "tool-concurrent", "name": "demo"}]
         assert state["attachments"] == [{"id": "att-concurrent", "content": "payload"}]
 
+    # ------------------------------------------------------------------
+    # Async subagent task
+    # ------------------------------------------------------------------
+
     @pytest.mark.asyncio
-    async def test_async_subagent_task_persistence(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_async_subagent_task_persistence(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         record = AsyncSubagentTaskRecord(
@@ -299,6 +340,10 @@ class TestStateManager:
         assert refreshed is not None
         assert refreshed.status == "success"
         assert refreshed.summary == "HELLO_FROM_ASYNC_SUBAGENT"
+
+    # ------------------------------------------------------------------
+    # LangGraphRuntimeStore low-level document round-trip
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
     async def test_langgraph_runtime_store_round_trips_documents(self):
@@ -335,42 +380,37 @@ class TestStateManager:
         assert native_store.search_queries == [None]
         assert next(iter(native_store.items))[0][:3] == (*LOG_NAMESPACE_PREFIX, "tool")
 
-    async def test_initialize_keeps_schedule_only_in_memory_without_runtime_store(self, tmp_path):
-        state_dir = tmp_path / "data" / "state"
-        logs_dir = tmp_path / "logs"
-        state_dir.mkdir(parents=True)
-        logs_dir.mkdir()
-
-        manager = StateManager(state_dir, logs_dir)
-        await manager.initialize()
-
-        assert await manager.get_schedule() == {}
-        assert not (state_dir / "schedule.json").exists()
-        assert not (state_dir.parent / "config" / "schedule.json").exists()
+    # ------------------------------------------------------------------
+    # Append JSONL (via runtime store logs)
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_append_jsonl(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_log_conversation_round_trip(self):
+        """log_conversation writes log rows into the runtime store, not files."""
+        store = _FakeRuntimeStore()
+        manager = StateManager(runtime_store=store)
         await manager.initialize()
 
-        await manager.append_jsonl("conversation", {"role": "user", "content": "Hello"})
-        await manager.append_jsonl("conversation", {"role": "assistant", "content": "Hi!"})
+        await manager.log_conversation(
+            ConversationMessage(id="msg-1", role="user", content="Hello")
+        )
+        await manager.log_conversation(
+            ConversationMessage(id="msg-2", role="assistant", content="Hi!")
+        )
 
-        log_path = logs_dir / "conversation.jsonl"
-        assert log_path.exists()
+        logs = store._logs.get("conversation", [])
+        assert len(logs) == 2
+        assert logs[0]["payload"]["role"] == "user"
+        assert logs[1]["payload"]["role"] == "assistant"
 
-        with open(log_path) as f:
-            lines = f.readlines()
-
-        assert len(lines) == 2
-        entry1 = json.loads(lines[0])
-        assert entry1["role"] == "user"
+    # ------------------------------------------------------------------
+    # Conversation log round-trip
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_log_conversation(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_log_conversation(self):
+        """log_conversation persists a message and read_conversation_log retrieves it."""
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
 
         message = ConversationMessage(
@@ -381,25 +421,23 @@ class TestStateManager:
 
         await manager.log_conversation(message)
 
-        history = await manager.read_conversation_log()
+        history = await manager._runtime_store.query_logs(source="conversation")
         assert len(history) == 1
-        assert history[0]["content"] == "Test message"
+        assert history[0]["payload"]["content"] == "Test message"
+
+    # ------------------------------------------------------------------
+    # Native store log rows (not state documents)
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_native_runtime_store_logs_write_rows_instead_of_documents(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
+    async def test_native_runtime_store_logs_write_rows_instead_of_documents(self):
+        """Appending JSONL with a native store writes log rows, not state documents."""
         native_store = FakeLangGraphStore()
         runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(
-            state_dir,
-            logs_dir,
-            runtime_store=runtime_store,
-        )
+        manager = StateManager(runtime_store=runtime_store)
         await manager.initialize()
 
-        await manager.append_jsonl(
-            "schedule", {"event": "schedule_created", "schedule_id": "sched-1"}
-        )
+        await manager.log_schedule_event({"event": "schedule_created", "schedule_id": "sched-1"})
 
         assert (STATE_NAMESPACE, "log_schedule") not in native_store.items
         log_entries = [
@@ -419,96 +457,57 @@ class TestStateManager:
         ]
 
     @pytest.mark.asyncio
-    async def test_native_runtime_store_conversation_logs_round_trip(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
+    async def test_native_runtime_store_conversation_logs_round_trip(self):
+        """Conversation messages are logged to the audit trail only (they live
+        in the LangGraph checkpoint, not in current_state)."""
         native_store = FakeLangGraphStore()
         runtime_store = LangGraphRuntimeStore(native_store)
-        manager = StateManager(
-            state_dir,
-            logs_dir,
-            runtime_store=runtime_store,
-        )
+        manager = StateManager(runtime_store=runtime_store)
         await manager.initialize()
 
         message = ConversationMessage(id="msg-native-log", role="user", content="Log this natively")
 
         await manager.log_conversation(message)
 
-        history = await manager.read_conversation_log()
+        history = await manager._runtime_store.query_logs(source="conversation")
         assert len(history) == 1
-        assert history[0]["content"] == "Log this natively"
-        current_state = native_store.items[(STATE_NAMESPACE, "current_state")]["payload"]
-        assert current_state["messages"][0]["id"] == "msg-native-log"
+        assert history[0]["payload"]["content"] == "Log this natively"
+
+    # ------------------------------------------------------------------
+    # commit_state flushes cached state to the runtime store
+    # ------------------------------------------------------------------
 
     @pytest.mark.asyncio
-    async def test_atomic_write_recreates_missing_parent_dir(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
-        await manager.initialize()
-
-        for file_path in state_dir.iterdir():
-            if file_path.is_file():
-                file_path.unlink()
-        state_dir.rmdir()
-
-        await manager.save_current_state({"thread_id": "thread-restored", "cycle_count": 1})
-
-        assert state_dir.exists()
-        assert (state_dir / "current_state.json").exists()
-
-    @pytest.mark.asyncio
-    async def test_commit_state(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_commit_state(self):
+        """commit_state persists cached state documents into the runtime store."""
+        store = _FakeRuntimeStore()
+        manager = StateManager(runtime_store=store)
         await manager.initialize()
 
         await manager.save_current_state({"thread_id": "thread-commit", "cycle_count": 5})
         await manager.commit_state()
 
-        state = await manager.get_current_state()
-        assert state.get("cycle_count") == 5
-
-    @pytest.mark.asyncio
-    async def test_file_lock_blocks_across_manager_instances(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager1 = StateManager(state_dir, logs_dir)
-        manager2 = StateManager(state_dir, logs_dir)
-        await manager1.initialize()
-        await manager2.initialize()
-
-        entered_second_lock = asyncio.Event()
-
-        async def acquire_second_lock() -> None:
-            async with manager2._file_lock("current_state"):
-                entered_second_lock.set()
-
-        async with manager1._file_lock("current_state"):
-            waiter = asyncio.create_task(acquire_second_lock())
-            await asyncio.sleep(0.1)
-            assert not entered_second_lock.is_set()
-
-        await asyncio.wait_for(waiter, timeout=1.0)
-        assert entered_second_lock.is_set()
+        doc = store._documents.get("current_state")
+        assert doc is not None
+        assert doc.get("cycle_count") == 5
+        assert doc.get("thread_id") == "thread-commit"
 
 
 class TestStateManagerCacheReads:
     """Tests that get_current_state returns from cache."""
 
-    @pytest.fixture
-    def temp_dirs(self):
-        with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
-            yield Path(state_dir), Path(logs_dir)
-
     @pytest.mark.asyncio
-    async def test_get_current_state_returns_from_cache(self, temp_dirs):
-        state_dir, logs_dir = temp_dirs
-        manager = StateManager(state_dir, logs_dir)
+    async def test_get_current_state_returns_from_cache(self):
+        """get_current_state reads from the in-memory cache, not a stale store value."""
+        store = _FakeRuntimeStore()
+        manager = StateManager(runtime_store=store)
         await manager.initialize()
 
         await manager.save_current_state({"thread_id": "thread-cached", "cycle_count": 7})
 
-        with open(state_dir / "current_state.json", "w") as f:
-            f.write('{"thread_id": "thread-disk", "cycle_count": 0}')
+        # Simulate a cross-process / cross-instance store write that bypasses
+        # the cache.  A cache-miss would pick this up; a cache-hit must not.
+        store._documents["current_state"] = {"thread_id": "thread-store", "cycle_count": 0}
 
         state = await manager.get_current_state()
         assert state["thread_id"] == "thread-cached"

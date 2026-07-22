@@ -432,8 +432,8 @@ def create_registry_state_file(
     """Build the ``agents.json`` state file backed by the StateManager.
 
     Backs the ``registry`` document (``{"agents": [...], "tools": [...]}``);
-    named ``agents.json`` to match the backend's existing external naming for
-    this document (see ``StateReader._document_for_path``).
+    named ``agents.json`` to match the backend's document store key
+    ``("progenitor", "state", "registry")``.
     """
 
     async def save(doc: JsonDoc) -> None:

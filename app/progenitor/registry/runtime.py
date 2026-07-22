@@ -2,25 +2,21 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from .store import ToolRegistry
 
 
 class AgentRegistryRuntime:
-    """Owns the runtime registry (database-backed, with a JSON-file fallback)."""
+    """Owns the runtime registry (database-backed via StateManager)."""
 
-    def __init__(self, config_dir: Path, project_root: Path) -> None:
-        self.config_dir = Path(config_dir)
-        self.project_root = Path(project_root)
-        self.agent_registry = ToolRegistry(self.config_dir / "agents.json")
+    def __init__(self) -> None:
+        self.agent_registry = ToolRegistry()
 
     def bind_state_manager(self, state_manager: Any) -> None:
         """Back the registry with the StateManager's ``registry`` document.
 
-        This makes the database the canonical store; ``agents.json`` becomes a
-        one-time migration source only. Call before :meth:`load`.
+        This makes the database the canonical store. Call before :meth:`load`.
         """
         self.agent_registry.bind_store(
             state_manager.get_registry,
