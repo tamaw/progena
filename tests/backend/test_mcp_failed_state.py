@@ -9,7 +9,6 @@ Covers two behaviours added for the live Tools page:
 
 from __future__ import annotations
 
-
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 

@@ -160,21 +160,22 @@ async def _maybe_reload(tool_registry: Any) -> None:
     load = getattr(tool_registry, "load", None)
     if not callable(load):
         return
-    if _reload_inflight is not None and not _reload_inflight.done():
+    inflight = _reload_inflight
+    if inflight is not None and not inflight.done():
         with contextlib.suppress(Exception):
-            await _reload_inflight
+            await inflight
         return
     maybe = load()
     if inspect.isawaitable(maybe):
-        _reload_inflight = asyncio.ensure_future(cast(Any, maybe))
+        inflight = asyncio.ensure_future(cast(Any, maybe))
     else:
         # Synchronous load — wrap in an already-resolved future so the
         # rest of the flow (await + exception handling) is uniform.
-        fut: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        fut.set_result(None)
-        _reload_inflight = fut
+        inflight = asyncio.get_running_loop().create_future()
+        inflight.set_result(None)
+    _reload_inflight = inflight
     try:
-        await _reload_inflight
+        await inflight
     except Exception:
         logger.warning("Failed to reload tool registry before tool execution", exc_info=True)
 
