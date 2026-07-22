@@ -1,19 +1,19 @@
 """
 Integration tests for the scheduler lifecycle: create → update → pause → resume → delete.
 
-These tests use a real StateManager backed by temporary directories and the
-real Scheduler class.  No LLM or network access is required.
+These tests use a real StateManager backed by an in-memory runtime store and the
+real Scheduler class. No LLM or network access is required.
 """
 
 import uuid
 
 import pytest
 
-from tests.progenitor.conftest import _FakeRuntimeStore
 from app.progenitor.schedule import Scheduler
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.utils import utcnow
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -21,13 +21,9 @@ from app.progenitor.utils import utcnow
 
 
 @pytest.fixture
-async def state_manager(tmp_path):
+async def state_manager():
     """Real StateManager backed by a _FakeRuntimeStore (no files)."""
-    manager = StateManager(
-        state_dir=tmp_path / "state",
-        logs_dir=tmp_path / "logs",
-        runtime_store=_FakeRuntimeStore(),
-    )
+    manager = StateManager(runtime_store=_FakeRuntimeStore())
     await manager.initialize()
     return manager
 

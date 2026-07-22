@@ -2,43 +2,10 @@
 
 from __future__ import annotations
 
-import copy
 from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from .models import AsyncSubagentTaskRecord
-
-
-async def get_async_subagent_tasks(
-    *,
-    state_cache: dict[str, Any],
-    file_lock: Callable[[str], Any],
-    read_json: Callable[[Path], Awaitable[Any]],
-    async_subagent_tasks_path: Path,
-) -> list[AsyncSubagentTaskRecord]:
-    if "async_subagent_tasks" in state_cache:
-        data = copy.deepcopy(cast(list[dict[str, Any]], state_cache["async_subagent_tasks"]))
-        return [AsyncSubagentTaskRecord(**item) for item in data]
-    async with file_lock("async_subagent_tasks"):
-        data = await read_json(async_subagent_tasks_path) or []
-        task_rows = [item for item in data if isinstance(item, dict)]
-        state_cache["async_subagent_tasks"] = task_rows
-        return [AsyncSubagentTaskRecord(**item) for item in copy.deepcopy(task_rows)]
-
-
-async def save_async_subagent_tasks(
-    *,
-    tasks: list[AsyncSubagentTaskRecord],
-    state_cache: dict[str, Any],
-    file_lock: Callable[[str], Any],
-    atomic_write_json: Callable[[Path, Any], Awaitable[None]],
-    async_subagent_tasks_path: Path,
-) -> None:
-    task_rows = [task.model_dump(mode="json", exclude_none=True) for task in tasks]
-    async with file_lock("async_subagent_tasks"):
-        await atomic_write_json(async_subagent_tasks_path, task_rows)
-        state_cache["async_subagent_tasks"] = task_rows
 
 
 async def get_async_subagent_task(

@@ -6,22 +6,10 @@ from typing import Any
 
 from langgraph.runtime import Runtime
 
-from ..schedule import emit_scheduled_completion, enqueue_due_schedule_entries, get_due_schedule_ids
+from ..schedule import emit_scheduled_completion, enqueue_due_schedule_entries
 from ..state.models import ProgenitorState
 from ..utils import utcnow, utcnow_isoformat
 from .context import HeartbeatContext
-
-
-async def due_schedule_node(
-    _state: ProgenitorState,
-    runtime: Runtime[HeartbeatContext],
-) -> dict[str, Any]:
-    """Identify due schedule entries."""
-    due_ids = await get_due_schedule_ids(
-        runtime.context.state_manager,
-        current_time=utcnow(),
-    )
-    return {"due_items": due_ids}
 
 
 async def enqueue_due_schedule_node(

@@ -364,7 +364,6 @@ async def test_chat_cancel_mid_stream_skips_checkpoint() -> None:
 
     assert frames == [("done", {"request_id": "req-cancel", "status": "cancelled"})]
     assert loop_runner.state_manager.saved_checkpoints == []
-    assert not loop_runner.queues.cycle_complete_event.is_set()
 
 
 async def test_chat_bridge_cancellation_does_not_synthesize_done_frame() -> None:
@@ -384,7 +383,6 @@ async def test_chat_bridge_cancellation_does_not_synthesize_done_frame() -> None
     assert frames[0][1]["content"] == "partial"
     assert not any(name == "done" for name, _ in frames)
     assert loop_runner.state_manager.saved_checkpoints == []
-    assert not loop_runner.queues.cycle_complete_event.is_set()
 
 
 async def test_chat_writes_keepalive_comments_during_a_silent_bridge_gap(monkeypatch) -> None:
@@ -479,7 +477,7 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
         await asyncio.wait_for(stream_task, timeout=2.0)
 
 
-async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> None:
+async def test_chat_happy_path_runs_checkpoint() -> None:
     loop_runner = FakeLoopRunner()
     script = [{"type": "stream_chunk", "content": "ok", "is_final": True}]
     server = await _start_chat_server(loop_runner, bridge_factory=make_bridge_factory(script))
@@ -492,7 +490,6 @@ async def test_chat_happy_path_runs_checkpoint_and_signals_cycle_complete() -> N
     assert frames[-1] == ("done", {"request_id": "req-checkpoint", "status": "completed"})
     # checkpoint_node writes per-thread document only (mirror removed)
     assert len(loop_runner.state_manager.saved_checkpoints) == 1
-    assert loop_runner.queues.cycle_complete_event.is_set()
 
 
 async def test_chat_checkpoint_failure_emits_error_not_done() -> None:

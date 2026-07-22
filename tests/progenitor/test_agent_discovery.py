@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.progenitor.tools.agent_discovery import (
+from app.progenitor.registry.discovery import (
     SKIP_FILES,
     SKIP_FOLDERS,
     AgentDiscovery,

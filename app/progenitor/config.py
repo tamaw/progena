@@ -13,7 +13,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import load_dotenv
 
-from .utils import env_bool, env_float, env_int
+from .utils import env_bool, env_int
 
 # Auto-load .env file from project root
 load_dotenv()
@@ -119,21 +119,13 @@ class RuntimeConfig:
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
-    max_actions_per_cycle: int = 10
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
-    backoff_multiplier: float = 1.5
-    max_backoff_seconds: int = 300
     checkpoint_interval_seconds: int = 30
-    input_timeout_seconds: int = 300
 
     # Queue bounds (memory protection)
     max_input_queue_size: int = 100  # Max pending input messages
     max_output_queue_size: int = 100  # Max pending output messages
-    max_stream_queue_size: int = 1000  # Max pending stream chunks
-
-    # Health check settings
-    health_stale_seconds: int = 120  # Consider unhealthy if not updated in 2 minutes
 
     # Persistent HTTP service settings (health, agent card, A2A callbacks, chat)
     http_host: str = "127.0.0.1"
@@ -148,19 +140,12 @@ class RuntimeConfig:
             idle_backoff_seconds=env_int("PROGENITOR_IDLE_BACKOFF_SECONDS", 30),
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
-            max_actions_per_cycle=env_int("PROGENITOR_MAX_ACTIONS_PER_CYCLE", 10),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
-            backoff_multiplier=env_float("PROGENITOR_BACKOFF_MULTIPLIER", 1.5),
-            max_backoff_seconds=env_int("PROGENITOR_MAX_BACKOFF_SECONDS", 300),
             checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),
-            input_timeout_seconds=env_int("PROGENITOR_INPUT_TIMEOUT_SECONDS", 300),
             # Queue bounds
             max_input_queue_size=env_int("PROGENITOR_MAX_INPUT_QUEUE_SIZE", 100),
             max_output_queue_size=env_int("PROGENITOR_MAX_OUTPUT_QUEUE_SIZE", 100),
-            max_stream_queue_size=env_int("PROGENITOR_MAX_STREAM_QUEUE_SIZE", 1000),
-            # Health check settings
-            health_stale_seconds=env_int("PROGENITOR_HEALTH_STALE_SECONDS", 120),
             http_host=os.getenv("PROGENITOR_HTTP_HOST", "127.0.0.1"),
             http_port=env_int("PROGENITOR_HTTP_PORT", 9501),
             http_public_base_url=os.getenv("PROGENITOR_HTTP_PUBLIC_BASE_URL") or None,
@@ -176,7 +161,6 @@ class StorageConfig:
     log_dir: Path = field(default_factory=_default_log_dir)
     worktree_dir: Path = field(default_factory=_default_worktree_dir)
     prompts_dir: Path = field(default_factory=_default_prompts_dir)
-    state_lock_timeout_seconds: int = 10
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
@@ -199,7 +183,6 @@ class StorageConfig:
             log_dir=default_logs,
             worktree_dir=default_worktrees,
             prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
-            state_lock_timeout_seconds=env_int("PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS", 10),
         )
 
 
@@ -410,11 +393,6 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             lambda v: isinstance(v, int) and 0 < v <= 86400,
         ),
         (
-            "max_actions_per_cycle",
-            config.runtime.max_actions_per_cycle,
-            lambda v: isinstance(v, int) and 0 < v <= 100,
-        ),
-        (
             "log_level",
             config.runtime.log_level,
             lambda v: isinstance(v, str) and v in {"debug", "info", "warn", "warning", "error"},
@@ -425,23 +403,8 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             lambda v: isinstance(v, str) and v in {"text", "json"},
         ),
         (
-            "backoff_multiplier",
-            config.runtime.backoff_multiplier,
-            lambda v: isinstance(v, (int, float)) and 1.0 < float(v) <= 10.0,
-        ),
-        (
-            "max_backoff_seconds",
-            config.runtime.max_backoff_seconds,
-            lambda v: isinstance(v, int) and 0 < v <= 3600,
-        ),
-        (
             "checkpoint_interval_seconds",
             config.runtime.checkpoint_interval_seconds,
-            lambda v: isinstance(v, int) and 0 < v <= 3600,
-        ),
-        (
-            "input_timeout_seconds",
-            config.runtime.input_timeout_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 3600,
         ),
         (
@@ -453,16 +416,6 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
             "max_output_queue_size",
             config.runtime.max_output_queue_size,
             lambda v: isinstance(v, int) and 0 < v <= 10000,
-        ),
-        (
-            "max_stream_queue_size",
-            config.runtime.max_stream_queue_size,
-            lambda v: isinstance(v, int) and 0 < v <= 100000,
-        ),
-        (
-            "health_stale_seconds",
-            config.runtime.health_stale_seconds,
-            lambda v: isinstance(v, int) and 0 < v <= 600,
         ),
     ]
     for field_name, value, predicate in runtime_rules:
@@ -478,12 +431,6 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
     for field_name, value in storage_rules:
         if not isinstance(value, Path):
             issues.append(f"Storage Config Error: {field_name} must be a Path")
-
-    if not (0 < config.storage.state_lock_timeout_seconds <= 300):
-        issues.append(
-            "Storage Config Error: invalid "
-            f"state_lock_timeout_seconds={config.storage.state_lock_timeout_seconds!r}"
-        )
 
     if config.database.enabled and not (
         1 <= config.database.pool_min_size <= config.database.pool_max_size <= 100

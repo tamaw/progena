@@ -52,7 +52,6 @@ class _MockRuntimeConfig:
     registry_refresh_seconds: int = 900
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
-    max_stream_queue_size: int = 10
 
 
 @dataclass

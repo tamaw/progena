@@ -45,11 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class ACPSessionClient(Client):
-    """Collects streaming updates from an ACP agent for one or more prompts.
-
-    A single instance can be reused across prompts on a shared connection by
-    calling :meth:`reset` between runs.
-    """
+    """Collects streaming updates from an ACP agent for one prompt."""
 
     def __init__(self, run_id: str = "unknown") -> None:
         self.run_id = run_id
@@ -58,15 +54,6 @@ class ACPSessionClient(Client):
         self.tool_calls: list[dict[str, Any]] = []
         self.errors: list[str] = []
         self._conn: Any = None
-
-    def reset(self, run_id: str | None = None) -> None:
-        """Clear collected state before reusing the client for a new prompt."""
-        if run_id is not None:
-            self.run_id = run_id
-        self.text_parts.clear()
-        self.thoughts.clear()
-        self.tool_calls.clear()
-        self.errors.clear()
 
     def on_connect(self, conn: Any) -> None:
         self._conn = conn
