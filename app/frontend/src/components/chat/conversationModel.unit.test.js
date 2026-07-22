@@ -14,11 +14,57 @@ import {
   getTimeBucket,
   groupSessionItems,
   getActiveRouteThreadId,
+  shouldDeferInitialRosterSelection,
+  shouldDeferRouteSelection,
   areChatTranscriptsEquivalent,
   shouldRetireLiveOwnerAfterCanonicalReconciliation,
   mergeCanonicalMessages,
   excludeLiveOwnedMessage,
 } from './conversationModel';
+
+describe('chat selection race guards', () => {
+  it('defers roster selection until draft bootstrap settles or an existing selection exists', () => {
+    expect(shouldDeferInitialRosterSelection({
+      draftBootstrapSettled: false,
+      selectedBackendChatId: null,
+      threadId: null,
+      messageCount: 0,
+    })).toBe(true);
+    expect(shouldDeferInitialRosterSelection({
+      draftBootstrapSettled: true,
+      selectedBackendChatId: 'draft-1',
+      threadId: null,
+      messageCount: 0,
+    })).toBe(true);
+    expect(shouldDeferInitialRosterSelection({
+      draftBootstrapSettled: true,
+      selectedBackendChatId: null,
+      threadId: null,
+      messageCount: 0,
+    })).toBe(false);
+  });
+
+  it('defers route reconciliation while a different user selection is in flight', () => {
+    expect(shouldDeferRouteSelection({
+      pendingThreadId: null,
+      selectionIntentThreadId: 'chat-b',
+      urlThreadId: 'chat-a',
+      selectedBackendChatId: 'chat-b',
+    })).toBe(true);
+    expect(shouldDeferRouteSelection({
+      pendingThreadId: 'chat-b',
+      selectionIntentThreadId: 'chat-b',
+      urlThreadId: 'chat-b',
+      selectedBackendChatId: 'chat-b',
+    })).toBe(true);
+    expect(shouldDeferRouteSelection({
+      pendingThreadId: null,
+      selectionIntentThreadId: null,
+      urlThreadId: 'chat-a',
+      selectedBackendChatId: null,
+    })).toBe(false);
+  });
+});
 
 
 describe('areChatTranscriptsEquivalent', () => {
@@ -627,4 +673,3 @@ describe('groupSessionItems', () => {
     expect(groups[0].items.map((i) => i.id)).toEqual(['p']);
   });
 });
-
