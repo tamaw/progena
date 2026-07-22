@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -109,18 +109,6 @@ const WEEKDAY_WELCOME_MESSAGES = [
   'Friday finish line 🏁',
   'Saturday side quest ✨',
 ];
-
-const CHAT_SELECTION_DEBUG = import.meta.env.DEV;
-
-function logChatSelection(event, details = {}) {
-  if (!CHAT_SELECTION_DEBUG) {
-    return;
-  }
-  console.info('[chat-selection]', event, {
-    at: new Date().toISOString(),
-    ...details,
-  });
-}
 
 function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
@@ -450,7 +438,6 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
 function ConversationPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const location = useLocation();
   // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
   // session selection is driven entirely by the id, never by the slug.
   const { threadId: urlThreadId } = useParams();
@@ -631,20 +618,13 @@ function ConversationPage() {
 
   const openBackendChat = useCallback(async (threadId) => {
     if (!threadId) {
-      logChatSelection('open-skip-empty-id');
       return;
     }
     if (pendingOpenThreadIdRef.current === threadId) {
-      logChatSelection('open-skip-in-flight', { threadId });
       return;
     }
     pendingOpenThreadIdRef.current = threadId;
     const requestId = createUuid();
-    logChatSelection('open-start', {
-      threadId,
-      requestId,
-      selectedBackendChatId: selectedBackendChatIdRef.current,
-    });
     beginForegroundStream();
     activeStreamIdRef.current = null;
     setIsGenerating(false);
@@ -660,21 +640,7 @@ function ConversationPage() {
       requestId,
     }));
     try {
-      const detail = await request.unwrap();
-      logChatSelection('open-complete', {
-        threadId,
-        requestId,
-        returnedThreadId: detail?.thread_id ?? null,
-        messageCount: Array.isArray(detail?.messages) ? detail.messages.length : null,
-      });
-      return detail;
-    } catch (error) {
-      logChatSelection('open-error', {
-        threadId,
-        requestId,
-        error: error?.message || String(error),
-      });
-      throw error;
+      return await request.unwrap();
     } finally {
       if (pendingOpenThreadIdRef.current === threadId) {
         pendingOpenThreadIdRef.current = null;
@@ -1209,16 +1175,10 @@ function ConversationPage() {
     }
     if (urlThreadId) {
       if (pendingOpenThreadIdRef.current === urlThreadId) {
-        logChatSelection('route-sync-skip-in-flight', { urlThreadId });
         return;
       }
       const selectionIntent = selectionIntentRef.current;
       if (selectionIntent && selectionIntent.threadId !== urlThreadId) {
-        logChatSelection('route-sync-skip-stale-url', {
-          urlThreadId,
-          intendedThreadId: selectionIntent.threadId,
-          reason: selectionIntent.reason,
-        });
         return;
       }
       if (selectionIntent?.threadId === urlThreadId) {
@@ -1336,20 +1296,8 @@ function ConversationPage() {
 
   const selectSessionItem = useCallback(async (sessionItem, reason = 'programmatic') => {
     if (!sessionItem) {
-      logChatSelection('select-skip-empty-item');
       return;
     }
-    logChatSelection('select-start', {
-      reason,
-      itemId: sessionItem.id,
-      itemThreadId: sessionItem.threadId,
-      itemSource: sessionItem.source,
-      itemSelected: sessionItem.selected,
-      selectedBackendChatId,
-      urlThreadId,
-      activeBackendChatId: activeBackendChat?.thread_id ?? null,
-      activeRequestId: activeBackendChatState?.requestId ?? null,
-    });
     const shouldReloadSelectedBackendChat = shouldLoadSelectedBackendChat({
       sessionItem,
       activeBackendChat,
@@ -1357,18 +1305,9 @@ function ConversationPage() {
       lastAppliedRequestId: lastAppliedBackendChatRequestIdRef.current,
     });
     if (sessionItem.selected && !shouldReloadSelectedBackendChat) {
-      logChatSelection('select-skip-already-selected', {
-        itemId: sessionItem.id,
-        selectedBackendChatId,
-        activeBackendChatId: activeBackendChat?.thread_id ?? null,
-      });
       return;
     }
     if (sessionItem.source !== 'backend' || !sessionItem.threadId) {
-      logChatSelection('select-clear-non-backend', {
-        itemId: sessionItem.id,
-        itemSource: sessionItem.source,
-      });
       clearBackendSelection({ clearRoute: true });
       return;
     }
@@ -1394,16 +1333,7 @@ function ConversationPage() {
     preserveStreamInBackground();
     try {
       await openBackendChat(sessionItem.threadId);
-      logChatSelection('select-complete', {
-        itemId: sessionItem.id,
-        threadId: sessionItem.threadId,
-      });
     } catch (error) {
-      logChatSelection('select-error', {
-        itemId: sessionItem.id,
-        threadId: sessionItem.threadId,
-        error: error?.message || String(error),
-      });
       show('error', 'Chat load failed', error.message);
     }
   }, [
@@ -1572,7 +1502,6 @@ function ConversationPage() {
         selectedBackendChatIdRef.current === urlThreadId
         || pendingOpenThreadIdRef.current === urlThreadId
       ) {
-        logChatSelection('mount-route-skip-already-selected', { urlThreadId });
         return;
       }
       openBackendChat(urlThreadId).catch(() => {
@@ -1592,11 +1521,6 @@ function ConversationPage() {
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
-      logChatSelection('mount-auto-select', {
-        itemId: topItem.id,
-        itemThreadId: topItem.threadId,
-        itemSource: topItem.source,
-      });
       void selectSessionItem(topItem, 'mount-auto-select');
     }
   }, [
@@ -1609,22 +1533,6 @@ function ConversationPage() {
     visibleSessionGroups,
     selectSessionItem,
     openBackendChat,
-  ]);
-
-  useEffect(() => {
-    logChatSelection('route-change', {
-      pathname: location.pathname,
-      urlThreadId,
-      selectedBackendChatId,
-      stateThreadId: threadId,
-      activeBackendChatId: activeBackendChat?.thread_id ?? null,
-    });
-  }, [
-    activeBackendChat,
-    location.pathname,
-    selectedBackendChatId,
-    threadId,
-    urlThreadId,
   ]);
 
   // Keep the URL in sync with whichever session is actually selected (either
@@ -1851,26 +1759,11 @@ function ConversationPage() {
                   tabIndex={0}
                   aria-current={item.selected ? 'true' : undefined}
                   onClick={() => {
-                    logChatSelection('card-click', {
-                      itemId: item.id,
-                      itemThreadId: item.threadId,
-                      itemSource: item.source,
-                      itemSelected: item.selected,
-                      selectedBackendChatId,
-                      urlThreadId,
-                    });
                     void selectSessionItem(item, 'card-click');
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      logChatSelection('card-keyboard', {
-                        itemId: item.id,
-                        itemThreadId: item.threadId,
-                        itemSource: item.source,
-                        selectedBackendChatId,
-                        urlThreadId,
-                      });
                       void selectSessionItem(item, 'card-keyboard');
                     }
                   }}
