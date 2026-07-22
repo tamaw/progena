@@ -1,6 +1,6 @@
 import { memo, useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
 import { useConfig } from '../context/ConfigContext';
 import { useNotifications } from '../context/NotificationContext';
@@ -109,6 +109,18 @@ const WEEKDAY_WELCOME_MESSAGES = [
   'Friday finish line 🏁',
   'Saturday side quest ✨',
 ];
+
+const CHAT_SELECTION_DEBUG = import.meta.env.DEV;
+
+function logChatSelection(event, details = {}) {
+  if (!CHAT_SELECTION_DEBUG) {
+    return;
+  }
+  console.info('[chat-selection]', event, {
+    at: new Date().toISOString(),
+    ...details,
+  });
+}
 
 function getDailyWelcomeMessage(date = new Date()) {
   return WEEKDAY_WELCOME_MESSAGES[date.getDay()] ?? 'Let\'s get started ✨';
@@ -438,6 +450,7 @@ const LiveConversationHeader = memo(function LiveConversationHeader({
 function ConversationPage() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const location = useLocation();
   // `titleSlug` is display context only (e.g. /chat/thread_123/my-chat) --
   // session selection is driven entirely by the id, never by the slug.
   const { threadId: urlThreadId } = useParams();
@@ -500,6 +513,11 @@ function ConversationPage() {
   const [sidebarQuery, setSidebarQuery] = useState('');
   const [sidebarSort, setSidebarSort] = useState('Recent');
   const [selectedBackendChatId, setSelectedBackendChatId] = useState(() => urlThreadId || null);
+  // The no-route bootstrap creates a fresh draft session asynchronously. Keep
+  // initial roster auto-selection behind that bootstrap; otherwise the two
+  // mount effects race and the selected chat can oscillate between the draft
+  // UUID and the first backend session.
+  const [draftBootstrapSettled, setDraftBootstrapSettled] = useState(Boolean(urlThreadId));
   const [foregroundReconciliationIntent, setForegroundReconciliationIntent] = useState(null);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState('');
@@ -529,6 +547,8 @@ function ConversationPage() {
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
   const selectedBackendChatIdRef = useRef(null);
+  const pendingOpenThreadIdRef = useRef(null);
+  const selectionIntentRef = useRef(null);
   // Track recently added scheduled messages to deduplicate.
   const recentScheduledContent = useRef(new Set());
   const foregroundOwnershipTokenRef = useRef(0);
@@ -611,8 +631,20 @@ function ConversationPage() {
 
   const openBackendChat = useCallback(async (threadId) => {
     if (!threadId) {
+      logChatSelection('open-skip-empty-id');
       return;
     }
+    if (pendingOpenThreadIdRef.current === threadId) {
+      logChatSelection('open-skip-in-flight', { threadId });
+      return;
+    }
+    pendingOpenThreadIdRef.current = threadId;
+    const requestId = createUuid();
+    logChatSelection('open-start', {
+      threadId,
+      requestId,
+      selectedBackendChatId: selectedBackendChatIdRef.current,
+    });
     beginForegroundStream();
     activeStreamIdRef.current = null;
     setIsGenerating(false);
@@ -622,12 +654,41 @@ function ConversationPage() {
     dispatch(clearChatUnread(threadId));
     dispatch(clearChatErrored(threadId));
     lastAppliedBackendChatRequestIdRef.current = null;
-    return dispatch(requestChatSessionDetail({
+    const request = dispatch(requestChatSessionDetail({
       chatsUrl: getApiUrl('chats'),
       threadId,
-      requestId: createUuid(),
-    })).unwrap();
-  }, [activeStreamIdRef, beginForegroundStream, dispatch, getApiUrl, setIsGenerating]);
+      requestId,
+    }));
+    try {
+      const detail = await request.unwrap();
+      logChatSelection('open-complete', {
+        threadId,
+        requestId,
+        returnedThreadId: detail?.thread_id ?? null,
+        messageCount: Array.isArray(detail?.messages) ? detail.messages.length : null,
+      });
+      return detail;
+    } catch (error) {
+      logChatSelection('open-error', {
+        threadId,
+        requestId,
+        error: error?.message || String(error),
+      });
+      throw error;
+    } finally {
+      if (pendingOpenThreadIdRef.current === threadId) {
+        pendingOpenThreadIdRef.current = null;
+      }
+    }
+  }, [
+    activeStreamIdRef,
+    beginForegroundStream,
+    dispatch,
+    getApiUrl,
+    pendingOpenThreadIdRef,
+    selectedBackendChatIdRef,
+    setIsGenerating,
+  ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
     const clientRequestId = createUuid();
     let resolveSession;
@@ -779,6 +840,10 @@ function ConversationPage() {
       } catch (error) {
         if (!cancelled) {
           console.warn('[ConversationPage] Failed to initialize draft chat:', error);
+        }
+      } finally {
+        if (!cancelled) {
+          setDraftBootstrapSettled(true);
         }
       }
     };
@@ -1133,11 +1198,33 @@ function ConversationPage() {
   }, [activeBackendChat, activeBackendChatState.error, activeBackendChatState.loading, dismissCurrentSession, selectedBackendChatId]);
 
   useEffect(() => {
+    // The mount effect below owns the first URL/roster selection. Running this
+    // ongoing route reconciler before that completes can reopen a stale URL
+    // while a draft or initial card request is still settling.
+    if (!hasAutoSelectedOnMountRef.current) {
+      return;
+    }
     if (!backendChatSessionsState.loaded) {
       return;
     }
     if (urlThreadId) {
-      if (selectedBackendChatId === urlThreadId) {
+      if (pendingOpenThreadIdRef.current === urlThreadId) {
+        logChatSelection('route-sync-skip-in-flight', { urlThreadId });
+        return;
+      }
+      const selectionIntent = selectionIntentRef.current;
+      if (selectionIntent && selectionIntent.threadId !== urlThreadId) {
+        logChatSelection('route-sync-skip-stale-url', {
+          urlThreadId,
+          intendedThreadId: selectionIntent.threadId,
+          reason: selectionIntent.reason,
+        });
+        return;
+      }
+      if (selectionIntent?.threadId === urlThreadId) {
+        selectionIntentRef.current = null;
+      }
+      if (selectedBackendChatIdRef.current === urlThreadId) {
         return;
       }
       openBackendChat(urlThreadId).catch(() => {
@@ -1148,7 +1235,7 @@ function ConversationPage() {
     if (selectedBackendChatId) {
       dismissCurrentSession();
     }
-  }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, selectedBackendChatId, urlThreadId]);
+  }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, urlThreadId]);
 
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
     const session = await acquireDraftChat(forceFreshSession ? null : threadId);
@@ -1247,10 +1334,22 @@ function ConversationPage() {
     show,
   ]);
 
-  const selectSessionItem = useCallback(async (sessionItem) => {
+  const selectSessionItem = useCallback(async (sessionItem, reason = 'programmatic') => {
     if (!sessionItem) {
+      logChatSelection('select-skip-empty-item');
       return;
     }
+    logChatSelection('select-start', {
+      reason,
+      itemId: sessionItem.id,
+      itemThreadId: sessionItem.threadId,
+      itemSource: sessionItem.source,
+      itemSelected: sessionItem.selected,
+      selectedBackendChatId,
+      urlThreadId,
+      activeBackendChatId: activeBackendChat?.thread_id ?? null,
+      activeRequestId: activeBackendChatState?.requestId ?? null,
+    });
     const shouldReloadSelectedBackendChat = shouldLoadSelectedBackendChat({
       sessionItem,
       activeBackendChat,
@@ -1258,12 +1357,26 @@ function ConversationPage() {
       lastAppliedRequestId: lastAppliedBackendChatRequestIdRef.current,
     });
     if (sessionItem.selected && !shouldReloadSelectedBackendChat) {
+      logChatSelection('select-skip-already-selected', {
+        itemId: sessionItem.id,
+        selectedBackendChatId,
+        activeBackendChatId: activeBackendChat?.thread_id ?? null,
+      });
       return;
     }
     if (sessionItem.source !== 'backend' || !sessionItem.threadId) {
+      logChatSelection('select-clear-non-backend', {
+        itemId: sessionItem.id,
+        itemSource: sessionItem.source,
+      });
       clearBackendSelection({ clearRoute: true });
       return;
     }
+
+    selectionIntentRef.current = {
+      reason,
+      threadId: sessionItem.threadId,
+    };
 
     // If we're leaving a local-only conversation, materialize it first so it
     // remains a distinct sidebar card instead of disappearing on selection.
@@ -1281,7 +1394,16 @@ function ConversationPage() {
     preserveStreamInBackground();
     try {
       await openBackendChat(sessionItem.threadId);
+      logChatSelection('select-complete', {
+        itemId: sessionItem.id,
+        threadId: sessionItem.threadId,
+      });
     } catch (error) {
+      logChatSelection('select-error', {
+        itemId: sessionItem.id,
+        threadId: sessionItem.threadId,
+        error: error?.message || String(error),
+      });
       show('error', 'Chat load failed', error.message);
     }
   }, [
@@ -1293,9 +1415,11 @@ function ConversationPage() {
     messages.length,
     openBackendChat,
     preserveStreamInBackground,
+    selectionIntentRef,
     selectedBackendChatId,
     threadId,
     show,
+    urlThreadId,
   ]);
 
   const handleCommand = useCallback(async (commandName) => {
@@ -1444,6 +1568,13 @@ function ConversationPage() {
     if (!backendChatSessionsState.loaded) return;
     if (urlThreadId) {
       hasAutoSelectedOnMountRef.current = true;
+      if (
+        selectedBackendChatIdRef.current === urlThreadId
+        || pendingOpenThreadIdRef.current === urlThreadId
+      ) {
+        logChatSelection('mount-route-skip-already-selected', { urlThreadId });
+        return;
+      }
       openBackendChat(urlThreadId).catch(() => {
         // Keep the routed id and let the active detail error render in place.
         // Falling back to a new chat here would hide the actual route failure
@@ -1451,12 +1582,50 @@ function ConversationPage() {
       });
       return;
     }
+    if (!draftBootstrapSettled) return;
+    // A successful no-route bootstrap already selected the fresh draft. Do
+    // not replace it with the first roster item when the roster hydrates.
+    if (selectedBackendChatId || threadId || messages.length > 0) {
+      hasAutoSelectedOnMountRef.current = true;
+      return;
+    }
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
-      selectSessionItem(topItem);
+      logChatSelection('mount-auto-select', {
+        itemId: topItem.id,
+        itemThreadId: topItem.threadId,
+        itemSource: topItem.source,
+      });
+      void selectSessionItem(topItem, 'mount-auto-select');
     }
-  }, [urlThreadId, backendChatSessionsState.loaded, visibleSessionGroups, selectSessionItem, openBackendChat]);
+  }, [
+    urlThreadId,
+    backendChatSessionsState.loaded,
+    draftBootstrapSettled,
+    messages.length,
+    selectedBackendChatId,
+    threadId,
+    visibleSessionGroups,
+    selectSessionItem,
+    openBackendChat,
+  ]);
+
+  useEffect(() => {
+    logChatSelection('route-change', {
+      pathname: location.pathname,
+      urlThreadId,
+      selectedBackendChatId,
+      stateThreadId: threadId,
+      activeBackendChatId: activeBackendChat?.thread_id ?? null,
+    });
+  }, [
+    activeBackendChat,
+    location.pathname,
+    selectedBackendChatId,
+    threadId,
+    urlThreadId,
+  ]);
 
   // Keep the URL in sync with whichever session is actually selected (either
   // a backend chat, or a local draft that already has messages). The title
@@ -1676,14 +1845,33 @@ function ConversationPage() {
                 <article
                   key={item.id}
                   className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
+                  data-thread-id={item.threadId || item.id}
+                  data-chat-source={item.source || 'unknown'}
                   role="button"
                   tabIndex={0}
                   aria-current={item.selected ? 'true' : undefined}
-                  onClick={() => selectSessionItem(item)}
+                  onClick={() => {
+                    logChatSelection('card-click', {
+                      itemId: item.id,
+                      itemThreadId: item.threadId,
+                      itemSource: item.source,
+                      itemSelected: item.selected,
+                      selectedBackendChatId,
+                      urlThreadId,
+                    });
+                    void selectSessionItem(item, 'card-click');
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      selectSessionItem(item);
+                      logChatSelection('card-keyboard', {
+                        itemId: item.id,
+                        itemThreadId: item.threadId,
+                        itemSource: item.source,
+                        selectedBackendChatId,
+                        urlThreadId,
+                      });
+                      void selectSessionItem(item, 'card-keyboard');
                     }
                   }}
                 >
