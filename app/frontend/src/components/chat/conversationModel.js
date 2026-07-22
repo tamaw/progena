@@ -54,6 +54,28 @@ export function getActiveRouteThreadId({
   );
 }
 
+export function shouldDeferInitialRosterSelection({
+  draftBootstrapSettled,
+  selectedBackendChatId,
+  threadId,
+  messageCount,
+}) {
+  return !draftBootstrapSettled || Boolean(selectedBackendChatId || threadId || messageCount > 0);
+}
+
+export function shouldDeferRouteSelection({
+  pendingThreadId,
+  selectionIntentThreadId,
+  urlThreadId,
+  selectedBackendChatId,
+}) {
+  return Boolean(
+    pendingThreadId === urlThreadId
+    || (selectionIntentThreadId && selectionIntentThreadId !== urlThreadId)
+    || selectedBackendChatId === urlThreadId,
+  );
+}
+
 function eventRenderSignature(event) {
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   return {

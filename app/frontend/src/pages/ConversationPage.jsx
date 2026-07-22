@@ -63,6 +63,8 @@ import {
   shouldShowChatContentLoading,
   getActiveRouteThreadId,
   shouldShowNewChatEmptyState,
+  shouldDeferInitialRosterSelection,
+  shouldDeferRouteSelection,
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
@@ -652,7 +654,6 @@ function ConversationPage() {
     dispatch,
     getApiUrl,
     pendingOpenThreadIdRef,
-    selectedBackendChatIdRef,
     setIsGenerating,
   ]);
   const acquireDraftChat = useCallback(async (requestedThreadId = null) => {
@@ -1174,17 +1175,16 @@ function ConversationPage() {
       return;
     }
     if (urlThreadId) {
-      if (pendingOpenThreadIdRef.current === urlThreadId) {
-        return;
-      }
       const selectionIntent = selectionIntentRef.current;
-      if (selectionIntent && selectionIntent.threadId !== urlThreadId) {
-        return;
-      }
       if (selectionIntent?.threadId === urlThreadId) {
         selectionIntentRef.current = null;
       }
-      if (selectedBackendChatIdRef.current === urlThreadId) {
+      if (shouldDeferRouteSelection({
+        pendingThreadId: pendingOpenThreadIdRef.current,
+        selectionIntentThreadId: selectionIntent?.threadId,
+        urlThreadId,
+        selectedBackendChatId: selectedBackendChatIdRef.current,
+      })) {
         return;
       }
       openBackendChat(urlThreadId).catch(() => {
@@ -1195,7 +1195,7 @@ function ConversationPage() {
     if (selectedBackendChatId) {
       dismissCurrentSession();
     }
-  }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, urlThreadId]);
+  }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, selectedBackendChatId, urlThreadId]);
 
   const openDraftChat = useCallback(async ({ forceFreshSession = false } = {}) => {
     const session = await acquireDraftChat(forceFreshSession ? null : threadId);
@@ -1294,7 +1294,7 @@ function ConversationPage() {
     show,
   ]);
 
-  const selectSessionItem = useCallback(async (sessionItem, reason = 'programmatic') => {
+  const selectSessionItem = useCallback(async (sessionItem) => {
     if (!sessionItem) {
       return;
     }
@@ -1313,7 +1313,6 @@ function ConversationPage() {
     }
 
     selectionIntentRef.current = {
-      reason,
       threadId: sessionItem.threadId,
     };
 
@@ -1349,7 +1348,6 @@ function ConversationPage() {
     selectedBackendChatId,
     threadId,
     show,
-    urlThreadId,
   ]);
 
   const handleCommand = useCallback(async (commandName) => {
@@ -1514,14 +1512,19 @@ function ConversationPage() {
     if (!draftBootstrapSettled) return;
     // A successful no-route bootstrap already selected the fresh draft. Do
     // not replace it with the first roster item when the roster hydrates.
-    if (selectedBackendChatId || threadId || messages.length > 0) {
+    if (shouldDeferInitialRosterSelection({
+      draftBootstrapSettled,
+      selectedBackendChatId,
+      threadId,
+      messageCount: messages.length,
+    })) {
       hasAutoSelectedOnMountRef.current = true;
       return;
     }
     hasAutoSelectedOnMountRef.current = true;
     const topItem = visibleSessionGroups[0]?.items[0];
     if (topItem?.source === 'backend') {
-      void selectSessionItem(topItem, 'mount-auto-select');
+      void selectSessionItem(topItem);
     }
   }, [
     urlThreadId,
@@ -1759,12 +1762,12 @@ function ConversationPage() {
                   tabIndex={0}
                   aria-current={item.selected ? 'true' : undefined}
                   onClick={() => {
-                    void selectSessionItem(item, 'card-click');
+                    void selectSessionItem(item);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      void selectSessionItem(item, 'card-keyboard');
+                      void selectSessionItem(item);
                     }
                   }}
                 >
