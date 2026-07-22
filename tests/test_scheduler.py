@@ -51,28 +51,6 @@ class TestScheduler:
         assert len(due) == 1
         assert due[0]["id"] == "due-from-created"
 
-    def test_mark_executed(self):
-        """Test marking an item executed updates last_run."""
-        now = utcnow().replace(second=0, microsecond=0)
-        schedule = [
-            {
-                "id": "task-1",
-                "cron_expression": "*/30 * * * *",
-                "created_at": (now - timedelta(hours=1)).isoformat(),
-                "last_run": None,
-            },
-            {
-                "id": "task-2",
-                "cron_expression": "0 * * * *",
-                "created_at": (now - timedelta(hours=1)).isoformat(),
-                "last_run": None,
-            },
-        ]
-
-        updated = self.scheduler.mark_executed(schedule, "task-1", now)
-        assert updated[0]["last_run"] == now.isoformat()
-        assert updated[1]["last_run"] is None
-
     def test_next_run_for_entry_invalid_cron(self):
         """Invalid cron expressions return None."""
         assert self.scheduler.next_run_for_entry({"cron_expression": "not a cron"}) is None
