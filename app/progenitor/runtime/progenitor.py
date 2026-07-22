@@ -129,10 +129,7 @@ class Progenitor:
             debug_mode=os.getenv("PROGENITOR_STORE_LOG_DEBUG", "").lower() in ("1", "true", "yes"),
         )
         self.log_store = runtime_store
-        self.state_manager = StateManager(
-            runtime_store=runtime_store,
-            lock_timeout=self.config.storage.state_lock_timeout_seconds,
-        )
+        self.state_manager = StateManager(runtime_store=runtime_store)
         await self.state_manager.initialize()
         mcp_payload = await self.state_manager.get_mcp_config()
         self.config.mcp = type(self.config.mcp).from_payload(mcp_payload)

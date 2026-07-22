@@ -216,7 +216,6 @@ async def test_runtime_heartbeat_graph_processes_one_input_cycle() -> None:
     assert result["current_input"] is None
     # checkpoint_node writes per-thread document only (mirror removed)
     assert state_manager.save_current_state.await_count == 1
-    queues.signal_cycle_complete_mock.assert_called_once()
     state_manager.save_health.assert_awaited()
     health_payload = state_manager.save_health.await_args.args[0]
     assert health_payload["llm_model"] == "gpt-5.3-chat"
@@ -358,7 +357,6 @@ async def test_runtime_heartbeat_graph_reports_startup_node_errors() -> None:
         "Heartbeat node startup_audit failed: startup audit exploded",
         {"heartbeat_node": "startup_audit"},
     )
-    queues.signal_cycle_complete_mock.assert_called_once()
     state_manager.save_health.assert_awaited()
     health_payload = state_manager.save_health.await_args.args[0]
     assert health_payload["status"] == "error"
@@ -429,7 +427,6 @@ class _FakeQueues:
         self.a2a_completions = list(a2a_completions or [])
         self.push_event = AsyncMock()
         self.enqueue_input = AsyncMock(return_value=True)
-        self.signal_cycle_complete_mock = MagicMock()
 
     async def get_input(self, timeout: float):  # noqa: ANN201
         self.last_input_timeout = timeout
@@ -437,9 +434,6 @@ class _FakeQueues:
 
     def get_queue_stats(self) -> dict[str, dict[str, int | bool]]:
         return {"input_queue": {"size": 0, "maxsize": 5, "full": False}}
-
-    def signal_cycle_complete(self) -> None:
-        self.signal_cycle_complete_mock()
 
     def drain_a2a_completions(self) -> list[A2ATaskRecord]:
         records = self.a2a_completions

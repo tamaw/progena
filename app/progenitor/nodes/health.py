@@ -49,22 +49,6 @@ _GIT_COMMIT = _detect_git_commit()
 _PROCESS_STARTED_AT = utcnow_isoformat()
 
 
-async def health_payload_node(
-    state: ProgenitorState,
-    runtime: Runtime[HeartbeatContext],
-) -> dict[str, Any]:
-    """Prepare a runtime health payload."""
-    del runtime
-    return {
-        "health": {
-            "status": "ok",
-            "timestamp": utcnow_isoformat(),
-            "thread_id": state.get("thread_id"),
-            "cycle_count": state.get("cycle_count", 0),
-        }
-    }
-
-
 async def write_health_status(
     state_manager: Any,
     status: str,

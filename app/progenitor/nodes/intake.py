@@ -134,15 +134,4 @@ async def cycle_setup_node(
         "current_backoff_seconds": float(runtime.context.idle_backoff_seconds),
         "heartbeat_action": "processed",
         "cycle_error": None,
-        "cycle_complete_signalled": False,
-    }
-
-
-async def normalize_input_node(state: ProgenitorState) -> dict[str, Any]:
-    """Normalize the current input fields."""
-    current_input = str(state.get("current_input") or "").strip()
-    return {
-        "current_input": current_input or None,
-        "current_input_role": state.get("current_input_role"),
-        "current_input_metadata": state.get("current_input_metadata"),
     }

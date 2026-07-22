@@ -119,12 +119,7 @@ from ..nodes.async_subagents import (
 from ..nodes.audit import startup_audit_node
 from ..nodes.checkpoint import checkpoint_node
 from ..nodes.context import HeartbeatContext
-from ..nodes.control import (
-    cleanup_cycle_state_node,
-    cycle_error_node,
-    idle_state_node,
-    signal_cycle_complete_node,
-)
+from ..nodes.control import cleanup_cycle_state_node, cycle_error_node, idle_state_node
 from ..nodes.cycle import cycle_node, isolated_cycle_node
 from ..nodes.health import idle_health_tick_node, runtime_health_node
 from ..nodes.intake import cycle_setup_node, dequeue_input_node
@@ -267,7 +262,6 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     )
     graph.add_node("checkpoint", _guard_maintenance_node("checkpoint", checkpoint_node))
     graph.add_node("health", _guard_maintenance_node("health", runtime_health_node))
-    graph.add_node("signal", _guard_maintenance_node("signal", signal_cycle_complete_node))
     graph.add_node("cleanup", _guard_maintenance_node("cleanup", cleanup_cycle_state_node))
 
     graph.add_edge(START, "startup_audit")
@@ -326,8 +320,7 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_edge("error", "scheduled_completion")
     graph.add_edge("scheduled_completion", "checkpoint")
     graph.add_edge("checkpoint", "health")
-    graph.add_edge("health", "signal")
-    graph.add_edge("signal", "cleanup")
+    graph.add_edge("health", "cleanup")
     graph.add_edge("cleanup", END)
     return graph.compile()
 

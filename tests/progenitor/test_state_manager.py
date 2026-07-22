@@ -12,7 +12,6 @@ from app.progenitor.state.langgraph_store import (
     LangGraphRuntimeStore,
 )
 from app.progenitor.state.manager import StateManager
-from tests.progenitor.conftest import _FakeRuntimeStore
 from app.progenitor.state.models import (
     A2ATaskRecord,
     AsyncSubagentTaskRecord,
@@ -21,6 +20,7 @@ from app.progenitor.state.models import (
     ScheduleEntry,
     ScheduleRunRecord,
 )
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 
 class FakeLangGraphStore:
@@ -351,7 +351,7 @@ class TestStateManager:
         store = LangGraphRuntimeStore(native_store)
 
         assert await store.get_document("current_state", {"messages": []}) == {"messages": []}
-        await store.update_document("current_state", {"cycle_count": 2}, {"messages": []})
+        await store.save_document("current_state", {"messages": [], "cycle_count": 2})
 
         assert await store.get_document("current_state", {}) == {
             "messages": [],
@@ -372,13 +372,15 @@ class TestStateManager:
             payload={"event": "tool_started", "api_key": "sk-secret"},
             timestamp="2024-01-01T00:00:00+00:00",
         )
-
-        rows = await store.query_logs(source="tool", search="tool_started")
+        rows = [
+            value
+            for (namespace, _key), value in native_store.items.items()
+            if namespace == (*LOG_NAMESPACE_PREFIX, "tool")
+        ]
         assert len(rows) == 1
         assert rows[0]["message"] == "started"
         assert rows[0]["payload"]["api_key"] == "[REDACTED]"
-        assert native_store.search_queries == [None]
-        assert next(iter(native_store.items))[0][:3] == (*LOG_NAMESPACE_PREFIX, "tool")
+        assert native_store.search_queries == []
 
     # ------------------------------------------------------------------
     # Append JSONL (via runtime store logs)
@@ -421,7 +423,7 @@ class TestStateManager:
 
         await manager.log_conversation(message)
 
-        history = await manager._runtime_store.query_logs(source="conversation")
+        history = manager._runtime_store._logs["conversation"]
         assert len(history) == 1
         assert history[0]["payload"]["content"] == "Test message"
 
@@ -469,7 +471,11 @@ class TestStateManager:
 
         await manager.log_conversation(message)
 
-        history = await manager._runtime_store.query_logs(source="conversation")
+        history = [
+            value
+            for (namespace, _key), value in native_store.items.items()
+            if namespace == (*LOG_NAMESPACE_PREFIX, "conversation")
+        ]
         assert len(history) == 1
         assert history[0]["payload"]["content"] == "Log this natively"
 

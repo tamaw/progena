@@ -61,9 +61,7 @@ class StateManager:
     def __init__(
         self,
         runtime_store: LangGraphRuntimeStore,
-        lock_timeout: int = 10,
     ) -> None:
-        self.lock_timeout = lock_timeout
         self._state_cache: dict[str, Any] = {}
         self._runtime_store = runtime_store
         # Per-thread-id micro-locks for atomic read-modify-write merges of
@@ -81,16 +79,6 @@ class StateManager:
         if key not in self._current_state_merge_locks:
             self._current_state_merge_locks[key] = asyncio.Lock()
         return self._current_state_merge_locks[key]
-
-    async def __aenter__(self) -> "StateManager":
-        """CQ-010: Async context manager entry - initialize resources."""
-        await self.initialize()
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
-        """CQ-010: Async context manager exit - cleanup resources."""
-        await self.close()
-        return None
 
     async def close(self) -> None:
         """CQ-010: Clean up resources and flush pending writes."""
@@ -228,11 +216,6 @@ class StateManager:
     # ==========================================================================
     # Health management (heartbeat-loop system status)
     # ==========================================================================
-    async def get_health(self) -> dict[str, Any]:
-        """Return the health document."""
-        health = await self._get_runtime_document("health")
-        return dict(health) if isinstance(health, dict) else {}
-
     async def save_health(self, payload: dict[str, Any]) -> None:
         """Persist the health document."""
         await self._save_runtime_document("health", payload)
@@ -276,24 +259,6 @@ class StateManager:
 
         normalized = normalize_mcp_config_payload(payload)
         await self._save_runtime_document("mcp", normalized)
-
-    # ==========================================================================
-    # Knowledge configuration
-    # ==========================================================================
-    async def get_knowledge_config(self) -> dict[str, Any]:
-        """Return the knowledge document (knowledge-base settings).
-
-        Read straight from the shared store (not the cache): the backend (UI)
-        edits this same document via ``PUT /api/ui/knowledge``, so a cached copy
-        would hide cross-process changes. See get_mcp_config for the rationale.
-        """
-        default: dict[str, Any] = {"bases": []}
-        payload = await self._runtime_store.get_document("knowledge", default)
-        return payload if isinstance(payload, dict) else dict(default)
-
-    async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
-        """Persist the knowledge document (knowledge-base settings)."""
-        await self._save_runtime_document("knowledge", payload)
 
     # ==========================================================================
     # Kanban board

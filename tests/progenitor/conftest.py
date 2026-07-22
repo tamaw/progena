@@ -1,6 +1,5 @@
 """Shared fixtures for progenitor unit tests."""
 
-from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import Any
 
@@ -40,13 +39,6 @@ class _FakeRuntimeStore:
     async def list_documents(self, key_prefix: str) -> list[tuple[str, Any]]:
         return [(k, v) for k, v in self._documents.items() if k.startswith(key_prefix)]
 
-    async def update_document(self, name: str, updates: dict[str, Any], default: Any) -> None:
-        current = await self.get_document(name, default)
-        if isinstance(current, dict):
-            current.update(updates)
-        else:
-            self._documents[name] = updates
-
     async def write_log(
         self,
         *,
@@ -70,33 +62,6 @@ class _FakeRuntimeStore:
             "relative_path": relative_path,
         }
         self._logs.setdefault(source, []).append(entry)
-
-    async def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        search: str | None = None,
-        limit: int = 200,
-    ) -> list[dict[str, Any]]:
-        rows: list[dict[str, Any]] = []
-        if source:
-            rows = list(self._logs.get(source, []))
-        else:
-            for entries in self._logs.values():
-                rows.extend(entries)
-        if level:
-            rows = [r for r in rows if r.get("level") == level.lower()]
-        if search:
-            lowered = search.lower()
-            rows = [
-                r
-                for r in rows
-                if lowered in str(r.get("message", "")).lower()
-                or lowered in str(r.get("payload", {})).lower()
-            ]
-        rows.sort(key=lambda r: str(r.get("timestamp", "")))
-        return rows[-limit:] if limit > 0 else rows
 
 
 @pytest.fixture(autouse=True)

@@ -410,10 +410,6 @@ class RuntimeChatService:
                 thread_id=thread_id,
             )
 
-        queues = getattr(self.loop_runner, "queues", None)
-        if queues is not None:
-            queues.signal_cycle_complete()
-
     async def _notify_queued_request(self, request_id: str, *, streaming: bool) -> None:
         queues = getattr(self.loop_runner, "queues", None)
         if queues is None:

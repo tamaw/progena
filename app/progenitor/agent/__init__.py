@@ -10,6 +10,8 @@ Modules:
     agent: Main factory — create_progenitor_agent()
     adapters: ChatOpenAI adapter, runtime graph adapter, and DeepAgent tool wrappers
     backends: CompositeBackend (LocalShell + Store + State)
-    middleware: SecretRedaction, AuditLogging, Metrics
+    middleware/: One module per custom middleware:
+        async_subagent_tracking, audit_logging, direct_a2a_fast_path,
+        dynamic_mcp, schema_compaction, and secret_redaction
     subagents: Progenitor helper subagents
 """

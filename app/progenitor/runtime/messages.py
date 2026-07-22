@@ -1,11 +1,9 @@
-"""Message coercion, serialization, and response extraction helpers."""
+"""Message coercion and response extraction helpers."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
-
-from ..ipc.stream_payloads import extract_stream_chunk_text
 
 
 def coerce_messages_list(messages: Any) -> list:
@@ -25,17 +23,6 @@ def coerce_messages_list(messages: Any) -> list:
         return list(messages)
     except TypeError:
         return []
-
-
-def serialize_messages(messages: Any) -> list:
-    """Serialize message objects for checkpoint."""
-    serialized = []
-    for msg in coerce_messages_list(messages):
-        if hasattr(msg, "model_dump"):
-            serialized.append(msg.model_dump())
-        elif isinstance(msg, dict):
-            serialized.append(msg)
-    return serialized
 
 
 def attach_reasoning_trace(
@@ -446,8 +433,6 @@ __all__ = [
     "extract_message_text",
     "extract_reasoning_trace",
     "extract_reasoning_token_count",
-    "extract_stream_chunk_text",
     "get_last_ai_message",
-    "serialize_messages",
     "summarize_message_schema",
 ]

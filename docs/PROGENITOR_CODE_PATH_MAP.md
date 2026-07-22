@@ -107,7 +107,7 @@ create_progenitor_agent()
   -> create_progenitor_backend(...)
   -> create_deepagent_tools(...)
   -> [DynamicMCPToolMiddleware, SecretRedactionMiddleware,
-      AuditLoggingMiddleware, MetricsMiddleware]
+      AuditLoggingMiddleware]
   -> resolve_skills_dir("progenitor", prompts_dir=...)
   -> _ensure_default_runtime_memory(data_dir)
   -> _resolve_runtime_memory_paths(data_dir, memory_paths)
@@ -193,7 +193,6 @@ Middleware stack created by `create_progenitor_agent()`:
 | `DynamicMCPToolMiddleware` | Strongly used | Injects live LangChain MCP tools from `llm_client.mcp_langchain_tools` into each model call and binds MCP tool-call requests. |
 | `SecretRedactionMiddleware` | Strongly used | Redacts secrets for logging paths while preserving original args for execution. |
 | `AuditLoggingMiddleware` | Strongly used when `log_dir` is provided | Emits tool stream events and writes `tool_calls.jsonl`. |
-| `MetricsMiddleware` | Strongly used | Tracks in-memory model/tool metrics. |
 
 ### `agent/subagents.py`
 
@@ -234,7 +233,6 @@ IPCServer or scheduled work
       -> set current_input/current_input_metadata/cycle_count
       -> _run_graph_cycle() or _run_isolated_graph_cycle()
       -> stream finalization / scheduled_response events
-      -> _signal_cycle_complete()
 ```
 
 ### Graph cycle path

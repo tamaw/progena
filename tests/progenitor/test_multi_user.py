@@ -8,7 +8,6 @@ propagation, and in-flight task ordering for same-thread double-submission.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest

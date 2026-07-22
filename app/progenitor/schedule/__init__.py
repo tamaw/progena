@@ -12,17 +12,14 @@ from .engine import (
     parse_schedule_datetime,
     resolve_timezone,
 )
-from .service import ScheduleResult, remove_scheduled_task
 
 __all__ = [
     "SCHEDULED_INPUT_PREFIX",
-    "ScheduleResult",
     "Scheduler",
     "default_timezone_name",
     "emit_scheduled_completion",
     "enqueue_due_schedule_entries",
     "get_due_schedule_ids",
     "parse_schedule_datetime",
-    "remove_scheduled_task",
     "resolve_timezone",
 ]
