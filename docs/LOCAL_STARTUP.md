@@ -134,9 +134,11 @@ curl -s http://localhost:8080/health
 curl -s http://localhost:8080/.well-known/agent-card.json | jq '{name, version, skills: [.skills[].id]}'
 ```
 
-When the progenitor runtime is running, it auto-discovers this agent (it scans `app/agents/`),
-registers it into `data/config/agents.json`, and the backend then surfaces it on the Agents page
-under the **A2A agents** group.
+When the progenitor runtime is running, it auto-discovers this agent by scanning
+`app/agents/`, registers it in the Postgres-backed `registry` document, and
+exposes the result to the agent as `/state/agents.json` through the virtual
+filesystem. The backend then surfaces it on the Agents page under the
+**A2A agents** group. No `data/config/agents.json` file is required.
 
 ## Quick checks
 

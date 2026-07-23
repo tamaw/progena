@@ -158,12 +158,15 @@ no response-body token SSE.
 
 ## State and logging
 
-Runtime and backend state is persisted under the configured data stores;
-operational logs are written to the configured log store. State changes that are
-relevant to the browser are represented as typed canonical stream events after
-persistence. Streaming chat content is transient transport data unless it is
-persisted into the underlying conversation state and later surfaced again via
-canonical snapshots/detail loads.
+Runtime and backend state, including the Progenitor state documents and
+operational logs, are persisted in the configured Postgres stores. The
+Progenitor agent receives selected documents through a validated virtual
+filesystem (`/state/*.json`, task Markdown files, and workflow JSON paths);
+these are database-backed views, not local files. State changes relevant to the
+browser are represented as typed canonical stream events after persistence.
+Streaming chat content is transient transport data unless it is persisted into
+the underlying conversation state and later surfaced again via canonical
+snapshots/detail loads.
 
 ## Deployment shape
 

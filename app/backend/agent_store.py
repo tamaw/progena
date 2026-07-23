@@ -2,10 +2,10 @@
 
 Agents and their editable graphs are the backend's own data, so they live in a
 separate database on the *same* Postgres server as the Progenitor runtime (only
-the database name differs). The store is seeded from the code-defined DeepAgent
-subagents (``app/progenitor/agent/subagents.py``) and the A2A registry
-(``data/config/agents.json``); live runtime status is merged in at read time by
-the route layer.
+the database name differs). The store is seeded from code-defined DeepAgent
+subagents (``app/progenitor/agent/subagents.py``) and the shared Postgres
+``registry`` document; live runtime status is merged in at read time by the
+route layer.
 """
 
 from __future__ import annotations

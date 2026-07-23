@@ -1,11 +1,14 @@
-# State documents: the mcp/schedule/event/registry/kanban pattern
+# State documents: Postgres records with virtual-file views
 
-This describes the shared pattern behind Progenitor's "state documents" — the
-handful of Postgres-backed JSON blobs (`mcp.json`, `schedule.json`,
-`agents.json`/`registry`, `event_widgets`, kanban board+cards) that are each
-editable from **two independent surfaces**: the agent (as a virtual file) and
-the backend HTTP API (as widget CRUD for the frontend). Read this before adding
-a new document type or "why isn't this abstracted with the others" questions.
+This describes Progenitor's state-document pattern. Runtime state and structured
+logs live in the LangGraph-backed Postgres store; the `.json` names are stable
+virtual-file views exposed to the agent, not files written under the repository's
+state directory. The same documents are editable from two independent surfaces:
+the agent's virtual filesystem and backend HTTP/API operations used by the
+frontend.
+
+Read this before adding a new document type or asking why a document is exposed
+as a virtual file instead of a physical JSON file.
 
 ## Why two surfaces, not one
 
@@ -67,36 +70,31 @@ first.
 
 The one deliberate exception left in the codebase is kanban's
 `_migrate_inline_cards` (`ui_routes.py`) — a precedent from before this rule
-was stated. Do not copy that pattern into new code.
-
 ## Surface 1: agent-facing virtual files (`app/progenitor/agent/state_backend.py`)
 
 `StateFile` is the unit: a virtual file backed by `load`/`save`/`validate`
-callables plus an optional `on_change` hook (e.g. live MCP reload after a
-write). `StateDocumentBackend` is a tiny DeepAgent backend that dispatches
-`aread`/`awrite`/`aedit` across a list of `StateFile`s — that's the entire
-abstraction; there's no per-type special-casing at that layer.
+callables plus an optional `on_change` hook (for example, live MCP reload after
+a write). `StateDocumentBackend` dispatches `aread`/`awrite`/`aedit` across the
+registered documents. A successful write validates the text and persists the
+document through `StateManager` into the Postgres store.
 
-Three of the four current documents (`mcp.json`, `knowledge.json`,
-`agents.json`) are simple get/save pass-throughs and are built with the shared
-`_simple_state_file()` helper:
+The current `/state/` document views are:
 
-```python
-def _simple_state_file(name, *, get, save, validate, default, on_change=None) -> StateFile:
-    async def load() -> JsonDoc:
-        result = await get()
-        return result if isinstance(result, dict) else default
-    return StateFile(name=name, load=load, save=save, validate=validate, on_change=on_change)
-```
+- `mcp.json` — MCP server configuration; agent-writable.
+- `knowledge.json` — knowledge-base settings; agent-writable.
+- `schedule.json` — schedule entries keyed by ID; agent-writable with audit diffing.
+- `agents.json` — registry agents and runtime tools; agent-writable.
+- `health.json` — heartbeat status; read-only and runtime-owned.
 
-`create_schedule_state_file` is **not** built on this helper — it has real
-unique logic that a generic factory would have to special-case away: `id`
-lives only in the dict key (stripped from/re-injected into each entry's
-value), an exactly-one-of `cron_expression`/`scheduled_at` check, and a diff
-against the previous document to emit the same `entry_added`/`entry_removed`/
-`entry_updated` audit-log events that the tool-based mutation path
-(`add_schedule_entry`/etc. in `state/config_store.py`) emits — so the audit
-trail is identical no matter which path made the change.
+The JSON suffix describes the virtual view. It does not imply a local file under
+`data/state`.
+
+Four documents (`mcp.json`, `knowledge.json`, `agents.json`, and `health.json`)
+use the simple get/save shape. Schedule has unique semantics that a generic
+factory would have to special-case: `id` lives in the dict key, exactly one of
+`cron_expression`/`scheduled_at` is required, and changes emit the same
+`entry_added`/`entry_removed`/`entry_updated` audit events as direct
+`StateManager` mutations.
 
 Registration is data-driven in `agent/backends.py`:
 
@@ -106,25 +104,24 @@ state_file_factories = [
     create_knowledge_state_file,
     create_schedule_state_file,
     create_registry_state_file,
+    create_health_state_file,
 ]
 routes["/state/"] = StateDocumentBackend(
     [factory(state_manager) for factory in state_file_factories]
 )
 ```
 
-Kanban is deliberately **not** in this list. `KanbanTaskDirectoryBackend`
-(same file) is a different, fundamentally incompatible architecture: one
-Postgres document per card (`kanban_card:<id>`) plus a separate structure
-document (`board.json`: columns + `card_order`), surfaced as a *directory* of
-per-card `.md` files (YAML frontmatter + markdown body) rather than one big
-JSON blob. Don't try to fold it into `StateDocumentBackend` — the one-file-per-
-document model doesn't fit one-document-per-entry.
+Kanban is deliberately not in this list. `KanbanTaskDirectoryBackend` is a
+different architecture: one Postgres document per card
+(`kanban_card:<id>`) plus a structure document (`board.json` with columns and
+`card_order`), surfaced as per-card `.md` virtual files with YAML frontmatter
+and Markdown bodies. Workflow definitions have their own
+`WorkflowDirectoryBackend` and are exposed as `/state/workflows/<id>.json`.
 
-Every document also gets a matching JSON Schema check
-(`_check_entry_schema`, `data/schemas/*.schema.v1.json`) as an *enforced
-floor* underneath the hand-rolled semantic validation (cron parsing, timestamp
-parsing, etc.) in each `validate_*_document` function — this exists so the
-schema and the code can't silently drift apart.
+JSON Schemas under `data/schemas/` validate entry shapes and workflow
+definitions. The state backend also performs semantic validation such as cron
+parsing and timestamp checks; schema validation is an enforced floor, not a
+replacement for document-specific rules.
 
 ## Surface 2: backend acknowledgement routes (`app/backend/ui_routes.py`)
 
