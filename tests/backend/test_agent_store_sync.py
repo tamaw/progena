@@ -189,6 +189,8 @@ def test_a2a_profile_from_info_maps_card():
     assert profile["id"] == "a2a-observe-agent"
     assert profile["kind"] == "a2a"
     assert profile["group"] == "A2A agents"
+    assert profile["enabled"] is True
+
     assert profile["version"] == "0.2.0"  # card wins over registry "9.9.9"
     assert profile["summary"] == "Live description from card."
     # preferredTransport from the card wins over the registry "http".
@@ -198,6 +200,11 @@ def test_a2a_profile_from_info_maps_card():
     assert [s["id"] for s in profile["skills"]] == ["progenitor_health_report"]
     # A2A agents are read-only: no editable graph attached.
     assert profile["graph"] is None
+
+
+def test_a2a_profile_enabled_follows_registry_document():
+    profile = agent_store.a2a_profile_from_info(_Info(enabled=False))
+    assert profile["enabled"] is False
 
 
 def test_a2a_profile_status_is_verbatim():
