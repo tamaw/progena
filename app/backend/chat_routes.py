@@ -9,8 +9,10 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from .chat_sessions import (
+    CHAT_MESSAGE_PAGE_SIZE,
     ChatCreateRequest,
     ChatDraftRequest,
+    ChatMessagesPageResponse,
     ChatPatchRequest,
     ChatSessionDetail,
     ChatSessionsResponse,
@@ -23,6 +25,7 @@ from .chat_sessions import (
     get_chat_detail,
     list_chat_sessions,
     materialize_chat_metadata,
+    paginate_chat_messages,
     patch_chat_metadata,
 )
 from .document_store import BackendDocumentStore
@@ -206,6 +209,8 @@ def create_chat_router(
         )
         if detail is None:
             raise HTTPException(status_code=404, detail="Chat session not found")
+        page, has_more = paginate_chat_messages(detail.messages, limit=CHAT_MESSAGE_PAGE_SIZE)
+        detail = detail.model_copy(update={"messages": page, "has_more_messages": has_more})
         broadcast_ui_event(
             "chat.session.upserted",
             {"session": detail.model_dump()},
@@ -222,6 +227,37 @@ def create_chat_router(
         return acknowledgement_response(
             request_id, ["chat.session.upserted", "chat.session.selected"]
         )
+
+    @router.get(
+        "/chats/{thread_id}/messages", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def get_chat_messages(
+        thread_id: str,
+        request: Request,
+        before_message_id: str | None = None,
+        limit: int = CHAT_MESSAGE_PAGE_SIZE,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Acknowledge an older-messages page request and publish it on the UI stream."""
+        request_id = request_correlation_id(request, x_request_id)
+        detail = prefer_live_detail(
+            get_chat_detail(get_document_store(), thread_id),
+            current_state_detail(thread_id),
+        )
+        if detail is None:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        page, has_more = paginate_chat_messages(
+            detail.messages, limit=limit, before_message_id=before_message_id
+        )
+        response = ChatMessagesPageResponse(thread_id=thread_id, messages=page, has_more=has_more)
+        broadcast_ui_event(
+            "chat.messages.page.loaded",
+            response.model_dump(),
+            scope="chat",
+            session_id=thread_id,
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["chat.messages.page.loaded"])
 
     @router.patch("/chats/{thread_id}", status_code=202, response_model=UiRequestAcknowledgement)
     async def patch_chat(

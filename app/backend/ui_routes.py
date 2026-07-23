@@ -193,10 +193,24 @@ class PromptFileResponse(BaseModel):
     content: str
 
 
+class PromptSummaryResponse(BaseModel):
+    """Workspace prompt metadata without the file body (list payload)."""
+
+    path: str
+    filename: str
+    directory: str
+    category: str | None = None
+    primary_agent: str | None = None
+    associated_agents: list[str] = Field(default_factory=list)
+    size_bytes: int
+    updated_at: float
+    preview: str
+
+
 class PromptsResponse(BaseModel):
     """Response containing discovered prompts."""
 
-    prompts: list[PromptFileResponse]
+    prompts: list[PromptSummaryResponse]
     total: int
 
 
@@ -216,10 +230,25 @@ class SkillFileResponse(BaseModel):
     content: str
 
 
+class SkillSummaryResponse(BaseModel):
+    """Workspace skill metadata without the file body (list payload)."""
+
+    path: str
+    filename: str
+    directory: str
+    agent: str
+    name: str
+    title: str
+    description: str
+    size_bytes: int
+    updated_at: float
+    preview: str
+
+
 class SkillsResponse(BaseModel):
     """Response containing discovered skills."""
 
-    skills: list[SkillFileResponse]
+    skills: list[SkillSummaryResponse]
     total: int
 
 
@@ -2343,13 +2372,47 @@ async def trigger_workflow(
 
 
 def _mcp_widget_items() -> list[WidgetResponse]:
-    """The MCP-type widgets, used by the /mcp route and the mcp.snapshot event."""
+    """The MCP-type widgets, used by the /mcp route and the mcp.snapshot event.
+
+    List payload strips per-tool schemas and log history (``data.tools``,
+    ``.logs``) — the list/filter/sort UI never reads them; only the selected
+    server's detail view does, fetched on demand via ``GET /mcp/content``.
+    """
     state_reader = get_state_reader()
-    return [
-        _widget_to_response(widget)
-        for widget in state_reader.get_widgets()
-        if widget.get("type") == "mcp"
-    ]
+    items = []
+    for widget in state_reader.get_widgets():
+        if widget.get("type") != "mcp":
+            continue
+        response = _widget_to_response(widget)
+        lean_data = {
+            key: value for key, value in response.data.items() if key not in ("tools", "logs")
+        }
+        items.append(response.model_copy(update={"data": lean_data, "logs": []}))
+    return items
+
+
+def _broadcast_mcp_server_detail(widget_id: str, *, request_id: str | None = None) -> bool:
+    """Re-publish one MCP server's full detail (tools + logs) on the UI stream.
+
+    Returns ``False`` (no broadcast) when ``widget_id`` no longer names a live
+    MCP widget, so callers can 404 or silently skip as appropriate.
+    """
+    state_reader = get_state_reader()
+    widget = next(
+        (
+            w
+            for w in state_reader.get_widgets()
+            if w.get("type") == "mcp" and w.get("id") == widget_id
+        ),
+        None,
+    )
+    if widget is None:
+        return False
+    response = _widget_to_response(widget)
+    broadcast_ui_event(
+        "mcp.server.detail.updated", response.model_dump(mode="json"), request_id=request_id
+    )
+    return True
 
 
 @router.get("/widgets", status_code=202, response_model=UiRequestAcknowledgement)
@@ -2385,6 +2448,24 @@ async def get_mcp_servers(
     items = _mcp_widget_items()
     broadcast_mcp_snapshot(items, request_id=request_id)
     return acknowledgement_response(request_id, ["mcp.snapshot"])
+
+
+@router.get("/mcp/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_mcp_server_detail(
+    id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a request for one MCP server's full detail and publish it.
+
+    Mirrors ``GET /workflows/content``/``GET /prompts/content``: the list
+    (``mcp.snapshot``) omits per-tool schemas and log history; the selected
+    server's full body (tools + logs) is fetched on demand here.
+    """
+    request_id = _request_correlation_id(request, x_request_id)
+    if not _broadcast_mcp_server_detail(id, request_id=request_id):
+        raise HTTPException(status_code=404, detail=f"MCP server '{id}' not found")
+    return acknowledgement_response(request_id, ["mcp.server.detail.updated"])
 
 
 @router.post(
@@ -2620,7 +2701,13 @@ async def patch_widget(
         state_reader.save_mcp_tools(tools_doc)
         _broadcast_widget_refresh(state_reader, request_id=request_id)
         broadcast_mcp_snapshot(request_id=request_id)
-        return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
+        event_types = ["widgets.updated", "mcp.snapshot"]
+        server_name_for_tool = str(target.get("server") or "").strip()
+        if server_name_for_tool and _broadcast_mcp_server_detail(
+            f"mcp:{server_name_for_tool}", request_id=request_id
+        ):
+            event_types.append("mcp.server.detail.updated")
+        return acknowledgement_response(request_id, event_types)
 
     if not widget_id.startswith("mcp:"):
         raise HTTPException(
@@ -2677,7 +2764,10 @@ async def patch_widget(
 
     _broadcast_widget_refresh(state_reader, request_id=request_id)
     broadcast_mcp_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["widgets.updated", "mcp.snapshot"])
+    event_types = ["widgets.updated", "mcp.snapshot"]
+    if _broadcast_mcp_server_detail(widget_id, request_id=request_id):
+        event_types.append("mcp.server.detail.updated")
+    return acknowledgement_response(request_id, event_types)
 
 
 @router.delete("/widgets/{widget_id}", status_code=202, response_model=UiRequestAcknowledgement)
@@ -3498,11 +3588,32 @@ async def get_prompts(
     # A catalogue snapshot is global canonical state. Never publish a
     # request-specific subset as a snapshot for all connected clients.
     prompts = [
-        PromptFileResponse.model_validate(prompt, from_attributes=True)
+        PromptSummaryResponse.model_validate(prompt, from_attributes=True)
         for prompt in service.list_prompts()
     ]
     broadcast_prompts_snapshot(prompts, request_id=request_id)
     return acknowledgement_response(request_id, ["prompts.snapshot"])
+
+
+@router.get("/prompts/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_prompt_content(
+    request: Request,
+    path: str = Query(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a prompt-content request and publish its canonical body."""
+    request_id = _request_correlation_id(request, x_request_id)
+    try:
+        record = PromptService().get_prompt(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Prompt '{path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = PromptFileResponse.model_validate(record, from_attributes=True)
+    broadcast_ui_event(
+        "prompt.content.updated", payload.model_dump(mode="json"), request_id=request_id
+    )
+    return acknowledgement_response(request_id, ["prompt.content.updated"])
 
 
 @router.put("/prompts/content", status_code=202, response_model=UiRequestAcknowledgement)
@@ -3514,7 +3625,7 @@ async def update_prompt_content(
     """Persist edits to an existing prompt file."""
     request_id = _request_correlation_id(request, x_request_id)
     try:
-        PromptFileResponse.model_validate(
+        saved = PromptFileResponse.model_validate(
             PromptService().save_prompt(body.path, body.content),
             from_attributes=True,
         )
@@ -3522,8 +3633,11 @@ async def update_prompt_content(
         raise HTTPException(status_code=404, detail=f"Prompt '{body.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_ui_event(
+        "prompt.content.updated", saved.model_dump(mode="json"), request_id=request_id
+    )
     broadcast_prompts_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["prompts.snapshot"])
+    return acknowledgement_response(request_id, ["prompt.content.updated", "prompts.snapshot"])
 
 
 @router.get("/skills", status_code=202, response_model=UiRequestAcknowledgement)
@@ -3538,13 +3652,34 @@ async def get_skills(
         # A catalogue snapshot is global canonical state. Never publish a
         # request-specific subset as a snapshot for all connected clients.
         skills = [
-            SkillFileResponse.model_validate(skill, from_attributes=True)
+            SkillSummaryResponse.model_validate(skill, from_attributes=True)
             for skill in SkillService().list_skills()
         ]
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     broadcast_skills_snapshot(skills, request_id=request_id)
     return acknowledgement_response(request_id, ["skills.snapshot"])
+
+
+@router.get("/skills/content", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_skill_content(
+    request: Request,
+    path: str = Query(...),
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Acknowledge a skill-content request and publish its canonical body."""
+    request_id = _request_correlation_id(request, x_request_id)
+    try:
+        record = SkillService().get_skill(path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Skill '{path}' not found") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    payload = SkillFileResponse.model_validate(record, from_attributes=True)
+    broadcast_ui_event(
+        "skill.content.updated", payload.model_dump(mode="json"), request_id=request_id
+    )
+    return acknowledgement_response(request_id, ["skill.content.updated"])
 
 
 @router.put("/skills/content", status_code=202, response_model=UiRequestAcknowledgement)
@@ -3556,7 +3691,7 @@ async def update_skill_content(
     """Persist edits to an existing skill file."""
     request_id = _request_correlation_id(request, x_request_id)
     try:
-        SkillFileResponse.model_validate(
+        saved = SkillFileResponse.model_validate(
             SkillService().save_skill(body.path, body.content),
             from_attributes=True,
         )
@@ -3564,8 +3699,11 @@ async def update_skill_content(
         raise HTTPException(status_code=404, detail=f"Skill '{body.path}' not found") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_ui_event(
+        "skill.content.updated", saved.model_dump(mode="json"), request_id=request_id
+    )
     broadcast_skills_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["skills.snapshot"])
+    return acknowledgement_response(request_id, ["skill.content.updated", "skills.snapshot"])
 
 
 @router.post("/skills", response_model=UiRequestAcknowledgement, status_code=202)
@@ -3577,7 +3715,7 @@ async def create_skill(
     """Create a new DeepAgent skill file."""
     request_id = _request_correlation_id(request, x_request_id)
     try:
-        SkillFileResponse.model_validate(
+        created = SkillFileResponse.model_validate(
             SkillService().create_skill(body.agent, body.name, body.content),
             from_attributes=True,
         )
@@ -3585,8 +3723,11 @@ async def create_skill(
         raise HTTPException(status_code=409, detail=f"Skill '{exc}' already exists") from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    broadcast_ui_event(
+        "skill.content.updated", created.model_dump(mode="json"), request_id=request_id
+    )
     broadcast_skills_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["skills.snapshot"])
+    return acknowledgement_response(request_id, ["skill.content.updated", "skills.snapshot"])
 
 
 @router.get("/logs", status_code=202, response_model=UiRequestAcknowledgement)
@@ -4479,7 +4620,7 @@ def broadcast_knowledge_snapshot(
 
 
 def broadcast_skills_snapshot(
-    skills: list[SkillFileResponse] | None = None, *, request_id: str | None = None
+    skills: list[SkillSummaryResponse] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current skill list to /api/ui/stream subscribers.
 
@@ -4490,7 +4631,7 @@ def broadcast_skills_snapshot(
     """
     if skills is None:
         skills = [
-            SkillFileResponse.model_validate(skill, from_attributes=True)
+            SkillSummaryResponse.model_validate(skill, from_attributes=True)
             for skill in SkillService().list_skills()
         ]
     payload = [item.model_dump(mode="json") for item in skills]
@@ -4498,7 +4639,7 @@ def broadcast_skills_snapshot(
 
 
 def broadcast_prompts_snapshot(
-    prompts: list[PromptFileResponse] | None = None, *, request_id: str | None = None
+    prompts: list[PromptSummaryResponse] | None = None, *, request_id: str | None = None
 ) -> UiEventEnvelope:
     """Broadcast the current prompt list to /api/ui/stream subscribers.
 
@@ -4509,7 +4650,7 @@ def broadcast_prompts_snapshot(
     """
     if prompts is None:
         prompts = [
-            PromptFileResponse.model_validate(prompt, from_attributes=True)
+            PromptSummaryResponse.model_validate(prompt, from_attributes=True)
             for prompt in PromptService().list_prompts()
         ]
     payload = [item.model_dump(mode="json") for item in prompts]

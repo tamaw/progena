@@ -38,10 +38,10 @@ import {
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
   PaneSection,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
@@ -1554,24 +1554,25 @@ function WorkflowsInner() {
               <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
               <PaneListSortButton title="Sort workflows" options={SORTS} value={sortMode} onSelect={setSortMode} />
             </PaneListToolbar>
-            <PaneListScroll className="workspace-sidebar__scroll">
-              {workflowsState.loading && !workflowsState.loaded ? <div className="prompts-empty-state">Loading workflows...</div> : null}
-              {workflowsState.error && !workflows.length ? <div className="prompts-empty-state">Failed to load workflows.</div> : null}
-              {!workflowsState.loading && !visibleItems.length ? <div className="prompts-empty-state">No workflows match the current filters.</div> : null}
-              {!workflowsState.loading && visibleItems.length ? (
-                <div className="workflows-list">
-                  {visibleItems.map((item) => (
-                    <WorkflowRow
-                      key={item.id}
-                      item={item}
-                      latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
-                      selectedPath={selectedPath}
-                      onSelect={handleSelectWorkflow}
-                    />
-                  ))}
-                </div>
-              ) : null}
-            </PaneListScroll>
+            {workflowsState.loading && !workflowsState.loaded ? <div className="prompts-empty-state">Loading workflows...</div> : null}
+            {workflowsState.error && !workflows.length ? <div className="prompts-empty-state">Failed to load workflows.</div> : null}
+            {!workflowsState.loading && !visibleItems.length ? <div className="prompts-empty-state">No workflows match the current filters.</div> : null}
+            {!workflowsState.loading && visibleItems.length ? (
+              <PaneListVirtualized
+                className="workspace-sidebar__scroll"
+                items={visibleItems}
+                getItemKey={(item) => item.id}
+                estimatedItemHeight={72}
+                renderItem={(item) => (
+                  <WorkflowRow
+                    item={item}
+                    latestRun={workflowRuns.find((run) => run.workflow_id === item.id) || null}
+                    selectedPath={selectedPath}
+                    onSelect={handleSelectWorkflow}
+                  />
+                )}
+              />
+            ) : null}
             <PaneListFooter>
               <span><span className="num">{workflows.length}</span> workflows</span>
             </PaneListFooter>

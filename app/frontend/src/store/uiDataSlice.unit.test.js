@@ -16,6 +16,7 @@ import reducer, {
   requestChatSessionReconciliation,
   updateChatSessionMetadata,
   selectActiveAgentProfile,
+  selectActiveChatSessionState,
   selectAgentProfiles,
   selectChatIndicators,
   selectChatReconciliationState,
@@ -23,6 +24,8 @@ import reducer, {
   selectGeneratingChatIds,
   selectChatSessions,
   selectKanbanBoard,
+  selectPromptContentEntry,
+  selectSkillContentEntry,
   selectTaskActivityEntry,
   selectTaskContentEntry,
   selectUnreadChatIds,
@@ -36,6 +39,7 @@ import reducer, {
   selectInboxState,
   selectInboxUnreadCount,
   selectMcpServers,
+  selectMcpServerDetail,
   selectMcpState,
   selectSchedules,
   selectUnseenNavRoutes,
@@ -308,6 +312,8 @@ describe('applyUiEvent reducer', () => {
       loading: false,
       error: null,
       requestId: null,
+      hasMoreMessages: false,
+      pendingOlderPage: null,
     });
   });
 
@@ -341,6 +347,18 @@ describe('applyUiEvent reducer', () => {
     expect(selectMcpState({ uiData: s }).error).toBe(null);
   });
 
+  it('mcp.server.detail.updated caches one server\'s full body (tools + logs) by id', () => {
+    const detail = {
+      id: 'mcp:jina',
+      type: 'mcp',
+      name: 'jina',
+      data: { tools: [{ name: 'search', enabled: true }], logs: [{ message: 'connected' }] },
+    };
+    const s = reducer(undefined, applyUiEvent({ type: 'mcp.server.detail.updated', payload: detail }));
+    expect(selectMcpServerDetail({ uiData: s }, 'mcp:jina')).toEqual(detail);
+    expect(selectMcpServerDetail({ uiData: s }, 'mcp:other')).toBe(null);
+  });
+
   it('kanban.snapshot replaces the live tasks board', () => {
     const board = {
       id: 'progenitor-kanban',
@@ -365,6 +383,65 @@ describe('applyUiEvent reducer', () => {
     }));
     expect(selectTaskContentEntry({ uiData: s }, 'card_1')?.content).toBe('# Ship Tasks');
     expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
+  });
+
+  it('prompt.content.updated and skill.content.updated cache full bodies by path', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'prompt.content.updated',
+      payload: { path: 'builder_agent/think.md', content: '# Think prompt' },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'skill.content.updated',
+      payload: { path: 'progenitor/runtime-inspection/SKILL.md', content: '# Runtime inspection' },
+    }));
+    expect(selectPromptContentEntry({ uiData: s }, 'builder_agent/think.md')?.content).toBe('# Think prompt');
+    expect(selectSkillContentEntry({ uiData: s }, 'progenitor/runtime-inspection/SKILL.md')?.content).toBe('# Runtime inspection');
+    expect(selectPromptContentEntry({ uiData: s }, 'unknown.md')).toBeNull();
+  });
+
+  it('chat.session.selected caps hasMoreMessages and chat.messages.page.loaded prepends an older page', () => {
+    let s = reducer(undefined, requestChatSessionDetail.pending('REQ1', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'REQ1',
+        session: { thread_id: 'a', messages: [{ id: 'm50', content: 'newest' }], has_more_messages: true },
+      },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).hasMoreMessages).toBe(true);
+    expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toBeNull();
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.messages.page.loaded',
+      payload: {
+        thread_id: 'a',
+        request_id: 'REQ2',
+        messages: [{ id: 'm0', content: 'oldest' }],
+        has_more: false,
+      },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).hasMoreMessages).toBe(false);
+    expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toEqual({
+      requestId: 'REQ2',
+      messages: [{ id: 'm0', content: 'oldest' }],
+    });
+  });
+
+  it('chat.messages.page.loaded is ignored for a thread that is not currently active', () => {
+    let s = reducer(undefined, requestChatSessionDetail.pending('REQ1', {
+      chatsUrl: '/x', threadId: 'a', requestId: 'REQ1',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: { request_id: 'REQ1', session: { thread_id: 'a', messages: [] } },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.messages.page.loaded',
+      payload: { thread_id: 'b', messages: [{ id: 'm0' }], has_more: false },
+    }));
+    expect(selectActiveChatSessionState({ uiData: s }).pendingOlderPage).toBeNull();
   });
 
   it('workflow snapshot/detail/run events populate the workflows domain', () => {

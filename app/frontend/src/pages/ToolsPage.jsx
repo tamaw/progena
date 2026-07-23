@@ -6,11 +6,10 @@ import {
   PaneList,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -24,7 +23,7 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import { useWidgetsApi } from '../hooks/api/useWidgetsApi';
 import { useConfig } from '../context/ConfigContext';
-import { fetchMcp, selectMcpServers, selectMcpState } from '../store/uiDataSlice';
+import { fetchMcp, fetchMcpServerDetail, selectMcpServers, selectMcpServerDetail, selectMcpState } from '../store/uiDataSlice';
 import { selectRealtime } from '../store/realtimeSlice';
 
 const SERVER_FILTERS = ['All', 'Connected', 'Disabled', 'Errors'];
@@ -202,6 +201,9 @@ export default function ToolsPage() {
     [selectedServerId, servers, visibleServers],
   );
   const selectedStatus = selectedServer ? statusOf(selectedServer) : 'disabled';
+  // Per-tool schemas and log history are detail-only fields, fetched on
+  // demand per server (the list snapshot carries scalar fields only).
+  const serverDetail = useSelector((state) => selectMcpServerDetail(state, selectedServer?.id));
 
   // Keep the URL in sync with whichever server is actually selected. A routed
   // server id stays authoritative; if it disappears after hydration, the effect
@@ -221,6 +223,16 @@ export default function ToolsPage() {
     if (!realtime.connected) return;
     void refreshMcp().catch((loadError) => setError(loadError.message || 'Failed to load MCP servers.'));
   }, [realtime.connected, refreshMcp]);
+  // Fetch the selected server's full detail (tools + logs) once per id; the
+  // cache is refreshed automatically by `mcp.server.detail.updated` after any
+  // enable/disable or config mutation, so no re-fetch is needed post-toggle.
+  useEffect(() => {
+    const id = selectedServer?.id;
+    if (!id || !realtime.connected || serverDetail) return;
+    dispatch(fetchMcpServerDetail({ mcpUrl, id })).catch(() => {
+      // Leave the detail placeholder showing; the next selection/reconnect retries.
+    });
+  }, [dispatch, mcpUrl, realtime.connected, selectedServer?.id, serverDetail]);
   useEffect(() => {
     if (!mcpState.loaded || !selectedServerId) {
       return;
@@ -336,9 +348,10 @@ export default function ToolsPage() {
 
   // DB-backed tools surfaced by the runtime (with per-tool enabled flags),
   // discovered when the runtime initialises / refreshes its MCP context.
-  const serverTools = Array.isArray(selectedServer?.tools) ? selectedServer.tools : [];
+  const isDetailLoading = Boolean(selectedServer) && !serverDetail;
+  const serverTools = Array.isArray(serverDetail?.data?.tools) ? serverDetail.data.tools : [];
   const enabledToolCount = serverTools.filter((tool) => tool.enabled !== false).length;
-  const selectedLogs = Array.isArray(selectedServer?.logs) ? selectedServer.logs.slice(0, 5) : [];
+  const selectedLogs = Array.isArray(serverDetail?.data?.logs) ? serverDetail.data.logs.slice(0, 5) : [];
 
   return (
     <PageShell className="tools-page">
@@ -355,40 +368,42 @@ export default function ToolsPage() {
           <PaneListSortButton title="Sort servers" options={SERVER_SORTS} value={sortMode} onSelect={setSortMode} />
         </PaneListToolbar>
 
-        <PaneListScroll>
-          {servers.length === 0 ? (
-            <div className="tools-empty-state">
-              No MCP servers configured. Use “+ New” to ask Progenitor to connect one.
-            </div>
-          ) : visibleServers.length === 0 ? (
-            <div className="tools-empty-state">No MCP servers match this view.</div>
-          ) : (
-            GROUP_ORDER.map((group) => (
-              groupedServers[group]?.length ? (
-                <PaneListGroup key={group} title={group} count={groupedServers[group].length}>
-                  {groupedServers[group].map((server) => {
-                    const status = statusOf(server);
-                    return (
-                      <button
-                        type="button"
-                        key={server.id}
-                        className={`sess-row tools-pane-row tools-pane-row--${status} ${selectedServer?.id === server.id ? 'is-selected' : ''}`}
-                        aria-label={`${server.name}, ${statusLabel(status)}, ${server.transport || 'mcp'}`}
-                        onClick={() => navigate(buildEntityPath('/tools', server.id, server.name), { replace: true })}
-                      >
-                        <span className="sess-row__top">
-                          <span className={`sess-row__dot tools-status-dot--${status}`} />
-                          <span className="sess-row__agent tools-pane-row__name">{server.name}</span>
-                        </span>
-                        <span className="sess-row__title">{server.description || server.url || '—'}</span>
-                      </button>
-                    );
-                  })}
-                </PaneListGroup>
-              ) : null
-            ))
-          )}
-        </PaneListScroll>
+        {servers.length === 0 ? (
+          <div className="tools-empty-state">
+            No MCP servers configured. Use “+ New” to ask Progenitor to connect one.
+          </div>
+        ) : visibleServers.length === 0 ? (
+          <div className="tools-empty-state">No MCP servers match this view.</div>
+        ) : (
+          <PaneListVirtualized
+            groups={GROUP_ORDER
+              .filter((group) => groupedServers[group]?.length)
+              .map((group) => ({
+                key: group,
+                title: group,
+                items: groupedServers[group],
+              }))}
+            getItemKey={(server) => server.id}
+            estimatedItemHeight={70}
+            renderItem={(server) => {
+              const status = statusOf(server);
+              return (
+                <button
+                  type="button"
+                  className={`sess-row tools-pane-row tools-pane-row--${status} ${selectedServer?.id === server.id ? 'is-selected' : ''}`}
+                  aria-label={`${server.name}, ${statusLabel(status)}, ${server.transport || 'mcp'}`}
+                  onClick={() => navigate(buildEntityPath('/tools', server.id, server.name), { replace: true })}
+                >
+                  <span className="sess-row__top">
+                    <span className={`sess-row__dot tools-status-dot--${status}`} />
+                    <span className="sess-row__agent tools-pane-row__name">{server.name}</span>
+                  </span>
+                  <span className="sess-row__title">{server.description || server.url || '—'}</span>
+                </button>
+              );
+            }}
+          />
+        )}
 
         <PaneListFooter>
           <span><span className="num">{totals.connected}</span> connected</span>
@@ -446,8 +461,8 @@ export default function ToolsPage() {
                 <MetricCard label="Transport" value={selectedServer.transport || 'mcp'} detail="protocol" />
                 <MetricCard
                   label="Tools"
-                  value={serverTools.length ? `${enabledToolCount}/${serverTools.length}` : '—'}
-                  detail={serverTools.length ? 'enabled' : 'none discovered'}
+                  value={isDetailLoading ? '…' : (serverTools.length ? `${enabledToolCount}/${serverTools.length}` : '—')}
+                  detail={isDetailLoading ? 'loading' : (serverTools.length ? 'enabled' : 'none discovered')}
                 />
                 <MetricCard
                   label="Updated"
@@ -531,9 +546,11 @@ export default function ToolsPage() {
                     );
                   }) : (
                     <div className="tools-empty-state">
-                      {selectedServer.enabled === false
-                        ? 'Enable the server to discover its tools.'
-                        : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.'}
+                      {isDetailLoading
+                        ? 'Loading tools…'
+                        : (selectedServer.enabled === false
+                          ? 'Enable the server to discover its tools.'
+                          : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.')}
                     </div>
                   )}
                 </div>
@@ -552,7 +569,9 @@ export default function ToolsPage() {
                       <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
                     </article>
                   )) : (
-                    <div className="tools-empty-state">No recent activity for this server.</div>
+                    <div className="tools-empty-state">
+                      {isDetailLoading ? 'Loading activity…' : 'No recent activity for this server.'}
+                    </div>
                   )}
                 </div>
               </section>

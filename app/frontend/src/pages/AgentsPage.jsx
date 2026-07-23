@@ -16,11 +16,10 @@ import {
   PaneList,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -558,40 +557,31 @@ function AgentsPage({ variant = 'agents' }) {
             onSelect={setSortMode}
           />
         </PaneListToolbar>
-        <PaneListScroll>
-          {visibleAgents.length ? (
-            sections.map((section) => {
-              const rows = section.agents.map((agent) => (
-                isSequences ? (
-                  <SequenceRow
-                    key={agent.id}
-                    agent={agent}
-                    selected={selectedAgent?.id === agent.id}
-                    onSelect={selectAgent}
-                  />
-                ) : (
-                  <AgentRow
-                    key={agent.id}
-                    agent={agent}
-                    selected={selectedAgent?.id === agent.id}
-                    onSelect={selectAgent}
-                  />
-                )
-              ));
-              return section.title ? (
-                <PaneListGroup key={section.key} title={section.title} count={section.agents.length}>
-                  {rows}
-                </PaneListGroup>
+        {visibleAgents.length ? (
+          <PaneListVirtualized
+            groups={sections}
+            getGroupItems={(section) => section.agents}
+            renderItem={(agent) => (
+              isSequences ? (
+                <SequenceRow
+                  agent={agent}
+                  selected={selectedAgent?.id === agent.id}
+                  onSelect={selectAgent}
+                />
               ) : (
-                <div key={section.key}>{rows}</div>
-              );
-            })
-          ) : (
-            <div className="agents-empty-state">
-              {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}
-            </div>
-          )}
-        </PaneListScroll>
+                <AgentRow
+                  agent={agent}
+                  selected={selectedAgent?.id === agent.id}
+                  onSelect={selectAgent}
+                />
+              )
+            )}
+          />
+        ) : (
+          <div className="agents-empty-state">
+            {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}
+          </div>
+        )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{taskCount}</span> tasks</span>

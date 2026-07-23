@@ -14,10 +14,10 @@ import DetailHeader, {
 import {
   PaneList,
   PaneListFilters,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { useConfig } from '../context/ConfigContext';
 import { renderMarkdownToHtml } from '../lib/markdown';
@@ -223,13 +223,15 @@ export default function InboxPage() {
             onSelect={setSort}
           />
         </PaneListToolbar>
-        <PaneListScroll>
-          {visibleMessages.length === 0 ? (
-            <div className="chat-pane-empty">{listEmptyMessage}</div>
-          ) : (
-            visibleMessages.map((message) => (
+        {visibleMessages.length === 0 ? (
+          <div className="chat-pane-empty">{listEmptyMessage}</div>
+        ) : (
+          <PaneListVirtualized
+            items={visibleMessages}
+            getItemKey={(message) => message.id}
+            estimatedItemHeight={70}
+            renderItem={(message) => (
               <article
-                key={message.id}
                 className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${message.read ? '' : ' is-unread'}`}
                 role="button"
                 tabIndex={0}
@@ -254,9 +256,9 @@ export default function InboxPage() {
                   <div className="chat-session-card__preview">{previewText(message.body)}</div>
                 ) : null}
               </article>
-            ))
-          )}
-        </PaneListScroll>
+            )}
+          />
+        )}
       </PaneList>
 
       <DetailPane className="inbox-detail" label="Inbox message">

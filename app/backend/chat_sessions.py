@@ -151,6 +151,44 @@ class ChatSessionSummary(BaseModel):
 
 class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
+    has_more_messages: bool = False
+
+
+CHAT_MESSAGE_PAGE_SIZE = 50
+
+
+def paginate_chat_messages(
+    messages: list[ChatMessage],
+    *,
+    limit: int = CHAT_MESSAGE_PAGE_SIZE,
+    before_message_id: str | None = None,
+) -> tuple[list[ChatMessage], bool]:
+    """Slice one page out of a chronological (oldest-first) message list.
+
+    ``before_message_id=None`` returns the newest ``limit`` messages (initial
+    hydration). Otherwise returns the ``limit`` messages immediately preceding
+    the message with that id (older-page pagination for "load earlier").
+    If ``before_message_id`` is not found (e.g. the checkpoint changed under a
+    stale cursor), falls back to the oldest ``limit`` messages so the caller
+    still makes forward progress instead of erroring.
+    """
+    if not messages:
+        return [], False
+    if before_message_id is None:
+        end = len(messages)
+    else:
+        end = next(
+            (index for index, message in enumerate(messages) if message.id == before_message_id),
+            limit,
+        )
+    start = max(0, end - limit)
+    return messages[start:end], start > 0
+
+
+class ChatMessagesPageResponse(BaseModel):
+    thread_id: str
+    messages: list[ChatMessage]
+    has_more: bool
 
 
 class ChatSessionsResponse(BaseModel):

@@ -27,12 +27,11 @@ import {
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
   PaneSection,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import NumberStepper from '../components/common/NumberStepper';
@@ -573,26 +572,26 @@ export default function KnowledgePage() {
               />
             </PaneListToolbar>
 
-            <PaneListScroll>
-              {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
-              {!visibleBases.length && loaded ? (
-                <div className="task-empty">
-                  {bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}
-                </div>
-              ) : null}
-              {groups.map((group) => (
-                <PaneListGroup key={group.key} title={group.label} count={group.bases.length}>
-                  {group.bases.map((base) => (
-                    <KnowledgeCard
-                      key={base.id}
-                      base={base}
-                      selected={selectedBase?.id === base.id}
-                      onSelect={(id) => navigate(buildEntityPath('/knowledge', id, base.name), { replace: true })}
-                    />
-                  ))}
-                </PaneListGroup>
-              ))}
-            </PaneListScroll>
+            {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
+            {!visibleBases.length && loaded ? (
+              <div className="task-empty">
+                {bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}
+              </div>
+            ) : null}
+            {groups.length ? (
+              <PaneListVirtualized
+                groups={groups.map((group) => ({ ...group, items: group.bases }))}
+                getItemKey={(base) => base.id}
+                estimatedItemHeight={72}
+                renderItem={(base) => (
+                  <KnowledgeCard
+                    base={base}
+                    selected={selectedBase?.id === base.id}
+                    onSelect={(id) => navigate(buildEntityPath('/knowledge', id, base.name), { replace: true })}
+                  />
+                )}
+              />
+            ) : null}
 
             <PaneListFooter>
               <span><span className="num">{bases.length}</span> stores</span>

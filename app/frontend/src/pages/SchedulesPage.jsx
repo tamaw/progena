@@ -7,11 +7,10 @@ import {
   PaneList,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -622,30 +621,31 @@ function SchedulesPage() {
             onSelect={setSortMode}
           />
         </PaneListToolbar>
-        <PaneListScroll>
-          {loading ? (
-            <div className="agents-empty-state">Loading schedules…</div>
-          ) : error && !schedules.length ? (
-            <div className="agents-empty-state">{error}</div>
-          ) : visibleSchedules.length ? (
-            order.map((group) =>
-              groupedSchedules[group]?.length ? (
-                <PaneListGroup key={group} title={group} count={groupedSchedules[group].length}>
-                  {groupedSchedules[group].map((schedule) => (
-                    <ScheduleRow
-                      key={schedule.id}
-                      schedule={schedule}
-                      selected={selectedSchedule?.id === schedule.id}
-                      onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
-                    />
-                  ))}
-                </PaneListGroup>
-              ) : null,
-            )
-          ) : (
-            <div className="agents-empty-state">No schedules match this view.</div>
-          )}
-        </PaneListScroll>
+        {loading ? (
+          <div className="agents-empty-state">Loading schedules…</div>
+        ) : error && !schedules.length ? (
+          <div className="agents-empty-state">{error}</div>
+        ) : visibleSchedules.length ? (
+          <PaneListVirtualized
+            groups={order
+              .filter((group) => groupedSchedules[group]?.length)
+              .map((group) => ({
+                key: group,
+                title: group,
+                items: groupedSchedules[group],
+              }))}
+            getItemKey={(schedule) => schedule.id}
+            renderItem={(schedule) => (
+              <ScheduleRow
+                schedule={schedule}
+                selected={selectedSchedule?.id === schedule.id}
+                onSelect={() => navigate(buildEntityPath('/schedules', schedule.id, schedule.name), { replace: true })}
+              />
+            )}
+          />
+        ) : (
+          <div className="agents-empty-state">No schedules match this view.</div>
+        )}
         <PaneListFooter>
           <span>
             <span className="num">{activeCount}</span> active
