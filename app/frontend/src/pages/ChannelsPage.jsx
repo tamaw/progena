@@ -4,8 +4,7 @@ import {
   PaneListToolbar,
   PaneListSearch,
   PaneListSortButton,
-  PaneListScroll,
-  PaneListGroup,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -209,24 +208,24 @@ export default function ChannelsPage() {
           <PaneListSearch value={search} placeholder="Search channels..." onChange={setSearch} />
           <PaneListSortButton>Category</PaneListSortButton>
         </PaneListToolbar>
-        <PaneListScroll>
-          {visibleChannels.length ? (
-            groups.order.map((category) => (
-              <PaneListGroup key={category} title={category} count={groups.byKey[category].length}>
-                {groups.byKey[category].map((channel) => (
-                  <ChannelRow
-                    key={channel.id}
-                    channel={channel}
-                    selected={selected?.id === channel.id}
-                    onSelect={setSelectedId}
-                  />
-                ))}
-              </PaneListGroup>
-            ))
-          ) : (
-            <div className="agents-empty-state">No channels match this view.</div>
-          )}
-        </PaneListScroll>
+        {visibleChannels.length ? (
+          <PaneListVirtualized
+            groups={groups.order.map((category) => ({
+              key: category,
+              title: category,
+              items: groups.byKey[category],
+            }))}
+            renderItem={(channel) => (
+              <ChannelRow
+                channel={channel}
+                selected={selected?.id === channel.id}
+                onSelect={setSelectedId}
+              />
+            )}
+          />
+        ) : (
+          <div className="agents-empty-state">No channels match this view.</div>
+        )}
       </PaneList>
 
       {selected ? (

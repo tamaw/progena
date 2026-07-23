@@ -24,16 +24,19 @@ export function useSnapshotSave({
   items, snapshotRequestId, pendingSave, dispatch, thunk, buildArgs,
   path, content, savedContent, saving, realtimeConnected,
   setDraftContent, setSaving, setPendingSave, setStatusMessage, setError,
+  resolveSavedContent,
 }) {
   useEffect(() => {
     if (!pendingSave?.acknowledged || snapshotRequestId !== pendingSave.requestId) return;
     const updatedItem = items.find((item) => item.path === pendingSave.path);
     if (!updatedItem) return;
-    setDraftContent(updatedItem.content || '');
+    const resolvedContent = resolveSavedContent ? resolveSavedContent(pendingSave.path) : updatedItem.content;
+    if (resolvedContent === undefined) return; // content cache hasn't caught up yet; effect re-runs when it does
+    setDraftContent(resolvedContent || '');
     setSaving(false);
     setPendingSave(null);
     setStatusMessage(`Saved ${updatedItem.path}.`);
-  }, [items, pendingSave, setDraftContent, setPendingSave, setSaving, setStatusMessage, snapshotRequestId]);
+  }, [items, pendingSave, resolveSavedContent, setDraftContent, setPendingSave, setSaving, setStatusMessage, snapshotRequestId]);
 
   useEffect(() => {
     if (!pendingSave || realtimeConnected) {

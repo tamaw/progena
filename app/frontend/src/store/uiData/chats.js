@@ -17,6 +17,8 @@ const emptyActive = () => ({
   loading: false,
   error: null,
   requestId: null,
+  hasMoreMessages: false,
+  pendingOlderPage: null,
 });
 
 const emptyReconciliation = () => ({
@@ -153,6 +155,16 @@ export const fetchChatSessions = createAcknowledgedThunk('uiData/fetchChatSessio
 export const requestChatSessionDetail = createAcknowledgedThunk('uiData/requestChatSessionDetail', async ({ chatsUrl, threadId }, { requestId }) => {
   const acknowledgement = await requestAcknowledged(
     withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}`, { request_id: requestId }),
+    { requestId },
+  );
+  return { ...acknowledgement, threadId };
+});
+export const fetchChatMessages = createAcknowledgedThunk('uiData/fetchChatMessages', async ({ chatsUrl, threadId, beforeMessageId, limit }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${chatsUrl}/${encodeURIComponent(threadId)}/messages`, {
+      ...(beforeMessageId ? { before_message_id: beforeMessageId } : {}),
+      ...(limit ? { limit: String(limit) } : {}),
+    }),
     { requestId },
   );
   return { ...acknowledgement, threadId };
@@ -351,6 +363,18 @@ export const eventHandlers = {
     state.chats.active.loading = false;
     state.chats.active.error = null;
     state.chats.active.requestId = payload.request_id || state.chats.active.requestId;
+    state.chats.active.hasMoreMessages = Boolean(payload.session?.has_more_messages);
+    state.chats.active.pendingOlderPage = null;
+  },
+  'chat.messages.page.loaded': (state, payload) => {
+    if (payload?.thread_id !== state.chats.active.threadId) {
+      return;
+    }
+    state.chats.active.hasMoreMessages = Boolean(payload.has_more);
+    state.chats.active.pendingOlderPage = {
+      requestId: payload.request_id || null,
+      messages: Array.isArray(payload.messages) ? payload.messages : [],
+    };
   },
   'chat.session.deleted': (state, payload) => {
     deleteChatFromList(state.chats, payload.thread_id);

@@ -29,6 +29,7 @@ from fastapi import FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.sse import EventSourceResponse, format_sse_event
+from starlette.middleware.gzip import GZipMiddleware
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
@@ -1001,6 +1002,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Compress finite JSON responses once they exceed a small threshold. Starlette
+# deliberately leaves text/event-stream responses uncompressed so the canonical
+# and request-scoped SSE lanes keep low-latency frame delivery.
+app.add_middleware(
+    GZipMiddleware,
+    minimum_size=1024,
+    compresslevel=6,
+)
+
 
 @app.middleware("http")
 async def request_tracking_middleware(request: Request, call_next):
@@ -1097,6 +1107,33 @@ async def rate_limit_middleware(request: Request, call_next):
     response.headers["X-RateLimit-Limit-Hour"] = str(config.rate_limit_per_hour)
     response.headers["X-RateLimit-Remaining-Hour"] = str(remaining["hour"])
 
+    return response
+
+
+@app.middleware("http")
+async def request_metrics_middleware(request: Request, call_next):
+    """Expose finite-request timing and log transport-level measurements."""
+    started_at = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - started_at) * 1000
+    content_type = response.headers.get("content-type", "")
+    is_event_stream = content_type.startswith("text/event-stream")
+
+    # SSE connections are intentionally excluded: their duration is the
+    # lifetime of the connection, not the cost of producing one response.
+    if not is_event_stream:
+        response.headers["Server-Timing"] = f"app;dur={duration_ms:.2f}"
+        response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
+
+    logger.info(
+        "API request completed: %s %s status=%s duration_ms=%.2f content_length=%s request_id=%s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration_ms,
+        response.headers.get("content-length"),
+        getattr(request.state, "request_id", None),
+    )
     return response
 
 

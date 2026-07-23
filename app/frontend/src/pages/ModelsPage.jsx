@@ -5,8 +5,7 @@ import {
   PaneListToolbar,
   PaneListSearch,
   PaneListSortButton,
-  PaneListScroll,
-  PaneListGroup,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -216,24 +215,25 @@ export default function ModelsPage() {
           <PaneListSearch value={search} placeholder="Search models..." onChange={setSearch} />
           <PaneListSortButton>Provider</PaneListSortButton>
         </PaneListToolbar>
-        <PaneListScroll>
-          {visibleModels.length ? (
-            providerOrder.map((provider) => (
-              <PaneListGroup key={provider} title={provider} count={grouped[provider].length}>
-                {grouped[provider].map((model) => (
-                  <ModelRow
-                    key={model.id}
-                    model={model}
-                    selected={selected?.id === model.id}
-                    onSelect={setSelectedId}
-                  />
-                ))}
-              </PaneListGroup>
-            ))
-          ) : (
-            <div className="agents-empty-state">No models match this view.</div>
-          )}
-        </PaneListScroll>
+        {visibleModels.length ? (
+          <PaneListVirtualized
+            groups={providerOrder.map((provider) => ({
+              key: provider,
+              title: provider,
+              items: grouped[provider],
+            }))}
+            getItemKey={(model) => model.id}
+            renderItem={(model) => (
+              <ModelRow
+                model={model}
+                selected={selected?.id === model.id}
+                onSelect={setSelectedId}
+              />
+            )}
+          />
+        ) : (
+          <div className="agents-empty-state">No models match this view.</div>
+        )}
       </PaneList>
 
       {selected ? (

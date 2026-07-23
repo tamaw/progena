@@ -3,11 +3,10 @@ import {
   PaneList,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -330,32 +329,34 @@ export default function RepositoriesPage() {
           <PaneListSortButton title="Sort">Health</PaneListSortButton>
         </PaneListToolbar>
 
-        <PaneListScroll>
-          {Array.from(groupedRepositories.entries()).map(([group, items]) => (
-            <PaneListGroup key={group} title={group} count={items.length}>
-              {items.map((repository) => (
-                <button
-                  key={repository.id}
-                  type="button"
-                  className={`repo-source-row ${selectedRepository.id === repository.id ? 'is-selected' : ''}`}
-                  onClick={() => setSelectedId(repository.id)}
-                >
-                  <span className={`repo-source-row__mark repo-source-row__mark--${normalizeStatus(repository.status)}`} />
-                  <span className="repo-source-row__top">
-                    <span className="repo-source-row__source">{repository.source}</span>
-                    <span className="repo-source-row__branch">{repository.branch}</span>
-                  </span>
-                  <span className="repo-source-row__age">{repository.updated}</span>
-                  <span className="repo-source-row__title">{repository.name}</span>
-                  <span className="repo-source-row__meta">{repository.changed} changed · {repository.prs} PRs · checks {repository.checks}</span>
-                </button>
-              ))}
-            </PaneListGroup>
-          ))}
-          {filteredRepositories.length === 0 ? (
-            <div className="empty-state small">No repositories match the current source filter.</div>
-          ) : null}
-        </PaneListScroll>
+        <PaneListVirtualized
+          groups={Array.from(groupedRepositories.entries()).map(([group, items]) => ({
+            key: group,
+            title: group,
+            items,
+          }))}
+          getItemKey={(repository) => repository.id}
+          estimatedItemHeight={92}
+          renderItem={(repository) => (
+            <button
+              type="button"
+              className={`repo-source-row ${selectedRepository.id === repository.id ? 'is-selected' : ''}`}
+              onClick={() => setSelectedId(repository.id)}
+            >
+              <span className={`repo-source-row__mark repo-source-row__mark--${normalizeStatus(repository.status)}`} />
+              <span className="repo-source-row__top">
+                <span className="repo-source-row__source">{repository.source}</span>
+                <span className="repo-source-row__branch">{repository.branch}</span>
+              </span>
+              <span className="repo-source-row__age">{repository.updated}</span>
+              <span className="repo-source-row__title">{repository.name}</span>
+              <span className="repo-source-row__meta">{repository.changed} changed · {repository.prs} PRs · checks {repository.checks}</span>
+            </button>
+          )}
+        />
+        {filteredRepositories.length === 0 ? (
+          <div className="empty-state small">No repositories match the current source filter.</div>
+        ) : null}
 
         <PaneListFooter>
           <span>{selectedRepository.branch}</span>

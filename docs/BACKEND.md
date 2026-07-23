@@ -258,16 +258,16 @@ responses never are.
 
 | Domain | Browser routes | Result contract |
 | --- | --- | --- |
-| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected`, `chat.session.deleted` |
+| Chat sessions | `GET/POST /api/ui/chats`; `POST /api/ui/chats/draft`; `GET/PATCH/DELETE /api/ui/chats/{thread_id}`; `GET /api/ui/chats/{thread_id}/messages` | Canonical `ui.event` envelopes: `chat.sessions.snapshot`, `chat.session.created`, `chat.session.metadata.updated`, `chat.session.upserted`, request-correlated `chat.session.selected` (capped to the newest `CHAT_MESSAGE_PAGE_SIZE` messages, with `has_more_messages`), `chat.messages.page.loaded` (older-page pagination), `chat.session.deleted` |
 | Generation | `POST /api/ui/responses`; `GET /api/ui/responses/{request_id}/stream`; `PUT /api/ui/responses/{generation_id}/cancel` | Canonical lifecycle envelopes: `chat.response.started`, `chat.response.completed`, `chat.response.failed`, `chat.response.cancelled`; dedicated response frames: `chat.response.delta`, `chat.response.event`; dedicated transport-only frames: `chat.response.heartbeat`, `chat.response.resync_required`; cancel acknowledgement declares `chat.response.cancel_requested` |
 | Agent profiles | `GET /api/ui/agent-profiles`; `GET /api/ui/agent-profiles/{agent_id}`; `PATCH /api/ui/agent-profiles/{agent_id}/graph` | Canonical `ui.event` envelopes: `agents.snapshot`, `agent.upserted`, request-correlated `agent.selected`, `agent.graph.updated` |
 | Inbox | `GET /api/ui/inbox`; `POST /api/ui/inbox/{message_id}/read`; `DELETE /api/ui/inbox/{message_id}` | Canonical `ui.event` envelopes: `inbox.snapshot`, `inbox.message.upserted`, `inbox.message.deleted` |
 | Knowledge | `GET/PUT /api/ui/knowledge`; `POST /api/ui/knowledge/{base_id}/sources/{source_id}/index`; `GET /api/ui/knowledge/{base_id}/search` | Canonical `ui.event` envelopes: `knowledge.snapshot`, request-scoped `knowledge.search.results` |
 | Workflows | `GET/POST /api/ui/workflows`; `GET/PUT /api/ui/workflows/content`; `DELETE /api/ui/workflows/{workflow_id}`; `POST /api/ui/workflows/{workflow_id}/pause`; `POST /api/ui/workflows/{workflow_id}/resume`; `POST /api/ui/workflows/{workflow_id}/trigger`; `GET /api/ui/workflow-runs` | Canonical `ui.event` envelopes: `workflows.snapshot`, `workflow.updated`, `workflow.deleted`, `workflow.runs.snapshot`, `workflow.run.started`, `workflow.run.updated`, `workflow.run.completed`, `workflow.run.failed` |
-| Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
-| Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | Canonical `ui.event` envelopes: `widgets.updated`, `mcp.snapshot` |
+| Kanban and tasks | `GET /api/ui/kanban`; `POST /api/ui/kanban/cards`; `PATCH/DELETE /api/ui/kanban/cards/{card_id}`; `GET/PUT /api/ui/tasks/{card_id}/content`; `POST /api/ui/tasks/{card_id}/activity` | Canonical `ui.event` envelopes: `kanban.snapshot`, `task.content.updated`, `task.activity.updated` |
+| Widgets and MCP | `GET /api/ui/widgets`; `GET /api/ui/mcp`; `GET /api/ui/mcp/content`; `PATCH/DELETE /api/ui/widgets/{widget_id}`; `POST /api/ui/widgets/{widget_id}/refresh` | Canonical `ui.event` envelopes: `widgets.updated`, `mcp.snapshot` (lean list, no per-tool/log detail), `mcp.server.detail.updated` (full tools/logs for one server) |
 | Schedules and event widgets | `GET/POST /api/ui/schedules`; `POST /api/ui/schedules/{schedule_id}/trigger`; `POST /api/ui/events` | Canonical `ui.event` envelopes: `schedule.snapshot`, `widgets.updated` |
-| Prompts and skills | `GET /api/ui/prompts`; `GET /api/ui/skills`; `PUT /api/ui/prompts/content`; `PUT /api/ui/skills/content`; `POST /api/ui/skills` | Canonical `ui.event` envelopes: `prompts.snapshot`, `skills.snapshot` |
+| Prompts and skills | `GET /api/ui/prompts`; `GET /api/ui/skills`; `GET/PUT /api/ui/prompts/content`; `GET/PUT /api/ui/skills/content`; `POST /api/ui/skills` | Canonical `ui.event` envelopes: `prompts.snapshot`, `skills.snapshot` (lean lists, no file body), `prompt.content.updated`, `skill.content.updated` |
 | Alerts | `GET /api/ui/alerts`; `POST /api/ui/alerts/viewed`; `POST /api/ui/alerts/{alert_id}/dismiss`; `POST /api/ui/alerts/{alert_id}/respond` | Canonical `ui.event` envelopes: `alerts.updated` and `alert` for independently generated alerts |
 | Logs | `GET /api/ui/logs`; `GET /api/ui/logs/sources`; `GET /api/ui/logs/export` | Canonical `ui.event` envelopes: `logs.page.loaded`, `logs.sources.loaded`, `logs.export.started`, `logs.export.chunk`, `logs.export.completed` |
 
@@ -297,8 +297,7 @@ The following are intentionally absent rather than compatibility endpoints:
 - `GET /api/ui/status/snapshot`, `/loops`, `/agents`, `/backlog`, `/schedule`,
   `/tasks`, `/agents/{agent_name}`, `/database/schema`, and
   `/telegram/status`, plus `POST /api/ui/telegram/test`.
-- `GET /api/ui/tasks/{card_id}/content`, `GET /api/ui/prompts/content`,
-  `GET /api/ui/skills/content`, `GET /api/ui/agent-profiles/graph-schema`, and
+- `GET /api/ui/agent-profiles/graph-schema`, and
   the unmounted workspace-only surface, including `/api/ui/workspace`,
   `/api/ui/widget-schemas`, and their consumers.
 - `GET /api/ui/events` and every `/api/ui/status` EventSource variant.

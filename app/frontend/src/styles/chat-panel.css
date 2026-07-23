@@ -1944,6 +1944,34 @@
     margin: 0;
 }
 
+.chat-messages__load-older {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 8px;
+}
+
+.chat-messages__load-older-button {
+    padding: 4px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
+    background: var(--color-bg-secondary);
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.chat-messages__load-older-button:hover:not(:disabled) {
+    border-color: var(--color-border-strong);
+    background: var(--color-bg-hover);
+    color: var(--color-text-primary);
+}
+
+.chat-messages__load-older-button:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
 .chat-loading {
     display: flex;
     align-items: center;
