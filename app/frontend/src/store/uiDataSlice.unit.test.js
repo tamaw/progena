@@ -472,6 +472,20 @@ describe('agent reducers', () => {
     expect(selectAgentProfiles({ uiData: s }).map((a) => a.id)).toEqual(['alpha', 'beta']);
   });
 
+  it('agents.snapshot refreshes the active detail when enabled changes', () => {
+    let s = reducer(undefined, agentsSnapshot(['a2a-greetings']));
+    s = reducer(s, applyUiEvent({
+      type: 'agent.selected',
+      payload: { agent: { id: 'a2a-greetings', enabled: false } },
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'agents.snapshot',
+      payload: { agents: [{ id: 'a2a-greetings', name: 'Greetings', enabled: true }] },
+    }));
+    expect(s.agents.byId['a2a-greetings'].enabled).toBe(true);
+    expect(s.agents.active.detail.enabled).toBe(true);
+  });
+
   it('agent.upserted merges into an existing agent and appends new ones', () => {
     let s = reducer(undefined, agentsSnapshot(['alpha']));
     s = reducer(s, applyUiEvent({ type: 'agent.upserted', payload: { agent: { id: 'alpha', role: 'changed' } } }));

@@ -37,9 +37,8 @@ import { AgentGraphTab } from '../components/agents/AgentGraph';
 import { A2ADetailBody, ACPDetailBody, SubagentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
 
-const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped'];
 
-// The three kinds of agent the "+ New" flow can scaffold. Each maps to one of
+const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
 // the read-only detail bodies above (subagent / a2a / acp) and its own draft
 // field set. Blurbs explain the distinction in the type-picker modal.
 const AGENT_TYPES = [
@@ -124,7 +123,7 @@ function normalizeStatus(status) {
 }
 
 function matchesAgent(agent, filter, search) {
-  const matchesFilter = filter === 'All' || normalizeStatus(agent.status) === filter;
+  const matchesFilter = filter === 'All' || normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter;
   if (!matchesFilter) {
     return false;
   }
@@ -190,14 +189,15 @@ function StatusPill({ status }) {
 }
 
 function AgentRow({ agent, selected, onSelect }) {
+  const status = agent.enabled === false ? 'disabled' : (agent.status || 'draft');
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row agents-agent-row--${agent.status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row agents-agent-row--${status} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(agent.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${agent.status}`} />
+        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} />
         <span className="sess-row__agent agents-agent-row__name">{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
@@ -538,6 +538,7 @@ function AgentsPage({ variant = 'agents' }) {
     })).unwrap();
   }
 
+
   return (
     <PageShell>
       <PaneList label="Agents" className="agents-pane">
@@ -644,7 +645,7 @@ function AgentsPage({ variant = 'agents' }) {
                 </DetailHeaderActions>
               )}
               meta={[
-                <StatusPill key="status" status={selectedAgent.status} />,
+                <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} />,
                 <span key="model" className="sess-detail__model">{selectedAgent.model}</span>,
                 <span key="role" className="muted">{selectedAgent.role}</span>,
                 selectedAgent.url ? (
