@@ -3,15 +3,17 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from file-backed runtime artifacts plus shared backend-managed state:
-- health: system status (cycle_count, idle state, queue stats), persisted in the
-  shared Postgres document store; liveness itself comes from a live IPC heartbeat
-  check, not a stored document (see main.get_progenitor_liveness())
-- agents.json + the shared MCP state document: Registered agents and enabled MCP servers
-- build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
-- current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedules: scheduled tasks, persisted in the shared Postgres document store
-  (system feature, persists beyond user sessions)
+Reads state from the shared Postgres document store used by both the backend
+and Progenitor runtime. The backend exposes state-document changes to the
+frontend through canonical UI events:
+- health: persisted heartbeat status plus a live Progenitor reachability check
+- registry and MCP: registered agents, runtime tools, and enabled MCP servers
+- schedules, knowledge, workflows, kanban, and inbox: Postgres-backed documents
+
+The Progenitor agent sees selected documents as validated virtual files such as
+`/state/agents.json`, `/state/mcp.json`, and `/state/schedule.json`. These names
+are not local filesystem paths; `build_state.json` and `current_state.json` are
+not backend-owned files in the current runtime.
 """
 
 import asyncio

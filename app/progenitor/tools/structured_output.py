@@ -74,7 +74,9 @@ class StructuredOutputTool(BaseSystemTool):
             "- schema_file: a schema name under data/schemas/, OR\n"
             "- json_schema: an inline JSON Schema object\n"
             "- input: (optional) source text to extract/transform\n\n"
-            "To persist the result, write it with the native write/edit file tools."
+            "To persist the result, write it with the native virtual-file "
+            "read/write/edit tools; those writes are validated and stored in "
+            "the configured Postgres document store."
         )
 
     async def execute(self, context: ToolContext) -> ToolResult:

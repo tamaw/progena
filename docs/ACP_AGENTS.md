@@ -23,13 +23,13 @@ registry (Postgres `registry` document — canonical; read-through to the backen
 ### Where the registry lives (database, not the file)
 
 The runtime registry is **database-backed**: `ToolRegistry` reads and writes the
-Postgres `registry` document via the StateManager (`registry/runtime.py`
-`bind_state_manager`). `data/config/agents.json` is **redundant** — it is only read
-**once**, to migrate pre-existing entries into the store when the store is empty
-(e.g. first boot of a new system). After that the database is canonical and the
-file is ignored. Registering through the `register_acp_agent` tool persists to the
-database, so a restart picks it up without touching any file. (With no store bound
-— e.g. in tests — `ToolRegistry` falls back to the JSON file.)
+Postgres `registry` document through `StateManager` (`registry/runtime.py`
+`bind_state_manager`). The agent-facing `/state/agents.json` virtual file is a
+validated view of that same document. It is not a local file under
+`data/config/`. Registering through `register_acp_agent` persists to Postgres,
+so a restart picks it up without touching the filesystem. An unbound
+`ToolRegistry` instance, such as one used in an isolated unit test, starts with
+an in-memory registry and does not provide production persistence.
 
 - **Invocation** — `call_agent` resolves the agent from the registry and dispatches
   by `transport`. ACP runs are dispatched through `app/progenitor/acp/` (a generic
