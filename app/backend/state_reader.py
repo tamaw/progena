@@ -1,9 +1,13 @@
 """
 State Reader Module.
 
-Reads state/config/session files from the Progenitor data directory and log
-files from the logs directory. The backend uses this as an in-memory adapter
-layer; it does not own any durable UI state.
+Reads state documents from the shared Postgres document store and operational
+logs from the configured log store. The backend uses this as a read/write
+adapter layer; Progenitor remains the owner of runtime state semantics.
+
+The virtual `/state/*.json` names are database-backed views, not files under the
+repository's data directory.
+
 """
 
 from __future__ import annotations
@@ -457,6 +461,10 @@ class StateSnapshot:
     cycle_count: int
     thread_id: str | None
     messages_count: int
+    # Content fingerprint of the registry document, so in-place agent edits
+    # (enabled, status, endpoint, card metadata) trigger a live agents snapshot
+    # even when the number of agents is unchanged.
+    registry_fingerprint: str = ""
     build: BuildInfo | None = None
     sessions: SessionSummary | None = None
     # Content fingerprint of the MCP server config. ``tools`` already has one
@@ -864,6 +872,15 @@ class StateReader:
             ),
         ]
 
+    def _registry_fingerprint(self) -> str:
+        """Stable hash of the registry state document."""
+        try:
+            registry_doc = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "registry", {})
+            payload = registry_doc.payload if registry_doc is not None else {}
+        except Exception:
+            return ""
+        return _hash_material(payload)
+
     def _mcp_fingerprint(self) -> str:
         """Stable hash of the MCP config *and* discovered tools/status.
 
@@ -1037,6 +1054,7 @@ class StateReader:
             build=BuildInfo.from_dict(build),
             sessions=self.get_sessions_summary(),
             mcp_fingerprint=self._mcp_fingerprint(),
+            registry_fingerprint=self._registry_fingerprint(),
             knowledge_fingerprint=self._knowledge_fingerprint(),
             schedule_fingerprint=self._schedule_fingerprint(),
             kanban_fingerprint=self._kanban_fingerprint(),
@@ -1873,6 +1891,8 @@ class StateReader:
         if new.schedule_fingerprint != old.schedule_fingerprint:
             return True
         if new.kanban_fingerprint != old.kanban_fingerprint:
+            return True
+        if new.registry_fingerprint != old.registry_fingerprint:
             return True
         if new.health_fingerprint != old.health_fingerprint:
             return True

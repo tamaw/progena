@@ -6133,6 +6133,9 @@ body,
 .agents-agent-row__status--draft {
   background: var(--color-text-muted);
 }
+.agents-agent-row__status--disabled {
+  background: var(--color-text-muted);
+}
 
 .agents-agent-row__name {
   font-weight: 700;
@@ -6454,6 +6457,10 @@ body,
 }
 
 .agents-status-pill--stopped {
+  color: var(--color-text-muted);
+  background: var(--color-bg-tertiary);
+}
+.agents-status-pill--disabled {
   color: var(--color-text-muted);
   background: var(--color-bg-tertiary);
 }

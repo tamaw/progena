@@ -737,6 +737,7 @@ def a2a_profile_from_info(
         "version": version,
         "summary": description,
         "status": str(getattr(info, "status", "") or "unknown"),
+        "enabled": bool(getattr(info, "enabled", True)),
         "prompt": "",
         "skills": _skills_from_card(card),
         "tasks": tasks,

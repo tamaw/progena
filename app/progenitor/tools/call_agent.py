@@ -131,6 +131,8 @@ class CallAgentTool(BaseSystemTool):
 
         if not isinstance(cfg, dict):
             return ToolResult.fail(f"Unknown agent: {agent}")
+        if cfg.get("enabled", True) is False:
+            return ToolResult.fail(f"Agent '{agent}' is disabled")
 
         resolved_name = str(cfg.get("name") or agent or "").strip() or agent
         routing_mode = "explicit" if args.get("agent") or args.get("agent_name") else "auto"
@@ -246,6 +248,8 @@ def _agents_from_registry(tool_registry: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(agent, dict):
             continue
         name = str(agent.get("name") or "").strip()
+        if agent.get("enabled", True) is False:
+            continue
         if not name:
             continue
         mapped[name] = dict(agent)
