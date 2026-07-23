@@ -74,6 +74,7 @@ async def _open_store(
                 database_url,
                 min_size=pc.pop("min_size", 1),
                 max_size=pc.pop("max_size", None),
+                open=False,
                 kwargs={
                     "autocommit": True,
                     "prepare_threshold": 0,
@@ -83,6 +84,7 @@ async def _open_store(
                 **cast(dict, pc),
             ),
         )
+        await pool.open()
         try:
             store = AsyncPostgresStore(conn=pool)
             if setup:

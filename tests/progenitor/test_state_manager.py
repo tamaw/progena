@@ -268,6 +268,27 @@ class TestStateManager:
         assert "jina" in config["mcpServers"]
         assert config["mcpServers"]["jina"]["url"] == "https://x"
 
+    @pytest.mark.asyncio
+    async def test_knowledge_config_reads_and_writes_shared_store(self):
+        """Knowledge settings use the same runtime-store document as the backend."""
+        native_store = FakeLangGraphStore()
+        runtime_store = LangGraphRuntimeStore(native_store)
+        manager = StateManager(runtime_store=runtime_store)
+        await manager.initialize()
+
+        assert await manager.get_knowledge_config() == {"bases": []}
+
+        knowledge_document = {"bases": [{"id": "docs", "name": "Docs"}]}
+        await native_store.aput(
+            STATE_NAMESPACE,
+            "knowledge",
+            {"payload": knowledge_document},
+        )
+        assert await manager.get_knowledge_config() == knowledge_document
+
+        await manager.save_knowledge_config({"bases": []})
+        assert await manager.get_knowledge_config() == {"bases": []}
+
     # ------------------------------------------------------------------
     # Serialized mutations (concurrent tool calls, same turn)
     # ------------------------------------------------------------------

@@ -132,6 +132,7 @@ class StateManager:
             "schedule_runs": [],
             "registry": {},
             "mcp": default_mcp_config_payload(),
+            "knowledge": {"bases": []},
             "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
             "health": {},
@@ -220,6 +221,12 @@ class StateManager:
         """Persist the health document."""
         await self._save_runtime_document("health", payload)
 
+    async def get_health(self) -> dict[str, Any]:
+        """Return the heartbeat-loop health document."""
+        health = await self._runtime_store.get_document("health", {})
+        self._state_cache["health"] = health
+        return dict(health) if isinstance(health, dict) else {}
+
     # ==========================================================================
     # Registry management
     # ==========================================================================
@@ -259,6 +266,23 @@ class StateManager:
 
         normalized = normalize_mcp_config_payload(payload)
         await self._save_runtime_document("mcp", normalized)
+
+    # ==========================================================================
+    # Knowledge configuration
+    # ==========================================================================
+    async def get_knowledge_config(self) -> dict[str, Any]:
+        """Return the knowledge document from the shared runtime store.
+
+        The backend edits this same Postgres document, so read directly from the
+        store rather than the in-memory cache to preserve cross-process changes.
+        """
+        default: dict[str, Any] = {"bases": []}
+        payload = await self._runtime_store.get_document("knowledge", default)
+        return payload if isinstance(payload, dict) else dict(default)
+
+    async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
+        """Persist the knowledge document to the shared runtime store."""
+        await self._save_runtime_document("knowledge", payload)
 
     # ==========================================================================
     # Kanban board
