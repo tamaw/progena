@@ -138,7 +138,12 @@ class StateManager:
             "health": {},
         }
         for name, default in defaults.items():
-            self._state_cache[name] = await self._runtime_store.get_document(name, default)
+            payload = await self._runtime_store.get_document(name, default)
+            if name == "schedule":
+                payload, migrated = self._normalize_schedule_payload(payload)
+                if migrated:
+                    await self._runtime_store.save_document(name, payload)
+            self._state_cache[name] = payload
 
     async def _get_runtime_document(self, name: str) -> Any:
         """Return a cached native-store-backed state document."""
