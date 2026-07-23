@@ -432,8 +432,8 @@ def create_registry_state_file(
     """Build the ``agents.json`` state file backed by the StateManager.
 
     Backs the ``registry`` document (``{"agents": [...], "tools": [...]}``);
-    named ``agents.json`` to match the backend's existing external naming for
-    this document (see ``StateReader._document_for_path``).
+    named ``agents.json`` to match the backend's document store key
+    ``("progenitor", "state", "registry")``.
     """
 
     async def save(doc: JsonDoc) -> None:
@@ -977,22 +977,15 @@ def create_schedule_state_file(
     *,
     on_change: Callable[[], Awaitable[None]] | None = None,
 ) -> StateFile:
-    """Build the ``schedule.json`` state file backed by the StateManager.
+    """Build the ``schedule.json`` virtual file backed by StateManager.
 
     ``StateManager.get_schedule()``/``save_schedule()`` already use the same
-    object-keyed-by-id shape this file exposes to the agent - the only
-    presentation-layer difference is that ``id`` lives solely in the object
-    key here, not duplicated inside each entry's value (matching
-    ``data/schemas/schedule_entry.schema.v1.json``'s documented shape).
-
-    ``save`` diffs the incoming entries against the current on-disk state and
-    emits the same ``log_schedule_event`` audit-trail entries
-    (``entry_added``/``entry_removed``/``entry_updated``) that
-    ``StateManager.add_schedule_entry``/``remove_schedule_entry``/
-    ``update_schedule_entry`` emit, so this agent-facing write path produces
-    the same audit trail regardless of which path made the change. One
-    ``get_schedule`` read + one ``save_schedule`` write + one log call per
-    changed entry - no redundant re-reads.
+    object-keyed-by-id shape this file exposes to the agent. The presentation
+    layer omits ``id`` from each value because the object key is authoritative.
+    Saves diff the incoming document against the current Postgres-backed state
+    and emit the same ``log_schedule_event`` audit entries as direct
+    ``StateManager`` schedule mutations. There is one store read, one store
+    write, and one log call per changed entry - no redundant re-reads.
     """
 
     async def load() -> JsonDoc:

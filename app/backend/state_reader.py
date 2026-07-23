@@ -21,9 +21,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 
-from app.progenitor.config import default_mcp_config_payload, resolve_schedule_config_path
+from app.progenitor.config import default_mcp_config_payload
 from app.progenitor.mcp.loader import (
-    load_mcp_servers,
     normalize_mcp_config_payload,
     resolve_required_env_template,
 )
@@ -44,7 +43,6 @@ from .document_store import (
 
 logger = logging.getLogger(__name__)
 DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
-DEFAULT_STATE_DIR = DEFAULT_DATA_DIR / "state"
 DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[2] / "logs"
 PLAIN_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
@@ -505,110 +503,18 @@ class StateReader:
 
     def __init__(
         self,
-        state_dir: Path | None = None,
-        config_dir: Path | None = None,
-        sessions_dir: Path | None = None,
+        document_store: BackendDocumentStore,
         logs_dir: Path | None = None,
-        document_store: BackendDocumentStore | None = None,
     ):
-        data_dir = Path(os.getenv("PROGENITOR_DATA_DIR", str(DEFAULT_DATA_DIR)))
-        self.state_dir = state_dir or Path(
-            os.getenv("PROGENITOR_STATE_DIR", str(data_dir / "state"))
-        )
-        self.config_dir = config_dir or self.state_dir.parent / "config"
-        self.sessions_dir = sessions_dir or self.state_dir.parent / "sessions"
         self.logs_dir = logs_dir or Path(os.getenv("PROGENITOR_LOG_DIR", str(DEFAULT_LOGS_DIR)))
-        self._cache: dict[str, tuple[float, Any]] = {}
+        self.document_store = document_store
         self._last_snapshot: StateSnapshot | None = None
         self._watchers: list[Callable[[StateSnapshot, str | None], None]] = []
         self._listener: StoreChangeListener | None = None
-        self.document_store = document_store or (
-            get_default_document_store()
-            if state_dir is None
-            and config_dir is None
-            and sessions_dir is None
-            and logs_dir is None
-            else None
-        )
 
     @property
-    def schedule_config_path(self) -> Path:
-        return resolve_schedule_config_path(self.config_dir)
-
     def _resolved_logs_dir(self) -> Path:
         return self.logs_dir.resolve()
-
-    def invalidate(self, *paths: Path) -> None:
-        """Invalidate cached file contents."""
-        if not paths:
-            self._cache.clear()
-            return
-        for path in paths:
-            self._cache.pop(str(Path(path)), None)
-
-    def _read_json(self, filename: str) -> Any:
-        return self._read_json_from_path(self.state_dir / filename)
-
-    def _read_json_from_path(self, filepath: Path) -> Any:
-        filepath = Path(filepath)
-        prefix_key_default = None
-        if self.document_store is not None:
-            prefix_key_default = self._document_for_path(filepath)
-            if prefix_key_default is not None:
-                prefix, key, default = prefix_key_default
-                document = self.document_store.get_document(prefix, key, None)
-                if document is not None:
-                    return document.payload
-        try:
-            if filepath.exists():
-                mtime = filepath.stat().st_mtime
-                cache_key = str(filepath)
-                if cache_key in self._cache:
-                    cached_mtime, cached_data = self._cache[cache_key]
-                    if cached_mtime == mtime:
-                        return cached_data
-
-                content = filepath.read_text(encoding="utf-8")
-                data = json.loads(content)
-                self._cache[cache_key] = (mtime, data)
-                return data
-        except json.JSONDecodeError as e:
-            logger.warning("Invalid JSON in %s: %s", filepath, e)
-            return None
-        except Exception as e:
-            logger.debug("Failed to read %s: %s", filepath, e)
-            return None
-
-        if prefix_key_default is not None:
-            return default
-        return None
-
-    def _write_json_to_path(self, filepath: Path, data: Any) -> bool:
-        """Persist a legacy path-shaped write into the configured document store."""
-        if self.document_store is None:
-            return False
-        prefix_key_default = self._document_for_path(Path(filepath))
-        if prefix_key_default is None:
-            return False
-        prefix, key, _default = prefix_key_default
-        self.document_store.save_document(prefix, key, data)
-        return True
-
-    def _document_for_path(self, filepath: Path) -> tuple[str, str, Any] | None:
-        name = Path(filepath).name
-        if name == "current_state.json":
-            return PROGENITOR_STATE_PREFIX, "current_state", {}
-        if name == "build_state.json":
-            return PROGENITOR_STATE_PREFIX, "build_state", {}
-        if name == "schedule.json":
-            return PROGENITOR_STATE_PREFIX, "schedule", {}
-        if name == "agents.json":
-            return PROGENITOR_STATE_PREFIX, "registry", {}
-        if name == "event_widgets.json":
-            return BACKEND_STATE_PREFIX, "event_widgets", {}
-        if name == "sessions.json":
-            return BACKEND_STATE_PREFIX, "sessions", []
-        return None
 
     def _read_text_lines(self, filepath: Path, limit: int | None = 200) -> list[str]:
         try:
@@ -663,7 +569,8 @@ class StateReader:
         )
 
     def get_registry(self) -> tuple[list[AgentInfo], list[ToolInfo]]:
-        agents_data = self._read_json_from_path(self.config_dir / "agents.json") or {}
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "registry", {})
+        agents_data = document.payload if document is not None else {}
 
         agent_entries: list[dict[str, Any]] = []
         if isinstance(agents_data, dict):
@@ -697,11 +604,8 @@ class StateReader:
         ``("progenitor","state","a2a_tasks")`` document; the backend just reads
         them so the Agents page can show per-agent task history.
         """
-        if self.document_store is not None:
-            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "a2a_tasks", [])
-            doc = document.payload if document is not None else []
-        else:
-            doc = self._read_json_from_path(self.state_dir / "a2a_tasks.json")
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "a2a_tasks", [])
+        doc = document.payload if document is not None else []
         return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
 
     def get_acp_tasks(self) -> list[dict[str, Any]]:
@@ -710,32 +614,12 @@ class StateReader:
         Peer of :meth:`get_a2a_tasks`; Progenitor persists ACP runs to its
         ``("progenitor","state","acp_tasks")`` document.
         """
-        if self.document_store is not None:
-            document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", [])
-            doc = document.payload if document is not None else []
-        else:
-            doc = self._read_json_from_path(self.state_dir / "acp_tasks.json")
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "acp_tasks", [])
+        doc = document.payload if document is not None else []
         return [task for task in doc if isinstance(task, dict)] if isinstance(doc, list) else []
 
     def _registry_tools(self, agents: list[AgentInfo]) -> tuple[list[AgentInfo], list[ToolInfo]]:
-        tools = (
-            self._mcp_tools_from_store()
-            if self.document_store is not None
-            else [
-                ToolInfo.from_dict(
-                    {
-                        "name": server.name,
-                        "description": server.description or f"Remote MCP server at {server.url}",
-                        "enabled": server.enabled,
-                        "kind": "mcp_server",
-                        "status": "stopped" if server.enabled else "disabled",
-                        "transport": server.transport,
-                        "url": server.url,
-                    }
-                )
-                for server in load_mcp_servers(self.get_mcp_config())
-            ]
-        )
+        tools = self._mcp_tools_from_store()
         return agents, tools
 
     def _mcp_tools_from_store(self) -> list[ToolInfo]:
@@ -818,51 +702,39 @@ class StateReader:
         }
 
     def get_mcp_config(self) -> dict[str, Any]:
-        if self.document_store is not None:
-            document = self.document_store.get_document(
-                PROGENITOR_STATE_PREFIX,
-                "mcp",
-                default_mcp_config_payload(),
-            )
-            payload = document.payload if document is not None else default_mcp_config_payload()
-        else:
-            payload = self._cache.get("__mcp_config__", (0.0, default_mcp_config_payload()))[1]
+        document = self.document_store.get_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp",
+            default_mcp_config_payload(),
+        )
+        payload = document.payload if document is not None else default_mcp_config_payload()
         return normalize_mcp_config_payload(payload if isinstance(payload, dict) else None)
 
     def save_mcp_config(self, payload: dict[str, Any]) -> None:
         normalized = normalize_mcp_config_payload(payload)
-        if self.document_store is not None:
-            self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp", normalized)
-            return
-        self._cache["__mcp_config__"] = (time.time(), normalized)
+        self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp", normalized)
 
     def get_mcp_tools(self) -> dict[str, Any]:
         """Read the runtime-owned discovered MCP tools document."""
         default: dict[str, Any] = {"tools": []}
-        if self.document_store is not None:
-            document = self.document_store.get_document(
-                PROGENITOR_STATE_PREFIX, "mcp_tools", default
-            )
-            payload = document.payload if document is not None else default
-        else:
-            payload = self._cache.get("__mcp_tools__", (0.0, default))[1]
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "mcp_tools", default)
+        payload = document.payload if document is not None else default
         return payload if isinstance(payload, dict) else dict(default)
 
     def save_mcp_tools(self, payload: dict[str, Any]) -> None:
-        if self.document_store is not None:
-            self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", payload)
-            return
-        self._cache["__mcp_tools__"] = (time.time(), payload)
+        self.document_store.save_document(PROGENITOR_STATE_PREFIX, "mcp_tools", payload)
 
     def get_backlog(self) -> list[BacklogItem]:
-        data = self._read_json("build_state.json")
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+        data = document.payload if document is not None else {}
         backlog = data.get("backlog", []) if isinstance(data, dict) else []
         if not isinstance(backlog, list):
             return []
         return [BacklogItem.from_dict(item) for item in backlog if isinstance(item, dict)]
 
     def get_schedule(self) -> list[ScheduleItem]:
-        data = self._read_json_from_path(self.schedule_config_path)
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        data = document.payload if document is not None else {}
         if not isinstance(data, dict):
             return []
         return [
@@ -872,7 +744,8 @@ class StateReader:
         ]
 
     def get_event_widgets(self) -> list[EventWidgetItem]:
-        data = self._read_json_from_path(self.config_dir / "event_widgets.json")
+        document = self.document_store.get_document(BACKEND_STATE_PREFIX, "event_widgets", {})
+        data = document.payload if document is not None else {}
         if not isinstance(data, dict):
             return []
         return [
@@ -882,15 +755,25 @@ class StateReader:
         ]
 
     def get_build_state(self) -> dict[str, Any]:
-        data = self._read_json("build_state.json")
-        return data or {}
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, "build_state", {})
+        data = document.payload if document is not None else {}
+        return data if isinstance(data, dict) else {}
 
-    def get_progenitor_state(self) -> dict[str, Any]:
-        data = self._read_json("current_state.json")
-        return data or {}
+    def get_progenitor_state(self, thread_id: str | None = None) -> dict[str, Any]:
+        key = f"current_state:{thread_id}" if thread_id is not None else "current_state"
+        document = self.document_store.get_document(PROGENITOR_STATE_PREFIX, key, {})
+        data = document.payload if document is not None else {}
+        return data if isinstance(data, dict) else {}
+
+    def get_thread_messages(self, thread_id: str) -> list[Any]:
+        if self.document_store is None:
+            return []
+        snapshot = self.document_store.get_checkpoint_thread_snapshot(thread_id)
+        return snapshot.messages if snapshot is not None else []
 
     def get_sessions_summary(self) -> SessionSummary:
-        data = self._read_json_from_path(self.sessions_dir / "sessions.json") or []
+        document = self.document_store.get_document(BACKEND_STATE_PREFIX, "sessions", [])
+        data = document.payload if document is not None else []
         sessions: list[dict[str, Any]] = []
         if isinstance(data, list):
             sessions = [entry for entry in data if isinstance(entry, dict)]
@@ -1170,7 +1053,7 @@ class StateReader:
         return files
 
     def _relative_log_path(self, path: Path) -> str:
-        resolved_logs_dir = self._resolved_logs_dir()
+        resolved_logs_dir = self._resolved_logs_dir
         resolved_path = path.resolve()
         if resolved_path.is_relative_to(resolved_logs_dir):
             return str(resolved_path.relative_to(resolved_logs_dir)).replace("\\", "/")
@@ -1360,7 +1243,7 @@ class StateReader:
         return entry
 
     def _path_source(self, path: Path) -> str:
-        resolved_logs_dir = self._resolved_logs_dir()
+        resolved_logs_dir = self._resolved_logs_dir
         resolved_path = path.resolve()
         relative_parts = (
             resolved_path.relative_to(resolved_logs_dir).parts
@@ -1392,7 +1275,7 @@ class StateReader:
         if not self.logs_dir.exists():
             return []
 
-        resolved_logs_dir = self._resolved_logs_dir()
+        resolved_logs_dir = self._resolved_logs_dir
 
         if file_path:
             candidate = (resolved_logs_dir / file_path).resolve()
@@ -2009,5 +1892,5 @@ def get_state_reader() -> StateReader:
     """Get or create the global state reader."""
     global _state_reader
     if _state_reader is None:
-        _state_reader = StateReader()
+        _state_reader = StateReader(document_store=get_default_document_store())
     return _state_reader

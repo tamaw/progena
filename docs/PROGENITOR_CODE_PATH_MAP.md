@@ -94,20 +94,22 @@ main.py
 
 ### `agent/deep_agent.py`
 
-`create_progenitor_agent()` is strongly used. It composes the model, state
-checkpointing, filesystem backend, tools, middleware, skills, memory, subagents,
-and DeepAgent graph.
+`create_progenitor_agent()` is strongly used. It composes the model, injected
+LangGraph checkpointer/store, virtual filesystem backend, tools, middleware,
+skills, memory, subagents, and DeepAgent graph.
 
 Important construction steps:
 
 ```text
 create_progenitor_agent()
   -> create_langchain_model(config.llm)
-  -> _build_checkpointer(state_dir / "conversations.db")
+  -> use injected Postgres checkpointer/store
   -> create_progenitor_backend(...)
+       -> mount /state/* virtual documents over StateManager
+       -> mount read-only /data/, /schemas/, /prompts/, /self/, /repos/
   -> create_deepagent_tools(...)
   -> [DynamicMCPToolMiddleware, SecretRedactionMiddleware,
-      AuditLoggingMiddleware, MetricsMiddleware]
+      AuditLoggingMiddleware]
   -> resolve_skills_dir("progenitor", prompts_dir=...)
   -> _ensure_default_runtime_memory(data_dir)
   -> _resolve_runtime_memory_paths(data_dir, memory_paths)
@@ -120,7 +122,9 @@ Strength: strongly used.
 
 Conditional branches:
 
-- SQLite checkpointer is used when available; fallback is in-memory saver.
+- A local checkpointer fallback may be used only when the standalone factory is
+  called without an injected checkpointer; the production runtime injects the
+  Postgres checkpointer/store.
 - Skills are loaded when `data/skills/progenitor/` exists.
 - Runtime memory files are discovered under `data/memories/*.md`; a default
   runtime memory file is created if needed.
@@ -193,7 +197,6 @@ Middleware stack created by `create_progenitor_agent()`:
 | `DynamicMCPToolMiddleware` | Strongly used | Injects live LangChain MCP tools from `llm_client.mcp_langchain_tools` into each model call and binds MCP tool-call requests. |
 | `SecretRedactionMiddleware` | Strongly used | Redacts secrets for logging paths while preserving original args for execution. |
 | `AuditLoggingMiddleware` | Strongly used when `log_dir` is provided | Emits tool stream events and writes `tool_calls.jsonl`. |
-| `MetricsMiddleware` | Strongly used | Tracks in-memory model/tool metrics. |
 
 ### `agent/subagents.py`
 
@@ -234,7 +237,6 @@ IPCServer or scheduled work
       -> set current_input/current_input_metadata/cycle_count
       -> _run_graph_cycle() or _run_isolated_graph_cycle()
       -> stream finalization / scheduled_response events
-      -> _signal_cycle_complete()
 ```
 
 ### Graph cycle path
@@ -371,38 +373,42 @@ IPCClient.send_message_stream_events()
   -> handle interleaved AGENT_EVENT messages
 ```
 
-Strength: strongly used by `app/backend/sse_client.py`.
-
 ## State and persistence path
 
 ### Strongly used
 
-Source: `app/progenitor/state/manager.py`.
+Source: `app/progenitor/state/manager.py` and
+`app/progenitor/state/langgraph_store.py`.
 
 ```text
-StateManager.initialize()
-  -> create state/log directories
-  -> _ensure_initial_state()
-  -> _cleanup_stale_temp_files()
+Progenitor.initialize()
+  -> open LangGraph Postgres checkpointer/store
+  -> StateManager.initialize()
+  -> ensure default state documents in ("progenitor", "state")
 
 Runtime:
-  -> get_current_state()
-  -> save_current_state()
-  -> update_current_state()
-  -> commit_state()
-  -> append_jsonl/log_* helpers
+  -> get_current_state()/update_current_state()
   -> get_schedule()/save_schedule()
-  -> get_a2a_tasks()/save_a2a_tasks()/upsert/update
+  -> get_mcp_config()/save_mcp_config()
+  -> get_registry()/save_registry()
+  -> save_health()
+  -> write_log() for conversation, schedule, checkpoint, and audit events
+
+DeepAgent virtual filesystem:
+  -> /state/*.json reads/writes StateManager documents
+  -> /state/tasks/* reads/writes kanban documents
+  -> /state/workflows/*.json reads/writes workflow documents
 ```
 
-State documents managed (persisted in the Postgres document store):
+State documents are Postgres records, not local JSON files. Conversation
+messages live in the LangGraph checkpoint; per-thread `current_state` documents
+hold scalar bookkeeping and UI/runtime metadata. The `.json` names are the
+stable virtual-file presentation used by the agent.
 
-- `current_state.json`
-- `schedule` (Postgres document, not a file)
-- `registry.json`
-- `a2a_tasks.json`
+Append-only logs use the Postgres `("progenitor", "logs", <source>)`
+namespace. The `relative_path` field is a display label for the log entry, not
+a filesystem write target.
 
-Append-only logs include conversation and schedule events.
 
 ### Lesser-used or legacy state methods
 
@@ -518,20 +524,23 @@ Sources:
 
 - `app/progenitor/schedule/engine.py`
 - `app/progenitor/schedule/dispatch.py`
-- `app/progenitor/runtime/loop.py`
+- `app/progenitor/runtime/heartbeat.py`
+- `app/progenitor/graph/heartbeat_graph.py`
 
 ```text
-ProgenitorLoop.run_forever()
-  -> _is_scheduler_enabled()
-  -> create_task(_scheduler_loop())
-      -> Scheduler()
-      -> _check_and_enqueue_scheduled_work()
-          -> state_manager.get_schedule()
-          -> Scheduler.get_due_items()
-          -> enqueue_input("[Scheduled Task]\n" + message)
-          -> Scheduler.mark_executed()
-          -> state_manager.save_schedule()
+HeartbeatRuntime
+  -> heartbeat graph maintenance/schedule tick
+      -> state_manager.get_schedule()
+      -> Scheduler.get_due_items()
+      -> queues.enqueue_input("[Scheduled Task]\n" + message)
+      -> state_manager.upsert_schedule_run(...)
+      -> state_manager.update_schedule_entry(...)
+      -> state_manager.log_schedule_event(...)
 ```
+
+Schedule changes are persisted in the Postgres `schedule` document. One-shot
+entries are disabled/paused after enqueue; recurring entries retain their
+schedule and receive updated run metadata.
 
 Status: conditional. The code is live when scheduler config is enabled and
 schedule entries exist.

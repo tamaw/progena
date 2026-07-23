@@ -3,15 +3,17 @@ Chat UI API Routes.
 
 Additional API endpoints specifically for the Chat UI frontend.
 
-Reads real state data from file-backed runtime artifacts plus shared backend-managed state:
-- health: system status (cycle_count, idle state, queue stats), persisted in the
-  shared Postgres document store; liveness itself comes from a live IPC heartbeat
-  check, not a stored document (see main.get_progenitor_liveness())
-- agents.json + the shared MCP state document: Registered agents and enabled MCP servers
-- build_state.json: Agent builds ONLY (inner loop, LLM messages, verification)
-- current_state.json: Progenitor agent state (chat history, tool calls) - user session
-- schedules: scheduled tasks, persisted in the shared Postgres document store
-  (system feature, persists beyond user sessions)
+Reads state from the shared Postgres document store used by both the backend
+and Progenitor runtime. The backend exposes state-document changes to the
+frontend through canonical UI events:
+- health: persisted heartbeat status plus a live Progenitor reachability check
+- registry and MCP: registered agents, runtime tools, and enabled MCP servers
+- schedules, knowledge, workflows, kanban, and inbox: Postgres-backed documents
+
+The Progenitor agent sees selected documents as validated virtual files such as
+`/state/agents.json`, `/state/mcp.json`, and `/state/schedule.json`. These names
+are not local filesystem paths; `build_state.json` and `current_state.json` are
+not backend-owned files in the current runtime.
 """
 
 import asyncio
@@ -20,12 +22,10 @@ import json
 import logging
 import os
 import re
-import tempfile
 import time
 import uuid
 from collections.abc import AsyncGenerator, Callable, Mapping
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any, Literal, cast
 
 import httpx
@@ -66,7 +66,11 @@ from .alerts import (
 )
 from .chat_routes import broadcast_chat_sessions_snapshot, create_chat_router
 from .chat_sessions import UiEventEnvelope, UiRequestAcknowledgement, acknowledgement_response
-from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
+from .document_store import (
+    BACKEND_STATE_PREFIX,
+    PROGENITOR_STATE_PREFIX,
+    get_default_document_store,
+)
 from .inbox_routes import (
     INBOX_MESSAGE_KEY_PREFIX,
     broadcast_inbox_snapshot,
@@ -1505,11 +1509,6 @@ def _kanban_board_response(
     )
 
 
-def _event_widget_path(state_reader: StateReader) -> Path:
-    """Return the persisted event widget state path."""
-    return state_reader.config_dir / "event_widgets.json"
-
-
 def _read_kanban_card_doc(store: Any, card_id: str) -> dict | None:
     """Read one persisted card document (the ``kanban_card:<id>`` row)."""
     document = store.get_document(
@@ -1635,8 +1634,8 @@ def _normalize_event_widget_record(entry: dict) -> dict:
 
 
 def _read_event_widget_records(state_reader: StateReader) -> dict[str, dict]:
-    event_path = _event_widget_path(state_reader)
-    raw = state_reader._read_json_from_path(event_path)  # noqa: SLF001 - shared helper
+    document = state_reader.document_store.get_document(BACKEND_STATE_PREFIX, "event_widgets", {})
+    raw = document.payload if document is not None else {}
     if not isinstance(raw, dict):
         return {}
     return {
@@ -1649,14 +1648,12 @@ def _read_event_widget_records(state_reader: StateReader) -> dict[str, dict]:
 def _write_event_widget_records(
     state_reader: StateReader, records: dict[str, dict]
 ) -> dict[str, dict]:
-    event_path = _event_widget_path(state_reader)
     normalized = {
         entry_id: _normalize_event_widget_record({**entry, "id": entry.get("id") or entry_id})
         for entry_id, entry in records.items()
         if isinstance(entry, dict)
     }
-    _atomic_write_json(event_path, normalized, state_reader)
-    state_reader.invalidate(event_path)
+    state_reader.document_store.save_document(BACKEND_STATE_PREFIX, "event_widgets", normalized)
     return normalized
 
 
@@ -1734,28 +1731,6 @@ def _write_kanban_board(state_reader: StateReader, board: dict) -> dict:
     return normalized
 
 
-def _atomic_write_json(
-    filepath: Path, data: object, state_reader: StateReader | None = None
-) -> None:
-    """Atomically write JSON for backend-backed state updates."""
-    reader = state_reader or get_state_reader()
-    if reader._write_json_to_path(filepath, data):  # noqa: SLF001 - shared persistence bridge
-        reader.invalidate(filepath)
-        return
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, default=str)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, filepath)
-    except Exception:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp_path)
-        raise
-
-
 def _read_mcp_config(state_reader: StateReader) -> dict:
     """Read the live MCP config from the shared state document."""
     return state_reader.get_mcp_config()
@@ -1766,20 +1741,21 @@ def _write_mcp_config(state_reader: StateReader, data: dict[str, Any]) -> None:
     state_reader.save_mcp_config(data)
 
 
-def _read_schedule_config(state_reader: StateReader) -> tuple[Path, dict]:
+def _read_schedule_config(state_reader: StateReader) -> dict[str, Any]:
     """Read the live schedule config, keyed by schedule id."""
-    schedule_path = state_reader.schedule_config_path
-    raw = state_reader._read_json_from_path(schedule_path)  # noqa: SLF001 - shared helper
-    return schedule_path, raw if isinstance(raw, dict) else {}
+    document = state_reader.document_store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+    raw = document.payload if document is not None else {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _delete_schedule_entry(state_reader: StateReader, schedule_id: str) -> bool:
-    """Delete a persisted schedule entry and refresh the cached schedule file."""
-    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    """Delete a persisted schedule entry and refresh the cached schedule document."""
+    schedule_data = _read_schedule_config(state_reader)
 
     def _save() -> None:
-        _atomic_write_json(schedule_path, schedule_data, state_reader)
-        state_reader.invalidate(schedule_path)
+        state_reader.document_store.save_document(
+            PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+        )
 
     return _delete_document_entry(entries=schedule_data, entry_id=schedule_id, save=_save)
 
@@ -2497,7 +2473,7 @@ async def patch_widget(
     state_reader = get_state_reader()
     if widget_id.startswith("schedule:"):
         schedule_id = widget_id.split(":", 1)[1]
-        schedule_path, schedule_data = _read_schedule_config(state_reader)
+        schedule_data = _read_schedule_config(state_reader)
 
         def _apply_schedule_patch(entry: dict) -> None:
             current_schedule_type = body.schedule_type or entry.get("schedule_type") or "cron"
@@ -2537,8 +2513,9 @@ async def patch_widget(
             entry["next_run_at"] = next_run.isoformat() if next_run else None
 
         def _save_schedule() -> None:
-            _atomic_write_json(schedule_path, schedule_data, state_reader)
-            state_reader.invalidate(schedule_path)
+            state_reader.document_store.save_document(
+                PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+            )
 
         updated = _patch_document_entry(
             entries=schedule_data,
@@ -2779,7 +2756,7 @@ async def create_schedule(
     request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
-    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    schedule_data = _read_schedule_config(state_reader)
 
     created_at = utcnow().isoformat()
     schedule_id = generate_schedule_id(is_one_off=body.schedule_type.strip().lower() == "once")
@@ -2795,8 +2772,7 @@ async def create_schedule(
     )
     schedule_data[schedule_id] = entry
 
-    _atomic_write_json(schedule_path, schedule_data, state_reader)
-    state_reader.invalidate(schedule_path)
+    state_reader.document_store.save_document(PROGENITOR_STATE_PREFIX, "schedule", schedule_data)
 
     refreshed = next(
         (
@@ -2853,7 +2829,7 @@ async def retrigger_schedule(
     request_id = _request_correlation_id(request, x_request_id)
 
     state_reader = get_state_reader()
-    schedule_path, schedule_data = _read_schedule_config(state_reader)
+    schedule_data = _read_schedule_config(state_reader)
     entry = schedule_data.get(schedule_id)
     if entry is None:
         raise HTTPException(status_code=404, detail="Schedule not found")
@@ -2889,8 +2865,7 @@ async def retrigger_schedule(
 
     # The agent edits cron_expression/scheduled_at directly but may not recompute
     # next_run or the display fields; reconcile them here so the UI stays coherent.
-    state_reader.invalidate(schedule_path)
-    _, schedule_data = _read_schedule_config(state_reader)
+    schedule_data = _read_schedule_config(state_reader)
     updated = schedule_data.get(schedule_id)
     if updated is not None:
         updated["updated_at"] = utcnow().isoformat()
@@ -2904,8 +2879,9 @@ async def retrigger_schedule(
         next_run = Scheduler().next_run_for_entry(updated)
         updated["next_run"] = next_run.isoformat() if next_run else None
         updated["next_run_at"] = next_run.isoformat() if next_run else None
-        _atomic_write_json(schedule_path, schedule_data, state_reader)
-        state_reader.invalidate(schedule_path)
+        state_reader.document_store.save_document(
+            PROGENITOR_STATE_PREFIX, "schedule", schedule_data
+        )
 
     _broadcast_widget_refresh(state_reader, request_id=request_id)
     broadcast_schedule_snapshot(request_id=request_id)
@@ -3234,6 +3210,7 @@ async def get_task_content(
     content = _read_task_content(state_reader, card)
     broadcast_task_content(card_id, content, request_id=request_id)
     return acknowledgement_response(request_id, ["task.content.updated"])
+
 
 @router.put("/tasks/{card_id}/content", status_code=202, response_model=UiRequestAcknowledgement)
 async def update_task_content(
@@ -4598,7 +4575,8 @@ router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
-        get_current_state=lambda: get_state_reader().get_progenitor_state(),
+        get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
+        get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
     )
 )
 

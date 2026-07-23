@@ -8,34 +8,25 @@ still trigger a live UI push.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 
 
-def _reader(tmp_path: Path, servers: dict) -> tuple[StateReader, InMemoryDocumentStore]:
+def _reader(servers: dict) -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": servers})
-    for name in ("state", "config", "sessions", "logs"):
-        (tmp_path / name).mkdir()
     reader = StateReader(
-        state_dir=tmp_path / "state",
-        config_dir=tmp_path / "config",
-        sessions_dir=tmp_path / "sessions",
-        logs_dir=tmp_path / "logs",
         document_store=store,
     )
     return reader, store
 
 
 def _resnapshot(reader: StateReader) -> object:
-    reader._cache.clear()
     return reader.get_snapshot()
 
 
-def test_store_change_threads_key_to_watchers(tmp_path):
-    reader, _store = _reader(tmp_path, {"jina": {"url": "https://x/mcp", "transport": "http"}})
+def test_store_change_threads_key_to_watchers():
+    reader, _store = _reader({"jina": {"url": "https://x/mcp", "transport": "http"}})
     seen: list[tuple[object, object]] = []
     reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
 
@@ -51,9 +42,8 @@ def test_store_change_threads_key_to_watchers(tmp_path):
     assert seen[-1][1] is None
 
 
-def test_toggling_enabled_is_detected(tmp_path):
+def test_toggling_enabled_is_detected():
     reader, store = _reader(
-        tmp_path,
         {"jina": {"url": "https://x/mcp", "transport": "http", "enabled": True}},
     )
     snap1 = reader.get_snapshot()
@@ -72,9 +62,8 @@ def test_toggling_enabled_is_detected(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_editing_url_is_detected(tmp_path):
+def test_editing_url_is_detected():
     reader, store = _reader(
-        tmp_path,
         {"jina": {"url": "https://old/mcp", "transport": "http"}},
     )
     snap1 = reader.get_snapshot()
@@ -91,9 +80,8 @@ def test_editing_url_is_detected(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_unchanged_mcp_config_is_not_flagged(tmp_path):
+def test_unchanged_mcp_config_is_not_flagged():
     reader, _store = _reader(
-        tmp_path,
         {"jina": {"url": "https://x/mcp", "transport": "http"}},
     )
     snap1 = reader.get_snapshot()

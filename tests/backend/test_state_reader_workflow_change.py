@@ -8,33 +8,24 @@ kanban/inbox, no other snapshot field changes on a workflow-only write, so
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 
 
-def _reader(tmp_path: Path) -> tuple[StateReader, InMemoryDocumentStore]:
+def _reader() -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
-    for name in ("state", "config", "sessions", "logs"):
-        (tmp_path / name).mkdir()
     reader = StateReader(
-        state_dir=tmp_path / "state",
-        config_dir=tmp_path / "config",
-        sessions_dir=tmp_path / "sessions",
-        logs_dir=tmp_path / "logs",
         document_store=store,
     )
     return reader, store
 
 
 def _resnapshot(reader: StateReader) -> object:
-    reader._cache.clear()
     return reader.get_snapshot()
 
 
-def test_store_change_threads_workflow_key_to_watchers(tmp_path):
-    reader, _store = _reader(tmp_path)
+def test_store_change_threads_workflow_key_to_watchers():
+    reader, _store = _reader()
     seen: list[tuple[object, object]] = []
     reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
 
@@ -44,8 +35,8 @@ def test_store_change_threads_workflow_key_to_watchers(tmp_path):
     assert seen[0][1] == "workflow:wf_a"
 
 
-def test_new_workflow_definition_is_detected_via_fingerprint(tmp_path):
-    reader, store = _reader(tmp_path)
+def test_new_workflow_definition_is_detected_via_fingerprint():
+    reader, store = _reader()
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1
 
@@ -60,8 +51,8 @@ def test_new_workflow_definition_is_detected_via_fingerprint(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_workflow_run_update_is_detected_via_fingerprint(tmp_path):
-    reader, store = _reader(tmp_path)
+def test_workflow_run_update_is_detected_via_fingerprint():
+    reader, store = _reader()
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         "workflow_run:run_a",
@@ -81,8 +72,8 @@ def test_workflow_run_update_is_detected_via_fingerprint(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_unchanged_workflows_are_not_flagged(tmp_path):
-    reader, store = _reader(tmp_path)
+def test_unchanged_workflows_are_not_flagged():
+    reader, store = _reader()
     store.save_document(
         PROGENITOR_STATE_PREFIX,
         "workflow:wf_a",

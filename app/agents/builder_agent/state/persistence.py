@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 
 # Cross-platform file locking
-if sys.platform == 'win32':
+if sys.platform == "win32":
     import msvcrt
 
     def lock_file(f):
@@ -112,7 +112,7 @@ class StatePersistence:
         if not filepath.exists():
             return None
 
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             content = await f.read()
             return cast(dict[str, Any], json.loads(content))
 
@@ -137,13 +137,11 @@ class StatePersistence:
 
         # Create temp file in same directory for atomic rename
         fd, tmp_path = tempfile.mkstemp(
-            dir=filepath.parent,
-            prefix=f".{filepath.name}.",
-            suffix=".tmp"
+            dir=filepath.parent, prefix=f".{filepath.name}.", suffix=".tmp"
         )
 
         try:
-            with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=2, default=str)
                 f.flush()
                 os.fsync(f.fileno())
@@ -161,10 +159,7 @@ class StatePersistence:
                 os.unlink(tmp_path)
 
             if metrics:
-                metrics.increment(
-                    "state_write_total",
-                    {"file": filename, "success": "false"}
-                )
+                metrics.increment("state_write_total", {"file": filename, "success": "false"})
 
             if span:
                 span.record_exception(e)
@@ -187,7 +182,7 @@ class StatePersistence:
 
         line = json.dumps(entry, default=str) + "\n"
 
-        async with aiofiles.open(filepath, 'a', encoding='utf-8') as f:
+        async with aiofiles.open(filepath, "a", encoding="utf-8") as f:
             await f.write(line)
             await f.flush()
             # fsync for durability
@@ -212,7 +207,7 @@ class StatePersistence:
             return []
 
         entries = []
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
+        async with aiofiles.open(filepath, encoding="utf-8") as f:
             async for line in f:
                 if line.strip():
                     entries.append(json.loads(line))
@@ -220,48 +215,3 @@ class StatePersistence:
         if limit:
             return entries[-limit:]
         return entries
-
-    async def read_jsonl_filtered(
-        self,
-        filename: str,
-        filter_fn,
-        limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-        """Read filtered entries from a JSONL log file.
-
-        Args:
-            filename: Name of the log file.
-            filter_fn: Function to filter entries.
-            limit: Maximum entries to return.
-
-        Returns:
-            List of filtered entries.
-        """
-        filepath = self.logs_dir / filename
-        if not filepath.exists():
-            return []
-
-        entries = []
-        async with aiofiles.open(filepath, encoding='utf-8') as f:
-            async for line in f:
-                if line.strip():
-                    entry = json.loads(line)
-                    if filter_fn(entry):
-                        entries.append(entry)
-
-        if limit:
-            return entries[-limit:]
-        return entries
-
-    def file_exists(self, filename: str, in_logs: bool = False) -> bool:
-        """Check if a file exists.
-
-        Args:
-            filename: Name of the file.
-            in_logs: If True, check in logs_dir; otherwise state_dir.
-
-        Returns:
-            True if file exists.
-        """
-        base_dir = self.logs_dir if in_logs else self.state_dir
-        return (base_dir / filename).exists()

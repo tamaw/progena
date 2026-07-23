@@ -1,7 +1,6 @@
 """Tests for tracked A2A task lifecycle helpers."""
 
 import tempfile
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -16,12 +15,13 @@ from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import A2ATaskRecord
 from app.progenitor.tools.get_a2a_task import GetA2ATaskTool
 from app.progenitor.tools.protocol import ToolContext
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 
 @pytest.fixture
 async def state_manager():
-    with tempfile.TemporaryDirectory() as state_dir, tempfile.TemporaryDirectory() as logs_dir:
-        manager = StateManager(Path(state_dir), Path(logs_dir))
+    with tempfile.TemporaryDirectory(), tempfile.TemporaryDirectory():
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
         await manager.initialize()
         yield manager
 

@@ -71,19 +71,6 @@ class Scheduler:
         due_with_time.sort(key=lambda pair: pair[0])
         return [item for _, item in due_with_time]
 
-    def mark_executed(
-        self,
-        schedule: list[dict[str, Any]],
-        item_id: str,
-        run_time: datetime,
-    ) -> list[dict[str, Any]]:
-        """Update schedule entry after execution."""
-        for item in schedule:
-            if item.get("id") == item_id:
-                item["last_run"] = run_time.isoformat()
-                break
-        return schedule
-
     def next_run_for_entry(self, item: dict[str, Any]) -> datetime | None:
         """Compute the next run for an entry."""
         scheduled_at = item.get("scheduled_at")

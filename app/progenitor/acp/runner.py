@@ -43,17 +43,6 @@ class ACPRunResult:
     elapsed_seconds: float = 0.0
     error: str | None = None
 
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "success": self.success,
-            "output": self.output,
-            "stop_reason": self.stop_reason,
-            "session_id": self.session_id,
-            "tool_calls": self.tool_calls,
-            "elapsed_seconds": self.elapsed_seconds,
-            "error": self.error,
-        }
-
 
 class ACPRunner:
     """Run one prompt against an ACP agent over stdio (spawned) or TCP (connect).

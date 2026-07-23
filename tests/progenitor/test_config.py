@@ -18,12 +18,11 @@ from app.progenitor.config import (
     StorageConfig,
     get_config,
     reload_config,
-    resolve_schedule_config_path,
 )
 from app.progenitor.mcp.loader import load_mcp_servers, resolve_required_env_template
 from app.progenitor.prompts import DEFAULT_PROMPTS_DIR
 from app.progenitor.runtime.logging import setup_logging
-from app.progenitor.utils import env_bool, env_float, env_int, env_list
+from app.progenitor.utils import env_bool, env_int
 
 
 class TestEnvParsers:
@@ -71,22 +70,6 @@ class TestEnvParsers:
         """Test missing env var returns default."""
         os.environ.pop("TEST_INT_MISSING", None)
         assert env_int("TEST_INT_MISSING", 50) == 50
-
-    def testenv_float_valid(self):
-        """Test parsing valid floats."""
-        with patch.dict(os.environ, {"TEST_FLOAT": "3.14"}):
-            assert env_float("TEST_FLOAT", 0.0) == 3.14
-
-    def testenv_list_valid(self):
-        """Test parsing comma-separated list."""
-        with patch.dict(os.environ, {"TEST_LIST": "a,b, c , d"}):
-            result = env_list("TEST_LIST")
-            assert result == ["a", "b", "c", "d"]
-
-    def testenv_list_empty(self):
-        """Test empty list when not set."""
-        os.environ.pop("TEST_LIST_MISSING", None)
-        assert env_list("TEST_LIST_MISSING") == []
 
 
 class TestLLMConfig:
@@ -152,7 +135,6 @@ class TestRuntimeConfig:
         assert config.idle_backoff_seconds == 30
         assert config.mcp_refresh_seconds == 900
         assert config.registry_refresh_seconds == 900
-        assert config.max_actions_per_cycle == 10
         assert config.log_level == "info"
         assert config.http_host == "127.0.0.1"
         assert config.http_port == 9501
@@ -164,7 +146,6 @@ class TestRuntimeConfig:
             "PROGENITOR_IDLE_BACKOFF_SECONDS": "60",
             "PROGENITOR_MCP_REFRESH_SECONDS": "900",
             "PROGENITOR_REGISTRY_REFRESH_SECONDS": "1200",
-            "PROGENITOR_MAX_ACTIONS_PER_CYCLE": "20",
             "PROGENITOR_LOG_LEVEL": "debug",
             "PROGENITOR_HTTP_HOST": "0.0.0.0",
             "PROGENITOR_HTTP_PORT": "9901",
@@ -176,7 +157,6 @@ class TestRuntimeConfig:
             assert config.idle_backoff_seconds == 60
             assert config.mcp_refresh_seconds == 900
             assert config.registry_refresh_seconds == 1200
-            assert config.max_actions_per_cycle == 20
             assert config.log_level == "debug"
             assert config.http_host == "0.0.0.0"
             assert config.http_port == 9901
@@ -249,7 +229,6 @@ class TestStorageConfig:
             "PROGENITOR_DATA_DIR": "/custom/data",
             "PROGENITOR_LOG_DIR": "/custom/logs",
             "PROGENITOR_WORKTREE_DIR": "/custom/worktrees",
-            "PROGENITOR_STATE_LOCK_TIMEOUT_SECONDS": "30",
         }
         with patch.dict(os.environ, env, clear=False):
             os.environ.pop("PROGENITOR_STATE_DIR", None)
@@ -260,17 +239,10 @@ class TestStorageConfig:
             assert config.log_dir == Path("/custom/logs")
             assert config.worktree_dir == Path("/custom/worktrees")
             assert config.prompts_dir == Path("/custom/data/prompts")
-            assert config.state_lock_timeout_seconds == 30
 
 
 class TestMCPConfig:
     """Tests for Progenitor's persisted MCP registry loader."""
-
-    def test_resolve_schedule_config_path_uses_checked_in_default(self):
-        repo_root = Path(__file__).resolve().parents[2]
-        with patch.dict(os.environ, {}, clear=False):
-            path = resolve_schedule_config_path()
-        assert path == repo_root / "data" / "config" / "schedule.json"
 
     def test_load_mcp_servers_reads_mcp_servers_map(self):
         payload = json.loads(
@@ -392,7 +364,7 @@ class TestProgenitorConfig:
         }
 
         with patch.dict(os.environ, env, clear=False):
-            config = ProgenitorConfig.load(Path("."), Path("."))
+            config = ProgenitorConfig.load(Path("."))
 
             assert config.runtime.timezone == "Asia/Tokyo"
             assert config.runtime.idle_backoff_seconds == 15

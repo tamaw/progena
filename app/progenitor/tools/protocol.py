@@ -109,26 +109,6 @@ def build_tool_spec(
     }
 
 
-def legacy_parameters_from_args_model(args_model: type[BaseModel]) -> dict[str, dict[str, Any]]:
-    """Render a JSON-schema model into the legacy per-field parameter shape."""
-    parameters = parameters_from_args_model(args_model)
-    properties = parameters.get("properties")
-    if not isinstance(properties, dict):
-        return {}
-
-    required_fields = parameters.get("required")
-    required = set(required_fields) if isinstance(required_fields, list) else set()
-
-    legacy: dict[str, dict[str, Any]] = {}
-    for field_name, spec in properties.items():
-        if not isinstance(spec, dict):
-            continue
-        entry = dict(spec)
-        entry["required"] = field_name in required
-        legacy[field_name] = entry
-    return legacy
-
-
 class SystemTool(Protocol):
     """Protocol for tools that can be executed inline."""
 

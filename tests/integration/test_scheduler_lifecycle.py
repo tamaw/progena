@@ -1,8 +1,8 @@
 """
 Integration tests for the scheduler lifecycle: create → update → pause → resume → delete.
 
-These tests use a real StateManager backed by temporary directories and the
-real Scheduler class.  No LLM or network access is required.
+These tests use a real StateManager backed by an in-memory runtime store and the
+real Scheduler class. No LLM or network access is required.
 """
 
 import uuid
@@ -13,6 +13,7 @@ from app.progenitor.schedule import Scheduler
 from app.progenitor.state.manager import StateManager
 from app.progenitor.state.models import ScheduleEntry
 from app.progenitor.utils import utcnow
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -20,13 +21,9 @@ from app.progenitor.utils import utcnow
 
 
 @pytest.fixture
-async def state_manager(tmp_path):
-    """Real StateManager backed by a temporary directory."""
-    state_dir = tmp_path / "state"
-    logs_dir = tmp_path / "logs"
-    state_dir.mkdir()
-    logs_dir.mkdir()
-    manager = StateManager(state_dir, logs_dir)
+async def state_manager():
+    """Real StateManager backed by a _FakeRuntimeStore (no files)."""
+    manager = StateManager(runtime_store=_FakeRuntimeStore())
     await manager.initialize()
     return manager
 
@@ -51,7 +48,12 @@ async def _add_and_persist(state_manager: StateManager) -> str:
         cron_expression="0 9 * * *",
         created_at=utcnow(),
     )
-    await state_manager.add_schedule_entry(entry)
+    schedule = await state_manager.get_schedule()
+    schedule[entry.id] = entry
+    await state_manager.save_schedule(schedule)
+    await state_manager.log_schedule_event(
+        {"event": "entry_added", "schedule_id": entry.id, "description": entry.message}
+    )
     return schedule_id
 
 
@@ -112,15 +114,21 @@ class TestSchedulerLifecycle:
         assert entry.paused is False, "Entry should not be paused after resume"
 
         # ---- 5. DELETE -------------------------------------------------------
-        removed = await state_manager.remove_schedule_entry(schedule_id)
-        assert removed, "remove_schedule_entry should report success"
+        schedule = await state_manager.get_schedule()
+        if schedule_id in schedule:
+            del schedule[schedule_id]
+            await state_manager.save_schedule(schedule)
+            await state_manager.log_schedule_event(
+                {"event": "entry_removed", "schedule_id": schedule_id}
+            )
 
         schedule = await state_manager.get_schedule()
         assert schedule_id not in schedule, "Entry should be absent after deletion"
 
     @pytest.mark.asyncio
     async def test_delete_nonexistent_returns_failure(self, state_manager: StateManager):
-        removed = await state_manager.remove_schedule_entry("sched_does_not_exist")
+        schedule = await state_manager.get_schedule()
+        removed = "sched_does_not_exist" in schedule
         assert removed is False
 
     @pytest.mark.asyncio

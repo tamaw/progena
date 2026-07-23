@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,6 @@ from .mcp_sync import MCPSyncScheduler
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent.parent
-CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 class Progenitor:
@@ -33,12 +33,10 @@ class Progenitor:
         self,
         config: ProgenitorConfig | None = None,
     ):
-        self.config = config or get_config(PROJECT_ROOT, CONFIG_DIR)
+        self.config = config or get_config(PROJECT_ROOT)
         self.running = False
         self._shutdown_started = False
 
-        self.state_dir = self.config.storage.state_dir
-        self.config_dir = self.state_dir.parent / "config"
         self.logs_dir = self.config.storage.log_dir
         if not self.config.database.enabled:
             raise ValueError(
@@ -50,7 +48,7 @@ class Progenitor:
             config=self.config.llm,
             mcp_config=self.config.mcp,
         )
-        self.registry_runtime = AgentRegistryRuntime(self.config_dir, PROJECT_ROOT)
+        self.registry_runtime = AgentRegistryRuntime()
         self.mcp_runtime = MCPRuntime(self.config.mcp)
         self.llm_client.set_mcp_runtime(self.mcp_runtime)
         self.tool_registry = self.registry_runtime.agent_registry
@@ -110,8 +108,7 @@ class Progenitor:
 
     async def initialize(self) -> None:
         """Initialize all components."""
-        for dir_path in [self.state_dir, self.config_dir, self.logs_dir]:
-            dir_path.mkdir(parents=True, exist_ok=True)
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
 
         from ..database import open_langgraph_persistence
 
@@ -127,14 +124,12 @@ class Progenitor:
         store = persistence.store
         if store is None:
             raise RuntimeError("LangGraph Postgres store is required for runtime persistence")
-        runtime_store = LangGraphRuntimeStore(store)
-        self.log_store = runtime_store
-        self.state_manager = StateManager(
-            self.state_dir,
-            self.logs_dir,
-            lock_timeout=self.config.storage.state_lock_timeout_seconds,
-            runtime_store=runtime_store,
+        runtime_store = LangGraphRuntimeStore(
+            store,
+            debug_mode=os.getenv("PROGENITOR_STORE_LOG_DEBUG", "").lower() in ("1", "true", "yes"),
         )
+        self.log_store = runtime_store
+        self.state_manager = StateManager(runtime_store=runtime_store)
         await self.state_manager.initialize()
         mcp_payload = await self.state_manager.get_mcp_config()
         self.config.mcp = type(self.config.mcp).from_payload(mcp_payload)

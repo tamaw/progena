@@ -99,7 +99,6 @@ class ProgenitorLoop:
         scheduler_poll_seconds = max(1.0, scheduler_poll_seconds)
 
         self._queues = RuntimeQueues(config.runtime)
-        self._graph_lock = asyncio.Lock()
         self._state: dict[str, Any] = {}
         audit_payload: dict[str, Any] | None = None
         to_dict = getattr(config, "to_dict", None)
@@ -210,25 +209,19 @@ class ProgenitorLoop:
         while self.running:
             try:
                 self._prepare_heartbeat_poll()
-                # Wait for queued input OUTSIDE graph_lock. This wait can
+                # Wait for queued input before ainvoke. This wait can
                 # block up to input_timeout (commonly idle_backoff_seconds,
-                # 30s by default, whenever nothing else is due). Doing this
-                # inside the locked ainvoke() call previously meant a live
-                # direct chat turn (RuntimeChatService.handle_chat, which
-                # awaits this same graph_lock via _direct_graph_lock) could
-                # stall for up to that long behind an unrelated idle poll
-                # cycle before the user's own message even started
-                # processing. Skip the fetch if a prior cycle left an
-                # unconsumed item in state (error-recovery retry case).
+                # 30s by default, whenever nothing else is due).  Skip the
+                # fetch if a prior cycle left an unconsumed item in state
+                # (error-recovery retry case).
                 if self._state.get("queued_input") is None:
                     self._state["queued_input"] = await self._queues.get_input(
                         self._heartbeat_context.input_timeout
                     )
-                async with self._graph_lock:
-                    updates = await self._heartbeat_graph.ainvoke(
-                        cast(ProgenitorState, self._state),
-                        context=self._heartbeat_context,
-                    )
+                updates = await self._heartbeat_graph.ainvoke(
+                    cast(ProgenitorState, self._state),
+                    context=self._heartbeat_context,
+                )
                 if isinstance(updates, dict):
                     self.apply_graph_updates(updates)
                 self._heartbeat_context.due_maintenance.clear()
@@ -291,11 +284,6 @@ class ProgenitorLoop:
     def heartbeat_context(self) -> HeartbeatContext:
         """Runtime context passed to heartbeat graph nodes."""
         return self._heartbeat_context
-
-    @property
-    def graph_lock(self) -> asyncio.Lock:
-        """Serialize graph execution across heartbeat and direct IPC streaming."""
-        return self._graph_lock
 
     def stop(self) -> None:
         """Signal the loop to stop."""

@@ -54,7 +54,6 @@ async def cleanup_cycle_state_node(
         "scheduled_result_status": None,
         "cycle_source": None,
         "cycle_error": None,
-        "cycle_complete_signalled": False,
         "health_status_override": None,
         "health_error": None,
     }
@@ -97,13 +96,3 @@ async def cycle_error_node(
         "health_status_override": "error",
         "health_error": safe_error,
     }
-
-
-async def signal_cycle_complete_node(
-    state: ProgenitorState,
-    runtime: Runtime[HeartbeatContext],
-) -> dict[str, Any]:
-    """Signal cycle completion to waiting clients."""
-    del state
-    runtime.context.queues.signal_cycle_complete()
-    return {"cycle_complete_signalled": True}

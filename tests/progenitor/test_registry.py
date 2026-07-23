@@ -1,8 +1,6 @@
 """Tests for tool registry."""
 
 import json
-import tempfile
-from pathlib import Path
 
 import pytest
 
@@ -10,31 +8,35 @@ from app.progenitor.registry import ToolRegistry
 from app.progenitor.state.models import AgentRegistryEntry
 
 
+def _fake_store() -> tuple:
+    """Return (loader, saver, backing-dict) emulating the registry document."""
+    backing: dict = {}
+
+    async def loader() -> dict:
+        return backing.get("registry", {})
+
+    async def saver(doc: dict) -> None:
+        backing["registry"] = json.loads(json.dumps(doc))
+
+    return loader, saver, backing
+
+
 class TestToolRegistry:
     """Tests for the ToolRegistry class."""
 
-    @pytest.fixture
-    def temp_registry(self):
-        """Create an isolated temporary agent registry file."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            root = Path(tmpdir)
-            registry_path = root / "agents.json"
-            registry_path.write_text(json.dumps({"agents": []}), encoding="utf-8")
-            yield registry_path
-
     @pytest.mark.asyncio
-    async def test_load_empty_registry(self, temp_registry):
+    async def test_load_empty_registry(self):
         """Test loading an empty registry."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         assert registry.get_agents() == []
         assert registry.get_tools() == []
 
     @pytest.mark.asyncio
-    async def test_register_agent(self, temp_registry):
+    async def test_register_agent(self):
         """Test registering an agent."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -51,9 +53,9 @@ class TestToolRegistry:
         assert agents[0]["name"] == "test_agent"
 
     @pytest.mark.asyncio
-    async def test_register_tool(self, temp_registry):
+    async def test_register_tool(self):
         """Test registering an MCP tool."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         tool = {
@@ -72,9 +74,9 @@ class TestToolRegistry:
         assert tools[0]["name"] == "test_tool"
 
     @pytest.mark.asyncio
-    async def test_get_all_capabilities(self, temp_registry):
+    async def test_get_all_capabilities(self):
         """Test getting all capabilities from agents and tools."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         # Register agent
@@ -101,9 +103,9 @@ class TestToolRegistry:
         assert "cap_d" in caps
 
     @pytest.mark.asyncio
-    async def test_find_agent_by_capability(self, temp_registry):
+    async def test_find_agent_by_capability(self):
         """Test finding an agent by capability."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -119,9 +121,9 @@ class TestToolRegistry:
         assert agents[0]["name"] == "email_agent"
 
     @pytest.mark.asyncio
-    async def test_register_agent_duplicate(self, temp_registry):
+    async def test_register_agent_duplicate(self):
         """Test registering duplicate agents replaces existing."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -138,9 +140,9 @@ class TestToolRegistry:
         assert found["name"] == "email_agent"
 
     @pytest.mark.asyncio
-    async def test_find_tool_by_capability(self, temp_registry):
+    async def test_find_tool_by_capability(self):
         """Test finding a tool by capability."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         tool = {
@@ -155,9 +157,9 @@ class TestToolRegistry:
         assert found["name"] == "weather_tool"
 
     @pytest.mark.asyncio
-    async def test_find_by_name(self, temp_registry):
+    async def test_find_by_name(self):
         """Test finding agent or tool by name."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -174,9 +176,9 @@ class TestToolRegistry:
         assert found["name"] == "my_agent"
 
     @pytest.mark.asyncio
-    async def test_capability_exists(self, temp_registry):
+    async def test_capability_exists(self):
         """Test checking if a capability exists."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -191,9 +193,9 @@ class TestToolRegistry:
         assert not registry.capability_exists("nonexistent_cap")
 
     @pytest.mark.asyncio
-    async def test_get_agent_endpoint_reads_url(self, temp_registry):
+    async def test_get_agent_endpoint_reads_url(self):
         """URL-configured entries should resolve for callers."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
         registry._registry["agents"] = [{"name": "url_only_agent", "url": "http://localhost:9310"}]
 
@@ -201,9 +203,9 @@ class TestToolRegistry:
         assert endpoint == "http://localhost:9310"
 
     @pytest.mark.asyncio
-    async def test_unregister(self, temp_registry):
+    async def test_unregister(self):
         """Test unregistering an agent or tool."""
-        registry = ToolRegistry(temp_registry)
+        registry = ToolRegistry()
         await registry.load()
 
         entry = AgentRegistryEntry(
@@ -222,10 +224,13 @@ class TestToolRegistry:
         assert len(registry.get_agents()) == 0
 
     @pytest.mark.asyncio
-    async def test_persistence(self, temp_registry):
-        """Test that registry persists to disk."""
+    async def test_persistence(self):
+        """Test that registry persists via the document store."""
+        loader, saver, backing = _fake_store()
+
         # First instance
-        registry1 = ToolRegistry(temp_registry)
+        registry1 = ToolRegistry()
+        registry1.bind_store(loader, saver)
         await registry1.load()
 
         entry = AgentRegistryEntry(
@@ -236,8 +241,9 @@ class TestToolRegistry:
         )
         await registry1.register_agent(entry)
 
-        # Second instance (simulating restart)
-        registry2 = ToolRegistry(temp_registry)
+        # Second instance (simulating restart) — same store
+        registry2 = ToolRegistry()
+        registry2.bind_store(loader, saver)
         await registry2.load()
 
         agents = registry2.get_agents()
@@ -245,34 +251,40 @@ class TestToolRegistry:
         assert agents[0]["name"] == "persistent_agent"
 
     @pytest.mark.asyncio
-    async def test_runtime_tools_are_not_persisted(self, temp_registry):
-        """Runtime MCP tools should stay in memory instead of being persisted."""
-        registry = ToolRegistry(temp_registry)
+    async def test_store_persists_all_entries(self):
+        """With store backing, tools are persisted alongside agents."""
+        loader, saver, backing = _fake_store()
+
+        registry = ToolRegistry()
+        registry.bind_store(loader, saver)
         await registry.load()
 
         await registry.register_tool({"name": "ephemeral_tool", "capabilities": ["fetch"]})
         tools = registry.get_tools()
         assert len(tools) == 1
         assert tools[0]["name"] == "ephemeral_tool"
+        # Explicitly save so the store is written before reloading.
+        await registry.save()
 
-        registry_reloaded = ToolRegistry(temp_registry)
+        # With store-backed, tools are persisted on save.
+        registry_reloaded = ToolRegistry()
+        registry_reloaded.bind_store(loader, saver)
         await registry_reloaded.load()
-        assert registry_reloaded.get_tools() == []
+        assert len(registry_reloaded.get_tools()) == 1
 
     @pytest.mark.asyncio
-    async def test_load_merges_legacy_and_map_entries(self, temp_registry):
+    async def test_load_merges_legacy_and_map_entries(self):
         """Map entries should be loaded even when legacy agents list exists."""
-        temp_registry.write_text(
-            json.dumps(
-                {
-                    "agents": [{"name": "from_legacy", "url": "http://legacy:8080"}],
-                    "from_legacy": {"url": "http://map:8081"},
-                    "from_map": {"url": "http://map:8082"},
-                }
-            ),
-            encoding="utf-8",
-        )
-        registry = ToolRegistry(temp_registry)
+
+        async def loader():
+            return {
+                "agents": [{"name": "from_legacy", "url": "http://legacy:8080"}],
+                "from_legacy": {"url": "http://map:8081"},
+                "from_map": {"url": "http://map:8082"},
+            }
+
+        registry = ToolRegistry()
+        registry.bind_store(loader, None)  # no saver needed for load
         await registry.load()
 
         agents = sorted(registry.get_agents(), key=lambda a: a["name"])

@@ -22,7 +22,6 @@ from a2a.types import (
     Part,
     PushNotificationConfig,
     Role,
-    TaskIdParams,
     TaskQueryParams,
     TextPart,
 )
@@ -33,6 +32,7 @@ logger = logging.getLogger(__name__)
 _TERMINAL_TASK_STATES = {"completed", "failed", "canceled", "cancelled"}
 
 _MAX_PROGRESS_UPDATES = 50
+
 
 class A2AClient:
     """Client for calling A2A agents over HTTP."""
@@ -153,8 +153,6 @@ class A2AClient:
                 return latest
             await asyncio.sleep(min(0.25, remaining))
 
-
-
     async def call_agent(
         self,
         agent_config: dict[str, Any],
@@ -187,23 +185,26 @@ class A2AClient:
 
         try:
             remaining = max(deadline - time.monotonic(), 0.0)
-            async with asyncio.timeout(remaining), self._sdk_client(
-                agent_config,
-                timeout=remaining,
-                # Only request streaming when a caller actually wants
-                # intermediate progress (on_progress): callers that don't
-                # are better served by plain non-streaming request/response,
-                # which doesn't depend on the target agent's SSE support at
-                # all. Requesting it unconditionally would be *safe*
-                # regardless of what the agent advertises -- the SDK
-                # negotiates against the agent card (base_client.py checks
-                # self._config.streaming AND card.capabilities.streaming)
-                # and falls back transparently -- but "safe" isn't the same
-                # as "no reason not to": narrowing the blast radius to only
-                # the callers who opted in is strictly better.
-                streaming=on_progress is not None,
-                polling=not blocking,
-            ) as client:
+            async with (
+                asyncio.timeout(remaining),
+                self._sdk_client(
+                    agent_config,
+                    timeout=remaining,
+                    # Only request streaming when a caller actually wants
+                    # intermediate progress (on_progress): callers that don't
+                    # are better served by plain non-streaming request/response,
+                    # which doesn't depend on the target agent's SSE support at
+                    # all. Requesting it unconditionally would be *safe*
+                    # regardless of what the agent advertises -- the SDK
+                    # negotiates against the agent card (base_client.py checks
+                    # self._config.streaming AND card.capabilities.streaming)
+                    # and falls back transparently -- but "safe" isn't the same
+                    # as "no reason not to": narrowing the blast radius to only
+                    # the callers who opted in is strictly better.
+                    streaming=on_progress is not None,
+                    polling=not blocking,
+                ) as client,
+            ):
                 message = Message(
                     role=cast(Any, getattr(Role, "user", "user")),
                     parts=[Part(root=TextPart(text=request or ""))],
@@ -247,9 +248,14 @@ class A2AClient:
                                     # Artifact updates carry result data, not status
                                     # progress. Keep them on the task snapshot but do
                                     # not retain or forward them as progress events.
-                                    is_artifact_update = isinstance(update_payload, dict) and str(
-                                        update_payload.get("kind") or ""
-                                    ).strip().lower().replace("_", "-") == "artifact-update"
+                                    is_artifact_update = (
+                                        isinstance(update_payload, dict)
+                                        and str(update_payload.get("kind") or "")
+                                        .strip()
+                                        .lower()
+                                        .replace("_", "-")
+                                        == "artifact-update"
+                                    )
                                     if blocking and not is_artifact_update:
                                         progress_updates.append(update_payload)
                                         if on_progress is not None:
@@ -310,7 +316,6 @@ class A2AClient:
             result["progress_updates"] = list(progress_updates)
         return result
 
-
     async def get_task(
         self,
         agent_config: dict[str, Any],
@@ -324,22 +329,6 @@ class A2AClient:
                 task = await client.get_task(
                     TaskQueryParams(id=task_id, history_length=history_length)
                 )
-        except (TimeoutError, httpx.TimeoutException):
-            return {"success": False, "error": f"Request timeout after {timeout}s"}
-        except Exception as exc:
-            return {"success": False, "error": str(exc)}
-        return {"success": True, "result": self._serialize_model(task)}
-
-    async def cancel_task(
-        self,
-        agent_config: dict[str, Any],
-        task_id: str,
-        timeout: float = 15.0,
-    ) -> dict[str, Any]:
-        """Cancel an A2A task by task ID."""
-        try:
-            async with self._sdk_client(agent_config, timeout=timeout) as client:
-                task = await client.cancel_task(TaskIdParams(id=task_id))
         except (TimeoutError, httpx.TimeoutException):
             return {"success": False, "error": f"Request timeout after {timeout}s"}
         except Exception as exc:
