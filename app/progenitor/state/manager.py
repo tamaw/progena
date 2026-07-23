@@ -196,17 +196,39 @@ class StateManager:
     # ==========================================================================
     # Schedule management (database-backed in production runtime)
     # ==========================================================================
-    async def get_schedule(self) -> dict[str, ScheduleEntry]:
-        """Return the schedule document.
+    @staticmethod
+    def _normalize_schedule_payload(payload: Any) -> tuple[dict[str, Any], bool]:
+        """Normalize the current object-keyed schedule document.
 
-        Read straight from the shared store rather than the in-memory
-        cache: schedules are also created/paused/deleted by the backend
-        (UI) writing the same Postgres document, so a cached copy would
-        hide those cross-process changes from the runtime scheduler.
+        Older runtime-store documents used a list of serialized schedule
+        entries. Keep those entries readable during the shape migration, while
+        rejecting malformed data instead of silently dropping scheduled work.
         """
+        if isinstance(payload, dict):
+            return payload, False
+        if not isinstance(payload, list):
+            raise ValueError("schedule document must be an object or legacy entry list")
+
+        normalized: dict[str, Any] = {}
+        for item in payload:
+            if not isinstance(item, dict):
+                raise ValueError("legacy schedule entries must be objects")
+            entry_id = item.get("id")
+            if not isinstance(entry_id, str) or not entry_id.strip():
+                raise ValueError("legacy schedule entries must have a non-empty string id")
+            if entry_id in normalized:
+                raise ValueError(f"duplicate legacy schedule id: {entry_id}")
+            normalized[entry_id] = item
+        return normalized, True
+
+    async def get_schedule(self) -> dict[str, ScheduleEntry]:
+        """Return the schedule document, migrating the legacy list shape."""
         payload = await self._runtime_store.get_document("schedule", {})
-        self._state_cache["schedule"] = payload
-        return {k: ScheduleEntry.model_validate(v) for k, v in payload.items()}
+        normalized, migrated = self._normalize_schedule_payload(payload)
+        if migrated:
+            await self._runtime_store.save_document("schedule", normalized)
+        self._state_cache["schedule"] = normalized
+        return {k: ScheduleEntry.model_validate(v) for k, v in normalized.items()}
 
     async def save_schedule(self, schedule: dict[str, ScheduleEntry]) -> None:
         """Persist the schedule document."""
