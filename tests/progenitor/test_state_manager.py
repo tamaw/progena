@@ -145,6 +145,16 @@ class TestStateManager:
         assert await manager.get_schedule() == {}
         assert store._documents["schedule"] == {}
 
+    @pytest.mark.asyncio
+    async def test_initialize_migrates_legacy_schedule_document(self):
+        store = _FakeRuntimeStore()
+        store._documents["schedule"] = []
+        manager = StateManager(runtime_store=store)
+
+        await manager.initialize()
+
+        assert store._documents["schedule"] == {}
+
     # ------------------------------------------------------------------
     # A2A tasks
     # ------------------------------------------------------------------
