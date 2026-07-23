@@ -15,6 +15,7 @@ from app.progenitor.agent.state_backend import (
     WorkflowDirectoryBackend,
     card_to_markdown,
     create_health_state_file,
+    create_knowledge_state_file,
     create_mcp_state_file,
     create_registry_state_file,
     create_schedule_state_file,
@@ -51,6 +52,32 @@ def _backend(payload=None) -> tuple[StateDocumentBackend, _FakeStateManager, lis
         reloads.append(True)
 
     backend = StateDocumentBackend([create_mcp_state_file(sm, on_change=on_change)])
+    return backend, sm, reloads
+
+
+class _FakeKnowledgeStateManager:
+    def __init__(self, payload: dict[str, Any] | None = None) -> None:
+        self.payload = payload or {"bases": []}
+        self.saved: list[dict[str, Any]] = []
+
+    async def get_knowledge_config(self) -> dict[str, Any]:
+        return copy.deepcopy(self.payload)
+
+    async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
+        self.payload = copy.deepcopy(payload)
+        self.saved.append(copy.deepcopy(payload))
+
+
+def _knowledge_backend(
+    payload: dict[str, Any] | None = None,
+) -> tuple[StateDocumentBackend, _FakeKnowledgeStateManager, list[bool]]:
+    sm = _FakeKnowledgeStateManager(payload)
+    reloads: list[bool] = []
+
+    async def on_change() -> None:
+        reloads.append(True)
+
+    backend = StateDocumentBackend([create_knowledge_state_file(sm, on_change=on_change)])
     return backend, sm, reloads
 
 
@@ -125,6 +152,34 @@ async def test_awrite_persists_and_runs_on_change():
 async def test_awrite_invalid_does_not_persist_or_reload():
     backend, sm, reloads = _backend({"mcpServers": {"jina": {"url": "https://x/mcp"}}})
     result = await backend.awrite("/mcp.json", '{"mcpServers": {"x": {}}}')  # missing url
+    assert result.error and "Invalid" in result.error
+    assert sm.saved == []
+    assert reloads == []
+
+
+async def test_knowledge_virtual_file_roundtrip() -> None:
+    backend, sm, reloads = _knowledge_backend()
+    result = await backend.awrite(
+        "/knowledge.json",
+        json.dumps({"bases": [{"name": "Project Docs", "tags": ["internal"]}]}),
+    )
+    assert result.error is None
+    assert result.path == "/knowledge.json"
+    assert sm.payload["bases"][0]["name"] == "Project Docs"
+    assert sm.payload["bases"][0]["id"]
+    assert reloads == [True]
+
+    read = await backend.aread("/knowledge.json")
+    assert read.error is None
+    assert json.loads(read.file_data["content"]) == sm.payload
+
+
+async def test_invalid_knowledge_virtual_file_does_not_persist() -> None:
+    backend, sm, reloads = _knowledge_backend()
+    result = await backend.awrite(
+        "/knowledge.json",
+        json.dumps({"bases": [{"name": "Docs", "metric": "invalid"}]}),
+    )
     assert result.error and "Invalid" in result.error
     assert sm.saved == []
     assert reloads == []
