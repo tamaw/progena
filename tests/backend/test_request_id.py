@@ -49,6 +49,23 @@ class TestRequestIdMiddleware:
         assert request_id.startswith("req-")
         assert len(request_id) == 16  # "req-" (4) + 12 hex chars
 
+    def test_finite_response_exposes_timing_metric(self, app):
+        """Finite responses expose a browser-visible server timing measurement."""
+        with TestClient(app) as client:
+            response = client.get("/api/ui/widgets")
+
+        assert "Server-Timing" in response.headers
+        assert response.headers["Server-Timing"].startswith("app;dur=")
+        assert float(response.headers["X-Response-Time-Ms"]) >= 0
+
+    def test_large_response_is_compressed(self, app):
+        """Large finite responses negotiate gzip compression."""
+        with TestClient(app) as client:
+            response = client.get("/openapi.json", headers={"Accept-Encoding": "gzip"})
+
+        assert response.headers.get("content-encoding") == "gzip"
+        assert response.headers.get("vary", "").lower() == "accept-encoding"
+
 
 class TestClientRequestIdPropagation:
     """Test that request ID is passed to the Progenitor client."""

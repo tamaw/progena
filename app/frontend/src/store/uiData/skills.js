@@ -14,6 +14,7 @@ export const initialState = {
     error: null,
     snapshotRequestId: null,
     requestId: null,
+    contentByPath: {},
   },
 };
 
@@ -49,6 +50,15 @@ export const saveSkill = createAcknowledgedThunk('uiData/saveSkill', async ({ sk
   });
 });
 
+// Fetch one skill's full body on demand (list items carry metadata only).
+export const fetchSkillContent = createAcknowledgedThunk('uiData/fetchSkillContent', async ({ skillsUrl, path }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${skillsUrl}/content`, { path }),
+    { requestId },
+  );
+  return { ...acknowledgement, path };
+});
+
 // Create a new skill file under <agent>/<name>/SKILL.md. The backend broadcasts
 // `skills.snapshot`; the acknowledgement triggers the snapshot event
 // which reconciles state.
@@ -64,6 +74,11 @@ export const eventHandlers = {
   'skills.snapshot': (state, payload) => {
     applySkills(state, payload.skills, payload.request_id || null);
   },
+  'skill.content.updated': (state, payload) => {
+    if (typeof payload?.path === 'string' && payload.path) {
+      state.skills.contentByPath[payload.path] = payload;
+    }
+  },
 };
 
 export function buildExtraReducers(builder) {
@@ -75,3 +90,6 @@ export function buildExtraReducers(builder) {
 
 export const selectSkills = (state) => state.uiData.skills.items;
 export const selectSkillsState = (state) => state.uiData.skills;
+export const selectSkillContentEntry = (state, path) => (
+  path ? state.uiData.skills.contentByPath[path] || null : null
+);

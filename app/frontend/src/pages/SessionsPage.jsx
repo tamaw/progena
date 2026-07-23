@@ -5,11 +5,10 @@ import {
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
@@ -382,36 +381,38 @@ export default function SessionsPage() {
           <PaneListSortButton title="Sort">Recent</PaneListSortButton>
         </PaneListToolbar>
 
-        <PaneListScroll>
-          {Array.from(groupedSessions.entries()).map(([group, sessions]) => (
-            <PaneListGroup key={group} title={group} count={sessions.length}>
-              {sessions.map((session) => {
-                const agent = AGENTS[session.agent] || AGENTS.OpenCode;
-                return (
-                  <button
-                    key={session.id}
-                    type="button"
-                    className={`sess-row ${selected.id === session.id ? 'is-selected' : ''}`}
-                    onClick={() => setSelectedId(session.id)}
-                  >
-                    <span className={`sess-row__star ${session.pinned ? 'is-on' : ''}`}>{session.pinned ? '★' : '☆'}</span>
-                    <span className="sess-row__top">
-                      <span className="sess-row__dot" style={{ background: agent.color }} />
-                      <span className="sess-row__agent" style={{ color: agent.color }}>{session.agent}</span>
-                      <span className="sess-row__sep">·</span>
-                      <span className="sess-row__project">{session.project}</span>
-                    </span>
-                    <span className="sess-row__age">{session.age}</span>
-                    <span className="sess-row__title">{session.title}</span>
-                    <span className="sess-row__msgs">
-                      <span className="num">{session.messages.toLocaleString()}</span> msgs · {session.tools} tools · <span className={session.errors > 0 ? 'err' : ''}>{session.errors} err</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </PaneListGroup>
-          ))}
-        </PaneListScroll>
+        <PaneListVirtualized
+          groups={Array.from(groupedSessions.entries()).map(([group, sessions]) => ({
+            key: group,
+            title: group,
+            items: sessions,
+          }))}
+          getItemKey={(session) => session.id}
+          estimatedItemHeight={92}
+          renderItem={(session) => {
+            const agent = AGENTS[session.agent] || AGENTS.OpenCode;
+            return (
+              <button
+                type="button"
+                className={`sess-row ${selected.id === session.id ? 'is-selected' : ''}`}
+                onClick={() => setSelectedId(session.id)}
+              >
+                <span className={`sess-row__star ${session.pinned ? 'is-on' : ''}`}>{session.pinned ? '★' : '☆'}</span>
+                <span className="sess-row__top">
+                  <span className="sess-row__dot" style={{ background: agent.color }} />
+                  <span className="sess-row__agent" style={{ color: agent.color }}>{session.agent}</span>
+                  <span className="sess-row__sep">·</span>
+                  <span className="sess-row__project">{session.project}</span>
+                </span>
+                <span className="sess-row__age">{session.age}</span>
+                <span className="sess-row__title">{session.title}</span>
+                <span className="sess-row__msgs">
+                  <span className="num">{session.messages.toLocaleString()}</span> msgs · {session.tools} tools · <span className={session.errors > 0 ? 'err' : ''}>{session.errors} err</span>
+                </span>
+              </button>
+            );
+          }}
+        />
 
         <PaneListFooter>
           <span><span className="num">637</span> sessions</span>

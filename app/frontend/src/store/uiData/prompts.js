@@ -14,6 +14,7 @@ export const initialState = {
     error: null,
     snapshotRequestId: null,
     requestId: null,
+    contentByPath: {},
   },
 };
 
@@ -49,9 +50,23 @@ export const savePrompt = createAcknowledgedThunk('uiData/savePrompt', async ({ 
   });
 });
 
+// Fetch one prompt's full body on demand (list items carry metadata only).
+export const fetchPromptContent = createAcknowledgedThunk('uiData/fetchPromptContent', async ({ promptsUrl, path }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    withQuery(`${promptsUrl}/content`, { path }),
+    { requestId },
+  );
+  return { ...acknowledgement, path };
+});
+
 export const eventHandlers = {
   'prompts.snapshot': (state, payload) => {
     applyPrompts(state, payload.prompts, payload.request_id || null);
+  },
+  'prompt.content.updated': (state, payload) => {
+    if (typeof payload?.path === 'string' && payload.path) {
+      state.prompts.contentByPath[payload.path] = payload;
+    }
   },
 };
 
@@ -63,3 +78,6 @@ export function buildExtraReducers(builder) {
 }
 export const selectPrompts = (state) => state.uiData.prompts.items;
 export const selectPromptsState = (state) => state.uiData.prompts;
+export const selectPromptContentEntry = (state, path) => (
+  path ? state.uiData.prompts.contentByPath[path] || null : null
+);

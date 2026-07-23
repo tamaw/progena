@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
@@ -7,10 +7,12 @@ import { renderMarkdownToHtml, stripYamlFrontmatter } from '../lib/markdown';
 import { createUuid } from '../lib/uuid';
 import {
   fetchSkills,
+  fetchSkillContent,
   saveSkill,
   createSkill,
   selectSkills,
   selectSkillsState,
+  selectSkillContentEntry,
 } from '../store/uiDataSlice';
 import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from '../store/uiData/snapshotSave';
 import DetailHeader, {
@@ -25,10 +27,9 @@ import {
   PaneCollapseSeam,
   PaneExpandRail,
   PaneListFilters,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
@@ -144,6 +145,9 @@ export default function SkillsPage() {
   const [editorMode, setEditorMode] = useState('preview');
   const [newAgent, setNewAgent] = useState('progenitor');
   const [newSkillName, setNewSkillName] = useState('new-skill');
+  const skillContentEntry = useSelector((state) => selectSkillContentEntry(state, selectedPath));
+  const skillContentByPath = useSelector((state) => state.uiData.skills.contentByPath);
+  const initializedContentPathRef = useRef(null);
   const requestedPath = searchParams.get('path') || '';
   const loading = !skillsState.loaded && pendingLoad !== null;
 
@@ -250,15 +254,20 @@ export default function SkillsPage() {
     if (!createdSkill) {
       return;
     }
+    const createdContent = skillContentByPath[createdSkill.path]?.content;
+    if (createdContent === undefined) {
+      return; // wait for skill.content.updated to arrive before completing creation
+    }
     // Canonical event application is the intentional source of this local UI transition.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedPath(createdSkill.path);
-    setDraftContent(createdSkill.content || '');
+    initializedContentPathRef.current = createdSkill.path;
+    setDraftContent(createdContent);
     setCreating(false);
     setSaving(false);
     setPendingCreatedSkill(null);
     setStatusMessage(`Created ${createdSkill.path}.`);
-  }, [pendingCreatedSkill, skills, skillsState.snapshotRequestId]);
+  }, [pendingCreatedSkill, skillContentByPath, skills, skillsState.snapshotRequestId]);
 
   useEffect(() => {
     if (!pendingCreatedSkill || realtime.connected) {
@@ -301,14 +310,14 @@ export default function SkillsPage() {
       return;
     }
     // Snapshot-driven selection intentionally synchronizes route-local view state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedPath((current) => {
       const next = skills.find((skill) => skill.path === requestedPath)?.path
         || skills.find((skill) => skill.path === current)?.path
         || skills[0]?.path
         || '';
       if (next !== current) {
-        setDraftContent(skills.find((skill) => skill.path === next)?.content || '');
+        setDraftContent('');
+        initializedContentPathRef.current = null;
       }
       return next;
     });
@@ -324,6 +333,40 @@ export default function SkillsPage() {
     nextParams.set('path', selectedPath);
     setSearchParams(nextParams, { replace: true });
   }, [creating, searchParams, selectedPath, setSearchParams]);
+
+  // List items carry metadata only; fetch the full body for the selected path.
+  // Skipped while creating (there is no persisted path yet) or while a
+  // just-created skill's content is still resolving (handled above).
+  useEffect(() => {
+    if (creating || !realtime.connected || !selectedPath || skillContentEntry?.path === selectedPath) {
+      return;
+    }
+    dispatch(fetchSkillContent({ skillsUrl, path: selectedPath }))
+      .unwrap()
+      .catch((contentError) => setError(contentError));
+  }, [creating, dispatch, realtime.connected, selectedPath, skillContentEntry, skillsUrl]);
+
+  // Seed the editor once per selected path when its content arrives, so a
+  // later re-broadcast of the same event never clobbers in-progress edits.
+  useEffect(() => {
+    if (creating || !skillContentEntry || skillContentEntry.path !== selectedPath) {
+      return;
+    }
+    if (initializedContentPathRef.current === selectedPath) {
+      return;
+    }
+    initializedContentPathRef.current = selectedPath;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setDraftContent(skillContentEntry.content || '');
+    });
+    return () => {
+      active = false;
+    };
+  }, [creating, selectedPath, skillContentEntry]);
 
   const groupFilters = useMemo(
     () => ['All', ...Array.from(new Set(skills.map((skill) => skill.agent || 'progenitor'))).sort((left, right) => left.localeCompare(right))],
@@ -341,18 +384,12 @@ export default function SkillsPage() {
   }, [activeGroup, query, skills]);
 
   const skillTree = useMemo(() => buildSkillTree(visibleSkills), [visibleSkills]);
-  const groupCounts = useMemo(
-    () => visibleSkills.reduce((counts, skill) => {
-      const group = skill.agent || 'progenitor';
-      return { ...counts, [group]: (counts[group] || 0) + 1 };
-    }, {}),
-    [visibleSkills],
-  );
   const selectedSkill = useMemo(
     () => skills.find((skill) => skill.path === selectedPath) || null,
     [selectedPath, skills],
   );
-  const hasUnsavedChanges = selectedSkill ? draftContent !== (selectedSkill.content || '') : false;
+  const hasUnsavedChanges = selectedSkill && skillContentEntry ? draftContent !== (skillContentEntry.content || '') : false;
+  const isSkillContentLoading = Boolean(selectedSkill) && !creating && (!skillContentEntry || skillContentEntry.path !== selectedPath);
   const renderedDraftContent = useMemo(
     () => renderMarkdownToHtml(stripYamlFrontmatter(draftContent)),
     [draftContent],
@@ -366,7 +403,7 @@ export default function SkillsPage() {
     thunk: saveSkill,
     path: selectedSkill?.path,
     content: draftContent,
-    savedContent: selectedSkill?.content || '',
+    savedContent: skillContentEntry?.content || '',
     saving,
     realtimeConnected: realtime.connected,
     setDraftContent,
@@ -374,6 +411,7 @@ export default function SkillsPage() {
     setPendingSave,
     setStatusMessage,
     setError,
+    resolveSavedContent: (path) => (skillContentEntry?.path === path ? skillContentEntry.content : undefined),
     buildArgs: ({ path, content, requestId }) => ({ skillsUrl, path, content, requestId }),
   });
   const normalizedNewAgent = normalizeSkillSegment(newAgent);
@@ -388,7 +426,8 @@ export default function SkillsPage() {
     setCreating(false);
     setError(null);
     setSelectedPath(skill.path);
-    setDraftContent(skill.content || '');
+    setDraftContent('');
+    initializedContentPathRef.current = null;
     setStatusMessage('');
   };
 
@@ -416,7 +455,7 @@ export default function SkillsPage() {
       return;
     }
     setError(null);
-    setDraftContent(selectedSkill.content || '');
+    setDraftContent(skillContentEntry?.content || '');
     setStatusMessage('Reverted unsaved changes.');
   };
 
@@ -495,35 +534,32 @@ export default function SkillsPage() {
           </button>
         </PaneListToolbar>
 
-        <PaneListScroll className="prompts-sidebar-body">
-          {loading && <div className="prompts-empty-state">Loading skills...</div>}
-          {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">{error?.message || skillsState.error}</div>}
-          {!loading && !realtime.connected && skills.length === 0 && !(error || skillsState.error) && (
-            <div className="prompts-empty-state">Reconnect the realtime stream to load skills.</div>
-          )}
-          {!loading && skills.length === 0 && realtime.connected && !(error || skillsState.error) && (
-            <div className="prompts-empty-state">No skills found. Create one to share reusable behavior with agents.</div>
-          )}
-          {!loading && visibleSkills.length === 0 && skills.length > 0 && (
-            <div className="prompts-empty-state">No skills match the current filters.</div>
-          )}
-          {!loading && skillTree.map((group) => (
-            <PaneListGroup key={group.name} title={group.name} count={groupCounts[group.name] || 0}>
-              <div className="prompts-tree-branch">
-                <div className="prompts-tree-children">
-                  {group.skills.map((skill) => (
-                    <SkillRow
-                      key={skill.path}
-                      skill={skill}
-                      selectedPath={selectedPath}
-                      onSelectSkill={handleSelectSkill}
-                    />
-                  ))}
-                </div>
-              </div>
-            </PaneListGroup>
-          ))}
-        </PaneListScroll>
+        {loading && <div className="prompts-empty-state">Loading skills...</div>}
+        {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">{error?.message || skillsState.error}</div>}
+        {!loading && !realtime.connected && skills.length === 0 && !(error || skillsState.error) && (
+          <div className="prompts-empty-state">Reconnect the realtime stream to load skills.</div>
+        )}
+        {!loading && skills.length === 0 && realtime.connected && !(error || skillsState.error) && (
+          <div className="prompts-empty-state">No skills found. Create one to share reusable behavior with agents.</div>
+        )}
+        {!loading && visibleSkills.length === 0 && skills.length > 0 && (
+          <div className="prompts-empty-state">No skills match the current filters.</div>
+        )}
+        {!loading && skillTree.length ? (
+          <PaneListVirtualized
+            className="prompts-sidebar-body"
+            groups={skillTree.map((group) => ({ ...group, items: group.skills }))}
+            getItemKey={(skill) => skill.path}
+            estimatedItemHeight={42}
+            renderItem={(skill) => (
+              <SkillRow
+                skill={skill}
+                selectedPath={selectedPath}
+                onSelectSkill={handleSelectSkill}
+              />
+            )}
+          />
+        ) : null}
         </>
         )}
       </PaneSection>
@@ -614,6 +650,8 @@ export default function SkillsPage() {
                   </label>
                 </div>
 
+              ) : isSkillContentLoading ? (
+                <div className="prompts-empty-state">Loading skill…</div>
               ) : editorMode === 'preview' && !creating ? (
                 <div
                   className="markdown-content"

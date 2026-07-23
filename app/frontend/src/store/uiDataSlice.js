@@ -149,6 +149,7 @@ export const selectHasUnseenNavRoute = createSelector(
 // Re-export thunks + selectors from their domain modules.
 export {
   fetchChatSessions,
+  fetchChatMessages,
   requestChatSessionDetail,
   requestChatSessionReconciliation,
   createChatSession,
@@ -198,21 +199,27 @@ export {
   fetchSkills,
   saveSkill,
   createSkill,
+  fetchSkillContent,
   selectSkills,
   selectSkillsState,
+  selectSkillContentEntry,
 } from './uiData/skills';
 
 export {
   fetchPrompts,
   savePrompt,
+  fetchPromptContent,
   selectPrompts,
   selectPromptsState,
+  selectPromptContentEntry,
 } from './uiData/prompts';
 
 export {
   fetchMcp,
+  fetchMcpServerDetail,
   selectMcpServers,
   selectMcpState,
+  selectMcpServerDetail,
 } from './uiData/mcp';
 
 export {

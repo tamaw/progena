@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
+import { memo, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useChatApi } from '../hooks/api/useChatApi';
@@ -16,6 +16,7 @@ import {
   createChatSession,
   deleteChatSession,
   ensureDraftChatSession,
+  fetchChatMessages,
   requestChatSessionDetail,
   requestChatSessionReconciliation,
   selectActiveChatSession,
@@ -35,11 +36,10 @@ import {
   PaneCollapseSeam,
   PaneExpandRail,
   PaneListFilters,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
@@ -519,6 +519,10 @@ function ConversationPage() {
     if (!container) return;
     isPinnedToBottomRef.current = container.scrollHeight - container.scrollTop - container.clientHeight < 24;
   }, []);
+  const [oldestMessageCursor, setOldestMessageCursor] = useState(null);
+  const [loadingOlderMessages, setLoadingOlderMessages] = useState(false);
+  const appliedOlderPageRequestIdRef = useRef(null);
+  const pendingScrollAdjustmentRef = useRef(null);
   const titleInputRef = useRef(null);
   // Tracks the requestId of the fetch last applied to local `messages` state.
   // Each dispatch of requestChatSessionDetail carries a fresh requestId
@@ -960,6 +964,8 @@ function ConversationPage() {
     recentScheduledContent.current.clear();
     isPinnedToBottomRef.current = true;
     setMessages(backendMessages);
+    setOldestMessageCursor(backendMessages.length ? backendMessages[0].id : null);
+    appliedOlderPageRequestIdRef.current = null;
     setIsGenerating(false);
     // The chat being displayed just changed identity -- a live turn still
     // sitting in state belongs to whatever chat was previously on screen
@@ -977,6 +983,63 @@ function ConversationPage() {
       localStorage.removeItem(config.storage.chatHistory);
     }
   }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, backgroundOriginChatIdRef, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
+
+  // Prepends an older-messages page fetched via "Load earlier messages" into
+  // local `messages` state. Deliberately independent of the reconciliation
+  // (`mergeCanonicalMessages`/`areChatTranscriptsEquivalent`) and live-turn
+  // pipelines above: those only ever touch the trailing edge of the
+  // transcript, so prepending historical pages to the front never interacts
+  // with them.
+  useEffect(() => {
+    const pending = activeBackendChatState?.pendingOlderPage;
+    if (!pending || pending.requestId === appliedOlderPageRequestIdRef.current) {
+      return;
+    }
+    appliedOlderPageRequestIdRef.current = pending.requestId;
+    const olderMessages = pending.messages
+      .map((message, index) => normalizeBackendChatMessage(message, index))
+      .filter(Boolean);
+    if (!olderMessages.length) {
+      return;
+    }
+    pendingScrollAdjustmentRef.current = messagesContainerRef.current?.scrollHeight ?? null;
+    setMessages((prev) => {
+      const existingIds = new Set(prev.map((message) => message.id));
+      const deduped = olderMessages.filter((message) => !existingIds.has(message.id));
+      return deduped.length ? [...deduped, ...prev] : prev;
+    });
+    setOldestMessageCursor(olderMessages[0]?.id ?? null);
+  }, [activeBackendChatState?.pendingOlderPage]);
+
+  // Restores scroll offset after an older-messages prepend so the viewport
+  // does not visually jump to the new top of the list.
+  useLayoutEffect(() => {
+    const container = messagesContainerRef.current;
+    const previousHeight = pendingScrollAdjustmentRef.current;
+    if (!container || previousHeight == null) {
+      return;
+    }
+    container.scrollTop += container.scrollHeight - previousHeight;
+    pendingScrollAdjustmentRef.current = null;
+  }, [messages]);
+
+  const handleLoadOlderMessages = useCallback(async () => {
+    if (!threadId || !oldestMessageCursor || loadingOlderMessages || !activeBackendChatState?.hasMoreMessages) {
+      return;
+    }
+    setLoadingOlderMessages(true);
+    try {
+      await dispatch(fetchChatMessages({
+        chatsUrl: getApiUrl('chats'),
+        threadId,
+        beforeMessageId: oldestMessageCursor,
+      })).unwrap();
+    } catch (loadError) {
+      show('error', 'Failed to load earlier messages', loadError.message);
+    } finally {
+      setLoadingOlderMessages(false);
+    }
+  }, [activeBackendChatState?.hasMoreMessages, dispatch, getApiUrl, loadingOlderMessages, oldestMessageCursor, show, threadId]);
 
   // Committed message changes and generation transitions keep the page at the
   // tail only while the user remains near the bottom. Per-frame live-turn
@@ -1747,58 +1810,55 @@ function ConversationPage() {
             onSelect={setSidebarSort}
           />
         </PaneListToolbar>
-        <PaneListScroll>
-          {visibleSessionGroups.length === 0 ? (
-            <div className="chat-pane-empty">{sidebarEmptyMessageText}</div>
-          ) : (
-            visibleSessionGroups.map((group) => {
-              const cards = group.items.map((item) => (
-                <article
-                  key={item.id}
-                  className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
-                  data-thread-id={item.threadId || item.id}
-                  data-chat-source={item.source || 'unknown'}
-                  role="button"
-                  tabIndex={0}
-                  aria-current={item.selected ? 'true' : undefined}
-                  onClick={() => {
+        {visibleSessionGroups.length === 0 ? (
+          <div className="chat-pane-empty">{sidebarEmptyMessageText}</div>
+        ) : (
+          <PaneListVirtualized
+            groups={visibleSessionGroups.map((group) => ({
+              key: group.key,
+              title: group.label,
+              items: group.items,
+            }))}
+            getItemKey={(item) => item.id}
+            estimatedItemHeight={70}
+            renderItem={(item) => (
+              <article
+                className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}
+                data-thread-id={item.threadId || item.id}
+                data-chat-source={item.source || 'unknown'}
+                role="button"
+                tabIndex={0}
+                aria-current={item.selected ? 'true' : undefined}
+                onClick={() => {
+                  void selectSessionItem(item);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
                     void selectSessionItem(item);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      void selectSessionItem(item);
-                    }
-                  }}
-                >
-                  <div className="chat-session-card__top">
-                    <span
-                      className={`chat-session-card__dot chat-session-card__dot--${item.status || 'idle'}`}
-                      aria-hidden="true"
-                    />
-                    <span className="chat-session-card__title">{item.title}</span>
-                    <span className="chat-session-card__age">{item.meta}</span>
+                  }
+                }}
+              >
+                <div className="chat-session-card__top">
+                  <span
+                    className={`chat-session-card__dot chat-session-card__dot--${item.status || 'idle'}`}
+                    aria-hidden="true"
+                  />
+                  <span className="chat-session-card__title">{item.title}</span>
+                  <span className="chat-session-card__age">{item.meta}</span>
+                </div>
+                {(item.preview || item.detail) && (
+                  <div className="chat-session-card__preview">
+                    {item.detail && (
+                      <span className="chat-session-card__state">{item.detail}</span>
+                    )}
+                    {item.preview}
                   </div>
-                  {(item.preview || item.detail) && (
-                    <div className="chat-session-card__preview">
-                      {item.detail && (
-                        <span className="chat-session-card__state">{item.detail}</span>
-                      )}
-                      {item.preview}
-                    </div>
-                  )}
-                </article>
-              ));
-              return group.label ? (
-                <PaneListGroup key={group.key} title={group.label} count={group.items.length}>
-                  {cards}
-                </PaneListGroup>
-              ) : (
-                <div key={group.key}>{cards}</div>
-              );
-            })
-          )}
-        </PaneListScroll>
+                )}
+              </article>
+            )}
+          />
+        )}
         </>
         )}
       </PaneSection>
@@ -1855,6 +1915,18 @@ function ConversationPage() {
                 </div>
               ) : (
                 <>
+                  {activeBackendChatState?.hasMoreMessages ? (
+                    <div className="chat-messages__load-older">
+                      <button
+                        type="button"
+                        className="chat-messages__load-older-button"
+                        onClick={handleLoadOlderMessages}
+                        disabled={loadingOlderMessages}
+                      >
+                        {loadingOlderMessages ? 'Loading…' : 'Load earlier messages'}
+                      </button>
+                    </div>
+                  ) : null}
                   {visibleMessages.map((msg) => {
                     if (msg.role === 'user' && streamFilters.user === false) return null;
                     return (

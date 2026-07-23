@@ -15,11 +15,10 @@ import {
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
@@ -950,27 +949,30 @@ export default function TasksPage({ context = null }) {
           />
         </PaneListToolbar>
 
-        <PaneListScroll>
-          {loading ? <div className="task-empty">Loading tasks...</div> : null}
-          {error ? <div className="task-alert">{error}</div> : null}
-          {!loading && !visibleCards.length ? <div className="task-empty">No matching tasks.</div> : null}
-          {!loading && groupedColumns.map((column) => (
-            column.cards.length ? (
-              <PaneListGroup key={column.id} title={column.label} count={column.cards.length}>
-                {column.cards.map((card, index) => (
-                  <TaskRow
-                    key={card.id}
-                    card={card}
-                    index={index}
-                    selected={selectedCard?.id === card.id}
-                    compact={column.cards.length > 4 && index > 2}
-                    onSelect={() => selectTaskCard(card.id, card.title)}
-                  />
-                ))}
-              </PaneListGroup>
-            ) : null
-          ))}
-        </PaneListScroll>
+        {loading ? <div className="task-empty">Loading tasks...</div> : null}
+        {error ? <div className="task-alert">{error}</div> : null}
+        {!loading && !visibleCards.length ? <div className="task-empty">No matching tasks.</div> : null}
+        {!loading && groupedColumns.length ? (
+          <PaneListVirtualized
+            groups={groupedColumns
+              .filter((column) => column.cards.length)
+              .map((column) => ({ ...column, items: column.cards }))}
+            getItemKey={(card) => card.id}
+            estimatedItemHeight={82}
+            renderItem={(card, index) => {
+              const column = groupedColumns.find((entry) => entry.cards.some((item) => item.id === card.id));
+              return (
+                <TaskRow
+                  card={card}
+                  index={index}
+                  selected={selectedCard?.id === card.id}
+                  compact={column?.cards.length > 4 && index > 2}
+                  onSelect={() => selectTaskCard(card.id, card.title)}
+                />
+              );
+            }}
+          />
+        ) : null}
 
         <PaneListFooter>
           <span><span className="num">{board?.cards.filter((card) => !isArchivedCard(card)).length ?? 0}</span> tasks</span>

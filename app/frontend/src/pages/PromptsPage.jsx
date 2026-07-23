@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
 import { selectRealtime } from '../store/realtimeSlice';
@@ -7,19 +7,20 @@ import { renderMarkdownToHtml } from '../lib/markdown';
 import { createUuid } from '../lib/uuid';
 import {
   fetchPrompts,
+  fetchPromptContent,
   savePrompt,
   selectPrompts,
   selectPromptsState,
+  selectPromptContentEntry,
 } from '../store/uiDataSlice';
 import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from '../store/uiData/snapshotSave';
 import {
   PaneCollapseSeam,
   PaneExpandRail,
   PaneListFilters,
-  PaneListGroup,
-  PaneListScroll,
   PaneListSearch,
   PaneListToolbar,
+  PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { PaneSection } from '../components/layout/PaneList';
@@ -86,66 +87,25 @@ function sortTreeNode(node) {
   };
 }
 
-function PromptTreeBranch({
-  label,
-  branchKey,
-  node,
-  depth = 0,
-  hideLabel = false,
-  selectedPath,
-  expandedNodes,
-  onToggle,
-  onSelectPrompt,
-}) {
+function flattenPromptNode(node, branchKey, depth, expandedNodes, hideLabel = false) {
   const isExpanded = hideLabel ? true : (expandedNodes[branchKey] ?? depth === 0);
-
-  return (
-    <div className="prompts-tree-branch">
-      {!hideLabel && (
-        <button
-          className={`prompts-tree-toggle depth-${Math.min(depth, 3)} ${isExpanded ? 'expanded' : ''}`}
-          onClick={() => onToggle(branchKey)}
-          type="button"
-        >
-          <span className="prompts-tree-caret">{isExpanded ? '▾' : '▸'}</span>
-          <span className="prompts-tree-label pane-row-caption">{label}</span>
-        </button>
-      )}
-
-      {isExpanded && (
-        <div className="prompts-tree-children">
-          {node.children.map((child) => (
-            <PromptTreeBranch
-              key={`${branchKey}/${child.name}`}
-              label={child.name}
-              branchKey={`${branchKey}/${child.name}`}
-              node={child}
-              depth={depth + 1}
-              hideLabel={false}
-              selectedPath={selectedPath}
-              expandedNodes={expandedNodes}
-              onToggle={onToggle}
-              onSelectPrompt={onSelectPrompt}
-            />
-          ))}
-
-          {node.prompts.map((prompt) => (
-            <button
-              key={prompt.path}
-              className={`prompts-tree-leaf depth-${Math.min(depth + 1, 3)} ${selectedPath === prompt.path ? 'active' : ''}`}
-              onClick={() => onSelectPrompt(prompt)}
-              type="button"
-              title={prompt.path}
-            >
-              <span className="prompts-tree-file pane-row-title">{prompt.displayName}</span>
-              <span className="prompts-tree-file-path pane-row-caption">{prompt.path}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  const rows = [];
+  if (!hideLabel) {
+    rows.push({ kind: 'branch', key: branchKey, label: node.name, branchKey, depth, isExpanded });
+  }
+  if (!isExpanded) {
+    return rows;
+  }
+  node.children.forEach((child) => {
+    const childKey = `${branchKey}/${child.name}`;
+    rows.push(...flattenPromptNode(child, childKey, depth + 1, expandedNodes));
+  });
+  node.prompts.forEach((prompt) => {
+    rows.push({ kind: 'prompt', key: prompt.path, prompt, depth: depth + 1 });
+  });
+  return rows;
 }
+
 
 export default function PromptsPage() {
   const dispatch = useDispatch();
@@ -167,6 +127,8 @@ export default function PromptsPage() {
   const [activeGroup, setActiveGroup] = useState('All');
   const [query, setQuery] = useState('');
   const [editorMode, setEditorMode] = useState('preview');
+  const promptContentEntry = useSelector((state) => selectPromptContentEntry(state, selectedPath));
+  const initializedContentPathRef = useRef(null);
   const requestedPath = searchParams.get('path') || '';
   const loading = !promptsState.loaded && pendingLoad !== null;
 
@@ -267,14 +229,14 @@ export default function PromptsPage() {
       return;
     }
     // Snapshot-driven selection intentionally synchronizes route-local view state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelectedPath((current) => {
       const next = prompts.find((prompt) => prompt.path === requestedPath)?.path
         || prompts.find((prompt) => prompt.path === current)?.path
         || prompts[0]?.path
         || '';
       if (next !== current) {
-        setDraftContent(prompts.find((prompt) => prompt.path === next)?.content || '');
+        setDraftContent('');
+        initializedContentPathRef.current = null;
       }
       return next;
     });
@@ -290,6 +252,38 @@ export default function PromptsPage() {
     nextParams.set('path', selectedPath);
     setSearchParams(nextParams, { replace: true });
   }, [searchParams, selectedPath, setSearchParams]);
+
+  // List items carry metadata only; fetch the full body for the selected path.
+  useEffect(() => {
+    if (!realtime.connected || !selectedPath || promptContentEntry?.path === selectedPath) {
+      return;
+    }
+    dispatch(fetchPromptContent({ promptsUrl, path: selectedPath }))
+      .unwrap()
+      .catch((contentError) => setError(contentError));
+  }, [dispatch, promptContentEntry, promptsUrl, realtime.connected, selectedPath]);
+
+  // Seed the editor once per selected path when its content arrives, so a
+  // later re-broadcast of the same event never clobbers in-progress edits.
+  useEffect(() => {
+    if (!promptContentEntry || promptContentEntry.path !== selectedPath) {
+      return;
+    }
+    if (initializedContentPathRef.current === selectedPath) {
+      return;
+    }
+    initializedContentPathRef.current = selectedPath;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) {
+        return;
+      }
+      setDraftContent(promptContentEntry.content || '');
+    });
+    return () => {
+      active = false;
+    };
+  }, [promptContentEntry, selectedPath]);
 
   const groupFilters = useMemo(
     () => ['All', ...Array.from(new Set(prompts.map((prompt) => prompt.primary_agent || prompt.category || 'unassigned'))).sort((left, right) => left.localeCompare(right))],
@@ -309,6 +303,14 @@ export default function PromptsPage() {
     () => buildPromptTree(visiblePrompts).map((group) => ({ ...group, ...sortTreeNode(group) })),
     [visiblePrompts]
   );
+  const virtualPromptGroups = useMemo(
+    () => promptTree.map((group) => ({
+      key: group.name,
+      title: group.name,
+      items: flattenPromptNode(group, group.name, 0, expandedNodes, true),
+    })),
+    [expandedNodes, promptTree],
+  );
   const groupCounts = useMemo(
     () => visiblePrompts.reduce((counts, prompt) => {
       const group = prompt.primary_agent || prompt.category || 'unassigned';
@@ -320,7 +322,8 @@ export default function PromptsPage() {
     () => prompts.find((prompt) => prompt.path === selectedPath) || null,
     [prompts, selectedPath]
   );
-  const hasUnsavedChanges = selectedPrompt ? draftContent !== (selectedPrompt.content || '') : false;
+  const hasUnsavedChanges = selectedPrompt && promptContentEntry ? draftContent !== (promptContentEntry.content || '') : false;
+  const isPromptContentLoading = Boolean(selectedPrompt) && (!promptContentEntry || promptContentEntry.path !== selectedPath);
   const renderedDraftContent = useMemo(() => renderMarkdownToHtml(draftContent), [draftContent]);
 
   const handleSave = useSnapshotSave({
@@ -331,7 +334,7 @@ export default function PromptsPage() {
     thunk: savePrompt,
     path: selectedPrompt?.path,
     content: draftContent,
-    savedContent: selectedPrompt?.content || '',
+    savedContent: promptContentEntry?.content || '',
     saving,
     realtimeConnected: realtime.connected,
     setDraftContent,
@@ -339,6 +342,7 @@ export default function PromptsPage() {
     setPendingSave,
     setStatusMessage,
     setError,
+    resolveSavedContent: (path) => (promptContentEntry?.path === path ? promptContentEntry.content : undefined),
     buildArgs: ({ path, content, requestId }) => ({ promptsUrl, path, content, requestId }),
   });
 
@@ -355,7 +359,8 @@ export default function PromptsPage() {
     }
     setError(null);
     setSelectedPath(prompt.path);
-    setDraftContent(prompt.content || '');
+    setDraftContent('');
+    initializedContentPathRef.current = null;
     setStatusMessage('');
   };
 
@@ -364,7 +369,7 @@ export default function PromptsPage() {
       return;
     }
     setError(null);
-    setDraftContent(selectedPrompt.content || '');
+    setDraftContent(promptContentEntry?.content || '');
     setStatusMessage('Reverted unsaved changes.');
   };
 
@@ -396,33 +401,52 @@ export default function PromptsPage() {
           </button>
         </PaneListToolbar>
 
-        <PaneListScroll className="prompts-sidebar-body">
-          {loading && <div className="prompts-empty-state">Loading prompts...</div>}
-          {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">{error?.message || promptsState.error}</div>}
-          {!loading && !realtime.connected && prompts.length === 0 && !(error || promptsState.error) && (
-            <div className="prompts-empty-state">Reconnect the realtime stream to load prompts.</div>
-          )}
-          {!loading && prompts.length === 0 && realtime.connected && !(error || promptsState.error) && (
-            <div className="prompts-empty-state">No prompts found.</div>
-          )}
-          {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
-            <div className="prompts-empty-state">No prompts match the current filters.</div>
-          )}
-          {!loading && promptTree.map((group) => (
-            <PaneListGroup key={group.name} title={group.name} count={groupCounts[group.name] || 0}>
-              <PromptTreeBranch
-                label={group.name}
-                branchKey={group.name}
-                node={group}
-                hideLabel
-                selectedPath={selectedPath}
-                expandedNodes={expandedNodes}
-                onToggle={toggleBranch}
-                onSelectPrompt={handleSelectPrompt}
-              />
-            </PaneListGroup>
-          ))}
-        </PaneListScroll>
+        {loading && <div className="prompts-empty-state">Loading prompts...</div>}
+        {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">{error?.message || promptsState.error}</div>}
+        {!loading && !realtime.connected && prompts.length === 0 && !(error || promptsState.error) && (
+          <div className="prompts-empty-state">Reconnect the realtime stream to load prompts.</div>
+        )}
+        {!loading && prompts.length === 0 && realtime.connected && !(error || promptsState.error) && (
+          <div className="prompts-empty-state">No prompts found.</div>
+        )}
+        {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
+          <div className="prompts-empty-state">No prompts match the current filters.</div>
+        )}
+        {!loading && virtualPromptGroups.length ? (
+          <PaneListVirtualized
+            className="prompts-sidebar-body"
+            groups={virtualPromptGroups}
+            getItemKey={(row) => row.key}
+            estimatedItemHeight={42}
+            renderGroupHeader={(group) => (
+              <div className="sess-group__head">
+                {group.title} <span className="muted">· {groupCounts[group.title] || 0}</span>
+              </div>
+            )}
+            renderItem={(row) => (
+              row.kind === 'branch' ? (
+                <button
+                  className={`prompts-tree-toggle depth-${Math.min(row.depth, 3)} ${row.isExpanded ? 'expanded' : ''}`}
+                  onClick={() => toggleBranch(row.branchKey)}
+                  type="button"
+                >
+                  <span className="prompts-tree-caret">{row.isExpanded ? '▾' : '▸'}</span>
+                  <span className="prompts-tree-label pane-row-caption">{row.label}</span>
+                </button>
+              ) : (
+                <button
+                  className={`prompts-tree-leaf depth-${Math.min(row.depth, 3)} ${selectedPath === row.prompt.path ? 'active' : ''}`}
+                  onClick={() => handleSelectPrompt(row.prompt)}
+                  type="button"
+                  title={row.prompt.path}
+                >
+                  <span className="prompts-tree-file pane-row-title">{row.prompt.displayName}</span>
+                  <span className="prompts-tree-file-path pane-row-caption">{row.prompt.path}</span>
+                </button>
+              )
+            )}
+          />
+        ) : null}
         </>
         )}
       </PaneSection>
@@ -474,7 +498,9 @@ export default function PromptsPage() {
               </div>
             </div>
 
-            {editorMode === 'preview' ? (
+            {isPromptContentLoading ? (
+              <div className="prompts-empty-state">Loading prompt…</div>
+            ) : editorMode === 'preview' ? (
               <div
                 className="prompts-markdown-preview message-content"
                 dangerouslySetInnerHTML={{ __html: renderedDraftContent }}

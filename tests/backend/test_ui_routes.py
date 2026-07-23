@@ -316,6 +316,75 @@ class TestUIRoutes:
         assert detail["session"]["messages"][1]["reasoning_token_count"] == 3
         assert detail["session"]["messages"][1]["token_count"] == 12
 
+    def test_chat_detail_caps_messages_and_flags_has_more(self, client, document_store):
+        messages = []
+        for index in range(60):
+            role = "human" if index % 2 == 0 else "ai"
+            messages.append({"id": f"m{index}", "type": role, "content": f"message {index}"})
+        document_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_sess-paged",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-05-31T12:00:00Z",
+                messages=messages,
+            )
+        )
+        client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "thread_id": "thread_sess-paged"},
+        )
+        thread_id = "thread_sess-paged"
+
+        detail_response = client.get(f"/api/ui/chats/{thread_id}")
+        assert detail_response.status_code == 202
+
+        from app.backend import ui_routes
+
+        replay_selected = ui_routes._ui_event_replay[-1]
+        assert replay_selected.type == "chat.session.selected"
+        session = replay_selected.payload["session"]
+        assert session["has_more_messages"] is True
+        assert len(session["messages"]) == 50
+        assert session["messages"][0]["content"] == "message 10"
+        assert session["messages"][-1]["content"] == "message 59"
+        assert session["message_count"] == 60
+
+    def test_chat_messages_page_loads_older_page_until_exhausted(self, client, document_store):
+        messages = []
+        for index in range(60):
+            role = "human" if index % 2 == 0 else "ai"
+            messages.append({"id": f"m{index}", "type": role, "content": f"message {index}"})
+        document_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_sess-paged-older",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-05-31T12:00:00Z",
+                messages=messages,
+            )
+        )
+        client.post(
+            "/api/ui/chats",
+            json={"title": "New chat", "thread_id": "thread_sess-paged-older"},
+        )
+        thread_id = "thread_sess-paged-older"
+
+        older_response = client.get(
+            f"/api/ui/chats/{thread_id}/messages",
+            params={"before_message_id": "m10"},
+        )
+        assert older_response.status_code == 202
+
+        from app.backend import ui_routes
+
+        page_event = ui_routes._ui_event_replay[-1]
+        assert page_event.type == "chat.messages.page.loaded"
+        assert page_event.payload["thread_id"] == thread_id
+        assert page_event.payload["has_more"] is False
+        page_messages = page_event.payload["messages"]
+        assert len(page_messages) == 10
+        assert page_messages[0]["content"] == "message 0"
+        assert page_messages[-1]["content"] == "message 9"
+
     def test_chat_detail_prefers_current_state_reasoning_when_checkpoint_lacks_it(
         self,
         client,
@@ -610,6 +679,39 @@ class TestUIRoutes:
         assert response.status_code == 202
         assert prompt_path.read_text(encoding="utf-8") == "after"
 
+    def test_prompts_list_omits_content_and_content_route_returns_it(
+        self, client, tmp_path, monkeypatch
+    ):
+        prompts_dir = tmp_path / "data" / "prompts"
+        (prompts_dir / "builder_agent").mkdir(parents=True)
+        (prompts_dir / "builder_agent" / "think.md").write_text(
+            "full prompt body", encoding="utf-8"
+        )
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
+
+        list_response = client.get("/api/ui/prompts")
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
+        list_replay = ui_routes._ui_event_replay[-1]
+        assert list_replay.type == "prompts.snapshot"
+        listed = next(
+            prompt
+            for prompt in list_replay.payload["prompts"]
+            if prompt["path"] == "builder_agent/think.md"
+        )
+        assert "content" not in listed
+
+        content_response = client.get(
+            "/api/ui/prompts/content", params={"path": "builder_agent/think.md"}
+        )
+        assert content_response.status_code == 202
+        content_replay = ui_routes._ui_event_replay[-1]
+        assert content_replay.type == "prompt.content.updated"
+        assert content_replay.payload["path"] == "builder_agent/think.md"
+        assert content_replay.payload["content"] == "full prompt body"
+
     def test_skills_endpoint_lists_updates_and_creates_skills(self, client, tmp_path, monkeypatch):
         data_dir = tmp_path / "data"
         prompts_dir = data_dir / "prompts"
@@ -647,6 +749,45 @@ class TestUIRoutes:
 
         assert create_response.status_code == 202
         assert (skills_dir / "builder_agent" / "repo-triage" / "SKILL.md").is_file()
+
+    def test_skills_list_omits_content_and_content_route_returns_it(
+        self, client, tmp_path, monkeypatch
+    ):
+        data_dir = tmp_path / "data"
+        prompts_dir = data_dir / "prompts"
+        skills_dir = data_dir / "skills"
+        existing_skill = skills_dir / "progenitor" / "runtime-inspection" / "SKILL.md"
+        prompts_dir.mkdir(parents=True)
+        existing_skill.parent.mkdir(parents=True)
+        existing_skill.write_text(
+            "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools.",
+            encoding="utf-8",
+        )
+        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
+
+        list_response = client.get("/api/ui/skills")
+        assert list_response.status_code == 202
+        from app.backend import ui_routes
+
+        list_replay = ui_routes._ui_event_replay[-1]
+        assert list_replay.type == "skills.snapshot"
+        listed = next(
+            skill
+            for skill in list_replay.payload["skills"]
+            if skill["path"] == "progenitor/runtime-inspection/SKILL.md"
+        )
+        assert "content" not in listed
+
+        content_response = client.get(
+            "/api/ui/skills/content",
+            params={"path": "progenitor/runtime-inspection/SKILL.md"},
+        )
+        assert content_response.status_code == 202
+        content_replay = ui_routes._ui_event_replay[-1]
+        assert content_replay.type == "skill.content.updated"
+        assert content_replay.payload["path"] == "progenitor/runtime-inspection/SKILL.md"
+        assert "Use tools." in content_replay.payload["content"]
 
     def test_kanban_endpoint_returns_default_board(self, client, tasks_state_reader):
         response = client.get("/api/ui/kanban")
@@ -1857,6 +1998,135 @@ class TestWorkspaceBridgeActions:
             updated["mcpServers"]["jina"]["url"]
             == "https://mcp.jina.ai/v1?include_tags=search,read"
         )
+
+    def test_mcp_snapshot_omits_tool_detail_content_route_returns_it(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp",
+            {
+                "mcpServers": {
+                    "jina": {
+                        "description": "Web search",
+                        "enabled": True,
+                        "transport": "http",
+                        "url": "https://mcp.jina.ai/v1",
+                    }
+                }
+            },
+        )
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp_tools",
+            {
+                "tools": [
+                    {
+                        "name": "search",
+                        "server": "jina",
+                        "description": "Search the web",
+                        "enabled": True,
+                    },
+                    {
+                        "name": "read",
+                        "server": "jina",
+                        "description": "Read a URL",
+                        "enabled": True,
+                    },
+                ]
+            },
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        from app.backend import ui_routes
+
+        list_request_id = "mcp-list-lean"
+        event_start = len(ui_routes._ui_event_replay)
+        list_response = client.get("/api/ui/mcp", headers={"X-Request-ID": list_request_id})
+        assert_acknowledged(
+            list_response,
+            ["mcp.snapshot"],
+            request_id=list_request_id,
+            check_request_id_header=True,
+        )
+        list_envelope = next(
+            event
+            for event in ui_routes._ui_event_replay[event_start:]
+            if event.payload.get("request_id") == list_request_id
+        )
+        jina_item = next(item for item in list_envelope.payload["items"] if item["name"] == "jina")
+        assert "tools" not in jina_item["data"]
+        assert jina_item["logs"] == []
+
+        detail_request_id = "mcp-detail-fetch"
+        event_start = len(ui_routes._ui_event_replay)
+        detail_response = client.get(
+            "/api/ui/mcp/content",
+            params={"id": "mcp:jina"},
+            headers={"X-Request-ID": detail_request_id},
+        )
+        assert_acknowledged(
+            detail_response,
+            ["mcp.server.detail.updated"],
+            request_id=detail_request_id,
+            check_request_id_header=True,
+        )
+        detail_envelope = next(
+            event
+            for event in ui_routes._ui_event_replay[event_start:]
+            if event.payload.get("request_id") == detail_request_id
+        )
+        detail_tools = detail_envelope.payload["data"]["tools"]
+        assert {tool["name"] for tool in detail_tools} == {"search", "read"}
+
+    def test_mcp_content_route_404s_for_unknown_server(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+
+        response = client.get("/api/ui/mcp/content", params={"id": "mcp:missing"})
+
+        assert response.status_code == 404
+
+    def test_patch_mcp_tool_broadcasts_server_detail_update(self, client, monkeypatch):
+        store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp",
+            {
+                "mcpServers": {
+                    "jina": {
+                        "description": "Web search",
+                        "enabled": True,
+                        "transport": "http",
+                        "url": "https://mcp.jina.ai/v1",
+                    }
+                }
+            },
+        )
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "mcp_tools",
+            {"tools": [{"name": "search", "server": "jina", "description": "", "enabled": True}]},
+        )
+        state_reader = StateReader(document_store=store)
+        monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
+        from app.backend import ui_routes
+
+        response = client.patch("/api/ui/widgets/mcp_tool:search", json={"enabled": False})
+
+        assert response.status_code == 202
+        assert set(response.json()["event_types"]) == {
+            "widgets.updated",
+            "mcp.snapshot",
+            "mcp.server.detail.updated",
+        }
+        detail_event = next(
+            event
+            for event in reversed(ui_routes._ui_event_replay)
+            if event.type == "mcp.server.detail.updated"
+        )
+        detail_tools = detail_event.payload["data"]["tools"]
+        assert next(tool for tool in detail_tools if tool["name"] == "search")["enabled"] is False
 
     def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
         store = InMemoryDocumentStore()

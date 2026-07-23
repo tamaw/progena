@@ -1,8 +1,12 @@
 /**
  * MCP domain: external MCP servers, kept live by `mcp.snapshot` events on
- * /api/ui/stream and seeded via REST when the Tools page mounts.
+ * /api/ui/stream and seeded via REST when the Tools page mounts. The list
+ * carries scalar fields only (enabled/transport/url/kind) — per-tool schemas
+ * and log history are fetched on demand per server via `mcp.server.detail.updated`.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
+import { withQuery } from '../http';
+
 export const initialState = {
   mcp: {
     servers: [],
@@ -10,6 +14,7 @@ export const initialState = {
     loading: false,
     error: null,
     requestId: null,
+    detailById: {},
   },
 };
 
@@ -17,6 +22,12 @@ export const initialState = {
 // as `mcp.snapshot` (the GET just triggers the broadcast).
 export const fetchMcp = createAcknowledgedThunk('uiData/fetchMcp', async ({ mcpUrl }, { requestId }) => {
   return requestAcknowledged(mcpUrl, { requestId });
+});
+
+// Fetch one server's full detail (tools + logs) on demand — the list items
+// carry scalar fields only.
+export const fetchMcpServerDetail = createAcknowledgedThunk('uiData/fetchMcpServerDetail', async ({ mcpUrl, id }, { requestId }) => {
+  return requestAcknowledged(withQuery(`${mcpUrl}/content`, { id }), { requestId });
 });
 
 export const eventHandlers = {
@@ -27,6 +38,11 @@ export const eventHandlers = {
       state.mcp.loading = false;
       state.mcp.error = null;
       state.mcp.requestId = null;
+    }
+  },
+  'mcp.server.detail.updated': (state, payload) => {
+    if (typeof payload?.id === 'string' && payload.id) {
+      state.mcp.detailById[payload.id] = payload;
     }
   },
 };
@@ -40,3 +56,6 @@ export function buildExtraReducers(builder) {
 
 export const selectMcpServers = (state) => state.uiData.mcp.servers;
 export const selectMcpState = (state) => state.uiData.mcp;
+export const selectMcpServerDetail = (state, id) => (
+  id ? state.uiData.mcp.detailById[id] || null : null
+);
