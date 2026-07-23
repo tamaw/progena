@@ -113,6 +113,38 @@ class TestStateManager:
         assert len(schedule) == 1
         assert schedule["schedule-1"].id == "schedule-1"
 
+    @pytest.mark.asyncio
+    async def test_get_schedule_migrates_legacy_list_payload(self):
+        store = _FakeRuntimeStore()
+        store._documents["schedule"] = [
+            {
+                "id": "legacy-schedule",
+                "message": "Run the legacy task",
+                "cron_expression": "0 9 * * *",
+            }
+        ]
+        manager = StateManager(runtime_store=store)
+
+        schedule = await manager.get_schedule()
+
+        assert schedule["legacy-schedule"].message == "Run the legacy task"
+        assert store._documents["schedule"] == {
+            "legacy-schedule": {
+                "id": "legacy-schedule",
+                "message": "Run the legacy task",
+                "cron_expression": "0 9 * * *",
+            }
+        }
+
+    @pytest.mark.asyncio
+    async def test_get_schedule_migrates_empty_legacy_list(self):
+        store = _FakeRuntimeStore()
+        store._documents["schedule"] = []
+        manager = StateManager(runtime_store=store)
+
+        assert await manager.get_schedule() == {}
+        assert store._documents["schedule"] == {}
+
     # ------------------------------------------------------------------
     # A2A tasks
     # ------------------------------------------------------------------
