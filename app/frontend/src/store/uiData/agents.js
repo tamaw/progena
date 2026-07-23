@@ -35,6 +35,10 @@ function replaceAgentList(agents, items) {
     agents.byId[agentId] = agent;
     agents.order.push(agentId);
   }
+  const activeId = agents.active.agentId;
+  if (activeId && agents.active.detail && agents.byId[activeId]) {
+    agents.active.detail = { ...agents.active.detail, ...agents.byId[activeId] };
+  }
 }
 
 function upsertAgent(agents, agent) {
@@ -52,6 +56,7 @@ function upsertAgent(agents, agent) {
 }
 
 export const fetchAgentProfiles = createAcknowledgedThunk('uiData/fetchAgentProfiles', ({ agentsUrl }, { requestId }) => requestAcknowledged(agentsUrl, { requestId }));
+
 
 export const requestAgentDetail = createAcknowledgedThunk('uiData/requestAgentDetail', async ({ agentsUrl, agentId }, { requestId }) => {
   return requestAcknowledged(

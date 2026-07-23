@@ -62,6 +62,28 @@ class TestCallAgentTool:
         assert "nonexistent_agent" in (result.error or "")
 
     @pytest.mark.asyncio
+    async def test_execute_disabled_agent_fails_before_dispatch(self):
+        tool = CallAgentTool()
+        mock_registry = MagicMock()
+        mock_registry.get_agents.return_value = [{"name": "disabled_agent", "enabled": False}]
+        mock_registry.find_by_name.return_value = {
+            "name": "disabled_agent",
+            "url": "http://localhost:8107",
+            "transport": "http",
+            "enabled": False,
+        }
+        context = ToolContext(
+            user_input="Do something",
+            tool_args={"agent": "disabled_agent"},
+            tool_registry=mock_registry,
+            llm_client=MagicMock(),
+            state_manager=MagicMock(),
+        )
+        result = await tool.execute(context)
+        assert not result.success
+        assert "disabled" in (result.error or "").lower()
+
+    @pytest.mark.asyncio
     async def test_execute_auto_routes_when_agent_missing(self):
         tool = CallAgentTool()
         mock_registry = MagicMock()

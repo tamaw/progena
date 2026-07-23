@@ -65,6 +65,7 @@ export function A2ADetailBody({ agent }) {
         <header className="agents-section__head"><h2>Agent card</h2></header>
         <div className="agents-card-facts">
           {agent.summary ? <CardFact label="Description">{agent.summary}</CardFact> : null}
+          <CardFact label="Availability">{agent.enabled === false ? 'Disabled' : 'Enabled'}</CardFact>
           {agent.url ? (
             <CardFact label="Endpoint">
               <a className="agents-agent-url" href={agent.url} target="_blank" rel="noreferrer">{agent.url}</a>

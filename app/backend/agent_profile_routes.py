@@ -44,6 +44,7 @@ class AgentProfile(BaseModel):
     version: str | None = None
     summary: str | None = None
     status: str | None = None
+    enabled: bool = True
     prompt: str = ""
     skills: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
