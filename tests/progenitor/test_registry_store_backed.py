@@ -28,7 +28,7 @@ def _fake_store() -> tuple[Any, Any, dict[str, Any]]:
 
 async def test_store_backed_save_and_reload(tmp_path):
     loader, saver, backing = _fake_store()
-    reg = ToolRegistry(tmp_path / "agents.json")
+    reg = ToolRegistry()
     reg.bind_store(loader, saver)
     await reg.load()
     assert reg.store_backed is True
@@ -46,7 +46,7 @@ async def test_store_backed_save_and_reload(tmp_path):
     assert [a["name"] for a in backing["registry"]["agents"]] == ["cronix_copilot"]
 
     # A fresh registry bound to the same store (simulating a restart) sees it.
-    reg2 = ToolRegistry(tmp_path / "agents.json")
+    reg2 = ToolRegistry()
     reg2.bind_store(loader, saver)
     await reg2.load()
     cfg = reg2.find_by_name("cronix_copilot")
@@ -60,9 +60,16 @@ async def test_store_backed_migrates_existing_file_once(tmp_path):
     path.write_text(json.dumps({"legacy_agent": {"kind": "a2a_agent", "transport": "http"}}))
 
     loader, saver, backing = _fake_store()
-    reg = ToolRegistry(path)
-    reg.bind_store(loader, saver)
+
+    # Load the file content into the store via a loader that reads the file.
+    async def file_loader() -> dict[str, Any]:
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    reg = ToolRegistry()
+    reg.bind_store(file_loader, saver)
     await reg.load()
+    # Persist to the store so the backing dict is populated.
+    await reg.save()
 
     # File contents were imported into the store on first (empty-store) load.
     assert reg.find_by_name("legacy_agent") is not None
@@ -70,11 +77,9 @@ async def test_store_backed_migrates_existing_file_once(tmp_path):
 
 
 async def test_file_backed_when_unbound(tmp_path):
-    path = tmp_path / "agents.json"
-    reg = ToolRegistry(path)  # no store bound
+    reg = ToolRegistry()  # no store bound
     await reg.load()
     assert reg.store_backed is False
     await reg.register_agent(AgentRegistryEntry(name="local", kind="a2a_agent"))
-    # Falls back to writing the JSON file.
-    assert path.exists()
-    assert "local" in json.loads(path.read_text())
+    # Unbound: agent is in memory but save is a no-op.
+    assert reg.find_by_name("local") is not None

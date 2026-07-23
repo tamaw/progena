@@ -8,6 +8,7 @@ The frontend runs separately via npm/Vite.
 import asyncio
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,6 +18,7 @@ from fastapi.testclient import TestClient
 from app.backend.alerts import clear_alerts, create_alert
 from app.backend.document_store import (
     BACKEND_STATE_PREFIX,
+    PROGENITOR_LOG_PREFIX,
     PROGENITOR_STATE_PREFIX,
     CheckpointThreadSnapshot,
     InMemoryDocumentStore,
@@ -46,20 +48,11 @@ def clear_thread_registry():
 @pytest.fixture
 def kanban_state_reader(tmp_path, monkeypatch):
     """Provide an isolated state reader for kanban persistence tests."""
-    state_dir = tmp_path / "data" / "state"
-    config_dir = tmp_path / "data" / "config"
-    sessions_dir = tmp_path / "data" / "sessions"
     logs_dir = tmp_path / "logs"
-
-    state_dir.mkdir(parents=True)
-    config_dir.mkdir(parents=True)
-    sessions_dir.mkdir(parents=True)
     logs_dir.mkdir(parents=True)
 
     state_reader = StateReader(
-        state_dir=state_dir,
-        config_dir=config_dir,
-        sessions_dir=sessions_dir,
+        document_store=InMemoryDocumentStore(),
         logs_dir=logs_dir,
     )
     monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -76,20 +69,12 @@ def tasks_state_reader(tmp_path, monkeypatch):
     agent reads/edits through ``/state/tasks/`` as ``board.json`` plus per-task
     ``<id>.md`` files.
     """
-    state_dir = tmp_path / "data" / "state"
-    config_dir = tmp_path / "data" / "config"
-    sessions_dir = tmp_path / "data" / "sessions"
     logs_dir = tmp_path / "logs"
-
-    for directory in (state_dir, config_dir, sessions_dir, logs_dir):
-        directory.mkdir(parents=True)
+    logs_dir.mkdir(parents=True)
 
     state_reader = StateReader(
-        state_dir=state_dir,
-        config_dir=config_dir,
-        sessions_dir=sessions_dir,
-        logs_dir=logs_dir,
         document_store=InMemoryDocumentStore(),
+        logs_dir=logs_dir,
     )
     monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
     yield state_reader
@@ -360,7 +345,7 @@ class TestUIRoutes:
         )
 
         class _StubStateReader:
-            def get_progenitor_state(self):
+            def get_progenitor_state(self, thread_id: str | None = None) -> dict[str, Any]:
                 return {
                     "thread_id": thread_id,
                     "messages": [
@@ -378,6 +363,21 @@ class TestUIRoutes:
                     ],
                     "last_reasoning_trace": "Need to count down.",
                 }
+
+            def get_thread_messages(self, thread_id: str) -> list[Any]:
+                return [
+                    {"id": "m1", "type": "human", "content": "count backwards"},
+                    {
+                        "id": "m2",
+                        "type": "ai",
+                        "content": "99, 98, 97",
+                        "usage_metadata": {
+                            "input_tokens": 4,
+                            "output_tokens": 12,
+                            "total_tokens": 16,
+                        },
+                    },
+                ]
 
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: _StubStateReader())
 
@@ -522,19 +522,16 @@ class TestUIRoutes:
         document_store,
         kanban_state_reader,
     ):
-        state_path = kanban_state_reader.state_dir / "current_state.json"
-        state_path.write_text(
-            json.dumps(
-                {
-                    "session_id": "current-session-1",
-                    "thread_id": "thread_current-session-1",
-                    "title": "Current synthetic chat",
-                    "messages": [{"id": "m1", "role": "user", "content": "hello"}],
-                }
-            ),
-            encoding="utf-8",
+        kanban_state_reader.document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "current_state:thread_current-session-1",
+            {
+                "session_id": "current-session-1",
+                "thread_id": "thread_current-session-1",
+                "title": "Current synthetic chat",
+                "messages": [{"id": "m1", "role": "user", "content": "hello"}],
+            },
         )
-        kanban_state_reader.invalidate(state_path)
 
         patch_response = client.patch(
             "/api/ui/chats/thread_current-session-1",
@@ -734,10 +731,7 @@ class TestUIRoutes:
             "request_id": request_id,
         }
 
-
-    def test_task_content_update_acknowledges_and_persists_body(
-        self, client, tasks_state_reader
-    ):
+    def test_task_content_update_acknowledges_and_persists_body(self, client, tasks_state_reader):
         """Task body writes return an ack while stream state carries the saved content."""
         from app.backend import ui_routes
 
@@ -1086,11 +1080,10 @@ class TestUIRoutes:
         assert create_response.status_code == 202
         data = create_response.json()
         assert_acknowledgement_body(data)
-        schedule_path = kanban_state_reader.config_dir / "schedule.json"
-        before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
+        store = kanban_state_reader.document_store
+        schedule_doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        before_delete = schedule_doc.payload if schedule_doc else {}
         schedule_id = list(before_delete.keys())[0]
-        schedule_path = kanban_state_reader.config_dir / "schedule.json"
-        before_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
         assert list(before_delete.keys()) == [schedule_id]
 
         delete_response = client.delete(f"/api/ui/widgets/schedule:{schedule_id}")
@@ -1098,7 +1091,8 @@ class TestUIRoutes:
         assert delete_response.status_code == 202
         data = delete_response.json()
         assert_acknowledgement_body(data)
-        after_delete = json.loads(schedule_path.read_text(encoding="utf-8"))
+        schedule_doc = store.get_document(PROGENITOR_STATE_PREFIX, "schedule", {})
+        after_delete = schedule_doc.payload if schedule_doc else {}
         assert after_delete == {}
         from app.backend import ui_routes
 
@@ -1112,8 +1106,6 @@ class TestUIRoutes:
         assert repeated_delete.status_code == 202
         data = repeated_delete.json()
         assert_acknowledgement_body(data)
-
-    def test_schedules_alias_endpoint(self, client):
         response = client.get("/api/ui/schedules")
         assert response.status_code == 202
         data = response.json()
@@ -1361,10 +1353,22 @@ class TestLogsEndpoint:
                 "message": "decision failed",
             },
         ]
-        (kanban_state_reader.logs_dir / "decisions.jsonl").write_text(
-            "\n".join(json.dumps(entry) for entry in source_entries) + "\n",
-            encoding="utf-8",
-        )
+
+        store = kanban_state_reader.document_store
+        for i, entry in enumerate(source_entries):
+            store.save_document(
+                f"{PROGENITOR_LOG_PREFIX}.decisions",
+                f"entry-{i}",
+                {
+                    "timestamp": entry["timestamp"],
+                    "level": entry["level"],
+                    "source": entry["source"],
+                    "message": entry["message"],
+                    "relative_path": "decisions.jsonl",
+                    "group": "root",
+                    "data": entry,
+                },
+            )
 
         queue = asyncio.Queue()
         ui_routes._ui_stream_subscribers[queue] = None
@@ -1768,26 +1772,9 @@ class TestSplitSSEEndpoints:
 class TestWorkspaceBridgeActions:
     """Tests for backend action bridge endpoints."""
 
+    @pytest.mark.skip(reason="File-based fallback removed; tests document-store-only StateReader")
     def test_state_reader_uses_document_store_over_legacy_state_files(self, tmp_path):
-        state_dir = tmp_path / "data" / "state"
-        state_dir.mkdir(parents=True)
-        (state_dir / "current_state.json").write_text(
-            json.dumps({"thread_id": "legacy-file", "cycle_count": 1}),
-            encoding="utf-8",
-        )
-        store = InMemoryDocumentStore()
-        store.save_document(
-            PROGENITOR_STATE_PREFIX,
-            "current_state",
-            {"thread_id": "postgres-store", "cycle_count": 9},
-        )
-
-        state_reader = StateReader(state_dir=state_dir, document_store=store)
-
-        assert state_reader.get_progenitor_state() == {
-            "thread_id": "postgres-store",
-            "cycle_count": 9,
-        }
+        pass
 
     def test_patch_schedule_widget_updates_schedule_document(self, client, monkeypatch):
         store = InMemoryDocumentStore()
@@ -1872,44 +1859,31 @@ class TestWorkspaceBridgeActions:
         )
 
     def test_refresh_agent_widget_returns_live_card_details(self, client, tmp_path, monkeypatch):
-        state_dir = tmp_path / "data" / "state"
-        config_dir = tmp_path / "data" / "config"
-        sessions_dir = tmp_path / "data" / "sessions"
-        logs_dir = tmp_path / "logs"
-        state_dir.mkdir(parents=True)
-        config_dir.mkdir(parents=True)
-        sessions_dir.mkdir(parents=True)
-        logs_dir.mkdir(parents=True)
-        (config_dir / "agents.json").write_text(
-            json.dumps(
-                {
-                    "agents": [
-                        {
-                            "name": "observe_agent",
-                            "kind": "a2a_agent",
-                            "version": "0.2.0",
-                            "description": "Observe health",
-                            "entrypoint": "python observe.py",
-                            "transport": "http",
-                            "enabled": True,
-                            "url": "http://example.test/observe",
-                            "created_at": "2026-04-01T00:00:00Z",
-                            "updated_at": "2026-04-01T00:00:00Z",
-                            "status": "running",
-                        }
-                    ]
-                }
-            ),
-            encoding="utf-8",
-        )
         store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "registry",
+            {
+                "agents": [
+                    {
+                        "name": "observe_agent",
+                        "kind": "a2a_agent",
+                        "version": "0.2.0",
+                        "description": "Observe health",
+                        "entrypoint": "python observe.py",
+                        "transport": "http",
+                        "enabled": True,
+                        "url": "http://example.test/observe",
+                        "created_at": "2026-04-01T00:00:00Z",
+                        "updated_at": "2026-04-01T00:00:00Z",
+                        "status": "running",
+                    }
+                ]
+            },
+        )
         store.save_document(PROGENITOR_STATE_PREFIX, "mcp", {"mcpServers": {}})
 
         state_reader = StateReader(
-            state_dir=state_dir,
-            config_dir=config_dir,
-            sessions_dir=sessions_dir,
-            logs_dir=logs_dir,
             document_store=store,
         )
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -1948,19 +1922,15 @@ class TestWorkspaceBridgeActions:
         widget_event = ui_routes._ui_event_replay[-1]
         assert widget_event.type == "widgets.updated"
 
-    def test_refresh_mcp_widget_is_rejected(self, client, tmp_path, monkeypatch):
+    def test_refresh_mcp_widget_is_rejected(self, client, monkeypatch):
         # MCP tool discovery is owned by the Progenitor runtime's MCP init (and
         # ``mcp_refresh``); the backend no longer probes servers itself.
-        state_dir = tmp_path / "data" / "state"
-        config_dir = tmp_path / "data" / "config"
-        sessions_dir = tmp_path / "data" / "sessions"
-        logs_dir = tmp_path / "logs"
-        state_dir.mkdir(parents=True)
-        config_dir.mkdir(parents=True)
-        sessions_dir.mkdir(parents=True)
-        logs_dir.mkdir(parents=True)
-        (config_dir / "agents.json").write_text(json.dumps({"agents": []}), encoding="utf-8")
         store = InMemoryDocumentStore()
+        store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "registry",
+            {"agents": []},
+        )
         store.save_document(
             PROGENITOR_STATE_PREFIX,
             "mcp",
@@ -1976,10 +1946,6 @@ class TestWorkspaceBridgeActions:
             },
         )
         state_reader = StateReader(
-            state_dir=state_dir,
-            config_dir=config_dir,
-            sessions_dir=sessions_dir,
-            logs_dir=logs_dir,
             document_store=store,
         )
         monkeypatch.setattr("app.backend.ui_routes.get_state_reader", lambda: state_reader)
@@ -2068,8 +2034,9 @@ class TestWorkspaceBridgeActions:
         data = response.json()
         assert_acknowledgement_body(data)
 
-        event_path = kanban_state_reader.config_dir / "event_widgets.json"
-        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        store = kanban_state_reader.document_store
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
         event_widget_ids = list(stored.keys())
         assert len(event_widget_ids) == 1
         event_widget_id = event_widget_ids[0]
@@ -2085,24 +2052,22 @@ class TestWorkspaceBridgeActions:
         assert any(widget["id"] == f"event:{event_widget_id}" for widget in widgets_items)
 
     def test_patch_event_widget_updates_config_file(self, client, kanban_state_reader):
-        event_path = kanban_state_reader.config_dir / "event_widgets.json"
-        event_path.write_text(
-            json.dumps(
-                {
-                    "evt-1": {
-                        "id": "evt-1",
-                        "name": "Created trigger",
-                        "event_type": "kanban.card.created",
-                        "enabled": True,
-                        "trigger_count": 0,
-                        "last_run_status": "idle",
-                        "logs": [],
-                    }
+        store = kanban_state_reader.document_store
+        store.save_document(
+            BACKEND_STATE_PREFIX,
+            "event_widgets",
+            {
+                "evt-1": {
+                    "id": "evt-1",
+                    "name": "Created trigger",
+                    "event_type": "kanban.card.created",
+                    "enabled": True,
+                    "trigger_count": 0,
+                    "last_run_status": "idle",
+                    "logs": [],
                 }
-            ),
-            encoding="utf-8",
+            },
         )
-        kanban_state_reader.invalidate(event_path)
 
         response = client.patch(
             "/api/ui/widgets/event:evt-1",
@@ -2118,7 +2083,8 @@ class TestWorkspaceBridgeActions:
         assert_acknowledgement_body(data)
         assert "widgets.updated" in data["event_types"]
 
-        stored = json.loads(event_path.read_text(encoding="utf-8"))
+        stored_doc = store.get_document(BACKEND_STATE_PREFIX, "event_widgets", None)
+        stored = stored_doc.payload if stored_doc else {}
         assert stored["evt-1"]["name"] == "Deleted trigger"
         assert stored["evt-1"]["event_type"] == "kanban.card.deleted"
         assert stored["evt-1"]["enabled"] is False

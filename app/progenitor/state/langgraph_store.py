@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -44,8 +45,9 @@ class AsyncLangGraphStore(Protocol):
 class LangGraphRuntimeStore:
     """Persist Progenitor runtime documents and logs in LangGraph's native store."""
 
-    def __init__(self, store: AsyncLangGraphStore) -> None:
+    def __init__(self, store: AsyncLangGraphStore, *, debug_mode: bool = False) -> None:
         self._store = store
+        self._debug_mode = debug_mode
 
     async def open(self) -> None:
         """Match the old store lifecycle; native LangGraph store is already open."""
@@ -102,14 +104,6 @@ class LangGraphRuntimeStore:
                 return results
             offset += page_size
 
-    async def update_document(self, name: str, updates: dict[str, Any], default: Any) -> None:
-        """Merge updates into one dict document."""
-        current = await self.get_document(name, default)
-        if not isinstance(current, dict):
-            current = dict(default) if isinstance(default, dict) else {}
-        current.update(updates)
-        await self.save_document(name, current)
-
     async def write_log(
         self,
         *,
@@ -133,37 +127,12 @@ class LangGraphRuntimeStore:
         }
         key = f"{timestamp_text}_{uuid.uuid4().hex}"
         await self._store.aput((*LOG_NAMESPACE_PREFIX, source), key, value)
-
-    async def query_logs(
-        self,
-        *,
-        level: str | None = None,
-        source: str | None = None,
-        search: str | None = None,
-        limit: int = 200,
-    ) -> list[dict[str, Any]]:
-        """Query structured log entries from native LangGraph store namespaces."""
-        namespace = (*LOG_NAMESPACE_PREFIX, source) if source else LOG_NAMESPACE_PREFIX
-        filter_value = {"level": level.lower()} if level else None
-        requested_limit = max(limit, 1) if limit > 0 else 1000
-        if search:
-            requested_limit = max(requested_limit, 1000)
-        items = await self._store.asearch(
-            namespace,
-            filter=filter_value,
-            limit=requested_limit,
-        )
-        rows = [dict(_item_value(item)) for item in items]
-        if search:
-            lowered_search = search.lower()
-            rows = [
-                row
-                for row in rows
-                if lowered_search in str(row.get("message", "")).lower()
-                or lowered_search in str(row.get("payload", {})).lower()
-            ]
-        rows.sort(key=lambda row: str(row.get("timestamp", "")))
-        return rows[-limit:] if limit > 0 else rows
+        if self._debug_mode:
+            print(
+                f"[LOG {source}] {timestamp_text} {level}: {message}",
+                file=sys.stderr,
+                flush=True,
+            )
 
 
 def _item_value(item: Any) -> dict[str, Any]:

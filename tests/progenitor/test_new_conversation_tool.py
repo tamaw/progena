@@ -52,7 +52,6 @@ class _MockRuntimeConfig:
     registry_refresh_seconds: int = 900
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
-    max_stream_queue_size: int = 10
 
 
 @dataclass
@@ -105,7 +104,9 @@ async def test_loop_clears_messages_when_thread_id_changes_mid_cycle(tmp_path: P
     loop.apply_graph_updates(cast(dict[str, Any], updates))
 
     assert loop.state["thread_id"] == "thread_new"
-    assert loop.state["messages"] == []
+    # Messages are no longer cleared from heartbeat state on thread change —
+    # they live exclusively in the LangGraph checkpoint per thread_id.
+    assert loop.state["messages"] == [{"role": "user", "content": "before"}]
 
 
 @pytest.mark.asyncio

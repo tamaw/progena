@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 from typing import Any, cast
@@ -10,6 +9,7 @@ from typing import Any, cast
 from langgraph.runtime import Runtime
 
 from ..runtime.messages import get_last_ai_message, summarize_message_schema
+from ..runtime.thread_context import reset_current_thread_id, set_current_thread_id
 from ..state.models import ProgenitorState
 from .chat import chat_node
 from .context import HeartbeatContext
@@ -17,52 +17,36 @@ from .respond import response_node
 
 logger = logging.getLogger(__name__)
 
-_CONVERSATION_SNAPSHOT_KEYS = (
-    "thread_id",
-    "messages",
-    "attachments",
-    "tool_calls",
-    "current_input",
-    "current_input_role",
-    "current_input_metadata",
-    "pending_response",
-    "last_reasoning_trace",
-)
-
-
-def snapshot_conversation_state(state: dict[str, Any]) -> dict[str, Any]:
-    """Snapshot the active conversation state before an isolated run."""
-
-    return {key: copy.deepcopy(state.get(key)) for key in _CONVERSATION_SNAPSHOT_KEYS}
-
-
-def restore_conversation_state(state: dict[str, Any], snapshot: dict[str, Any]) -> None:
-    """Restore the conversation state that was saved before isolation."""
-
-    for key, value in snapshot.items():
-        state[key] = value
-
 
 async def isolated_cycle_node(
     state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Run one cycle on a temporary thread, then put the main thread back."""
-    live_state = runtime.context.live_state
+    """Run one cycle on a temporary thread, loading per-thread state fresh."""
     requested_thread_id = str(state.get("requested_thread_id") or "").strip()
-    snapshot = snapshot_conversation_state(live_state)
+    thread_state = await runtime.context.state_manager.get_current_state(
+        thread_id=requested_thread_id
+    )
+    turn_state = {
+        **state,
+        "thread_id": requested_thread_id,
+        "cycle_count": int(thread_state.get("cycle_count", 0)) + 1,
+        "pending_response": None,
+        "last_reasoning_trace": None,
+    }
+    token = set_current_thread_id(requested_thread_id)
     try:
-        # Clear transient content so the isolated thread starts clean.
-        live_state["thread_id"] = requested_thread_id
-        live_state["messages"] = []
-        live_state["attachments"] = []
-        live_state["tool_calls"] = []
-        live_state["pending_response"] = None
-        live_state["last_reasoning_trace"] = None
-        updates = await cycle_node(cast(ProgenitorState, {**live_state, **state}), runtime)
+        updates = await cycle_node(cast(ProgenitorState, turn_state), runtime)
     finally:
-        restore_conversation_state(live_state, snapshot)
-
+        reset_current_thread_id(token)
+    await runtime.context.state_manager.update_current_state(
+        {
+            "cycle_count": turn_state["cycle_count"],
+            "pending_response": updates.get("pending_response"),
+            "last_reasoning_trace": updates.get("last_reasoning_trace"),
+        },
+        thread_id=requested_thread_id,
+    )
     return {
         key: value
         for key, value in updates.items()
@@ -100,10 +84,14 @@ async def _run_cycle(
     working_state = dict(state)
     if current_input:
         # Run the DeepAgent graph only when there is user input to process.
-        chat_updates = await chat_node(
-            cast(ProgenitorState, {**working_state, "thread_id": effective_thread_id}),
-            runtime,
-        )
+        token = set_current_thread_id(effective_thread_id)
+        try:
+            chat_updates = await chat_node(
+                cast(ProgenitorState, {**working_state, "thread_id": effective_thread_id}),
+                runtime,
+            )
+        finally:
+            reset_current_thread_id(token)
         working_state.update(chat_updates)
         updates.update(chat_updates)
 
@@ -137,10 +125,5 @@ async def _run_cycle(
                 "No reasoning trace found in assistant message schema: %s",
                 json.dumps(summarize_message_schema(last_ai_msg), default=str),
             )
-
-    live_state = runtime.context.live_state
-    current_thread_id = str(live_state.get("thread_id") or working_state.get("thread_id") or "")
-    if current_thread_id != effective_thread_id:
-        updates.update({"messages": [], "attachments": [], "tool_calls": []})
 
     return updates

@@ -18,7 +18,6 @@ from app.progenitor.agent.middleware import (
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
-    MetricsMiddleware,
     SecretRedactionMiddleware,
 )
 from app.progenitor.state.models import AsyncSubagentTaskRecord
@@ -387,92 +386,6 @@ class TestAsyncSubagentTrackingMiddleware:
         assert payload["tasks"][0]["summary"] == "HELLO_FROM_ASYNC_SUBAGENT"
 
 
-class TestMetricsMiddleware:
-    """Tests for the metrics middleware."""
-
-    def test_initial_metrics(self):
-        mw = MetricsMiddleware()
-        metrics = mw.get_metrics()
-        assert metrics["model_calls"] == 0
-        assert metrics["tool_calls"] == 0
-        assert metrics["tool_errors"] == 0
-        assert metrics["tools"] == {}
-
-    async def test_tracks_tool_call(self):
-        mw = MetricsMiddleware()
-        handler = AsyncMock(return_value="result")
-        request = MagicMock()
-        request.tool_call = {"name": "shell", "args": {}, "id": "tc_1"}
-
-        await mw.awrap_tool_call(request, handler)
-
-        metrics = mw.get_metrics()
-        assert metrics["tool_calls"] == 1
-        assert "shell" in metrics["tools"]
-        assert metrics["tools"]["shell"]["calls"] == 1
-        assert metrics["tools"]["shell"]["errors"] == 0
-
-    async def test_tracks_multiple_tools(self):
-        mw = MetricsMiddleware()
-        handler = AsyncMock(return_value="ok")
-
-        for name in ["shell", "git", "shell", "shell", "git"]:
-            request = MagicMock()
-            request.tool_call = {"name": name, "args": {}, "id": "tc"}
-            await mw.awrap_tool_call(request, handler)
-
-        metrics = mw.get_metrics()
-        assert metrics["tool_calls"] == 5
-        assert metrics["tools"]["shell"]["calls"] == 3
-        assert metrics["tools"]["git"]["calls"] == 2
-
-    async def test_tracks_errors(self):
-        mw = MetricsMiddleware()
-        handler = AsyncMock(side_effect=RuntimeError("boom"))
-        request = MagicMock()
-        request.tool_call = {"name": "shell", "args": {}, "id": "tc_1"}
-
-        with pytest.raises(RuntimeError):
-            await mw.awrap_tool_call(request, handler)
-
-        metrics = mw.get_metrics()
-        assert metrics["tool_errors"] == 1
-        assert metrics["tools"]["shell"]["errors"] == 1
-        assert metrics["tools"]["shell"]["calls"] == 1
-
-    def test_tracks_model_calls(self):
-        mw = MetricsMiddleware()
-        mw.after_model(MagicMock(), MagicMock())
-        mw.after_model(MagicMock(), MagicMock())
-        assert mw.get_metrics()["model_calls"] == 2
-
-    async def test_tracks_latency(self):
-        mw = MetricsMiddleware()
-
-        async def slow_handler(req):
-            import asyncio
-
-            await asyncio.sleep(0.05)
-            return "done"
-
-        request = MagicMock()
-        request.tool_call = {"name": "slow_tool", "args": {}, "id": "tc"}
-        await mw.awrap_tool_call(request, slow_handler)
-
-        metrics = mw.get_metrics()
-        assert metrics["tools"]["slow_tool"]["total_ms"] >= 40  # At least 40ms
-        assert metrics["tools"]["slow_tool"]["avg_ms"] >= 40
-
-    def test_reset(self):
-        mw = MetricsMiddleware()
-        mw._call_counts["shell"] = 5
-        mw._model_calls = 3
-        mw.reset()
-        metrics = mw.get_metrics()
-        assert metrics["tool_calls"] == 0
-        assert metrics["model_calls"] == 0
-
-
 class TestMiddlewareIntegration:
     """Integration test: middleware wired into factory."""
 
@@ -519,4 +432,3 @@ class TestMiddlewareIntegration:
                 assert "DynamicMCPToolMiddleware" in types
                 assert "SecretRedactionMiddleware" in types
                 assert "AuditLoggingMiddleware" in types
-                assert "MetricsMiddleware" in types

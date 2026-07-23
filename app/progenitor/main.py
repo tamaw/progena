@@ -15,7 +15,6 @@ from .runtime.progenitor import Progenitor
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
-CONFIG_DIR = PROJECT_ROOT / "config"
 
 
 def setup_signal_handlers(progenitor: Progenitor) -> None:
@@ -38,7 +37,7 @@ def setup_signal_handlers(progenitor: Progenitor) -> None:
 
 async def main() -> None:
     """Main entry point."""
-    config = get_config(PROJECT_ROOT, CONFIG_DIR)
+    config = get_config(PROJECT_ROOT)
     agent_name = os.getenv("AGENT_NAME", "").strip()
     if not agent_name:
         raise RuntimeError("AGENT_NAME must be set for progenitor")

@@ -31,7 +31,6 @@ from .middleware import (
     AuditLoggingMiddleware,
     DirectA2AFastPathMiddleware,
     DynamicMCPToolMiddleware,
-    MetricsMiddleware,
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
@@ -218,7 +217,6 @@ def create_progenitor_agent(
         SchemaCompactionMiddleware(),
         SecretRedactionMiddleware(),
         AuditLoggingMiddleware(log_sink=log_sink),
-        MetricsMiddleware(),
     ]
 
     if not prompts_dir.is_dir():

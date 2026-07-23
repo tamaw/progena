@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `langchain_adapter.py`: ChatOpenAI → LiteLLM proxy bridge with Azure structured output bypass
   - `tools_adapter.py`: Auto-discovers and wraps 23+ BaseSystemTool instances as DeepAgent-compatible StructuredTools
   - `backends.py`: CompositeBackend with persisted `/memories/` on FilesystemBackend, read-only scoped filesystem mounts, and StateBackend workspace
-  - `middleware.py`: Custom middleware — SecretRedactionMiddleware, AuditLoggingMiddleware, MetricsMiddleware
+  - `middleware.py`: Custom middleware — SecretRedactionMiddleware, AuditLoggingMiddleware
   - `subagents.py`: Build loop as CompiledSubAgent, code reviewer, and researcher subagents
 - **Skills System** (`prompts/skills/`): 5 SKILL.md files with YAML frontmatter for progressive disclosure
   - `build-agent`: A2A agent and MCP tool building patterns

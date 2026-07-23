@@ -1,8 +1,13 @@
 # Heartbeat live evaluations
 
-This document captures a repeatable live-evaluation model for the Progenitor Heartbeat loop. The scenarios are derived from `tests/progenitor/` and validate the real running loop through the runtime's `/v1/events` broadcast stream, persisted state/config files, and health/checkpoint artifacts.
+This document captures a repeatable live-evaluation model for the Progenitor
+Heartbeat loop. Runtime state is stored in the shared LangGraph Postgres store;
+the `.json` names used by the agent are virtual-file views, not files under
+`data/state` or `data/config`.
 
-Note: earlier evaluation passes (see "Latest live run" below) ran against the old TCP socket IPC transport (`:9500`). Progenitor now serves background events over HTTP + SSE (`GET /v1/events` on `:9501`) from `runtime/http_chat.py`; the "IPC" mentions in the scenario table and historical run below describe those earlier passes faithfully.
+The current runtime serves background events over HTTP + SSE
+(`GET /v1/events` on `:9501`) from `runtime/http_chat.py`. References to the
+former TCP IPC transport below are historical observations from earlier runs.
 
 ## Runtime model inferred from tests
 
@@ -25,11 +30,11 @@ The repeatable script is `scripts/evaluate_heartbeat_live.py`.
 | Scenario | Live setup/check | Expected outcome | Failure likely area |
 | --- | --- | --- | --- |
 | Idle health updates | Poll the runtime's own HTTP `/health` endpoint while no input is forced (health has no on-disk file anymore) | `timestamp`/`cycle_count` keep advancing, endpoint stays reachable | `nodes/health.py`, `graph/heartbeat_graph.py`, `runtime/heartbeat.py` |
-| Queued input cycle flow | Use the `enqueue_background_task` tool through IPC chat, keep an IPC client connected, and wait for the background callback | Heartbeat drains the persisted background queue, runs a real `dequeue -> setup -> cycle` turn, advances `cycle_count`, and emits an `agent_message` callback with the queued result | `tools/enqueue_background_task.py`, `state/manager.py`, `nodes/intake.py`, `nodes/cycle.py`, `runtime/http_chat.py` |
-| Due schedule flow | Append a due one-off entry directly to `data/config/schedule.json` while an IPC client listens for events | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the one-off entry is removed; checkpoint/cycle state advances | `nodes/schedule.py`, `schedule/dispatch.py`, `nodes/cycle.py`, `nodes/checkpoint.py` |
-| Recurring schedule flow | Append a due recurring entry directly to `data/config/schedule.json` while an IPC client listens for events | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the recurring entry remains in `schedule.json` and gets `last_run` updated | `nodes/schedule.py`, `schedule/dispatch.py`, `schedule/engine.py` |
-| A2A completion flow | POST a terminal task callback to `/a2a/tasks/callback` while an IPC client listens | Callback is accepted, task record is terminal, and Heartbeat applies/notifies completion via IPC event or persisted notification/message state | `runtime/http.py`, `nodes/a2a.py`, `a2a/tasks.py`, `runtime/queues.py` |
-| Async tracked A2A task flow | Start a temporary local A2A test agent, register it in `data/config/agents.json`, submit `call_agent` through IPC chat, then let Heartbeat poll it | Tracked task record moves from `submitted` to `completed`, Heartbeat emits/records completion, and notification side effects are visible | `nodes/a2a.py`, `a2a/tasks.py`, `tools/call_agent.py`, `runtime/http.py` |
+| Queued input cycle flow | Use the `enqueue_background_task` tool through the HTTP chat surface, keep an SSE event client connected, and wait for the background callback | Heartbeat drains the persisted background queue from Postgres, runs a real `dequeue -> setup -> cycle` turn, advances `cycle_count`, and emits an `agent_message` callback with the queued result | `tools/enqueue_background_task.py`, `state/manager.py`, `nodes/intake.py`, `nodes/cycle.py`, `runtime/http_chat.py` |
+| Due schedule flow | Add a due entry through the `/state/schedule.json` virtual file or the backend schedule operation while an SSE client listens for events | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the one-shot entry is disabled/paused in the Postgres schedule document; checkpoint/cycle state advances | `nodes/schedule.py`, `schedule/dispatch.py`, `nodes/cycle.py`, `nodes/checkpoint.py` |
+| Recurring schedule flow | Add a due recurring entry through the `/state/schedule.json` virtual file or the backend schedule operation | Heartbeat emits `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the recurring entry remains in the Postgres schedule document and receives updated run metadata | `nodes/schedule.py`, `schedule/dispatch.py`, `schedule/engine.py` |
+| A2A completion flow | POST a terminal task callback to `/a2a/tasks/callback` while an SSE client listens | Callback is accepted, the task record is terminal in the Postgres state store, and Heartbeat applies/notifies completion through the event or conversation path | `runtime/http.py`, `nodes/a2a.py`, `a2a/tasks.py`, `runtime/queues.py` |
+| Async tracked A2A task flow | Start a temporary local A2A test agent, register it through the registry tool or `/state/agents.json` virtual file, submit `call_agent` through HTTP chat, then let Heartbeat poll it | Tracked task record moves from `submitted` to `completed`, Heartbeat emits/records completion, and notification side effects are visible | `nodes/a2a.py`, `a2a/tasks.py`, `tools/call_agent.py`, `runtime/http.py` |
 
 ## Runtime setup
 
@@ -38,8 +43,8 @@ The evaluator assumes Progenitor is already running.
 Default surfaces:
 
 - HTTP: `http://127.0.0.1:9501`
-- State dir: `data/state`
-- Config dir: `data/config`
+- Postgres: `PROGENITOR_DATABASE_URL` and the `("progenitor", "state")` namespace
+- Agent state surface: `/state/*.json` virtual files backed by Postgres
 
 Minimum runtime startup:
 
@@ -53,62 +58,48 @@ PYTHONPATH="$PWD" python -m app.progenitor.main
 
 ## Running evaluations
 
-Full Heartbeat live evaluation:
+The live evaluator script predates the Postgres state-document cutover. Its
+schedule, registry, task, and checkpoint setup still reads and writes local
+JSON paths, so it is **not a valid end-to-end evaluator for the current
+runtime**. Do not use `--state-dir` or `--config-dir` to create production
+state; those flags describe the legacy harness only.
+
+For the current runtime, run the focused Heartbeat tests and exercise live
+operations through HTTP/SSE plus the virtual-file surface:
 
 ```bash
 source .venv/bin/activate
-PYTHONPATH="$PWD" python scripts/evaluate_heartbeat_live.py
+pytest -q tests/progenitor/test_graphs.py tests/progenitor/test_bounded_queues.py
 ```
 
-Machine-readable output:
-
-```bash
-PYTHONPATH="$PWD" python scripts/evaluate_heartbeat_live.py --json
-```
-
-Target a non-default runtime:
-
-```bash
-PYTHONPATH="$PWD" python scripts/evaluate_heartbeat_live.py \
-  --base-url http://127.0.0.1:9501 \
-  --state-dir data/state \
-  --config-dir data/config
-```
+When the evaluator is migrated, schedule and registry setup must write through
+`/state/schedule.json` and `/state/agents.json` (or their backend API operations)
+and assertions must read the shared Postgres documents/events rather than local
+`current_state.json` or `a2a_tasks.json` files.
 
 ## Interpreting results
 
-The script exits `0` only if all selected scenarios pass. Each failure includes observed behavior and a likely code/runtime area.
+The focused tests exercise the current store-backed Heartbeat behavior. For a
+live run, separate transport failures from Heartbeat failures:
 
-Separate setup failures from Heartbeat failures:
+- Connection failures usually mean Progenitor is not running or its HTTP
+  server is bound to a different port.
+- HTTP callback failures point to runtime HTTP/A2A ingress before Heartbeat can
+  apply completion.
+- State-document failures should be checked through the Postgres store,
+  `/health`, the SSE event stream, or the corresponding `/state/*.json`
+  virtual file; do not inspect or edit `data/config/*.json`.
+- Idle health failures may require checking whether another long-running cycle
+  was active; logs are supporting evidence only.
 
-- Connection failures usually mean Progenitor is not running or its HTTP server is bound to a different port.
-- HTTP callback failures point to runtime HTTP/A2A ingress before Heartbeat has a chance to apply completion.
-- Schedule creation failures should be split into file setup, scheduler pickup, cycle processing, and event delivery.
-- Idle health failures may require checking whether another long-running cycle was active; logs are supporting evidence only.
+The historical `evaluate_heartbeat_live.py` run below is retained as evidence
+of the former TCP/SSE behavior, but its local JSON setup is not a current
+verification of the Postgres runtime. It must be ported before being used as a
+release check.
 
-The script uses the `enqueue_background_task` tool to persist one background prompt, edits `data/config/schedule.json`, temporarily registers a disposable A2A eval agent in `data/config/agents.json`, and posts synthetic A2A callbacks. It cleans up its own schedule entries, registry additions, and temporary tracked tasks. The temporary A2A helper lives in `scripts/test_a2a_eval_agent.py`.
+## Historical live run
 
-## Latest live run
-
-Command:
-
-```bash
-source .venv/bin/activate
-PYTHONPATH="$PWD" python scripts/evaluate_heartbeat_live.py --json
-```
-
-Observed result: `6/6` scenarios passed against the live Progenitor runtime on IPC `127.0.0.1:9500` and HTTP `http://127.0.0.1:9501`.
-
-| Scenario | Result | Observation |
-| --- | --- | --- |
-| Idle health updates | Pass | `health.json` advanced during idle heartbeat and retained `running` status with queue stats. |
-| Queued input cycle flow | Pass | `enqueue_background_task` persisted one background prompt, Heartbeat drained it, `cycle_count` advanced, and IPC received an `agent_message` callback from `heartbeat_input_completion`. |
-| Due schedule flow | Pass | Heartbeat emitted `scheduled_task_triggered`, `scheduled_response`, and `work_completed`; the injected one-off schedule was removed; `current_state.json` cycle count advanced. |
-| Recurring schedule flow | Pass | Heartbeat emitted scheduled completion events, retained the recurring entry, and updated `last_run`. |
-| A2A completion flow | Pass | HTTP callback was accepted and a matching IPC `agent_message` event was observed for the terminal task. |
-| Async tracked A2A task flow | Pass | A temporary A2A agent accepted the task, Heartbeat polling completed it, and completion was surfaced through IPC/state side effects. |
-
-Notes:
-
-- Scheduled completion events can be observed before the checkpoint write is visible on disk. The evaluator waits briefly for `current_state.json` to advance after seeing completion events.
-- Tracked A2A tasks are cached in-process by the live runtime, so cleanup for failed async-A2A experiments should go through the live callback endpoint instead of direct file edits to avoid poisoning later `a2a_poll` cycles.
+The last recorded run reported `6/6` scenarios passed against the old mixed
+runtime (`IPC 127.0.0.1:9500` and HTTP `127.0.0.1:9501`). Its observations are
+historical and should not be interpreted as proof of the current
+store-backed/virtual-file implementation.

@@ -3,7 +3,6 @@
 from datetime import UTC, datetime, timedelta
 
 from app.progenitor.schedule import Scheduler
-from app.progenitor.utils import utcnow
 
 
 class TestScheduler:
@@ -35,14 +34,6 @@ class TestScheduler:
         due = self.scheduler.get_due_items(schedule, now)
         assert len(due) == 1
         assert due[0]["id"] == "due"
-
-    def test_mark_executed_sets_last_run(self):
-        now = utcnow()
-        schedule = [
-            {"id": "task-1", "cron_expression": "*/30 * * * *", "created_at": now.isoformat()}
-        ]
-        updated = self.scheduler.mark_executed(schedule, "task-1", now)
-        assert updated[0]["last_run"] == now.isoformat()
 
     def test_is_one_shot_expression(self):
         assert self.scheduler.is_one_shot_expression("30 9 27 2 *") is True

@@ -549,7 +549,6 @@ class LoopControlState(TypedDict, total=False):
     queued_input: Any
     cycle_source: str | None
     cycle_error: str | None
-    cycle_complete_signalled: bool
     idle_cycles: int
     current_backoff_seconds: float
     startup_audit_logged: bool

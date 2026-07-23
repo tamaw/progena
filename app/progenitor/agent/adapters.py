@@ -9,6 +9,8 @@ Supports optional extended thinking/reasoning for models that support it
 (e.g., GPT-5.2-chat with reasoning enabled).
 """
 
+import asyncio
+import contextlib
 import inspect
 import logging
 from collections.abc import Callable
@@ -20,6 +22,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from ..config import LLMConfig
+from ..runtime.thread_context import get_current_thread_id
 from ..tools.protocol import ToolContext
 from ..tools.system_registry import get_all_system_tools
 
@@ -142,17 +145,37 @@ async def _resolve_state(
     return None
 
 
+_reload_inflight: asyncio.Future[None] | None = None
+
+
 async def _maybe_reload(tool_registry: Any) -> None:
-    """Best-effort hot-reload so newly-deployed agents/tools show up."""
+    """Best-effort hot-reload so newly-deployed agents/tools show up.
+
+    Deduplicates concurrent reloads: if another task is already reloading,
+    await that existing task instead of starting a redundant one.
+    """
+    global _reload_inflight
     if tool_registry is None:
         return
     load = getattr(tool_registry, "load", None)
     if not callable(load):
         return
+    inflight = _reload_inflight
+    if inflight is not None and not inflight.done():
+        with contextlib.suppress(Exception):
+            await inflight
+        return
+    maybe = load()
+    if inspect.isawaitable(maybe):
+        inflight = asyncio.ensure_future(cast(Any, maybe))
+    else:
+        # Synchronous load — wrap in an already-resolved future so the
+        # rest of the flow (await + exception handling) is uniform.
+        inflight = asyncio.get_running_loop().create_future()
+        inflight.set_result(None)
+    _reload_inflight = inflight
     try:
-        maybe = load()
-        if inspect.isawaitable(maybe):
-            await cast(Any, maybe)
+        await inflight
     except Exception:
         logger.warning("Failed to reload tool registry before tool execution", exc_info=True)
 
@@ -198,20 +221,42 @@ def create_deepagent_tools(
                 }
 
             # DeepAgent doesn't merge ToolResult.state_updates automatically; do it here.
-            if result.state_updates and isinstance(state, dict):
-                state.update(result.state_updates)
-                update = (
-                    getattr(state_manager, "update_current_state", None) if state_manager else None
-                )
-                if callable(update) and inspect.iscoroutinefunction(update):
-                    try:
-                        await update(result.state_updates)
-                    except Exception:
-                        logger.warning(
-                            "Failed to persist state updates from tool %s",
-                            getattr(system_tool, "name", "system_tool"),
-                            exc_info=True,
-                        )
+            # When a per-thread direct-chat turn is active, persist updates to the
+            # thread-specific document via Postgres UPSERT instead of mutating the
+            # shared heartbeat system-state dict.
+            thread_id = get_current_thread_id()
+            if result.state_updates:
+                if thread_id is not None:
+                    update = (
+                        getattr(state_manager, "update_current_state", None)
+                        if state_manager
+                        else None
+                    )
+                    if callable(update) and inspect.iscoroutinefunction(update):
+                        try:
+                            await update(result.state_updates, thread_id=thread_id)
+                        except Exception:
+                            logger.warning(
+                                "Failed to persist state updates from tool %s",
+                                getattr(system_tool, "name", "system_tool"),
+                                exc_info=True,
+                            )
+                elif isinstance(state, dict):
+                    state.update(result.state_updates)
+                    update = (
+                        getattr(state_manager, "update_current_state", None)
+                        if state_manager
+                        else None
+                    )
+                    if callable(update) and inspect.iscoroutinefunction(update):
+                        try:
+                            await update(result.state_updates)
+                        except Exception:
+                            logger.warning(
+                                "Failed to persist state updates from tool %s",
+                                getattr(system_tool, "name", "system_tool"),
+                                exc_info=True,
+                            )
             return result.data or {}
 
         return StructuredTool.from_function(

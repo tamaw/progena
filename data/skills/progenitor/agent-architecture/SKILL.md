@@ -31,12 +31,26 @@ OBSERVE → THINK → PLAN → BUILD → MERGE → EXECUTE → VERIFY → LEARN
 - LLM-based merge conflict resolution
 
 ## State Persistence
-- `current_state.json`: Conversation state (messages, tool calls)
-- `build_state.json`: Build backlog, work items, verification results
-- `schedule` document (Postgres-backed state store): Scheduled tasks
-- `agents.json`: Agent registry (`data/config/agents.json`)
+Runtime state and structured logs are stored in the LangGraph-backed Postgres
+store, not as JSON files under `data/state` or `data/config`.
 
-All state writes are atomic: write to temp file → fsync → rename.
+The runtime state namespace is `("progenitor", "state")`; structured logs use
+`("progenitor", "logs", <source>)`. The agent receives validated virtual-file
+views backed by those documents:
+
+- `/state/mcp.json` — MCP server configuration.
+- `/state/knowledge.json` — knowledge-base settings.
+- `/state/schedule.json` — scheduled tasks keyed by ID.
+- `/state/agents.json` — A2A registry agents and runtime tools.
+- `/state/health.json` — read-only heartbeat status.
+- `/state/tasks/board.json` and `/state/tasks/<id>.md` — kanban structure and cards.
+- `/state/workflows/<id>.json` — workflow definitions.
+
+Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual
+paths. The state backend validates the resulting document and persists it
+through `StateManager`; do not edit a local JSON file or invent a `data/config`
+path. Conversation messages are stored in the LangGraph checkpoint, while
+per-thread `current_state` documents hold scalar bookkeeping.
 
 ## A2A Protocol
 Agents communicate via HTTP:

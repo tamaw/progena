@@ -9,35 +9,26 @@ leave the count unchanged.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
 from app.backend.state_reader import StateReader
 
 
-def _reader(tmp_path: Path, entries: dict[str, dict]) -> tuple[StateReader, InMemoryDocumentStore]:
+def _reader(entries: dict[str, dict]) -> tuple[StateReader, InMemoryDocumentStore]:
     store = InMemoryDocumentStore()
     store.save_document(PROGENITOR_STATE_PREFIX, "schedule", entries)
-    for name in ("state", "config", "sessions", "logs"):
-        (tmp_path / name).mkdir()
     reader = StateReader(
-        state_dir=tmp_path / "state",
-        config_dir=tmp_path / "config",
-        sessions_dir=tmp_path / "sessions",
-        logs_dir=tmp_path / "logs",
         document_store=store,
     )
     return reader, store
 
 
 def _resnapshot(reader: StateReader) -> object:
-    reader._cache.clear()
     return reader.get_snapshot()
 
 
-def test_store_change_threads_schedule_key_to_watchers(tmp_path):
+def test_store_change_threads_schedule_key_to_watchers():
     reader, _store = _reader(
-        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
+        {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     seen: list[tuple[object, object]] = []
     reader.add_watcher(lambda snapshot, key: seen.append((snapshot, key)))
@@ -49,9 +40,9 @@ def test_store_change_threads_schedule_key_to_watchers(tmp_path):
     assert seen[0][1] == "schedule"
 
 
-def test_adding_a_schedule_entry_is_detected(tmp_path):
+def test_adding_a_schedule_entry_is_detected():
     reader, store = _reader(
-        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
+        {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1
@@ -70,10 +61,9 @@ def test_adding_a_schedule_entry_is_detected(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_in_place_pause_is_detected_via_fingerprint(tmp_path):
+def test_in_place_pause_is_detected_via_fingerprint():
     # Same entry count, only a field flips - must still push live.
     reader, store = _reader(
-        tmp_path,
         {
             "sched_a": {
                 "id": "sched_a",
@@ -105,9 +95,9 @@ def test_in_place_pause_is_detected_via_fingerprint(tmp_path):
     assert reader._state_changed(snap2)
 
 
-def test_unchanged_schedule_is_not_flagged(tmp_path):
+def test_unchanged_schedule_is_not_flagged():
     reader, _store = _reader(
-        tmp_path, {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
+        {"sched_a": {"id": "sched_a", "message": "hi", "cron_expression": "0 9 * * *"}}
     )
     snap1 = reader.get_snapshot()
     reader._last_snapshot = snap1

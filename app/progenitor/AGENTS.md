@@ -110,27 +110,49 @@ pytest tests/progenitor/ --cov=app.progenitor
 - `AZURE_OPENAI_*`: Azure deployment settings
 - `OPENAI_API_KEY`: OpenAI API key
 - `PROGENITOR_MOCK_LLM`: Enable mock mode
-- `PROGENITOR_DATA_DIR`: Data directory path
+- `PROGENITOR_DATABASE_URL`: PostgreSQL URL for the LangGraph checkpointer/store
+- `PROGENITOR_DATA_DIR`: Read-only runtime data root for prompts, schemas, skills, and memories
 
-#### Config Files
-- `current_state.json`: User session state
-- `a2a_tasks.json`: Tracked external A2A tasks
-- `mcp` document (Postgres-backed state store): External MCP server registry
-- `schedule` document (Postgres-backed state store): Scheduled tasks
+#### Runtime Persistence and Virtual Files
+The normal Progenitor runtime stores state and structured logs in the LangGraph
+Postgres store. Runtime state uses the `("progenitor", "state")` namespace;
+structured logs use `("progenitor", "logs", <source>)`. Progenitor does not
+write its runtime state as JSON files under `data/state`.
+
+The DeepAgent receives a virtual filesystem view backed by those documents:
+- `/state/mcp.json`: MCP server configuration
+- `/state/knowledge.json`: Knowledge-base settings
+- `/state/schedule.json`: Scheduled tasks
+- `/state/agents.json`: A2A agent registry and runtime tools
+- `/state/health.json`: Read-only heartbeat status
+- `/state/tasks/board.json` and `/state/tasks/<id>.md`: Kanban structure and cards
+- `/state/workflows/<id>.json`: Workflow definitions
+
+Native `read`/`write`/`edit` operations on these paths validate and persist the
+corresponding Postgres document. Conversation messages are kept in the
+LangGraph checkpoint; the per-thread `current_state` document stores scalar
+bookkeeping such as cycle and response status. Names such as
+`current_state.json` and `a2a_tasks.json` are legacy/document labels, not local
+filesystem paths.
 
 ### Key Patterns
 
 #### State Persistence
 ```python
-# Load state
-state = await state_manager.load_state()
+# Read a runtime document
+state = await state_manager.get_current_state(thread_id=thread_id)
 
-# Update state
-await state_manager.update_state({"key": "value"})
+# Merge scalar bookkeeping into the Postgres-backed document
+await state_manager.update_current_state({"pending_response": response}, thread_id=thread_id)
 
-# Save explicitly
-await state_manager.save_state()
+# Read or update a virtual-file document through the same store
+schedule = await state_manager.get_schedule()
+await state_manager.save_schedule(schedule)
 ```
+
+The standalone agent factory can use a local checkpointer fallback when no
+checkpointer is injected, but the production `Progenitor` runtime injects the
+Postgres checkpointer and store.
 
 #### LLM Calls
 ```python
@@ -155,13 +177,14 @@ prompt = load_prompt("progenitor/genesis.md")
 
 ### Important Notes
 - Always activate venv before Python commands
-- State persists automatically between runs
+- State persists automatically in the configured Postgres store
 - Exponential backoff when idle
 - Interrupt-safe (graceful shutdown on Ctrl+C)
 - Secret redaction in logs
 
 ### References
 - Runtime Spec: `docs/SPEC.md`
+- State Documents: `docs/STATE_DOCUMENTS.md`
 - Architecture: `docs/ARCHITECTURE_DIAGRAM.md`
 - State Models: `app/progenitor/state/models.py`
 - Graph Definitions: `app/progenitor/graph/progenitor_graph.py`, `app/progenitor/graph/heartbeat_graph.py`

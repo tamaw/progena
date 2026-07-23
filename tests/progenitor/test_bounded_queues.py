@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from langgraph.runtime import Runtime
@@ -20,11 +20,8 @@ class MockRuntimeConfig:
     idle_backoff_seconds: int = 30
     mcp_refresh_seconds: int = 900
     registry_refresh_seconds: int = 900
-    max_backoff_seconds: int = 300
-    backoff_multiplier: float = 1.5
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
-    max_stream_queue_size: int = 10
     timezone: str = "UTC"
 
 
@@ -81,10 +78,6 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
     async def test_input_queue_is_bounded(self):
         """Test that input queue has a max size."""
         assert self.loop.queues.input_queue.maxsize == 5
-
-    async def test_output_queue_is_bounded(self):
-        """Test that output queue has a max size."""
-        assert self.loop.queues.output_queue.maxsize == 5
 
     async def test_enqueue_input_success(self):
         """Test successful input enqueue."""
@@ -151,38 +144,16 @@ class TestBoundedQueues(unittest.IsolatedAsyncioTestCase):
         with pytest.raises(asyncio.QueueFull):
             await self.loop.queues.enqueue_input("overflow", timeout=0)
 
-    async def test_send_output_drops_on_full(self):
-        """Test that output drops messages when queue is full."""
-        # Fill the output queue
-        for i in range(5):
-            self.loop.queues.output_queue.put_nowait(f"output {i}")
-
-        # Should not raise, just log warning and drop
-        await self.loop.queues.send_output("overflow message")
-
-        # Queue size should still be 5
-        assert self.loop.queues.output_queue.qsize() == 5
-
     async def test_get_queue_stats(self):
         """Test queue statistics reporting."""
-        # Add some items
         await self.loop.queues.enqueue_input("msg1")
         await self.loop.queues.enqueue_input("msg2")
-        self.loop.queues.output_queue.put_nowait("out1")
 
         stats = self.loop.queues.get_queue_stats()
 
         assert stats["input_queue"]["size"] == 2
         assert stats["input_queue"]["maxsize"] == 5
         assert stats["input_queue"]["full"] is False
-
-        assert stats["output_queue"]["size"] == 1
-        assert stats["output_queue"]["maxsize"] == 5
-        assert stats["output_queue"]["full"] is False
-
-        assert stats["stream_queue"]["size"] == 0
-        assert stats["stream_queue"]["maxsize"] == 10
-        assert stats["stream_queue"]["full"] is False
 
     async def test_get_queue_stats_when_full(self):
         """Test queue stats when queues are full."""
@@ -392,9 +363,7 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
         from app.progenitor.runtime.heartbeat import ProgenitorLoop
 
         config = MockConfig(
-            runtime=MockRuntimeConfig(
-                max_input_queue_size=50, max_output_queue_size=25, max_stream_queue_size=500
-            )
+            runtime=MockRuntimeConfig(max_input_queue_size=50, max_output_queue_size=25)
         )
 
         state_manager = MagicMock()
@@ -407,7 +376,6 @@ class TestBoundedQueueConfiguration(unittest.IsolatedAsyncioTestCase):
         )
 
         assert loop.queues.input_queue.maxsize == 50
-        assert loop.queues.output_queue.maxsize == 25
 
 
 class TestConfigQueueSettings(unittest.TestCase):
@@ -421,25 +389,6 @@ class TestConfigQueueSettings(unittest.TestCase):
 
         assert config.max_input_queue_size == 100
         assert config.max_output_queue_size == 100
-        assert config.max_stream_queue_size == 1000
-
-    def test_queue_sizes_from_env(self):
-        """Test loading queue sizes from environment."""
-        from app.progenitor.config import RuntimeConfig
-
-        with patch.dict(
-            "os.environ",
-            {
-                "PROGENITOR_MAX_INPUT_QUEUE_SIZE": "200",
-                "PROGENITOR_MAX_OUTPUT_QUEUE_SIZE": "150",
-                "PROGENITOR_MAX_STREAM_QUEUE_SIZE": "2000",
-            },
-        ):
-            config = RuntimeConfig.from_env()
-
-            assert config.max_input_queue_size == 200
-            assert config.max_output_queue_size == 150
-            assert config.max_stream_queue_size == 2000
 
     def test_queue_sizes_use_code_defaults_without_file_config(self):
         """Runtime queue defaults are not pulled from saved config payloads."""
@@ -449,7 +398,6 @@ class TestConfigQueueSettings(unittest.TestCase):
 
         assert config.max_input_queue_size == 100
         assert config.max_output_queue_size == 100
-        assert config.max_stream_queue_size == 1000
 
 
 class TestReasoningTraceExtraction(unittest.TestCase):

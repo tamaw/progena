@@ -152,11 +152,12 @@ The dedicated stream owns response content transport only. It never carries
 - Due work is re-enqueued through the same input path as user messages.
 - Runtime state is updated after scheduled work is processed.
 
-## Persistence
-
-The system persists runtime conversation and schedule state, backend-owned
-metadata, and operational logs. State-document changes are broadcast to the
-canonical UI stream after the write succeeds; details are in
+The system persists runtime conversation/checkpoint state, state documents,
+backend-owned metadata, and operational logs in Postgres. Progenitor exposes
+selected state documents through a validated virtual filesystem (`/state/*.json`
+and related task/workflow paths); those JSON names are views over database
+documents, not files in `data/state` or `data/config`. State-document changes are
+broadcast to the canonical UI stream after the write succeeds; details are in
 [STATE_DOCUMENTS.md](STATE_DOCUMENTS.md).
 
 ## Public interfaces
