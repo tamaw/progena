@@ -74,9 +74,9 @@ If you need direct host access to backend port `8000`, add your own port mapping
 
 ## Volumes and ephemeral storage
 
-Host-mounted by default:
-- `progenitor`: `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data` (full data dir, incl. `state/`, `config/`, `memories/`, `schemas/`)
+- `progenitor`: `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data` (full data dir, incl. `state/`, `config/`, `memories/`)
 - `progenitor` and `backend`: `${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro`, `${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro`
+- `progenitor`: `${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro` (mounted explicitly, like `prompts`/`skills` — see note below)
 - `progenitor` and `backend`: `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
 
 Ephemeral storage:
@@ -86,6 +86,7 @@ Notes:
 - The `backend` container does not mount the full `/app/data` tree. Runtime state (current_state, schedule, registry/agents, tasks, sessions, event widgets, health, kanban, mcp) is read from the shared Postgres document store, not from files; only `prompts` and `skills` are mounted into `backend`.
 - Prompt assets now live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
 - Skill assets now live inside `${PROGENITOR_HOST_DATA_DIR}/skills` and resolve to `/app/data/skills` in containers.
+- Schema contracts (`data/schemas/`) are checked into git and mount explicitly from the checkout (`PROGENITOR_HOST_SCHEMAS_DIR`, default `../data/schemas`) rather than relying on `PROGENITOR_HOST_DATA_DIR`, which on real deployments points at a persistent host directory that is never seeded from the repo. This mirrors the `prompts`/`skills` pattern so schema updates land on every deploy.
 - Repository/worktree state now mounts from `${PROGENITOR_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
 - `PROGENITOR_WORKTREE_DIR` is set to `/app/repos` in `progenitor` and `backend`.
 

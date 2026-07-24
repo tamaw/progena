@@ -64,6 +64,7 @@ services:
       - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
       - ${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro
       - ${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro
+      - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
     tmpfs:

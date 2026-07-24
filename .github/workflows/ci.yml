@@ -215,6 +215,7 @@ jobs:
           PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
           PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
           PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
+          PROGENITOR_HOST_SCHEMAS_DIR: ${{ github.workspace }}/data/schemas
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
@@ -226,6 +227,7 @@ jobs:
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
           test -d "$PROGENITOR_HOST_PROMPTS_DIR"
           test -d "$PROGENITOR_HOST_SKILLS_DIR"
+          test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 
