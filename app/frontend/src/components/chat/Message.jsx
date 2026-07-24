@@ -263,7 +263,7 @@ function MessageView({
                     className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
                     title={tooltip}
                   >
-                    <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={26} />
+                    <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={36} />
                     <span className="message-attachment-chip__body">
                       <span className="message-attachment-chip__name">{attachment.name}</span>
                       <span className="message-attachment-chip__meta">
