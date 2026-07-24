@@ -187,37 +187,53 @@
 }
 
 .chat-input-attachment-chip {
+    position: relative;
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 2px 6px 2px 6px;
+    padding: 2px 6px 7px 6px;
     border-radius: 999px;
     background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
     font-size: var(--font-size-sm);
     max-width: 220px;
+    overflow: hidden;
 }
 
 .chat-input-attachment-chip__name {
-    position: relative;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+/* Sits below the icon/name/remove row, inset from the pill's rounded ends.
+   Unlike the uploading dim (opacity: 0.6 on the whole chip), this bar stays
+   fully visible once the upload completes -- see --progress--complete below --
+   so "this attachment made it to the server" remains legible after the fact,
+   not just mid-transfer. */
 .chat-input-attachment-chip__progress {
     position: absolute;
-    left: 0;
-    bottom: -3px;
-    height: 2px;
-    width: 0;
+    left: 8px;
+    right: 8px;
+    bottom: 3px;
+    height: 2.5px;
     border-radius: 999px;
     background-color: var(--color-accent);
+    transform-origin: left center;
+    transform: scaleX(0);
+}
+
+.chat-input-attachment-chip__progress--active {
     animation: chat-attachment-upload-progress 1.1s ease-in-out infinite;
 }
 
+.chat-input-attachment-chip__progress--complete {
+    transform: scaleX(1);
+    transition: transform 0.3s ease;
+}
+
 @keyframes chat-attachment-upload-progress {
-    0% { width: 0%; }
-    100% { width: 100%; }
+    0% { transform: scaleX(0); }
+    100% { transform: scaleX(1); }
 }
 
 .chat-input-attachment-chip--uploading {

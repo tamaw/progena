@@ -365,12 +365,7 @@ function ChatInput({
                 title={attachment.error || attachment.name}
               >
                 <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={16} />
-                <span className="chat-input-attachment-chip__name">
-                  {attachment.name}
-                  {attachment.uploading && (
-                    <span className="chat-input-attachment-chip__progress" aria-hidden="true" />
-                  )}
-                </span>
+                <span className="chat-input-attachment-chip__name">{attachment.name}</span>
                 <button
                   type="button"
                   className="chat-input-attachment-chip__remove"
@@ -379,6 +374,12 @@ function ChatInput({
                 >
                   ×
                 </button>
+                {!attachment.error && (
+                  <span
+                    className={`chat-input-attachment-chip__progress${attachment.uploading ? ' chat-input-attachment-chip__progress--active' : ' chat-input-attachment-chip__progress--complete'}`}
+                    aria-hidden="true"
+                  />
+                )}
               </span>
             ))}
           </div>
