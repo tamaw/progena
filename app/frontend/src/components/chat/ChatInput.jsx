@@ -365,7 +365,12 @@ function ChatInput({
                 title={attachment.error || attachment.name}
               >
                 <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={16} />
-                <span className="chat-input-attachment-chip__name">{attachment.name}</span>
+                <span className="chat-input-attachment-chip__name">
+                  {attachment.name}
+                  {attachment.uploading && (
+                    <span className="chat-input-attachment-chip__progress" aria-hidden="true" />
+                  )}
+                </span>
                 <button
                   type="button"
                   className="chat-input-attachment-chip__remove"
