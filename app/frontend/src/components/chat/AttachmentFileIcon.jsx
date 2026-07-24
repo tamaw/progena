@@ -4,14 +4,14 @@ import { describeAttachmentFileType } from './attachmentFileTypes';
 // XLS / PPT / IMG / ZIP / CODE / TXT / FILE) -- the file-attachment analog of
 // how images get their own thumbnail in MessageImageStrip. Pure/presentational:
 // callers resolve mime_type + filename via describeAttachmentFileType.
-function AttachmentFileIcon({ mimeType, filename }) {
+function AttachmentFileIcon({ mimeType, filename, size = 22 }) {
   const { label, color } = describeAttachmentFileType(mimeType, filename);
   return (
     <svg
       className="attachment-file-icon"
       viewBox="0 0 24 24"
-      width="22"
-      height="22"
+      width={size}
+      height={size}
       aria-hidden="true"
     >
       <path
