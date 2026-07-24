@@ -114,7 +114,12 @@ class ConvertAttachmentTool(BaseSystemTool):
                 "mime_type": row["mime_type"],
                 "markdown": markdown,
                 "total_chars": len(markdown),
-            }
+            },
+            artifact={
+                "kind": "document",
+                "count": len(markdown),
+                "summary": f"{filename} -> {len(markdown):,} chars markdown",
+            },
         )
 
     @staticmethod
