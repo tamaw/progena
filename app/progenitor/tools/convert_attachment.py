@@ -27,7 +27,12 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
-MAX_MARKDOWN_CHARS = 50_000
+# Bounds one tool call's returned payload, not the file's readable size --
+# the full markdown always persists to text_content (see update_text_content
+# below), so a caller that needs more just pages through /attachments/<file>
+# with offset/limit like any other virtual-fs file. Matches shell.py's
+# _MAX_OUTPUT_CHARS precedent for "don't blow up one tool result."
+MAX_MARKDOWN_CHARS = 10_000
 
 
 def _database_url() -> str:
@@ -105,16 +110,21 @@ class ConvertAttachmentTool(BaseSystemTool):
 
         await attachments_db.update_text_content(database_url, str(row["id"]), markdown)
 
-        return ToolResult.ok(
-            {
-                "attachment_id": row["id"],
-                "filename": filename,
-                "mime_type": row["mime_type"],
-                "markdown": returned_markdown,
-                "truncated": truncated,
-                "total_chars": len(markdown),
-            }
-        )
+        response: dict[str, object] = {
+            "attachment_id": row["id"],
+            "filename": filename,
+            "mime_type": row["mime_type"],
+            "markdown": returned_markdown,
+            "truncated": truncated,
+            "total_chars": len(markdown),
+        }
+        if truncated:
+            response["note"] = (
+                f"Showing the first {MAX_MARKDOWN_CHARS} of {len(markdown)} characters. "
+                f"Read the rest with the file tools at /attachments/{filename} "
+                f"(offset={MAX_MARKDOWN_CHARS})."
+            )
+        return ToolResult.ok(response)
 
     @staticmethod
     async def _convert(converter, data: bytes, extension: str | None):
