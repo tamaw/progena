@@ -1419,20 +1419,26 @@ def _extract_response_input(request: ResponseRequest) -> str:
 
     Empty text is allowed when the request carries attachments -- see
     `StreamingResponseRequest.validate_for_streaming`'s matching allowance
-    for the streaming path.
+    for the streaming path. The frontend always sends `input` as a message
+    list (`buildResponsesInput` in useChatApi.js), and it drops any entry
+    with empty content, so an attachment-only send arrives as `input: []`
+    -- not an empty string -- and must be allowed here too, not just in
+    the `isinstance(raw_input, str)` branch.
     """
     raw_input = request.input
+    has_attachments = bool(
+        isinstance(request.metadata, dict) and request.metadata.get("attachments")
+    )
     if isinstance(raw_input, str):
         last_input = raw_input
     elif raw_input:
         item = raw_input[-1]
         last_input = item if isinstance(item, str) else item.content or ""
+    elif has_attachments:
+        last_input = ""
     else:
         raise ValueError("No input provided")
 
-    has_attachments = bool(
-        isinstance(request.metadata, dict) and request.metadata.get("attachments")
-    )
     if not last_input.strip() and not has_attachments:
         raise ValueError("Input cannot be empty")
     return last_input
