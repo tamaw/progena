@@ -54,6 +54,7 @@ async def discover_agents_node(
         project_root=context.project_root,
         llm_client=context.llm_client,
         registry=context.tool_registry,
+        state_manager=getattr(context, "state_manager", None),
     )
     await _persist_registry(context)
     return {
@@ -79,6 +80,7 @@ async def startup_discover_agents_node(
         project_root=context.project_root,
         llm_client=context.llm_client,
         registry=context.tool_registry,
+        state_manager=getattr(context, "state_manager", None),
     )
     await _persist_registry(context)
     context.startup_flags.add("startup_registry_discover")

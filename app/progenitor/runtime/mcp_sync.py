@@ -1,7 +1,7 @@
 """Coalescing, single-flight scheduler for live MCP runtime re-syncs.
 
 Store-change notifications (UI server/tool toggles, agent edits to
-``/state/mcp.json``) can arrive in bursts. Running a full re-sync per
+``/config/mcp.json``) can arrive in bursts. Running a full re-sync per
 notification would both waste work and — worse — let two re-syncs interleave a
 teardown (``mcp_runtime.close()``) with a rebuild on the shared runtime.
 

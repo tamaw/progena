@@ -111,7 +111,7 @@ pytest tests/progenitor/ --cov=app.progenitor
 - `OPENAI_API_KEY`: OpenAI API key
 - `PROGENITOR_MOCK_LLM`: Enable mock mode
 - `PROGENITOR_DATABASE_URL`: PostgreSQL URL for the LangGraph checkpointer/store
-- `PROGENITOR_DATA_DIR`: Read-only runtime data root for prompts, schemas, skills, and memories
+- `PROGENITOR_DATA_DIR`: Read-only runtime data root for the JSON Schema contracts under `schemas/` (prompts, skills, and memories are Postgres-backed content documents now, see `content_documents.py`)
 
 #### Runtime Persistence and Virtual Files
 The normal Progenitor runtime stores state and structured logs in the LangGraph
@@ -120,13 +120,13 @@ structured logs use `("progenitor", "logs", <source>)`. Progenitor does not
 write its runtime state as JSON files under `data/state`.
 
 The DeepAgent receives a virtual filesystem view backed by those documents:
-- `/state/mcp.json`: MCP server configuration
-- `/state/knowledge.json`: Knowledge-base settings
-- `/state/schedule.json`: Scheduled tasks
-- `/state/agents.json`: A2A agent registry and runtime tools
-- `/state/health.json`: Read-only heartbeat status
-- `/state/tasks/board.json` and `/state/tasks/<id>.md`: Kanban structure and cards
-- `/state/workflows/<id>.json`: Workflow definitions
+- `/config/mcp.json`: MCP server configuration
+- `/config/knowledge.json`: Knowledge-base settings
+- `/config/schedule.json`: Scheduled tasks
+- `/config/agents.json`: A2A agent registry and runtime tools
+- `/config/health.json`: Read-only heartbeat status
+- `/config/tasks/board.json` and `/config/tasks/<id>.md`: Kanban structure and cards
+- `/config/workflows/<id>.json`: Workflow definitions
 
 Native `read`/`write`/`edit` operations on these paths validate and persist the
 corresponding Postgres document. Conversation messages are kept in the
@@ -156,14 +156,14 @@ Postgres checkpointer and store.
 
 #### LLM Calls
 ```python
-# Conversation graph
-graph = create_conversation_graph(config=config)
+# Conversation graph (async: seeds prompts/skills into Postgres on first boot)
+graph = await create_conversation_graph(config=config, state_manager=state_manager)
 
 # Heartbeat/background graph
 background = create_heartbeat_graph(state_manager=state_manager)
 
-# Direct prompt loading
-prompt = load_prompt("progenitor/genesis.md")
+# Direct prompt loading (Postgres-backed; see content_documents.py)
+prompt = await state_manager.get_content_document("prompt", "progenitor/genesis.md")
 ```
 
 #### Secret Redaction

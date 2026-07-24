@@ -5,6 +5,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
+from ..content_documents import content_document_key, content_document_prefix
 from ..utils import utcnow_isoformat
 from ..workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
@@ -454,6 +455,39 @@ class StateManager:
         """Return all workflow definition documents."""
         rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    # ==========================================================================
+    # Content documents (prompts, skills, runtime memories)
+    # ==========================================================================
+    async def get_content_document(self, kind: str, relative_path: str) -> str | None:
+        """Return one content document's text, or ``None`` if missing/malformed."""
+        key = content_document_key(kind, relative_path)
+        payload = await self._runtime_store.peek_document(key)
+        if isinstance(payload, dict) and isinstance((content := payload.get("content")), str):
+            return content
+        return None
+
+    async def save_content_document(self, kind: str, relative_path: str, content: str) -> None:
+        """Persist one content document's text."""
+        key = content_document_key(kind, relative_path)
+        await self._save_runtime_document(
+            key, {"content": content, "updated_at": utcnow_isoformat()}
+        )
+
+    async def delete_content_document(self, kind: str, relative_path: str) -> None:
+        """Remove one content document."""
+        key = content_document_key(kind, relative_path)
+        await self._runtime_store.delete_document(key)
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        """Return ``(relative_path, content)`` for every document of one kind."""
+        prefix = content_document_prefix(kind)
+        rows = await self._runtime_store.list_documents(prefix)
+        results: list[tuple[str, str]] = []
+        for key, payload in rows:
+            if isinstance(payload, dict) and isinstance(payload.get("content"), str):
+                results.append((key[len(prefix) :], payload["content"]))
+        return results
 
     # ==========================================================================
     # MCP tools

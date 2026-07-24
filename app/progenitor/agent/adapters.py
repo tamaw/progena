@@ -269,7 +269,7 @@ def create_deepagent_tools(
     return [_wrap(tool) for tool in get_all_system_tools()]
 
 
-def create_deep_agent_for_runtime(
+async def create_deep_agent_for_runtime(
     config: Any | None = None,
     checkpointer: Any | None = None,
     store: Any | None = None,
@@ -287,7 +287,7 @@ def create_deep_agent_for_runtime(
     if config is None:
         config = get_config(validate=False)
 
-    return create_conversation_graph(
+    return await create_conversation_graph(
         config=config,
         checkpointer=checkpointer,
         store=store,

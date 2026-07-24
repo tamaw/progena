@@ -50,7 +50,7 @@ class ToolRegistry:
         """Back the registry with a document store instead of a local JSON file.
 
         When bound, :meth:`load`/:meth:`save` read and write the canonical
-        Postgres registry document. The agent-facing ``/state/agents.json`` path
+        Postgres registry document. The agent-facing ``/config/agents.json`` path
         is only a virtual view of that document. When unbound, the registry is
         intentionally in-memory and is suitable for isolated tests only.
         """

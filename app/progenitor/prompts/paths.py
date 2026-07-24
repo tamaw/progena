@@ -63,13 +63,3 @@ def resolve_project_root(prompts_dir: Path | str | None = None) -> Path:
         if (candidate / "app").is_dir():
             return candidate
     return resolved_prompts_dir.parent
-
-
-def resolve_skills_root(prompts_dir: Path | str | None = None) -> Path:
-    """Return the checked-in skills root adjacent to the resolved prompts directory."""
-    return resolve_prompts_dir(prompts_dir).parent / "skills"
-
-
-def resolve_skills_dir(agent_name: str, prompts_dir: Path | str | None = None) -> Path:
-    """Return the agent-scoped skills directory under data/skills/."""
-    return resolve_skills_root(prompts_dir) / agent_name

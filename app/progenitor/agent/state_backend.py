@@ -1,7 +1,7 @@
 """DeepAgent backend that surfaces Progenitor state documents as files.
 
 Each registered document becomes one virtual file under the mount (e.g.
-``/state/mcp.json``). Reads map to a getter; writes/edits parse + validate the
+``/config/mcp.json``). Reads map to a getter; writes/edits parse + validate the
 file content, persist it via a setter, then run an optional side-effect (e.g.
 live MCP reload).
 
@@ -22,8 +22,10 @@ from typing import Any
 import yaml
 from croniter import croniter
 from deepagents.backends.protocol import (
+    FILE_NOT_FOUND,
     EditResult,
     FileData,
+    FileDownloadResponse,
     FileInfo,
     GlobResult,
     GrepResult,
@@ -33,6 +35,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.utils import (
     create_file_data,
+    file_data_to_string,
     perform_string_replacement,
     slice_read_response,
 )
@@ -281,6 +284,13 @@ class _AsyncOnlyFileBackendMixin:
     (aread/awrite/aedit/als/aglob/agrep) is ever wired up. Subclasses set their
     own ``_ASYNC_ONLY`` message and mix this in instead of repeating these six
     stubs verbatim.
+
+    Also supplies ``adownload_files``, required by DeepAgents'
+    ``BackendProtocol`` (used e.g. by ``MemoryMiddleware``/``SkillsMiddleware``
+    to batch-load mount sources). It's implemented once here, generically, on
+    top of each subclass's own ``aread`` — that already returns raw,
+    non-line-numbered content (line-number formatting happens downstream, in
+    the file-read tool, not in the backend), so it's safe to reuse verbatim.
     """
 
     _ASYNC_ONLY: str = "This backend is async-only; use the async file tools."
@@ -302,6 +312,27 @@ class _AsyncOnlyFileBackendMixin:
 
     def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
         raise NotImplementedError(self._ASYNC_ONLY)
+
+    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download multiple files as raw bytes, via this backend's ``aread``.
+
+        Response order matches input order; any read failure (unknown path,
+        out-of-range offset) normalizes to ``file_not_found`` since these
+        backends only fail reads that way.
+        """
+        responses: list[FileDownloadResponse] = []
+        for path in paths:
+            result = await self.aread(path, 0, 10_000_000)  # type: ignore[attr-defined]
+            if result.error is not None or result.file_data is None:
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error=FILE_NOT_FOUND)
+                )
+                continue
+            content = file_data_to_string(result.file_data)
+            responses.append(
+                FileDownloadResponse(path=path, content=content.encode("utf-8"), error=None)
+            )
+        return responses
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
@@ -507,7 +538,7 @@ _RESERVED_PROJECT_IDS = {".", ".."}
 class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async DeepAgent backend exposing the kanban board as a task directory.
 
-    Mounted at ``/state/tasks/``: ``board.json`` is the structure document
+    Mounted at ``/config/tasks/``: ``board.json`` is the structure document
     (columns + ``card_order``) and every card is one ``.md`` file (YAML
     frontmatter for the fields, markdown body for the description). Each card is
     its own ``kanban_card:<id>`` document in the shared Postgres store, so the
@@ -533,7 +564,7 @@ class KanbanTaskDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
     @staticmethod
     def _name(file_path: str) -> str:
-        # CompositeBackend strips the /state/tasks/ route prefix before delegating.
+        # CompositeBackend strips the /config/tasks/ route prefix before delegating.
         return file_path.lstrip("/").removeprefix("tasks/")
 
     @staticmethod
@@ -784,7 +815,7 @@ class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
 
 class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
-    """Async backend exposing workflow definitions as ``/state/workflows/*.json``."""
+    """Async backend exposing workflow definitions as ``/config/workflows/*.json``."""
 
     _ASYNC_ONLY = "WorkflowDirectoryBackend is async-only; use the async file tools."
 
@@ -1041,3 +1072,89 @@ def create_schedule_state_file(
         validate=validate_schedule_document,
         on_change=on_change,
     )
+
+
+class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
+    """Async backend exposing Postgres-backed content documents as a directory.
+
+    Backs ``/prompts/``, ``/skills/``, and ``/memories/``: plain-text
+    documents keyed by relative path (e.g. ``progenitor/system.md``),
+    replacing the old ``FilesystemBackend`` mounts over
+    ``data_dir/{prompts,skills,memories}``. Read-only mounts (prompts,
+    skills) are wrapped by ``ReadOnlyBackend`` at the route level, same as
+    the old filesystem mounts were.
+    """
+
+    _ASYNC_ONLY = "ContentDocumentDirectoryBackend is async-only; use the async file tools."
+
+    def __init__(self, state_manager: Any, kind: str) -> None:
+        self._sm = state_manager
+        self._kind = kind
+
+    @staticmethod
+    def _name(file_path: str) -> str:
+        return file_path.lstrip("/")
+
+    async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        name = self._name(file_path)
+        content = await self._sm.get_content_document(self._kind, name)
+        if content is None:
+            return ReadResult(error=f"File '{file_path}' not found")
+        file_data = create_file_data(content)
+        sliced = slice_read_response(file_data, offset, limit)
+        if isinstance(sliced, ReadResult):
+            return sliced
+        return ReadResult(
+            file_data=FileData(content=sliced, encoding=file_data.get("encoding", "utf-8"))
+        )
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        name = self._name(file_path)
+        if not name or name.endswith("/"):
+            return WriteResult(error=f"Invalid {self._kind} file path '{file_path}'")
+        await self._sm.save_content_document(self._kind, name, content)
+        return WriteResult(path=file_path)
+
+    async def aedit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        read = await self.aread(file_path, 0, 10_000_000)
+        if read.error is not None:
+            return EditResult(error=f"Error: {read.error}")
+        current = read.file_data["content"] if read.file_data else ""
+        result = perform_string_replacement(current, old_string, new_string, replace_all)
+        if isinstance(result, str):
+            return EditResult(error=result)
+        new_content, occurrences = result
+        written = await self.awrite(file_path, new_content)
+        if written.error is not None:
+            return EditResult(error=f"Error: {written.error}")
+        return EditResult(path=file_path, occurrences=int(occurrences))
+
+    async def adelete(self, file_path: str) -> WriteResult:
+        name = self._name(file_path)
+        content = await self._sm.get_content_document(self._kind, name)
+        if content is None:
+            return WriteResult(error=f"File '{file_path}' not found")
+        await self._sm.delete_content_document(self._kind, name)
+        return WriteResult(path=file_path)
+
+    async def als(self, path: str) -> LsResult:
+        rows = await self._sm.list_content_documents(self._kind)
+        prefix = self._name(path)
+        if prefix and not prefix.endswith("/"):
+            prefix = f"{prefix}/"
+        entries = sorted(rel for rel, _content in rows if rel.startswith(prefix))
+        return LsResult(entries=[FileInfo(path=f"/{entry}", is_dir=False) for entry in entries])
+
+    async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
+        return GlobResult(matches=[])
+
+    async def agrep(
+        self, pattern: str, path: str | None = None, glob: str | None = None
+    ) -> GrepResult:
+        return GrepResult(matches=[])

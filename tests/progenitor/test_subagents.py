@@ -2,6 +2,8 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from app.progenitor.agent.subagents import (
     create_code_review_subagent,
     create_general_purpose_subagent,
@@ -113,7 +115,8 @@ class TestHelloWorldAsyncSubagent:
 
 
 class TestSubagentWiring:
-    def test_factory_passes_subagents(self):
+    @pytest.mark.asyncio
+    async def test_factory_passes_subagents(self):
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.agent.create_progenitor_subagents") as mock_subagents,
@@ -126,7 +129,27 @@ class TestSubagentWiring:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.agent import create_progenitor_agent
 
-                create_progenitor_agent()
+                class _FakeStateManager:
+                    def __init__(self):
+                        self._docs = {
+                            "prompt": {"progenitor/genesis.md": "Genesis"},
+                            "skill": {},
+                            "memory": {},
+                        }
+
+                    async def get_content_document(self, kind, relative_path):
+                        return self._docs[kind].get(relative_path)
+
+                    async def save_content_document(self, kind, relative_path, content):
+                        self._docs[kind][relative_path] = content
+
+                    async def delete_content_document(self, kind, relative_path):
+                        self._docs[kind].pop(relative_path, None)
+
+                    async def list_content_documents(self, kind):
+                        return list(self._docs[kind].items())
+
+                await create_progenitor_agent(state_manager=_FakeStateManager())
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs

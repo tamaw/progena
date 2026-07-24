@@ -1,12 +1,12 @@
 ---
 name: managing-knowledge
-description: Create, rename, describe, tag, or configure knowledge bases, and add or remove folder sources, by editing the /state/knowledge.json file. Use when a user asks to add, rename, describe, tag, configure, or remove a knowledge base or one of its sources. To recall stored facts, use knowledge_search instead.
+description: Create, rename, describe, tag, or configure knowledge bases, and add or remove folder sources, by editing the /config/knowledge.json file. Use when a user asks to add, rename, describe, tag, configure, or remove a knowledge base or one of its sources. To recall stored facts, use knowledge_search instead.
 allowed-tools: read_file edit_file write_file structured_output knowledge_search
 ---
 
 # Managing Knowledge Bases
 
-Knowledge-base **settings** live in a single virtual file: `/state/knowledge.json`.
+Knowledge-base **settings** live in a single virtual file: `/config/knowledge.json`.
 It is backed by the runtime state document (Postgres is the source of truth), so
 editing it is the supported way to manage knowledge bases — there is no separate
 "add knowledge base" tool. Every successful write is validated and the Knowledge
@@ -28,10 +28,10 @@ setting.
 For "what do you know about X" / "recall …", use `knowledge_search`, not this file.
 
 ## Always Read Before You Edit
-`/state/knowledge.json` is serialized with sorted keys and 2-space indentation. Read
+`/config/knowledge.json` is serialized with sorted keys and 2-space indentation. Read
 it first so your `edit_file` `old_string` matches exactly:
 
-1. `read_file /state/knowledge.json`
+1. `read_file /config/knowledge.json`
 2. Make the change with `edit_file` (preferred — preserves the rest of the file) or
    `write_file` (only when rewriting the whole document).
 
@@ -75,10 +75,10 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
 ## Common Operations
 
 ### Add a knowledge base
-1. `read_file /state/knowledge.json`
+1. `read_file /config/knowledge.json`
 2. `read_file /schemas/knowledge_base_entry.schema.v1.json`
 3. `structured_output json_schema=<content from step 2> instruction="Build a knowledge base entry named '<name>' with description '<what it's for>' and tags [<tags>]. Omit id."`
-4. `edit_file /state/knowledge.json` to append the object from step 3 to `bases`,
+4. `edit_file /config/knowledge.json` to append the object from step 3 to `bases`,
    keeping every existing base untouched. Minimal shape (omit `id` to have one
    generated):
 ```json

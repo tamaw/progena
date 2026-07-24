@@ -3,7 +3,7 @@
 The observe agent keeps its own data (system prompt, skills catalog, task run
 history) and its LangGraph conversation checkpoints in a dedicated database on
 the same Postgres server as the Progenitor runtime. This wraps LangGraph's
-native checkpointer + store (see ``app.progenitor.database``) with a small
+native checkpointer + store (see ``db_persistence``) with a small
 semantic API, mirroring ``LangGraphRuntimeStore``.
 """
 
@@ -15,9 +15,8 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.progenitor.database import ensure_database_exists, open_langgraph_persistence
-
 from .config import DatabaseConfig
+from .db_persistence import ensure_database_exists, open_langgraph_persistence
 
 logger = logging.getLogger(__name__)
 

@@ -11,7 +11,7 @@ frontend through canonical UI events:
 - schedules, knowledge, workflows, kanban, and inbox: Postgres-backed documents
 
 The Progenitor agent sees selected documents as validated virtual files such as
-`/state/agents.json`, `/state/mcp.json`, and `/state/schedule.json`. These names
+`/config/agents.json`, `/config/mcp.json`, and `/config/schedule.json`. These names
 are not local filesystem paths; `build_state.json` and `current_state.json` are
 not backend-owned files in the current runtime.
 """
@@ -1037,7 +1037,7 @@ _KANBAN_CARD_CONTENT_FIELDS = (
 
 # Last-dispatched state per card id, used to detect kanban.card.* changes that
 # didn't go through the REST routes below (an agent writing
-# /state/tasks/<id>.md directly bypasses them entirely). Guarded by
+# /config/tasks/<id>.md directly bypasses them entirely). Guarded by
 # _kanban_card_trigger_lock wherever it's read-then-written, so a REST-driven
 # change and the store-change reconciler picking up its own resulting NOTIFY
 # can't both decide to dispatch the same change.
@@ -1058,7 +1058,7 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
 
     Shared by the REST kanban routes and the generic store-change reconciler
     (_reconcile_kanban_card_triggers) so a card edit fires the same triggers
-    whether it came from the UI or an agent writing /state/tasks/<id>.md
+    whether it came from the UI or an agent writing /config/tasks/<id>.md
     directly.
     """
     triggers: list[dict] = []
@@ -1207,7 +1207,7 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
     The REST routes (create/patch/delete) dispatch triggers inline and then
     record the resulting state via _remember_kanban_card_state. But the
     runtime agent's actual day-to-day mechanism for touching cards is
-    writing straight to /state/tasks/<id>.md, which persists via
+    writing straight to /config/tasks/<id>.md, which persists via
     StateManager straight to Postgres -- it never goes through these routes.
     This reconciler runs off the same store-change watcher that already
     pushes kanban.snapshot live (see _queue_state_watch_status), diffing the
@@ -2099,7 +2099,7 @@ def _build_schedule_entry(
 
 def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowContentResponse:
     return WorkflowContentResponse(
-        path=f"/state/workflows/{definition.id}.json",
+        path=f"/config/workflows/{definition.id}.json",
         workflow=definition,
     )
 
@@ -2905,7 +2905,7 @@ async def retrigger_schedule(
     plain language ("friday at 15:00"). We hand that to the Progenitor agent on a
     dedicated (non-chat) thread carrying just the schedule id and the free text -
     the loaded ``managing-schedules`` skill owns how a natural-language reschedule request
-    gets interpreted and applied to ``/state/schedule.json``, not a hardcoded
+    gets interpreted and applied to ``/config/schedule.json``, not a hardcoded
     tool-call prescription here. We then recompute ``next_run`` (in case the
     agent didn't) and rebroadcast a snapshot.
     """
@@ -2925,7 +2925,7 @@ async def retrigger_schedule(
         raise HTTPException(status_code=404, detail="Schedule not found")
 
     instruction = (
-        f'Reschedule the task with id "{schedule_id}" under /state/schedule.json to run: '
+        f'Reschedule the task with id "{schedule_id}" under /config/schedule.json to run: '
         f'"{text}". Do not change the task\'s message and do not create a new task. Reply '
         "with one short sentence confirming the new timing."
     )
@@ -4269,7 +4269,7 @@ _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = None) -> None:
     """Always-on watcher that reconciles kanban.card.* workflow triggers for
     changes made outside the REST kanban routes -- chiefly the runtime agent
-    writing /state/tasks/<id>.md directly.
+    writing /config/tasks/<id>.md directly.
 
     Registered separately from _queue_state_watch_status, which returns
     immediately when no UI client is connected (fine for UI-push
@@ -4609,7 +4609,7 @@ def broadcast_knowledge_snapshot(
     """Broadcast the current knowledge-base list to /api/ui/stream subscribers.
 
     Emitted after backend-side knowledge mutations and whenever the ``knowledge``
-    state document changes (UI ``PUT`` or an agent edit to ``/state/knowledge.json``
+    state document changes (UI ``PUT`` or an agent edit to ``/config/knowledge.json``
     surfaced via the Postgres NOTIFY watcher), so the Knowledge page reflects
     changes live without refetching. Callers that already built the list can pass
     it in to avoid a second snapshot query and keep the event consistent with the
