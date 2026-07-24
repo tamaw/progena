@@ -197,7 +197,7 @@ def create_deepagent_tools(
         async def _run(
             tool_call_id: Annotated[str, InjectedToolCallId] = "",
             **kwargs: Any,
-        ) -> dict[str, Any]:
+        ) -> tuple[dict[str, Any], dict[str, Any] | None]:
             await _maybe_reload(tool_registry)
             state = await _resolve_state(state_manager, live_state_provider)
 
@@ -212,13 +212,16 @@ def create_deepagent_tools(
             )
             result = await system_tool.execute(ctx)
             if not result.success:
-                return {
-                    "success": False,
-                    "error": result.error or f"{system_tool.name} failed",
-                    "should_retry_slow_path": bool(
-                        getattr(result, "should_retry_slow_path", False)
-                    ),
-                }
+                return (
+                    {
+                        "success": False,
+                        "error": result.error or f"{system_tool.name} failed",
+                        "should_retry_slow_path": bool(
+                            getattr(result, "should_retry_slow_path", False)
+                        ),
+                    },
+                    None,
+                )
 
             # DeepAgent doesn't merge ToolResult.state_updates automatically; do it here.
             # When a per-thread direct-chat turn is active, persist updates to the
@@ -257,13 +260,14 @@ def create_deepagent_tools(
                                 getattr(system_tool, "name", "system_tool"),
                                 exc_info=True,
                             )
-            return result.data or {}
+            return (result.data or {}, result.artifact)
 
         return StructuredTool.from_function(
             coroutine=_run,
             name=str(getattr(system_tool, "name", "system_tool")),
             description=str(getattr(system_tool, "description", "Progenitor system tool")),
             args_schema=system_tool.args_model,
+            response_format="content_and_artifact",
         )
 
     return [_wrap(tool) for tool in get_all_system_tools()]

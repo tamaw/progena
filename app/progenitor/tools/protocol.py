@@ -38,11 +38,22 @@ class ToolResult:
     error: str | None = None
     state_updates: dict[str, Any] | None = None
     should_retry_slow_path: bool = False
+    artifact: dict[str, Any] | None = None
+    """Small, bounded projection surfaced on the SSE/IPC activity stream
+    (see ``app.progenitor.ipc.stream_events._extract_artifact``). Allowed
+    keys: ``summary``, ``count``, ``kind``, ``status`` -- anything else is
+    dropped before it reaches the frontend. Distinct from ``data``, which is
+    the full result returned to the LLM."""
 
     @classmethod
-    def ok(cls, data: dict[str, Any], state_updates: dict[str, Any] | None = None) -> "ToolResult":
+    def ok(
+        cls,
+        data: dict[str, Any],
+        state_updates: dict[str, Any] | None = None,
+        artifact: dict[str, Any] | None = None,
+    ) -> "ToolResult":
         """Create a successful result."""
-        return cls(success=True, data=data, state_updates=state_updates)
+        return cls(success=True, data=data, state_updates=state_updates, artifact=artifact)
 
     @classmethod
     def fail(cls, error: str, should_retry_slow_path: bool = False) -> "ToolResult":

@@ -200,6 +200,10 @@ class ShellExecTool(BaseSystemTool):
         stdout = (stdout_b or b"").decode(errors="replace")
         stderr = (stderr_b or b"").decode(errors="replace")
 
+        line_count = stdout.count("\n") + stderr.count("\n")
+        status_bit = "timed out" if timed_out else f"exit {process.returncode}"
+        preview_command = command if len(command) <= 80 else command[:77] + "..."
+
         return ToolResult.ok(
             {
                 "enabled": True,
@@ -212,5 +216,11 @@ class ShellExecTool(BaseSystemTool):
                 "returncode": process.returncode,
                 "stdout": stdout,
                 "stderr": stderr,
-            }
+            },
+            artifact={
+                "kind": "shell",
+                "count": line_count,
+                "status": "error" if timed_out or process.returncode else "success",
+                "summary": f"`{preview_command}` -> {status_bit}, {line_count} lines",
+            },
         )
