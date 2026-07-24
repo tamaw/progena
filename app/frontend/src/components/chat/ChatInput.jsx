@@ -5,6 +5,7 @@ import { fetchAgentProfiles } from '../../store/uiData/agents';
 import { selectAgentProfiles, selectAgentProfilesState } from '../../store/uiDataSlice';
 import { getAgentMentionContext } from './chatInputModel';
 import AttachmentFileIcon from './AttachmentFileIcon';
+import { describeAttachmentFileType, formatAttachmentSize } from './attachmentFileTypes';
 
 const SLASH_COMMANDS = [
   {
@@ -60,6 +61,7 @@ function ChatInput({
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const dragDepthRef = useRef(0);
+  const uploadControllersRef = useRef(new Map());
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const textareaRef = useRef(null);
@@ -199,6 +201,8 @@ function ChatInput({
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.uploading);
 
   const removeAttachment = (localId) => {
+    uploadControllersRef.current.get(localId)?.abort();
+    uploadControllersRef.current.delete(localId);
     setPendingAttachments((prev) => prev.filter((attachment) => attachment.localId !== localId));
   };
 
@@ -223,10 +227,12 @@ function ChatInput({
 
     await Promise.all(staged.map(async (entry, index) => {
       const file = files[index];
+      const controller = new AbortController();
+      uploadControllersRef.current.set(entry.localId, controller);
       const formData = new FormData();
       formData.append('file', file);
       try {
-        const response = await fetch(getApiUrl('attachments'), { method: 'POST', body: formData });
+        const response = await fetch(getApiUrl('attachments'), { method: 'POST', body: formData, signal: controller.signal });
         const payload = await response.json().catch(() => null);
         if (!response.ok || !payload) {
           throw new Error(payload?.detail || `Upload failed (${response.status})`);
@@ -244,13 +250,36 @@ function ChatInput({
             : attachment
         )));
       } catch (error) {
-        setPendingAttachments((prev) => prev.map((attachment) => (
-          attachment.localId === entry.localId
-            ? { ...attachment, uploading: false, error: error.message || 'Upload failed' }
-            : attachment
-        )));
+        // Cancelled via removeAttachment -- the chip is already gone from
+        // pendingAttachments, so there's nothing left to mark as errored.
+        if (error.name !== 'AbortError') {
+          setPendingAttachments((prev) => prev.map((attachment) => (
+            attachment.localId === entry.localId
+              ? { ...attachment, uploading: false, error: error.message || 'Upload failed' }
+              : attachment
+          )));
+        }
+      } finally {
+        uploadControllersRef.current.delete(entry.localId);
       }
     }));
+  };
+
+  const handlePaste = (e) => {
+    if (!enableAttachments || disabled || isGenerating) return;
+    const items = Array.from(e.clipboardData?.items || []);
+    const files = items
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    if (files.length === 0) {
+      return;
+    }
+    // Only intercept when the clipboard actually carries file data --
+    // plain text paste (the overwhelming common case) must fall through
+    // to the textarea's default paste behavior untouched.
+    e.preventDefault();
+    handleFilesSelected(files);
   };
 
   const handleDragEnter = (e) => {
@@ -358,30 +387,43 @@ function ChatInput({
         )}
         {enableAttachments && pendingAttachments.length > 0 && (
           <div className="chat-input-attachments">
-            {pendingAttachments.map((attachment) => (
-              <span
-                key={attachment.localId}
-                className={`chat-input-attachment-chip${attachment.error ? ' chat-input-attachment-chip--error' : ''}${attachment.uploading ? ' chat-input-attachment-chip--uploading' : ''}`}
-                title={attachment.error || attachment.name}
-              >
-                <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={22} />
-                <span className="chat-input-attachment-chip__name">{attachment.name}</span>
-                <button
-                  type="button"
-                  className="chat-input-attachment-chip__remove"
-                  aria-label={`Remove ${attachment.name}`}
-                  onClick={() => removeAttachment(attachment.localId)}
+            {pendingAttachments.map((attachment) => {
+              const sizeLabel = formatAttachmentSize(attachment.size_bytes);
+              const { label: fileTypeLabel } = describeAttachmentFileType(attachment.mime_type, attachment.name);
+              const metaLabel = attachment.error
+                ? attachment.error
+                : (attachment.uploading ? 'Uploading…' : [fileTypeLabel, sizeLabel].filter(Boolean).join(' · '));
+              const tooltip = attachment.error
+                ? `${attachment.name} — ${attachment.error}`
+                : [attachment.name, sizeLabel].filter(Boolean).join(' — ');
+              return (
+                <span
+                  key={attachment.localId}
+                  className={`chat-input-attachment-chip${attachment.error ? ' chat-input-attachment-chip--error' : ''}${attachment.uploading ? ' chat-input-attachment-chip--uploading' : ''}`}
+                  title={tooltip}
                 >
-                  ×
-                </button>
-                {!attachment.error && (
-                  <span
-                    className={`chat-input-attachment-chip__progress${attachment.uploading ? ' chat-input-attachment-chip__progress--active' : ' chat-input-attachment-chip__progress--complete'}`}
-                    aria-hidden="true"
-                  />
-                )}
-              </span>
-            ))}
+                  <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={26} />
+                  <span className="chat-input-attachment-chip__body">
+                    <span className="chat-input-attachment-chip__name">{attachment.name}</span>
+                    <span className="chat-input-attachment-chip__meta">{metaLabel}</span>
+                  </span>
+                  <button
+                    type="button"
+                    className="chat-input-attachment-chip__remove"
+                    aria-label={attachment.uploading ? `Cancel upload of ${attachment.name}` : `Remove ${attachment.name}`}
+                    onClick={() => removeAttachment(attachment.localId)}
+                  >
+                    ×
+                  </button>
+                  {!attachment.error && (
+                    <span
+                      className={`chat-input-attachment-chip__progress${attachment.uploading ? ' chat-input-attachment-chip__progress--active' : ' chat-input-attachment-chip__progress--complete'}`}
+                      aria-hidden="true"
+                    />
+                  )}
+                </span>
+              );
+            })}
           </div>
         )}
         <div
@@ -408,6 +450,7 @@ function ChatInput({
             onClick={(e) => setSelectionStart(e.currentTarget.selectionStart ?? message.length)}
             onKeyUp={(e) => setSelectionStart(e.currentTarget.selectionStart ?? message.length)}
             onKeyDown={handleKeyDown}
+            onPaste={handlePaste}
             rows={1}
             disabled={disabled || isGenerating}
           />
