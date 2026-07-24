@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MAX_TIMEOUT_SECONDS = 300.0
-_MAX_OUTPUT_CHARS = 10_000
 
 
 def _detect_docker() -> bool:
@@ -110,12 +109,6 @@ def _extract_command_from_request(request: str) -> str:
             return text[len(prefix) :].strip()
 
     return text
-
-
-def _truncate(text: str) -> str:
-    if len(text) <= _MAX_OUTPUT_CHARS:
-        return text
-    return text[:_MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
 
 class ShellCheckTool(BaseSystemTool):
@@ -217,7 +210,7 @@ class ShellExecTool(BaseSystemTool):
                 "timeout_seconds": timeout,
                 "timed_out": timed_out,
                 "returncode": process.returncode,
-                "stdout": _truncate(stdout),
-                "stderr": _truncate(stderr),
+                "stdout": stdout,
+                "stderr": stderr,
             }
         )
