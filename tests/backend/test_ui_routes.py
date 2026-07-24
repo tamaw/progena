@@ -631,16 +631,19 @@ class TestUIRoutes:
 
         assert response.status_code == 404
 
-    def test_prompts_endpoint_lists_nested_prompts(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "data" / "prompts"
-        (prompts_dir / "builder_agent").mkdir(parents=True)
-        (prompts_dir / "progenitor" / "nested").mkdir(parents=True)
-        (prompts_dir / "builder_agent" / "think.md").write_text("builder content", encoding="utf-8")
-        (prompts_dir / "progenitor" / "nested" / "decide.md").write_text(
-            "progenitor content", encoding="utf-8"
+    def test_prompts_endpoint_lists_nested_prompts(self, client, document_store):
+        from app.progenitor.content_documents import content_document_key
+
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("prompt", "builder_agent/think.md"),
+            {"content": "builder content"},
         )
-        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("prompt", "progenitor/nested/decide.md"),
+            {"content": "progenitor content"},
+        )
 
         response = client.get("/api/ui/prompts")
         assert response.status_code == 202
@@ -663,13 +666,11 @@ class TestUIRoutes:
         assert builder_prompt["primary_agent"] == "builder_agent"
         assert "builder_agent" in builder_prompt["associated_agents"]
 
-    def test_prompts_endpoint_updates_prompt_content(self, client, tmp_path, monkeypatch):
-        prompts_dir = tmp_path / "data" / "prompts"
-        (prompts_dir / "builder_agent").mkdir(parents=True)
-        prompt_path = prompts_dir / "builder_agent" / "think.md"
-        prompt_path.write_text("before", encoding="utf-8")
-        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
+    def test_prompts_endpoint_updates_prompt_content(self, client, document_store):
+        from app.progenitor.content_documents import content_document_key
+
+        key = content_document_key("prompt", "builder_agent/think.md")
+        document_store.save_document(PROGENITOR_STATE_PREFIX, key, {"content": "before"})
 
         response = client.put(
             "/api/ui/prompts/content",
@@ -677,18 +678,17 @@ class TestUIRoutes:
         )
 
         assert response.status_code == 202
-        assert prompt_path.read_text(encoding="utf-8") == "after"
+        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        assert stored.payload["content"] == "after"
 
-    def test_prompts_list_omits_content_and_content_route_returns_it(
-        self, client, tmp_path, monkeypatch
-    ):
-        prompts_dir = tmp_path / "data" / "prompts"
-        (prompts_dir / "builder_agent").mkdir(parents=True)
-        (prompts_dir / "builder_agent" / "think.md").write_text(
-            "full prompt body", encoding="utf-8"
+    def test_prompts_list_omits_content_and_content_route_returns_it(self, client, document_store):
+        from app.progenitor.content_documents import content_document_key
+
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("prompt", "builder_agent/think.md"),
+            {"content": "full prompt body"},
         )
-        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(prompts_dir.parent))
 
         list_response = client.get("/api/ui/prompts")
         assert list_response.status_code == 202
@@ -712,19 +712,17 @@ class TestUIRoutes:
         assert content_replay.payload["path"] == "builder_agent/think.md"
         assert content_replay.payload["content"] == "full prompt body"
 
-    def test_skills_endpoint_lists_updates_and_creates_skills(self, client, tmp_path, monkeypatch):
-        data_dir = tmp_path / "data"
-        prompts_dir = data_dir / "prompts"
-        skills_dir = data_dir / "skills"
-        existing_skill = skills_dir / "progenitor" / "runtime-inspection" / "SKILL.md"
-        prompts_dir.mkdir(parents=True)
-        existing_skill.parent.mkdir(parents=True)
-        existing_skill.write_text(
-            "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools.",
-            encoding="utf-8",
+    def test_skills_endpoint_lists_updates_and_creates_skills(self, client, document_store):
+        from app.progenitor.content_documents import content_document_key
+
+        existing_key = content_document_key("skill", "progenitor/runtime-inspection/SKILL.md")
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            existing_key,
+            {
+                "content": "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools."
+            },
         )
-        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
 
         list_response = client.get("/api/ui/skills")
 
@@ -736,7 +734,8 @@ class TestUIRoutes:
         )
 
         assert update_response.status_code == 202
-        assert existing_skill.read_text(encoding="utf-8") == "after"
+        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, existing_key, None)
+        assert stored.payload["content"] == "after"
 
         create_response = client.post(
             "/api/ui/skills",
@@ -748,23 +747,20 @@ class TestUIRoutes:
         )
 
         assert create_response.status_code == 202
-        assert (skills_dir / "builder_agent" / "repo-triage" / "SKILL.md").is_file()
+        created_key = content_document_key("skill", "builder_agent/repo-triage/SKILL.md")
+        created = document_store.get_document(PROGENITOR_STATE_PREFIX, created_key, None)
+        assert created is not None
 
-    def test_skills_list_omits_content_and_content_route_returns_it(
-        self, client, tmp_path, monkeypatch
-    ):
-        data_dir = tmp_path / "data"
-        prompts_dir = data_dir / "prompts"
-        skills_dir = data_dir / "skills"
-        existing_skill = skills_dir / "progenitor" / "runtime-inspection" / "SKILL.md"
-        prompts_dir.mkdir(parents=True)
-        existing_skill.parent.mkdir(parents=True)
-        existing_skill.write_text(
-            "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools.",
-            encoding="utf-8",
+    def test_skills_list_omits_content_and_content_route_returns_it(self, client, document_store):
+        from app.progenitor.content_documents import content_document_key
+
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("skill", "progenitor/runtime-inspection/SKILL.md"),
+            {
+                "content": "---\nname: Runtime Inspection\ndescription: Inspect runtime state.\n---\n\nUse tools."
+            },
         )
-        monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
-        monkeypatch.setenv("PROGENITOR_DATA_DIR", str(data_dir))
 
         list_response = client.get("/api/ui/skills")
         assert list_response.status_code == 202

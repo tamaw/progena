@@ -153,7 +153,7 @@ class Progenitor:
         from ..agent.adapters import create_deep_agent_for_runtime
 
         assert self.state_manager is not None
-        self.graph = create_deep_agent_for_runtime(
+        self.graph = await create_deep_agent_for_runtime(
             config=self.config,
             checkpointer=checkpointer,
             store=store,
@@ -179,7 +179,7 @@ class Progenitor:
             log_sink=self.log_store,
         )
         # React to store writes (UI server/tool toggles, agent edits to
-        # /state/mcp.json) by re-syncing the live MCP runtime immediately, rather
+        # /config/mcp.json) by re-syncing the live MCP runtime immediately, rather
         # than waiting for the next heartbeat MCP refresh. The scheduler serializes
         # and coalesces this work so bursts can't race on the shared runtime.
         self._mcp_scheduler = MCPSyncScheduler(

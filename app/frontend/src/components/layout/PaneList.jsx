@@ -374,7 +374,11 @@ export function PaneListVirtualized({
     const observer = new ResizeObserver((entries) => {
       let changed = false;
       entries.forEach((entry) => {
-        const key = entry.target.dataset.virtualRowKey;
+        // Observe the row's rendered content, not the wrapper: the wrapper
+        // carries an inline `minHeight` floor (the current estimate), so
+        // measuring it directly can only ever grow a row, never shrink it
+        // back down when the real content is shorter than the estimate.
+        const key = entry.target.closest('[data-virtual-row-key]')?.dataset.virtualRowKey;
         const nextHeight = Math.ceil(entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height);
         if (key && nextHeight > 0 && heightsRef.current.get(key) !== nextHeight) {
           heightsRef.current.set(key, nextHeight);
@@ -385,7 +389,8 @@ export function PaneListVirtualized({
     });
     visibleRows.forEach((row) => {
       const element = rowElementsRef.current.get(row.key);
-      if (element) observer.observe(element);
+      const target = element?.firstElementChild || element;
+      if (target) observer.observe(target);
     });
     return () => observer.disconnect();
   }, [visibleRows]);

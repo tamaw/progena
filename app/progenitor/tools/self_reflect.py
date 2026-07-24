@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from ..llm.client import LLMClient
 
-from ..prompts import load_prompt
 from .protocol import BaseSystemTool, ToolContext, ToolResult, build_tool_spec
 
 logger = logging.getLogger(__name__)
@@ -159,14 +158,17 @@ class SelfReflection:
     - Get LLM-powered summaries of what code does
     """
 
-    def __init__(self, llm_client: Optional["LLMClient"] = None):
+    def __init__(self, llm_client: Optional["LLMClient"] = None, state_manager: Any = None):
         """
         Initialize self-reflection tool.
 
         Args:
             llm_client: Optional LLM client for code analysis
+            state_manager: Optional StateManager, required by analyze_file()
+                (loads its prompt from Postgres content documents)
         """
         self.llm_client = llm_client
+        self.state_manager = state_manager
         self.root = PROGENITOR_ROOT
 
     def _is_safe_path(self, path: Path) -> bool:
@@ -519,15 +521,25 @@ class SelfReflection:
         """
         if not self.llm_client:
             raise ValueError("LLM client required for file analysis")
+        if not self.state_manager:
+            raise ValueError("state_manager required for file analysis")
 
         file_content = self.read_file(relative_path, max_lines=300)
 
-        prompt = load_prompt(
-            "progenitor/self_reflect_file_analysis.md",
-            relative_path=relative_path,
-            language=file_content.language,
-            content=file_content.content,
+        prompt_template = await self.state_manager.get_content_document(
+            "prompt", "progenitor/self_reflect_file_analysis.md"
         )
+        if prompt_template is None:
+            raise RuntimeError(
+                "Missing 'progenitor/self_reflect_file_analysis.md' prompt document in Postgres"
+            )
+        prompt = prompt_template
+        for key, value in {
+            "relative_path": relative_path,
+            "language": file_content.language,
+            "content": file_content.content,
+        }.items():
+            prompt = prompt.replace(f"{{{key}}}", str(value))
 
         response = await self.llm_client.chat(
             prompt=prompt,

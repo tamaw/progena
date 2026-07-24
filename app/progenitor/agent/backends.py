@@ -2,16 +2,27 @@
 Backend configuration for Progenitor's DeepAgent.
 
 Profile:
-- Ephemeral workspace (StateBackend) + persistent memories (FilesystemBackend)
+- Ephemeral workspace (StateBackend) + persistent memories (Postgres-backed)
 - Scoped filesystem mounts for self-inspection and runtime data access:
-  - /memories/ -> configured data_dir/memories (read-write)
+  - /memories/ -> Postgres content documents, kind="memory" (read-write)
   - /self/ -> <project_root>/app (read-only)
   - /repos/ -> configured repo/worktree directory (read-only)
-  - /data/ -> configured data dir (read-only)
   - /logs/ -> configured log dir (read-only)
-  - /prompts/ -> configured prompts dir (read-only)
-  - /schemas/ -> configured schemas dir (read-only) - JSON Schema contracts a
+  - /prompts/ -> Postgres content documents, kind="prompt" (read-only)
+  - /skills/ -> Postgres content documents, kind="skill" (read-only) - DeepAgent
+    skill discovery reads these
+  - /schemas/ -> configured schemas dir (read-only, still disk-mounted: static
+    JSON Schema contracts checked into git, read by structured_output) - a
     skill reads before calling structured_output
+  - /config/ -> Postgres state documents the agent can read/edit as files,
+    including mcp.json, schedule.json, and agents.json, plus the
+    /config/tasks/ task directory (board.json and per-task <id>.md files).
+    Writes persist via the StateManager; the runtime's store listener handles
+    live MCP re-discovery, so no write-hook callback is needed here.
+
+Prompts, skills, and memories used to be plain files bind-mounted from the
+host (see ``content_documents.py`` for why); they're Postgres documents now,
+so only ``schemas/`` remains a real disk mount.
 """
 
 import logging
@@ -26,6 +37,7 @@ from deepagents.backends import (
 )
 
 from .state_backend import (
+    ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
     StateDocumentBackend,
@@ -41,7 +53,7 @@ from .state_backend import (
 logger = logging.getLogger(__name__)
 
 
-class ReadOnlyFilesystemBackend:
+class ReadOnlyBackend:
     """Deny all mutation operations while allowing reads/listing."""
 
     def __init__(self, backend: Any):
@@ -60,9 +72,7 @@ class ReadOnlyFilesystemBackend:
 def create_progenitor_backend(
     project_root: str | Path | None = None,
     *,
-    data_dir: str | Path | None = None,
     log_dir: str | Path | None = None,
-    prompts_dir: str | Path | None = None,
     schemas_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
@@ -71,26 +81,17 @@ def create_progenitor_backend(
 
     Args:
         project_root: Root directory for filesystem access. Defaults to cwd.
-        data_dir: Persistent data directory. Defaults to ``<project_root>/data``.
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
-        prompts_dir: Prompt directory. Defaults to ``<data_dir>/prompts``.
-        schemas_dir: JSON Schema directory. Defaults to ``<data_dir>/schemas``.
+        schemas_dir: JSON Schema directory. Defaults to ``<project_root>/data/schemas``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
-        state_manager: When provided, mounts ``/state/`` with state documents
-            the agent can read/edit as files, including ``mcp.json``,
-            ``schedule.json``, and ``agents.json``, plus the ``/state/tasks/``
-            task directory (``board.json`` and per-task ``<id>.md`` files).
-            Writes persist via the StateManager; the runtime's store listener
-            handles live MCP re-discovery, so no write-hook callback is needed
-            here.
+        state_manager: Required for prompts/skills/memories/config mounts (all
+            Postgres-backed); without it those routes are omitted entirely.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
     root = Path(project_root) if project_root else Path.cwd()
-    resolved_data_dir = Path(data_dir) if data_dir else root / "data"
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
-    resolved_prompts_dir = Path(prompts_dir) if prompts_dir else resolved_data_dir / "prompts"
-    resolved_schemas_dir = Path(schemas_dir) if schemas_dir else resolved_data_dir / "schemas"
+    resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "worktrees"
 
     def _route_backend(
@@ -106,24 +107,15 @@ def create_progenitor_backend(
             return None
         backend = FilesystemBackend(root_dir=str(path), virtual_mode=True)
         if read_only:
-            return ReadOnlyFilesystemBackend(backend)
+            return ReadOnlyBackend(backend)
         return backend
 
     routes: dict[str, Any] = {}
-    memories_backend = _route_backend(
-        resolved_data_dir / "memories",
-        read_only=False,
-        create_if_missing=True,
-    )
-    if memories_backend is not None:
-        routes["/memories/"] = memories_backend
 
     mounts: list[tuple[str, Path, bool]] = [
         ("/self/", root / "app", True),
         ("/repos/", resolved_worktree_dir, True),
-        ("/data/", resolved_data_dir, True),
         ("/logs/", resolved_log_dir, True),
-        ("/prompts/", resolved_prompts_dir, True),
         ("/schemas/", resolved_schemas_dir, True),
     ]
     for route, mount_path, ro in mounts:
@@ -131,12 +123,20 @@ def create_progenitor_backend(
         if backend is not None:
             routes[route] = backend
 
-    # State documents surfaced as virtual files (e.g. /state/mcp.json,
-    # /state/schedule.json, /state/agents.json), backed by the runtime
-    # StateManager so writes persist through the normal store path. Tasks get
-    # their own mount: a directory of per-task files (/state/tasks/<id>.md +
-    # board.json) so the agent edits one task per file instead of a giant blob.
     if state_manager is not None:
+        routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
+        routes["/prompts/"] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "prompt")
+        )
+        routes["/skills/"] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "skill")
+        )
+
+        # State documents surfaced as virtual files (e.g. /config/mcp.json,
+        # /config/schedule.json, /config/agents.json), backed by the runtime
+        # StateManager so writes persist through the normal store path. Tasks get
+        # their own mount: a directory of per-task files (/config/tasks/<id>.md +
+        # board.json) so the agent edits one task per file instead of a giant blob.
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
             create_knowledge_state_file,
@@ -144,11 +144,11 @@ def create_progenitor_backend(
             create_registry_state_file,
             create_health_state_file,
         ]
-        routes["/state/"] = StateDocumentBackend(
+        routes["/config/"] = StateDocumentBackend(
             [factory(state_manager) for factory in state_file_factories]
         )
-        routes["/state/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
-        routes["/state/workflows/"] = WorkflowDirectoryBackend(state_manager)
+        routes["/config/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
+        routes["/config/workflows/"] = WorkflowDirectoryBackend(state_manager)
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)

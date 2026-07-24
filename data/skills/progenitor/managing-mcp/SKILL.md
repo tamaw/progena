@@ -1,12 +1,12 @@
 ---
 name: managing-mcp
-description: Add, remove, edit, enable, or disable external MCP servers by editing the /state/mcp.json config file. Use when a user asks to connect, register, update, or drop an MCP server, or to turn one on/off.
+description: Add, remove, edit, enable, or disable external MCP servers by editing the /config/mcp.json config file. Use when a user asks to connect, register, update, or drop an MCP server, or to turn one on/off.
 allowed-tools: read_file edit_file write_file structured_output mcp mcp_refresh
 ---
 
 # Managing MCP Servers
 
-MCP server configuration lives in a single virtual file: `/state/mcp.json`. It is
+MCP server configuration lives in a single virtual file: `/config/mcp.json`. It is
 backed by the runtime state document (Postgres is the source of truth), so editing
 it is the supported way to manage servers — there is no separate "add server" tool.
 Every successful write is validated and triggers live tool re-discovery automatically,
@@ -20,10 +20,10 @@ updates live.
 - User asks to enable or disable a server
 
 ## Always Read Before You Edit
-`/state/mcp.json` is serialized with sorted keys and 2-space indentation. Read it
+`/config/mcp.json` is serialized with sorted keys and 2-space indentation. Read it
 first so your `edit_file` `old_string` matches exactly:
 
-1. `read_file /state/mcp.json`
+1. `read_file /config/mcp.json`
 2. Make the change with `edit_file` (preferred — preserves the rest of the file) or
    `write_file` (only when rewriting the whole document).
 
@@ -52,10 +52,10 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
 ## Common Operations
 
 ### Add a server
-1. `read_file /state/mcp.json`
+1. `read_file /config/mcp.json`
 2. `read_file /schemas/mcp_server_entry.schema.v1.json`
 3. `structured_output json_schema=<content from step 2> instruction="Build an MCP server entry for '<name>' at '<url>' with transport http."`
-4. `edit_file /state/mcp.json` to insert `"<name>": <result from step 3>` under
+4. `edit_file /config/mcp.json` to insert `"<name>": <result from step 3>` under
    `mcpServers`, keeping every other server untouched. Minimal shape:
 ```json
 "github": { "url": "https://api.githubcopilot.com/mcp/", "transport": "http", "enabled": true }

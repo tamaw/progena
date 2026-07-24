@@ -38,7 +38,7 @@ from ..config import ProgenitorConfig, get_config
 logger = logging.getLogger(__name__)
 
 
-def create_conversation_graph(
+async def create_conversation_graph(
     config: ProgenitorConfig | None = None,
     checkpointer: Any | None = None,
     store: Any | None = None,
@@ -57,7 +57,7 @@ def create_conversation_graph(
     """
     if config is None:
         config = get_config(validate=False)
-    graph = create_progenitor_agent(
+    graph = await create_progenitor_agent(
         config=config,
         checkpointer=checkpointer,
         store=store,

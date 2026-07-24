@@ -212,20 +212,17 @@ jobs:
           TELEGRAM_ALLOWED_USERS: ${{ vars.TELEGRAM_ALLOWED_USERS }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          PROGENITOR_HOST_DATA_DIR: /var/lib/progenitor/data
-          PROGENITOR_HOST_PROMPTS_DIR: ${{ github.workspace }}/data/prompts
-          PROGENITOR_HOST_SKILLS_DIR: ${{ github.workspace }}/data/skills
+          PROGENITOR_HOST_SCHEMAS_DIR: ${{ github.workspace }}/data/schemas
           PROGENITOR_HOST_LOGS_DIR: /var/lib/progenitor/logs
         run: |
           # If a manual/dev container exists with the same name, docker compose will fail.
-          # Removing containers keeps bind-mounted state (data/logs/worktrees) intact.
+          # Removing containers keeps bind-mounted state (logs/repos, plus Postgres) intact.
           docker rm -f progenitor progenitor-backend progenitor-frontend 2>/dev/null || true
           docker volume inspect progenitor-postgres-data >/dev/null 2>&1 || docker volume create progenitor-postgres-data >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-backend:${PROGENITOR_IMAGE_TAG} >/dev/null
           docker image inspect ghcr.io/tamaw/progenitor-frontend:${PROGENITOR_IMAGE_TAG} >/dev/null
-          test -d "$PROGENITOR_HOST_PROMPTS_DIR"
-          test -d "$PROGENITOR_HOST_SKILLS_DIR"
+          test -d "$PROGENITOR_HOST_SCHEMAS_DIR"
           docker compose -f docker/docker-compose.progenitor.yml up -d --no-build --pull never
           docker compose -f docker/docker-compose.progenitor.yml ps
 

@@ -11,18 +11,14 @@ WORKDIR /app
 # Copy project metadata and source
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
-COPY data/prompts/ ./data/prompts/
-COPY data/skills/ ./data/skills/
 COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir .
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Create directories for mounted volumes
-RUN mkdir -p /app/data/prompts /app/data/skills /app/logs /app/tmp
-
-VOLUME ["/app/data/prompts", "/app/data/skills", "/app/logs"]
+# Create directories for the (now Postgres-backed) data root and ephemeral scratch space.
+RUN mkdir -p /app/data /app/logs /app/tmp
 
 EXPOSE 8000
 

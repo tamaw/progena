@@ -2,7 +2,7 @@
 
 Knowledge-base settings live in one document (``progenitor.state`` / ``knowledge``)
 in the shared store, so the Progenitor agent can read and edit them as the
-``/state/knowledge.json`` virtual file. This module loads/saves that document and
+``/config/knowledge.json`` virtual file. This module loads/saves that document and
 merges per-base SQL stats (document/collection counts from ``knowledge_documents``)
 into the snapshot the UI renders from.
 """

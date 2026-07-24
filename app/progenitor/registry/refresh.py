@@ -30,6 +30,7 @@ async def discover_local_agents(
     project_root: Path,
     llm_client: Any,
     registry: Any,
+    state_manager: Any = None,
 ) -> dict[str, Any]:
     """Run local agent discovery against app/agents."""
     try:
@@ -42,6 +43,7 @@ async def discover_local_agents(
             agents_dir=agents_dir,
             llm_client=llm_client,
             registry=registry,
+            state_manager=state_manager,
         )
         logger.info(
             "Startup discovery: found=%d registered=%d",
