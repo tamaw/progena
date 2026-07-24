@@ -50,14 +50,17 @@ function ChatInput({
   keepFocusAfterSend = false,
   initialMessage = '',
   className = '',
+  enableAttachments = true,
 }) {
   const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [selectionStart, setSelectionStart] = useState(initialMessage.length);
+  const [pendingAttachments, setPendingAttachments] = useState([]);
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
   const agentProfiles = useSelector(selectAgentProfiles);
   const agentProfilesState = useSelector(selectAgentProfilesState);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
@@ -190,9 +193,62 @@ function ChatInput({
     }
   };
 
+  const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.uploading);
+
+  const removeAttachment = (localId) => {
+    setPendingAttachments((prev) => prev.filter((attachment) => attachment.localId !== localId));
+  };
+
+  const handleFilesSelected = async (fileList) => {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) {
+      return;
+    }
+    const staged = files.map((file) => ({
+      localId: `pending_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      name: file.name,
+      size_bytes: file.size,
+      uploading: true,
+      error: null,
+      id: null,
+    }));
+    setPendingAttachments((prev) => [...prev, ...staged]);
+
+    await Promise.all(staged.map(async (entry, index) => {
+      const file = files[index];
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const response = await fetch(getApiUrl('attachments'), { method: 'POST', body: formData });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok || !payload) {
+          throw new Error(payload?.detail || `Upload failed (${response.status})`);
+        }
+        setPendingAttachments((prev) => prev.map((attachment) => (
+          attachment.localId === entry.localId
+            ? {
+              ...attachment,
+              uploading: false,
+              id: payload.id,
+              name: payload.original_filename || attachment.name,
+              mime_type: payload.mime_type,
+              size_bytes: payload.size_bytes,
+            }
+            : attachment
+        )));
+      } catch (error) {
+        setPendingAttachments((prev) => prev.map((attachment) => (
+          attachment.localId === entry.localId
+            ? { ...attachment, uploading: false, error: error.message || 'Upload failed' }
+            : attachment
+        )));
+      }
+    }));
+  };
+
   const handleSend = () => {
     const trimmedMessage = message.trim();
-    if (!trimmedMessage || isGenerating || disabled) {
+    if ((!trimmedMessage && pendingAttachments.length === 0) || isGenerating || disabled || hasUploadingAttachments) {
       return;
     }
 
@@ -204,9 +260,11 @@ function ChatInput({
       return;
     }
 
-    if (trimmedMessage) {
-      onSend(trimmedMessage);
+    const attachments = pendingAttachments.filter((attachment) => attachment.id && !attachment.error);
+    if (trimmedMessage || attachments.length > 0) {
+      onSend(trimmedMessage, attachments);
       setMessage('');
+      setPendingAttachments([]);
       if (keepFocusAfterSend) {
         requestAnimationFrame(() => textareaRef.current?.focus());
       }
@@ -260,6 +318,27 @@ function ChatInput({
             ))}
           </div>
         )}
+        {enableAttachments && pendingAttachments.length > 0 && (
+          <div className="chat-input-attachments">
+            {pendingAttachments.map((attachment) => (
+              <span
+                key={attachment.localId}
+                className={`chat-input-attachment-chip${attachment.error ? ' chat-input-attachment-chip--error' : ''}${attachment.uploading ? ' chat-input-attachment-chip--uploading' : ''}`}
+                title={attachment.error || attachment.name}
+              >
+                <span className="chat-input-attachment-chip__name">{attachment.name}</span>
+                <button
+                  type="button"
+                  className="chat-input-attachment-chip__remove"
+                  aria-label={`Remove ${attachment.name}`}
+                  onClick={() => removeAttachment(attachment.localId)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
         <div className="input-wrapper">
           <textarea
             ref={textareaRef}
@@ -280,11 +359,38 @@ function ChatInput({
           />
           <div className="input-toolbar">
             <div className="input-toolbar__left">
-              <button type="button" className="btn-icon" title="Attach file (coming soon)" aria-label="Attach file" disabled>
-                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                </svg>
-              </button>
+              {enableAttachments ? (
+                <>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="chat-input-file-picker"
+                    onChange={(e) => {
+                      handleFilesSelected(e.target.files);
+                      e.target.value = '';
+                    }}
+                  />
+                  <button
+                    type="button"
+                    className="btn-icon"
+                    title="Attach file"
+                    aria-label="Attach file"
+                    disabled={disabled || isGenerating}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                    </svg>
+                  </button>
+                </>
+              ) : (
+                <button type="button" className="btn-icon" title="Attach file (unavailable here)" aria-label="Attach file" disabled>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                </button>
+              )}
               <div className="chat-help-control" tabIndex={0} aria-label="Keyboard shortcuts">
                 <span className="btn-icon chat-help-btn" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
@@ -323,7 +429,7 @@ function ChatInput({
                   className="btn-send"
                   aria-label="Send message"
                   onClick={handleSend}
-                  disabled={!message.trim() || disabled || isGenerating}
+                  disabled={(!message.trim() && pendingAttachments.length === 0) || disabled || isGenerating || hasUploadingAttachments}
                 >
                   <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                     <line x1="12" y1="19" x2="12" y2="5" />

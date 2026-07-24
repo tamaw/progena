@@ -598,6 +598,22 @@ class AttachmentManager:
         """Get cached attachment by checksum."""
         return self._cache.get(checksum) or self._get_stored_attachment(checksum)
 
+    def get_by_id(self, attachment_id: str) -> AttachmentResult | None:
+        """Look up a processed attachment by its ``att_...`` id (not checksum)."""
+        for attachment in self._cache.values():
+            if attachment.id == attachment_id:
+                return attachment
+        for raw in self._load_cache_document().values():
+            if isinstance(raw, dict) and raw.get("id") == attachment_id:
+                try:
+                    result = AttachmentResult.model_validate(raw)
+                except Exception as exc:
+                    logger.warning("Failed to load stored attachment %s: %s", attachment_id, exc)
+                    continue
+                self._cache[result.checksum] = result
+                return result
+        return None
+
     def clear_cache(self) -> None:
         """Clear the attachment cache."""
         self._cache.clear()

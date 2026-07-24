@@ -144,6 +144,7 @@ function MessageView({
     displayModelName = '',
     displayToolCalls = [],
     timelineItems,
+    attachments = [],
   } = message;
 
   const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
@@ -246,6 +247,22 @@ function MessageView({
         </div>
         <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
           <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+          {!hideContent && attachments.length > 0 && (
+            <div className="message-attachments">
+              {attachments.map((attachment, index) => (
+                <span
+                  key={attachment.id || `${attachment.name}-${index}`}
+                  className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
+                  title={attachment.error || attachment.name}
+                >
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+                  </svg>
+                  {attachment.name}
+                </span>
+              ))}
+            </div>
+          )}
           {showImages && !hideContent && messageImages.length > 0 && (
             <MessageImageStrip images={messageImages} />
           )}
