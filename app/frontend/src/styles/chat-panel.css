@@ -925,6 +925,31 @@
     box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
+/* Whole-window drop zone (ConversationPage): .chat-detail is the DetailPane
+   wrapping header + message history + composer. Needs its own
+   position: relative since the shared .detail-pane base doesn't set one --
+   scoped to this className so other DetailPane consumers are unaffected. */
+.chat-detail {
+    position: relative;
+}
+
+.chat-detail-drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: color-mix(in srgb, var(--chat-pane-bg) 92%, transparent);
+    border: 2px dashed var(--color-accent);
+    border-radius: 12px;
+    margin: 8px;
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+}
+
 .chat-input-drop-overlay {
     position: absolute;
     inset: 0;

@@ -514,6 +514,41 @@ function ConversationPage() {
   const messagesContainerRef = useRef(null);
   const isPinnedToBottomRef = useRef(true);
   const messagesScrollFrameRef = useRef(null);
+  const chatInputRef = useRef(null);
+  // Lets a drag/drop anywhere over the chat window (message history, header)
+  // attach files, not just a drop directly onto the composer -- forwards
+  // through chatInputRef into ChatInput's own upload pipeline so there's one
+  // staging/AbortController implementation, not two. ChatInput's own local
+  // drag handlers stopPropagation, so a drag that starts and ends over the
+  // composer itself never reaches these (its own inline zone handles that).
+  const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
+  const chatDragDepthRef = useRef(0);
+  const handleChatDragEnter = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+    chatDragDepthRef.current += 1;
+    setIsDraggingOverChat(true);
+  }, [connectionState, isClearingSession]);
+  const handleChatDragOver = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+  }, [connectionState, isClearingSession]);
+  const handleChatDragLeave = useCallback((e) => {
+    e.preventDefault();
+    chatDragDepthRef.current = Math.max(0, chatDragDepthRef.current - 1);
+    if (chatDragDepthRef.current === 0) {
+      setIsDraggingOverChat(false);
+    }
+  }, []);
+  const handleChatDrop = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    e.preventDefault();
+    chatDragDepthRef.current = 0;
+    setIsDraggingOverChat(false);
+    chatInputRef.current?.addFiles(e.dataTransfer?.files);
+  }, [connectionState, isClearingSession]);
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -1863,7 +1898,18 @@ function ConversationPage() {
         )}
       </PaneSection>
 
-      <DetailPane flush className="chat-detail" label="Chat conversation">
+      <DetailPane
+        flush
+        className="chat-detail"
+        label="Chat conversation"
+        onDragEnter={handleChatDragEnter}
+        onDragOver={handleChatDragOver}
+        onDragLeave={handleChatDragLeave}
+        onDrop={handleChatDrop}
+      >
+        {isDraggingOverChat && (
+          <div className="chat-detail-drop-overlay" aria-hidden="true">Drop files to attach</div>
+        )}
         <LiveConversationHeader
           liveTurnStore={liveTurnStore}
           messages={messages}
@@ -1955,6 +2001,7 @@ function ConversationPage() {
         </RegenerateDisabledContext.Provider>
 
         <ChatInput
+          ref={chatInputRef}
           onSend={handleSend}
           onStop={handleStop}
           onCommand={handleCommand}
