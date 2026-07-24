@@ -1,9 +1,9 @@
-"""Validation schema for the knowledge state document (``/state/knowledge.json``).
+"""Validation schema for the knowledge state document (``/config/knowledge.json``).
 
 The knowledge document is the single source of truth for knowledge-base *settings*
 (the documents + their vectors live in the ``knowledge_documents`` SQL table). The
 same models validate **both** the backend ``PUT /api/ui/knowledge`` body and the
-agent's ``/state/knowledge.json`` virtual file, so the two write paths can never
+agent's ``/config/knowledge.json`` virtual file, so the two write paths can never
 disagree on shape.
 
 ``validate_knowledge_payload`` returns a normalized dict: ids and timestamps are
@@ -198,7 +198,7 @@ def validate_knowledge_payload(data: Any) -> dict[str, Any]:
 
 
 def validate_knowledge_document(content: str) -> dict[str, Any]:
-    """Parse + validate ``/state/knowledge.json`` text into a normalized payload."""
+    """Parse + validate ``/config/knowledge.json`` text into a normalized payload."""
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:

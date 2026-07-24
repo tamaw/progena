@@ -120,49 +120,63 @@ async def measure_direct() -> dict[str, Any]:
 
     from app.progenitor.agent.agent import create_progenitor_agent
     from app.progenitor.config import get_config
+    from app.progenitor.database import open_langgraph_persistence
     from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
+    from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
+    from app.progenitor.state.manager import StateManager
 
     started_ns = now_ns()
     config = get_config(project_root=PROJECT_ROOT, validate=False)
-    graph = create_progenitor_agent(
-        config=config,
-        checkpointer=MemorySaver(),
-        project_root=str(PROJECT_ROOT),
-    )
-    graph_ready_ns = now_ns()
-    bridge = DeepAgentIPCStream(graph, config=config, state={})
-    thread_id = f"measure-direct-{uuid.uuid4().hex[:12]}"
-    first_token_ns: int | None = None
-    chunk_count = 0
-    response_text = ""
-    request_started_ns = now_ns()
-    async for item in bridge.stream(PROMPT, thread_id=thread_id, received_at=time.time()):
-        if item.get("type") != "stream_chunk" or item.get("is_final"):
-            continue
-        content = str(item.get("content") or "")
-        if not content:
-            continue
-        chunk_count += 1
-        response_text += content
-        if first_token_ns is None:
-            first_token_ns = now_ns()
-    return result(
-        "direct_deep_agent",
-        request_started_ns,
-        first_token_ns,
-        chunk_count=chunk_count,
-        graph_build_ms=round((graph_ready_ns - started_ns) / 1_000_000, 3),
-        process_to_first_token_ms=(
-            round((first_token_ns - started_ns) / 1_000_000, 3)
-            if first_token_ns is not None
-            else None
-        ),
-        response_preview=response_text[:120],
-        thread_id=thread_id,
-        model=getattr(config.llm, "model_default", None),
-        reasoning_enabled=getattr(config.llm, "reasoning_enabled", None),
-        reasoning_effort=getattr(config.llm, "reasoning_effort", None),
-    )
+    async with open_langgraph_persistence(
+        config.database.url,
+        setup=config.database.setup,
+        pool_min_size=config.database.pool_min_size,
+        pool_max_size=config.database.pool_max_size,
+    ) as persistence:
+        if persistence.store is None:
+            raise RuntimeError("LangGraph Postgres store is required to measure the direct path")
+        state_manager = StateManager(runtime_store=LangGraphRuntimeStore(persistence.store))
+        await state_manager.initialize()
+        graph = await create_progenitor_agent(
+            config=config,
+            checkpointer=MemorySaver(),
+            state_manager=state_manager,
+            project_root=str(PROJECT_ROOT),
+        )
+        graph_ready_ns = now_ns()
+        bridge = DeepAgentIPCStream(graph, config=config, state={})
+        thread_id = f"measure-direct-{uuid.uuid4().hex[:12]}"
+        first_token_ns: int | None = None
+        chunk_count = 0
+        response_text = ""
+        request_started_ns = now_ns()
+        async for item in bridge.stream(PROMPT, thread_id=thread_id, received_at=time.time()):
+            if item.get("type") != "stream_chunk" or item.get("is_final"):
+                continue
+            content = str(item.get("content") or "")
+            if not content:
+                continue
+            chunk_count += 1
+            response_text += content
+            if first_token_ns is None:
+                first_token_ns = now_ns()
+        return result(
+            "direct_deep_agent",
+            request_started_ns,
+            first_token_ns,
+            chunk_count=chunk_count,
+            graph_build_ms=round((graph_ready_ns - started_ns) / 1_000_000, 3),
+            process_to_first_token_ms=(
+                round((first_token_ns - started_ns) / 1_000_000, 3)
+                if first_token_ns is not None
+                else None
+            ),
+            response_preview=response_text[:120],
+            thread_id=thread_id,
+            model=getattr(config.llm, "model_default", None),
+            reasoning_enabled=getattr(config.llm, "reasoning_enabled", None),
+            reasoning_effort=getattr(config.llm, "reasoning_effort", None),
+        )
 
 
 async def measure_runtime(base_url: str) -> dict[str, Any]:

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field
 
-from ..prompts import load_prompt
+from ..prompts import render_prompt_template
 from .refresh import refresh_agent_metadata
 
 if TYPE_CHECKING:
@@ -122,11 +122,13 @@ class AgentDiscovery:
         llm_client: LLMClient,
         registry: ToolRegistry,
         host: str = "localhost",
+        state_manager: Any = None,
     ):
         self.agents_dir = Path(agents_dir)
         self.llm_client = llm_client
         self.registry = registry
         self.host = host
+        self.state_manager = state_manager
 
     def scan_agents_folder(self) -> list[AgentFolderInfo]:
         if not self.agents_dir.exists():
@@ -161,10 +163,18 @@ class AgentDiscovery:
 
         folder_descriptions = "\n\n".join(folder.to_prompt_string() for folder in folders)
         try:
-            system_prompt = load_prompt("progenitor/agent_discovery_analysis_system.md")
-            user_prompt = load_prompt(
-                "agent_discovery.analysis.md",
-                folder_descriptions=folder_descriptions,
+            if self.state_manager is None:
+                raise RuntimeError("state_manager unavailable; cannot load discovery prompts")
+            system_prompt = await self.state_manager.get_content_document(
+                "prompt", "progenitor/agent_discovery_analysis_system.md"
+            )
+            user_prompt_template = await self.state_manager.get_content_document(
+                "prompt", "agent_discovery.analysis.md"
+            )
+            if system_prompt is None or user_prompt_template is None:
+                raise RuntimeError("Missing agent discovery prompt document(s) in Postgres")
+            user_prompt = render_prompt_template(
+                user_prompt_template, folder_descriptions=folder_descriptions
             )
             return await self.llm_client.chat_structured(
                 prompt=user_prompt,
@@ -368,6 +378,7 @@ async def discover_agents(
     llm_client: LLMClient,
     registry: ToolRegistry,
     host: str = "localhost",
+    state_manager: Any = None,
 ) -> dict[str, Any]:
     """Convenience function to run agent discovery."""
     discovery = AgentDiscovery(
@@ -375,5 +386,6 @@ async def discover_agents(
         llm_client=llm_client,
         registry=registry,
         host=host,
+        state_manager=state_manager,
     )
     return await discovery.discover_and_register()

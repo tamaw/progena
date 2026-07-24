@@ -28,7 +28,7 @@ class ListToolsTool(BaseSystemTool):
 
         # Best-effort refresh of agents.json and agent cards, which can change
         # during process uptime. MCP tool discovery is owned by the heartbeat,
-        # the /state/mcp.json write-hook, and the mcp_refresh tool — listing
+        # the /config/mcp.json write-hook, and the mcp_refresh tool — listing
         # reads the already-synced registry rather than rebuilding the runtime.
         if hasattr(context.tool_registry, "load"):
             with suppress(Exception):

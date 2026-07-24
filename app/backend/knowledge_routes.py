@@ -1,7 +1,7 @@
 """Knowledge base API routes — pgvector stores for the Knowledge tab.
 
 Base *settings* live in the ``knowledge`` state document (the single source of
-truth, also editable by the agent as ``/state/knowledge.json``); the documents and
+truth, also editable by the agent as ``/config/knowledge.json``); the documents and
 their vectors live in the ``knowledge_documents`` SQL table. The page renders from
 the realtime ``knowledge.snapshot`` event, so this router exposes one validated
 settings write (``PUT``), the folder-index action (the only thing that can't be a

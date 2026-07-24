@@ -5,7 +5,7 @@ Reads state documents from the shared Postgres document store and operational
 logs from the configured log store. The backend uses this as a read/write
 adapter layer; Progenitor remains the owner of runtime state semantics.
 
-The virtual `/state/*.json` names are database-backed views, not files under the
+The virtual `/config/*.json` names are database-backed views, not files under the
 repository's data directory.
 
 """
@@ -473,7 +473,7 @@ class StateSnapshot:
     # count unchanged.
     mcp_fingerprint: str = ""
     # Content fingerprint of the knowledge state document, so an agent edit to
-    # /state/knowledge.json (which leaves all the counted fields above unchanged)
+    # /config/knowledge.json (which leaves all the counted fields above unchanged)
     # is still detected and pushed live to the Knowledge page.
     knowledge_fingerprint: str = ""
     # Content fingerprint of the schedule state document. ``schedule`` count
@@ -499,7 +499,7 @@ class StateSnapshot:
     inbox_fingerprint: str = ""
     # Content fingerprint of all workflow definition, run, and queue documents.
     # Like kanban/inbox, no other snapshot field changes when the agent writes
-    # /state/workflows/<id>.json (or the executor updates a run), so this is
+    # /config/workflows/<id>.json (or the executor updates a run), so this is
     # the sole signal _state_changed() has for a workflow-only write.
     workflow_fingerprint: str = ""
 

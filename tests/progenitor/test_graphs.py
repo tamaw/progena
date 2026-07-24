@@ -15,12 +15,15 @@ from app.progenitor.nodes.context import HeartbeatContext
 from app.progenitor.state.models import A2ATaskRecord, AsyncSubagentTaskRecord
 
 
-def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
-    with patch("app.progenitor.graph.progenitor_graph.create_progenitor_agent") as mock_create:
+@pytest.mark.asyncio
+async def test_create_conversation_graph_returns_native_deepagent_graph() -> None:
+    with patch(
+        "app.progenitor.graph.progenitor_graph.create_progenitor_agent", new_callable=AsyncMock
+    ) as mock_create:
         mock_graph = MagicMock()
         mock_create.return_value = mock_graph
 
-        result = create_conversation_graph(config=MagicMock())
+        result = await create_conversation_graph(config=MagicMock())
 
     assert result is mock_graph
     mock_create.assert_called_once()

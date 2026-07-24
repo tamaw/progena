@@ -154,7 +154,7 @@ The dedicated stream owns response content transport only. It never carries
 
 The system persists runtime conversation/checkpoint state, state documents,
 backend-owned metadata, and operational logs in Postgres. Progenitor exposes
-selected state documents through a validated virtual filesystem (`/state/*.json`
+selected state documents through a validated virtual filesystem (`/config/*.json`
 and related task/workflow paths); those JSON names are views over database
 documents, not files in `data/state` or `data/config`. State-document changes are
 broadcast to the canonical UI stream after the write succeeds; details are in

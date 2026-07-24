@@ -18,7 +18,7 @@ Postgres store, namespace ("progenitor", "state")
         +-- app/progenitor (runtime process, :9501)
         |     StateManager (state/manager.py) <-- LangGraph store
         |     StateDocumentBackend (agent/state_backend.py)
-        |       exposes documents as virtual files under /state/*.json
+        |       exposes documents as virtual files under /config/*.json
         |       so the DeepAgent edits them with normal file tools
         |
         +-- app/backend (FastAPI process, :8000)
@@ -78,7 +78,7 @@ a write). `StateDocumentBackend` dispatches `aread`/`awrite`/`aedit` across the
 registered documents. A successful write validates the text and persists the
 document through `StateManager` into the Postgres store.
 
-The current `/state/` document views are:
+The current `/config/` document views are:
 
 - `mcp.json` — MCP server configuration; agent-writable.
 - `knowledge.json` — knowledge-base settings; agent-writable.
@@ -106,7 +106,7 @@ state_file_factories = [
     create_registry_state_file,
     create_health_state_file,
 ]
-routes["/state/"] = StateDocumentBackend(
+routes["/config/"] = StateDocumentBackend(
     [factory(state_manager) for factory in state_file_factories]
 )
 ```
@@ -116,7 +116,7 @@ different architecture: one Postgres document per card
 (`kanban_card:<id>`) plus a structure document (`board.json` with columns and
 `card_order`), surfaced as per-card `.md` virtual files with YAML frontmatter
 and Markdown bodies. Workflow definitions have their own
-`WorkflowDirectoryBackend` and are exposed as `/state/workflows/<id>.json`.
+`WorkflowDirectoryBackend` and are exposed as `/config/workflows/<id>.json`.
 
 JSON Schemas under `data/schemas/` validate entry shapes and workflow
 definitions. The state backend also performs semantic validation such as cron

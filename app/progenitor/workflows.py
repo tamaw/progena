@@ -207,7 +207,7 @@ def workflow_file_name(workflow_id: str) -> str:
 
 
 def workflow_id_from_path(path_or_id: str) -> str:
-    """Normalize a workflow id from ``<id>``, ``<id>.json``, or ``/state/...``."""
+    """Normalize a workflow id from ``<id>``, ``<id>.json``, or ``/config/...``."""
 
     normalized = str(path_or_id or "").strip()
     if not normalized:

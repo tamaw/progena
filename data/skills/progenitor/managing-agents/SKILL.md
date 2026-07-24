@@ -1,12 +1,12 @@
 ---
 name: managing-agents
-description: Register, edit, enable/disable, or remove A2A agents by editing the /state/agents.json config file. Use when a user asks to add, update, drop, or toggle a remote agent, or to review what's registered.
+description: Register, edit, enable/disable, or remove A2A agents by editing the /config/agents.json config file. Use when a user asks to add, update, drop, or toggle a remote agent, or to review what's registered.
 allowed-tools: read_file write_file edit_file structured_output list_agents
 ---
 
 # Managing Agents
 
-Registered agents live in a single virtual file: `/state/agents.json` — shaped
+Registered agents live in a single virtual file: `/config/agents.json` — shaped
 `{ "agents": [...], "tools": [...] }`. It is backed by the runtime `registry` state
 document (Postgres is the source of truth), so editing it is the supported way to
 manage agents — there is no separate "add agent" tool. Every successful write is
@@ -15,7 +15,7 @@ validated, and the Agents page updates live.
 ## Always Read Before You Edit
 Read it first so your `edit_file` `old_string` matches exactly:
 
-1. `read_file /state/agents.json`
+1. `read_file /config/agents.json`
 2. Make the change with `edit_file` (preferred — preserves the rest of the file) or
    `write_file` (only when rewriting the whole document).
 
@@ -49,7 +49,7 @@ Each agent is keyed by its unique `name` (no generated id needed). Common fields
 `status_message`, `last_heartbeat`, `last_error`, `pid`, `created_at`, `updated_at`.
 
 ## Golden rules
-1. **Read before you write.** `read_file /state/agents.json` first.
+1. **Read before you write.** `read_file /config/agents.json` first.
 2. **Preserve everything you're not changing** — all other agents verbatim, the entire
    `tools` array verbatim, and runtime status fields on the edited agent.
 3. **Agents are keyed by `name`** — adding an agent with an existing name updates it.
@@ -63,10 +63,10 @@ Each agent is keyed by its unique `name` (no generated id needed). Common fields
 ## Common Operations
 
 ### Register / add an A2A agent
-1. `read_file /state/agents.json`
+1. `read_file /config/agents.json`
 2. `read_file /schemas/agent_entry.schema.v1.json`
 3. `structured_output json_schema=<content from step 2> instruction="Build an agent entry named '<name>' of kind 'a2a_agent' at url '<url>', enabled true, with a short description."`
-4. `edit_file /state/agents.json` to insert the object from step 3 into `agents`
+4. `edit_file /config/agents.json` to insert the object from step 3 into `agents`
    (or `write_file` only if the array is currently empty). Keep every existing agent
    and the entire `tools` array untouched.
 

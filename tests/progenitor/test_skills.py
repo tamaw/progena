@@ -99,10 +99,34 @@ class TestSkillFiles:
         assert not missing, f"Missing expected skills: {missing}"
 
 
+class FakeContentStateManager:
+    """Minimal async state_manager stub for get/save/list content documents."""
+
+    def __init__(self, *, prompt: str = "GENESIS") -> None:
+        self._docs: dict[str, dict[str, str]] = {
+            "prompt": {"progenitor/genesis.md": prompt},
+            "skill": {},
+            "memory": {},
+        }
+
+    async def get_content_document(self, kind: str, relative_path: str) -> str | None:
+        return self._docs[kind].get(relative_path)
+
+    async def save_content_document(self, kind: str, relative_path: str, content: str) -> None:
+        self._docs[kind][relative_path] = content
+
+    async def delete_content_document(self, kind: str, relative_path: str) -> None:
+        self._docs[kind].pop(relative_path, None)
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        return list(self._docs[kind].items())
+
+
 class TestSkillsWiring:
     """Test that skills are wired into the DeepAgent factory."""
 
-    def test_factory_passes_skills_to_create_deep_agent(self):
+    @pytest.mark.asyncio
+    async def test_factory_passes_skills_to_create_deep_agent(self):
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -120,9 +144,10 @@ class TestSkillsWiring:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.agent import create_progenitor_agent
 
-                create_progenitor_agent(
+                await create_progenitor_agent(
                     config=fake_config,
                     checkpointer=MagicMock(),
+                    state_manager=FakeContentStateManager(),
                     skills_dirs=["data/skills/progenitor"],
                 )
 
@@ -130,8 +155,9 @@ class TestSkillsWiring:
                 assert "skills" in call_kwargs
                 assert call_kwargs["skills"] == ["data/skills/progenitor"]
 
-    def test_factory_auto_discovers_skills_dir(self):
-        """When no skills_dirs given, auto-discovers the backend-mounted skill source."""
+    @pytest.mark.asyncio
+    async def test_factory_auto_discovers_skills_dir(self):
+        """When no skills_dirs given, auto-discovers from Postgres skill documents."""
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -149,12 +175,48 @@ class TestSkillsWiring:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.agent import create_progenitor_agent
 
-                # Use project root (which has data/skills/progenitor/)
-                create_progenitor_agent(
+                state_manager = FakeContentStateManager()
+                state_manager._docs["skill"]["progenitor/example/SKILL.md"] = (
+                    "---\nname: example\n---\n"
+                )
+                await create_progenitor_agent(
                     config=fake_config,
                     checkpointer=MagicMock(),
+                    state_manager=state_manager,
                     project_root=".",
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs.get("skills") == ["/data/skills/progenitor"]
+                assert call_kwargs.get("skills") == ["/skills/progenitor"]
+
+    @pytest.mark.asyncio
+    async def test_factory_skips_skills_when_no_progenitor_skill_docs(self, tmp_path):
+        """Auto-discovery leaves skills_dirs unset when no skill documents exist."""
+        fake_config = SimpleNamespace(
+            llm=SimpleNamespace(model_default="test-model"),
+            storage=SimpleNamespace(
+                state_dir=Path("data/state"),
+                prompts_dir=Path("data/prompts"),
+            ),
+        )
+        with (
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+        ):
+            mock_create.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
+            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
+                mock_model.return_value = MagicMock()
+                from app.progenitor.agent.agent import create_progenitor_agent
+
+                # Empty project root: the seed source directory doesn't exist,
+                # so seeding is a no-op and no skill documents ever land.
+                await create_progenitor_agent(
+                    config=fake_config,
+                    checkpointer=MagicMock(),
+                    state_manager=FakeContentStateManager(),
+                    project_root=str(tmp_path),
+                )
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs.get("skills") is None
