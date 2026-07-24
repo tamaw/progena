@@ -31,6 +31,7 @@ import {
 } from '../../data/solutions';
 import {
   AgentsNavIcon,
+  AlertsIcon,
   AttachmentsNavIcon,
   ChannelsNavIcon,
   ChatNavIcon,
