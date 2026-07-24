@@ -403,7 +403,7 @@ function WorkspaceSwitcher() {
   );
 }
 
-function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, onOpenQuickChat, onToggleNav }) {
+function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, onOpenQuickChat, onToggleNav, quickChatInputRef }) {
   const { currentTheme, toggleTheme } = useTheme();
   const alerts = useSelector(selectUiAlerts);
   const unreadCount = alerts?.filter((a) => !a.viewed)?.length || 0;
@@ -429,9 +429,9 @@ function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, o
       </div>
       <form className="app-shell__quick-chat app-shell__quick-chat--ai" onSubmit={onSubmitQuickChat} aria-label="Ask Progenitor AI">
         <span className="app-shell__quick-chat-ai-icon" aria-hidden="true"><ProgenitorAiIcon /></span>
-        <input name="prompt" type="text" placeholder="Ask Progenitor AI" aria-label="Ask Progenitor AI" autoComplete="off" />
-        <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control K">
-          <kbd>Ctrl</kbd><kbd>K</kbd>
+        <input ref={quickChatInputRef} name="prompt" type="text" placeholder="Ask Progenitor AI" aria-label="Ask Progenitor AI" autoComplete="off" />
+        <span className="app-shell__quick-chat-shortcut" aria-label="Keyboard shortcut: Control Q">
+          <kbd>Ctrl</kbd><kbd>Q</kbd>
         </span>
       </form>
       <div className="app-shell__actions">
@@ -1636,6 +1636,7 @@ function AppRuntimeShell() {
   const searchQuery = '';
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
+  const quickChatInputRef = useRef(null);
   const [isNavCollapsed, setIsNavCollapsed] = useState(false);
   const [isNavOpen, setIsNavOpen] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
@@ -1671,7 +1672,12 @@ function AppRuntimeShell() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         setQuickChatConfig(defaultQuickChatConfig);
-        setActivePanel('quickChat');
+        setActivePanel((current) => (current === 'quickChat' ? null : 'quickChat'));
+      }
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'q') {
+        event.preventDefault();
+        quickChatInputRef.current?.focus();
+        quickChatInputRef.current?.select();
       }
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f') {
         event.preventDefault();
@@ -1734,6 +1740,7 @@ function AppRuntimeShell() {
           setQuickChatConfig(defaultQuickChatConfig);
         }}
         onToggleNav={() => setIsNavOpen((current) => !current)}
+        quickChatInputRef={quickChatInputRef}
       />
       <main className="app-shell__content">
         <Outlet />
