@@ -1229,3 +1229,48 @@ describe('reasoning summary presentation', () => {
     expect(html).not.toContain(unstructuredContent);
   });
 });
+
+describe('user message attachments', () => {
+  it('renders a chip with the file-type badge, size, and a full-name tooltip', () => {
+    const message = baseMessage({
+      role: 'user',
+      content: 'i think i added a file lol',
+      attachments: [
+        { id: 'att_1', name: 'AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf', mime_type: 'application/pdf', size_bytes: 294275, error: null },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('message-attachment-chip');
+    expect(html).toContain('AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf');
+    // 294275 bytes -> 287 KB (no decimal once the value is >= 10)
+    expect(html).toContain('287 KB');
+    expect(html).toContain('PDF');
+    expect(html).toContain('title="AEGEAN_AIRLINES_SA_Booking_Confirmation.pdf — 287 KB"');
+  });
+
+  it('surfaces the extraction error instead of a size in the chip and tooltip', () => {
+    const message = baseMessage({
+      role: 'user',
+      content: 'oops',
+      attachments: [
+        { id: 'att_2', name: 'weird.bin', mime_type: 'application/octet-stream', size_bytes: 10, error: 'Unsupported binary format' },
+      ],
+    });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).toContain('message-attachment-chip--error');
+    expect(html).toContain('Unsupported binary format');
+    expect(html).toContain('title="weird.bin — Unsupported binary format"');
+  });
+
+  it('renders no attachments section when the message has none', () => {
+    const message = baseMessage({ role: 'user', content: 'hi', attachments: [] });
+
+    const html = renderToStaticMarkup(React.createElement(Message, { message }));
+
+    expect(html).not.toContain('message-attachments');
+  });
+});

@@ -25,6 +25,7 @@ from app.progenitor.runtime.messages import (
 )
 from app.progenitor.state.models import redact_secrets
 
+from .attachments import ATTACHMENT_CONTEXT_MARKER
 from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
@@ -480,6 +481,17 @@ def _message_text(value: Any) -> str:
     return str(value)
 
 
+def _strip_attachment_context(text: str) -> str:
+    """Drop the machine-only attachment note appended by
+    ``_resolve_message_attachments`` (see ``ATTACHMENT_CONTEXT_MARKER``'s
+    doc comment) so the persisted/displayed chat text is exactly what the
+    user typed, not the extra pointer note the LLM needed to notice the
+    upload.
+    """
+    marker_index = text.find(ATTACHMENT_CONTEXT_MARKER)
+    return text[:marker_index].rstrip() if marker_index != -1 else text
+
+
 def _thread_id_from_session_id(session_id: str | None) -> str | None:
     if not session_id:
         return None
@@ -750,9 +762,13 @@ def _chat_message_from_raw(
     if role == "tool":
         return None
     if isinstance(raw, dict):
-        content = _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        content = _strip_attachment_context(
+            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        )
     else:
-        content = extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
+        content = _strip_attachment_context(
+            extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
+        )
     if not content and role == "assistant":
         return None
     reasoning_text = extract_reasoning_trace(raw) or ""
