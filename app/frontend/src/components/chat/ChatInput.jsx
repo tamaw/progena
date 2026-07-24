@@ -364,7 +364,7 @@ function ChatInput({
                 className={`chat-input-attachment-chip${attachment.error ? ' chat-input-attachment-chip--error' : ''}${attachment.uploading ? ' chat-input-attachment-chip--uploading' : ''}`}
                 title={attachment.error || attachment.name}
               >
-                <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={16} />
+                <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={22} />
                 <span className="chat-input-attachment-chip__name">{attachment.name}</span>
                 <button
                   type="button"
