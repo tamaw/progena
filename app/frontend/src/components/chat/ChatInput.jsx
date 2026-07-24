@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../../context/ConfigContext';
 import { fetchAgentProfiles } from '../../store/uiData/agents';
@@ -38,7 +38,7 @@ function getSlashQuery(value) {
   return firstToken.slice(1).toLowerCase();
 }
 
-function ChatInput({
+const ChatInput = forwardRef(function ChatInput({
   onSend,
   onStop,
   onCommand,
@@ -53,7 +53,7 @@ function ChatInput({
   initialMessage = '',
   className = '',
   enableAttachments = true,
-}) {
+}, ref) {
   const [message, setMessage] = useState(initialMessage);
   const [activeSlashIndex, setActiveSlashIndex] = useState(0);
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
@@ -206,7 +206,7 @@ function ChatInput({
     setPendingAttachments((prev) => prev.filter((attachment) => attachment.localId !== localId));
   };
 
-  const handleFilesSelected = async (fileList) => {
+  const handleFilesSelected = useCallback(async (fileList) => {
     const files = Array.from(fileList || []);
     if (files.length === 0) {
       return;
@@ -263,7 +263,7 @@ function ChatInput({
         uploadControllersRef.current.delete(entry.localId);
       }
     }));
-  };
+  }, [getApiUrl]);
 
   const handlePaste = (e) => {
     if (!enableAttachments || disabled || isGenerating) return;
@@ -282,10 +282,22 @@ function ChatInput({
     handleFilesSelected(files);
   };
 
+  // Lets an ancestor (e.g. a page-wide drop zone) forward files into this
+  // composer's upload pipeline without duplicating the staging/AbortController
+  // logic above.
+  useImperativeHandle(ref, () => ({
+    addFiles: handleFilesSelected,
+  }), [handleFilesSelected]);
+
   const handleDragEnter = (e) => {
     if (!enableAttachments || disabled || isGenerating) return;
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
     e.preventDefault();
+    // Stop here so a page-level drop zone wrapping the whole chat window
+    // doesn't also see this drag and show its own overlay underneath --
+    // dragging directly over the composer should only ever show this
+    // local one.
+    e.stopPropagation();
     dragDepthRef.current += 1;
     setIsDraggingFiles(true);
   };
@@ -294,11 +306,13 @@ function ChatInput({
     if (!enableAttachments || disabled || isGenerating) return;
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
     e.preventDefault();
+    e.stopPropagation();
   };
 
   const handleDragLeave = (e) => {
     if (!enableAttachments) return;
     e.preventDefault();
+    e.stopPropagation();
     dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
     if (dragDepthRef.current === 0) {
       setIsDraggingFiles(false);
@@ -308,6 +322,7 @@ function ChatInput({
   const handleDrop = (e) => {
     if (!enableAttachments || disabled || isGenerating) return;
     e.preventDefault();
+    e.stopPropagation();
     dragDepthRef.current = 0;
     setIsDraggingFiles(false);
     handleFilesSelected(e.dataTransfer?.files);
@@ -540,6 +555,6 @@ function ChatInput({
       </div>
     </div>
   );
-}
+});
 
 export default ChatInput;
