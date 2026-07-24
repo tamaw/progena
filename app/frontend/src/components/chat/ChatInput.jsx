@@ -4,6 +4,7 @@ import { useConfig } from '../../context/ConfigContext';
 import { fetchAgentProfiles } from '../../store/uiData/agents';
 import { selectAgentProfiles, selectAgentProfilesState } from '../../store/uiDataSlice';
 import { getAgentMentionContext } from './chatInputModel';
+import AttachmentFileIcon from './AttachmentFileIcon';
 
 const SLASH_COMMANDS = [
   {
@@ -210,6 +211,10 @@ function ChatInput({
       localId: `pending_${Date.now()}_${Math.random().toString(16).slice(2)}`,
       name: file.name,
       size_bytes: file.size,
+      // Stamped from the File object so the chip's mime-type icon shows
+      // immediately, before the server round-trip resolves the
+      // authoritative mime_type below.
+      mime_type: file.type || '',
       uploading: true,
       error: null,
       id: null,
@@ -359,6 +364,7 @@ function ChatInput({
                 className={`chat-input-attachment-chip${attachment.error ? ' chat-input-attachment-chip--error' : ''}${attachment.uploading ? ' chat-input-attachment-chip--uploading' : ''}`}
                 title={attachment.error || attachment.name}
               >
+                <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} size={16} />
                 <span className="chat-input-attachment-chip__name">{attachment.name}</span>
                 <button
                   type="button"
