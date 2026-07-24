@@ -22,8 +22,10 @@ from typing import Any
 import yaml
 from croniter import croniter
 from deepagents.backends.protocol import (
+    FILE_NOT_FOUND,
     EditResult,
     FileData,
+    FileDownloadResponse,
     FileInfo,
     GlobResult,
     GrepResult,
@@ -33,6 +35,7 @@ from deepagents.backends.protocol import (
 )
 from deepagents.backends.utils import (
     create_file_data,
+    file_data_to_string,
     perform_string_replacement,
     slice_read_response,
 )
@@ -281,6 +284,13 @@ class _AsyncOnlyFileBackendMixin:
     (aread/awrite/aedit/als/aglob/agrep) is ever wired up. Subclasses set their
     own ``_ASYNC_ONLY`` message and mix this in instead of repeating these six
     stubs verbatim.
+
+    Also supplies ``adownload_files``, required by DeepAgents'
+    ``BackendProtocol`` (used e.g. by ``MemoryMiddleware``/``SkillsMiddleware``
+    to batch-load mount sources). It's implemented once here, generically, on
+    top of each subclass's own ``aread`` — that already returns raw,
+    non-line-numbered content (line-number formatting happens downstream, in
+    the file-read tool, not in the backend), so it's safe to reuse verbatim.
     """
 
     _ASYNC_ONLY: str = "This backend is async-only; use the async file tools."
@@ -302,6 +312,27 @@ class _AsyncOnlyFileBackendMixin:
 
     def grep(self, *args: Any, **kwargs: Any) -> GrepResult:
         raise NotImplementedError(self._ASYNC_ONLY)
+
+    async def adownload_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download multiple files as raw bytes, via this backend's ``aread``.
+
+        Response order matches input order; any read failure (unknown path,
+        out-of-range offset) normalizes to ``file_not_found`` since these
+        backends only fail reads that way.
+        """
+        responses: list[FileDownloadResponse] = []
+        for path in paths:
+            result = await self.aread(path, 0, 10_000_000)  # type: ignore[attr-defined]
+            if result.error is not None or result.file_data is None:
+                responses.append(
+                    FileDownloadResponse(path=path, content=None, error=FILE_NOT_FOUND)
+                )
+                continue
+            content = file_data_to_string(result.file_data)
+            responses.append(
+                FileDownloadResponse(path=path, content=content.encode("utf-8"), error=None)
+            )
+        return responses
 
 
 class StateDocumentBackend(_AsyncOnlyFileBackendMixin):
