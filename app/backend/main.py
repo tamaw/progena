@@ -36,7 +36,7 @@ from .alerts import AlertInfo
 from .attachment_blob_store import configure_attachment_blob_store, get_attachment_blob_store
 from .attachment_routes import get_attachment_manager
 from .attachment_routes import router as attachments_router
-from .attachments import format_attachments_for_context
+from .attachments import ATTACHMENT_CONTEXT_MARKER, format_attachments_for_context
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
@@ -1437,8 +1437,11 @@ def _resolve_message_attachments(
 
     Replaces the id list in place with a compact summary (for persistence
     alongside the message), stamps each blob's ``thread_id`` for the
-    file-browser view, and returns ``message`` with the resolved attachment
-    content appended so the agent can read it.
+    file-browser view, and returns ``message`` with a compact, marker-wrapped
+    attachment note appended so the agent knows a file arrived and where to
+    read it (see ``format_attachments_for_context``). Callers that persist or
+    display ``message`` must strip everything from ``ATTACHMENT_CONTEXT_MARKER``
+    onward first -- see ``chat_sessions._strip_attachment_context``.
     """
     raw_ids = request_metadata.get("attachments")
     if not isinstance(raw_ids, list) or not raw_ids:
@@ -1471,7 +1474,9 @@ def _resolve_message_attachments(
         for attachment in resolved
     ]
     context_block = format_attachments_for_context(resolved)
-    return f"{message}\n\n{context_block}" if context_block else message
+    if not context_block:
+        return message
+    return f"{message}\n\n{ATTACHMENT_CONTEXT_MARKER}\n{context_block}"
 
 
 def _default_conversation_id(session: SessionState) -> str:

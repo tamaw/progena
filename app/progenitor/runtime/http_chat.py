@@ -39,6 +39,21 @@ def _error(message: str, code: str, status: int) -> web.Response:
     return web.json_response({"error": message, "code": code}, status=status)
 
 
+def _extract_attachments(metadata: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    """Pull the resolved attachment list the backend stamps onto
+    ``request_metadata["attachments"]`` (see
+    ``app.backend.main._resolve_message_attachments``) back out of the chat
+    request's metadata, so it can ride onto the HumanMessage's
+    ``additional_kwargs`` for chat-history display (see
+    ``DeepAgentIPCStream.stream``)."""
+    if not isinstance(metadata, dict):
+        return None
+    attachments = metadata.get("attachments")
+    if not isinstance(attachments, list):
+        return None
+    return [item for item in attachments if isinstance(item, dict)] or None
+
+
 class RuntimeChatService:
     """Owns the runtime's chat request/cancel/event-broadcast HTTP endpoints."""
 
@@ -160,7 +175,10 @@ class RuntimeChatService:
             async def _produce() -> None:
                 try:
                     async for item in bridge.stream(
-                        message, thread_id=thread_id, received_at=received_at
+                        message,
+                        thread_id=thread_id,
+                        received_at=received_at,
+                        attachments=_extract_attachments(metadata),
                     ):
                         await queue.put(("item", item))
                 except asyncio.CancelledError:

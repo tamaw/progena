@@ -169,15 +169,16 @@ class DeepAgentIPCStream:
         *,
         thread_id: str,
         received_at: float | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield IPC stream items from ``graph.astream``."""
 
-        human_message = HumanMessage(
-            content=message,
-            additional_kwargs={
-                "created_at": received_at if received_at is not None else time.time()
-            },
-        )
+        additional_kwargs: dict[str, Any] = {
+            "created_at": received_at if received_at is not None else time.time()
+        }
+        if attachments:
+            additional_kwargs["attachments"] = attachments
+        human_message = HumanMessage(content=message, additional_kwargs=additional_kwargs)
         graph_input: dict[str, Any] = {"messages": [human_message]}
         self._trace_begin(thread_id=thread_id)
         self.state["current_input"] = message

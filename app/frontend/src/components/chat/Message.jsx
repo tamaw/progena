@@ -4,6 +4,8 @@ import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent, isRenderableStreamEvent } from './streamEventsModel';
 import TimelineItem from './TimelineItem';
 import MessageImageStrip from './MessageImageStrip';
+import AttachmentFileIcon from './AttachmentFileIcon';
+import { describeAttachmentFileType, formatAttachmentSize } from './attachmentFileTypes';
 import NormalToolContent from './NormalToolContent';
 import MessageActions from './MessageActions';
 import {
@@ -249,18 +251,28 @@ function MessageView({
           <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
           {!hideContent && attachments.length > 0 && (
             <div className="message-attachments">
-              {attachments.map((attachment, index) => (
-                <span
-                  key={attachment.id || `${attachment.name}-${index}`}
-                  className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
-                  title={attachment.error || attachment.name}
-                >
-                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-                  </svg>
-                  {attachment.name}
-                </span>
-              ))}
+              {attachments.map((attachment, index) => {
+                const sizeLabel = formatAttachmentSize(attachment.size_bytes);
+                const { label: fileTypeLabel } = describeAttachmentFileType(attachment.mime_type, attachment.name);
+                const tooltip = attachment.error
+                  ? `${attachment.name} — ${attachment.error}`
+                  : [attachment.name, sizeLabel].filter(Boolean).join(' — ');
+                return (
+                  <span
+                    key={attachment.id || `${attachment.name}-${index}`}
+                    className={`message-attachment-chip${attachment.error ? ' message-attachment-chip--error' : ''}`}
+                    title={tooltip}
+                  >
+                    <AttachmentFileIcon mimeType={attachment.mime_type} filename={attachment.name} />
+                    <span className="message-attachment-chip__body">
+                      <span className="message-attachment-chip__name">{attachment.name}</span>
+                      <span className="message-attachment-chip__meta">
+                        {attachment.error ? attachment.error : [fileTypeLabel, sizeLabel].filter(Boolean).join(' · ')}
+                      </span>
+                    </span>
+                  </span>
+                );
+              })}
             </div>
           )}
           {showImages && !hideContent && messageImages.length > 0 && (

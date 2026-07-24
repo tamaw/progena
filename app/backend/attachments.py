@@ -668,42 +668,38 @@ class AttachmentManager:
 # FastAPI integration helpers
 
 
-def format_attachments_for_context(
-    attachments: list[AttachmentResult],
-    max_total_tokens: int = 16000,
-) -> str:
-    """
-    Format attachments for inclusion in LLM context.
+# Precedes the machine-only attachment note appended to a user's message so
+# the note can be sent to the LLM (it needs to know a file just arrived and
+# where to read it) while still being stripped back out before the message
+# is persisted/displayed as chat history -- see
+# chat_sessions._strip_attachment_context, the matching consumer.
+ATTACHMENT_CONTEXT_MARKER = "<!--progenitor:attachment-context-->"
 
-    Returns formatted string with all attachment contents.
+
+def format_attachments_for_context(attachments: list[AttachmentResult]) -> str:
+    """
+    Build a compact, agent-only note listing this turn's attachments.
+
+    Deliberately does NOT inline extracted content: the agent already has
+    direct read access to it via the `/attachments/<filename>` virtual
+    filesystem mount (see `agent/attachment_backend.py`) and the
+    `convert_attachment` tool for binary formats that need markitdown, so
+    duplicating potentially large extracted text into every turn's prompt
+    would only burn tokens for content the agent can already fetch itself.
+    This note just tells the agent *that* something was attached and
+    *where* to find it.
     """
     if not attachments:
         return ""
 
-    parts = ["## Attached Documents\n"]
-    total_tokens = 0
-
+    lines = [
+        "Attached this turn (read via /attachments/<name>, or use the "
+        "convert_attachment tool for binary formats):"
+    ]
     for att in attachments:
-        if att.error:
-            parts.append(f"### {att.name} (Error: {att.error})\n\n")
-            continue
-
-        header = f"### {att.name}"
-        if att.source_url:
-            header += f" (from: {att.source_url})"
-        header += f"\n*Type: {att.mime_type}, Size: {att.size_bytes:,} bytes*\n\n"
-
-        content_tokens = (
-            att.truncated_tokens if att.truncated_tokens is not None else len(att.content) // 4
-        )
-        if total_tokens + content_tokens > max_total_tokens:
-            parts.append(f"{header}[Content omitted - token limit reached]\n\n")
-            continue
-
-        parts.append(f"{header}{att.content}\n\n")
-        total_tokens += content_tokens
-
-    return "".join(parts)
+        detail = f"error: {att.error}" if att.error else f"{att.size_bytes:,} bytes"
+        lines.append(f"- {att.original_filename} ({att.mime_type}, {detail})")
+    return "\n".join(lines)
 
 
 async def create_attachment_from_upload(
