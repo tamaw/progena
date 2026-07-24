@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.progenitor.prompts import load_prompt as load_repo_prompt
-from app.progenitor.prompts import load_skill_context as load_repo_skill_context
-from app.progenitor.prompts import render_prompt_template, resolve_prompts_dir
+from ..prompt_support import load_prompt as load_repo_prompt
+from ..prompt_support import load_skill_context as load_repo_skill_context
+from ..prompt_support import render_prompt_template, resolve_prompts_dir
 
 
 class PromptTemplates:

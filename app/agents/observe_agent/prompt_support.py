@@ -1,0 +1,66 @@
+"""Local prompt-file loading helpers for observe_agent.
+
+Self-contained copy of the prompt loading semantics: observe_agent does not
+depend on app.progenitor.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# prompt_support.py -> observe_agent/ -> agents/ -> app/ -> project_root/
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_PROMPTS_DIR = _PROJECT_ROOT / "data" / "prompts"
+
+
+def resolve_prompts_dir(prompts_dir: Path | str | None = None) -> Path:
+    """Resolve prompt directory from explicit override, env, and project default."""
+    if prompts_dir is not None:
+        return Path(prompts_dir).expanduser().resolve()
+
+    env_prompts_dir = os.getenv("PROGENITOR_PROMPTS_DIR", "").strip()
+    if env_prompts_dir:
+        resolved_env_dir = Path(env_prompts_dir).expanduser().resolve()
+        if not resolved_env_dir.exists():
+            raise FileNotFoundError(
+                f"PROGENITOR_PROMPTS_DIR points to missing directory: {resolved_env_dir}"
+            )
+        return resolved_env_dir
+
+    if not DEFAULT_PROMPTS_DIR.exists():
+        raise FileNotFoundError(
+            f"Prompts directory not found: {DEFAULT_PROMPTS_DIR}. "
+            "Ensure the data/prompts/ directory exists at the project root."
+        )
+    return DEFAULT_PROMPTS_DIR
+
+
+def render_prompt_template(content: str, **replacements: object) -> str:
+    """Apply simple {placeholder} replacements to prompt content."""
+    rendered = content
+    for key, value in replacements.items():
+        rendered = rendered.replace(f"{{{key}}}", str(value))
+    return rendered
+
+
+def load_prompt(
+    filename: str,
+    *,
+    prompts_dir: Path | str | None = None,
+    **replacements: object,
+) -> str:
+    """Load a prompt file and apply simple template replacements."""
+    prompt_root = resolve_prompts_dir(prompts_dir)
+    prompt_file = prompt_root / filename
+    if not prompt_file.exists():
+        searched_dirs = [str(prompt_root)]
+        if prompt_root != DEFAULT_PROMPTS_DIR:
+            searched_dirs.append(str(DEFAULT_PROMPTS_DIR))
+        raise FileNotFoundError(
+            f"Prompt file not found: {prompt_file}. "
+            f"Ensure data/prompts/{filename} exists. Searched prompt directories: {', '.join(searched_dirs)}"
+        )
+
+    content = prompt_file.read_text(encoding="utf-8")
+    return render_prompt_template(content, **replacements)

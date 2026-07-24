@@ -39,11 +39,10 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 from pydantic import SecretStr
 
-from app.progenitor.prompts import resolve_prompts_dir, resolve_skills_dir
-
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
 from .hooks import HookContext, HookManager, create_default_hook_manager
+from .prompt_support import resolve_prompts_dir, resolve_skills_dir
 from .prompts import load_prompt, load_skill_context
 from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
