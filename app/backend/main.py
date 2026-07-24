@@ -1415,7 +1415,12 @@ async def cancel_response(
 
 
 def _extract_response_input(request: ResponseRequest) -> str:
-    """Normalize Responses API input to the validated final user string."""
+    """Normalize Responses API input to the validated final user string.
+
+    Empty text is allowed when the request carries attachments -- see
+    `StreamingResponseRequest.validate_for_streaming`'s matching allowance
+    for the streaming path.
+    """
     raw_input = request.input
     if isinstance(raw_input, str):
         last_input = raw_input
@@ -1425,7 +1430,10 @@ def _extract_response_input(request: ResponseRequest) -> str:
     else:
         raise ValueError("No input provided")
 
-    if not last_input.strip():
+    has_attachments = bool(
+        isinstance(request.metadata, dict) and request.metadata.get("attachments")
+    )
+    if not last_input.strip() and not has_attachments:
         raise ValueError("Input cannot be empty")
     return last_input
 
@@ -1476,6 +1484,8 @@ def _resolve_message_attachments(
     context_block = format_attachments_for_context(resolved)
     if not context_block:
         return message
+    if not message.strip():
+        return f"{ATTACHMENT_CONTEXT_MARKER}\n{context_block}"
     return f"{message}\n\n{ATTACHMENT_CONTEXT_MARKER}\n{context_block}"
 
 

@@ -248,7 +248,7 @@ function MessageView({
           </span>
         </div>
         <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
-          <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />
+          {formattedContent && <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />}
           {!hideContent && attachments.length > 0 && (
             <div className="message-attachments">
               {attachments.map((attachment, index) => {
