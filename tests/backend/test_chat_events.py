@@ -124,6 +124,45 @@ class TestStreamingEvents:
         with pytest.raises(ValueError, match="empty"):
             StreamingResponseRequest.validate_for_streaming(empty_list)
 
+        # Empty string input is allowed when attachments are present --
+        # an attachment-only send (e.g. drag-and-drop with no typed
+        # message), matching how ChatGPT-style clients let a lone
+        # attachment stand in for the message.
+        attachment_only = ResponseRequest(
+            model="test",
+            input="",
+            stream=True,
+            metadata={"attachments": ["att_1"]},
+        )
+        StreamingResponseRequest.validate_for_streaming(attachment_only)
+
+        # An empty `attachments` list must not bypass the empty-input check.
+        empty_attachments = ResponseRequest(
+            model="test", input="", stream=True, metadata={"attachments": []}
+        )
+        with pytest.raises(ValueError, match="empty"):
+            StreamingResponseRequest.validate_for_streaming(empty_attachments)
+
+
+class TestExtractResponseInput:
+    """`_extract_response_input` mirrors StreamingResponseRequest's
+    attachment-only allowance for the non-streaming path."""
+
+    def test_empty_text_raises_without_attachments(self):
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(model="test", input="   ", stream=False)
+        with pytest.raises(ValueError, match="empty"):
+            _extract_response_input(request)
+
+    def test_empty_text_allowed_with_attachments(self):
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(
+            model="test", input="", stream=False, metadata={"attachments": ["att_1"]}
+        )
+        assert _extract_response_input(request) == ""
+
 
 class TestResponsesAPIEvents:
     """Responses input normalization remains valid before event dispatch."""
