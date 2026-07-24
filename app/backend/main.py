@@ -33,6 +33,7 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
+from .attachment_blob_store import configure_attachment_blob_store, get_attachment_blob_store
 from .attachment_routes import get_attachment_manager
 from .attachment_routes import router as attachments_router
 from .attachments import format_attachments_for_context
@@ -730,9 +731,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting backend with enhanced features...")
     document_store = configure_default_document_store(config.database_url)
+    attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
     async def close_document_store() -> None:
         document_store.close()
+
+    async def close_attachment_blob_store() -> None:
+        attachment_blob_store.close()
 
     # Backend-owned agent data lives in a separate database on the same server.
     try:
@@ -769,6 +774,12 @@ async def lifespan(app: FastAPI):
     graceful_shutdown.register_callback(
         "close_document_store",
         close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
+    graceful_shutdown.register_callback(
+        "close_attachment_blob_store",
+        close_attachment_blob_store,
         priority=45,
         timeout=5.0,
     )
@@ -1293,7 +1304,7 @@ async def responses(
 
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
-    last_user_msg = _resolve_message_attachments(last_user_msg, request_metadata)
+    last_user_msg = _resolve_message_attachments(last_user_msg, request_metadata, thread_id)
     await session_manager.record_chat_activity(
         session.session_id,
         message_increment=1,
@@ -1419,12 +1430,15 @@ def _extract_response_input(request: ResponseRequest) -> str:
     return last_input
 
 
-def _resolve_message_attachments(message: str, request_metadata: dict[str, Any]) -> str:
-    """Resolve ``request_metadata["attachments"]`` ids into document content.
+def _resolve_message_attachments(
+    message: str, request_metadata: dict[str, Any], thread_id: str
+) -> str:
+    """Resolve ``request_metadata["attachments"]`` ids into blob content.
 
     Replaces the id list in place with a compact summary (for persistence
-    alongside the message) and returns ``message`` with the resolved
-    attachment content appended so the agent can read it.
+    alongside the message), stamps each blob's ``thread_id`` for the
+    file-browser view, and returns ``message`` with the resolved attachment
+    content appended so the agent can read it.
     """
     raw_ids = request_metadata.get("attachments")
     if not isinstance(raw_ids, list) or not raw_ids:
@@ -1432,12 +1446,16 @@ def _resolve_message_attachments(message: str, request_metadata: dict[str, Any])
         return message
 
     manager = get_attachment_manager()
-    resolved = [
-        attachment
-        for attachment_id in raw_ids
-        if isinstance(attachment_id, str)
-        and (attachment := manager.get_by_id(attachment_id)) is not None
-    ]
+    blob_store = get_attachment_blob_store()
+    resolved = []
+    for attachment_id in raw_ids:
+        if not isinstance(attachment_id, str):
+            continue
+        attachment = manager.get_by_id(attachment_id)
+        if attachment is None:
+            continue
+        blob_store.set_thread_id(attachment_id, thread_id)
+        resolved.append(attachment)
     if not resolved:
         request_metadata.pop("attachments", None)
         return message
