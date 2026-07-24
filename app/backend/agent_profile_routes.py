@@ -209,7 +209,7 @@ async def broadcast_agent_profiles_snapshot(
 
     Shared by the ``GET /agent-profiles`` handler and the ``registry`` document
     change watcher (see ``ui_routes._queue_state_watch_status``), so an agent
-    editing ``/state/agents.json`` pushes live to the Agents page the same way
+    editing ``/config/agents.json`` pushes live to the Agents page the same way
     a UI-driven edit already does. Returns ``None`` (no-op) if the agent store
     isn't configured yet rather than raising, since this also runs from a
     background watcher with no request to manage.

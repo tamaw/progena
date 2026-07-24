@@ -61,9 +61,6 @@ services:
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENITOR_HTTP_HOST: 0.0.0.0
     volumes:
-      - ${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data
-      - ${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro
-      - ${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro
       - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
@@ -116,8 +113,6 @@ services:
       TELEGRAM_ALLOWED_USERS: ${TELEGRAM_ALLOWED_USERS:-}
       TELEGRAM_POLLING_ENABLED: ${TELEGRAM_POLLING_ENABLED:-true}
     volumes:
-      - ${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro
-      - ${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
     tmpfs:

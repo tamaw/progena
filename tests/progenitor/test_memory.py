@@ -1,10 +1,33 @@
 """
-Tests for Progenitor runtime memory wiring.
+Tests for Progenitor runtime memory wiring (Postgres-backed content documents).
 """
 
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+
+class FakeContentStateManager:
+    """Minimal async state_manager stub for get/save/list content documents."""
+
+    def __init__(self, *, prompt: str = "GENESIS") -> None:
+        self._docs: dict[str, dict[str, str]] = {
+            "prompt": {"progenitor/genesis.md": prompt},
+            "skill": {},
+            "memory": {},
+        }
+
+    async def get_content_document(self, kind: str, relative_path: str) -> str | None:
+        return self._docs[kind].get(relative_path)
+
+    async def save_content_document(self, kind: str, relative_path: str, content: str) -> None:
+        self._docs[kind][relative_path] = content
+
+    async def delete_content_document(self, kind: str, relative_path: str) -> None:
+        self._docs[kind].pop(relative_path, None)
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        return list(self._docs[kind].items())
 
 
 def _fake_config(base_dir: Path) -> SimpleNamespace:
@@ -27,45 +50,46 @@ def _fake_config(base_dir: Path) -> SimpleNamespace:
 
 
 class TestRuntimeMemoryWiring:
-    """Test that Progenitor wires runtime memory from the filesystem."""
+    """Test that Progenitor wires runtime memory from Postgres content documents."""
 
-    def test_factory_passes_explicit_memory_paths(self, tmp_path: Path):
+    async def test_factory_passes_explicit_memory_paths(self, tmp_path: Path):
         config = _fake_config(tmp_path)
+        state_manager = FakeContentStateManager()
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import create_progenitor_agent
 
-            create_progenitor_agent(
+            await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
+                state_manager=state_manager,
                 memory_paths=["/memories/custom.md", "/memories/notes.md"],
             )
 
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["memory"] == ["/memories/custom.md", "/memories/notes.md"]
+        # Explicit paths bypass discovery entirely -- nothing written.
+        assert state_manager._docs["memory"] == {}
 
-    def test_factory_defaults_to_filesystem_runtime_memory(self, tmp_path: Path):
+    async def test_factory_defaults_to_postgres_runtime_memory(self, tmp_path: Path):
         config = _fake_config(tmp_path)
+        state_manager = FakeContentStateManager()
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import (
@@ -73,44 +97,53 @@ class TestRuntimeMemoryWiring:
                 create_progenitor_agent,
             )
 
-            create_progenitor_agent(
+            await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
-                project_root=tmp_path,
+                state_manager=state_manager,
             )
 
         call_kwargs = mock_create.call_args.kwargs
-        assert call_kwargs["memory"] == ["/data/memories/AGENTS.md"]
-        memory_file = config.storage.data_dir / "memories" / "AGENTS.md"
-        assert memory_file.read_text(encoding="utf-8") == DEFAULT_RUNTIME_MEMORY_CONTENT
+        assert call_kwargs["memory"] == ["/memories/AGENTS.md"]
+        assert state_manager._docs["memory"]["AGENTS.md"] == DEFAULT_RUNTIME_MEMORY_CONTENT
 
-    def test_factory_discovers_filesystem_runtime_memories(self, tmp_path: Path):
+    async def test_factory_discovers_postgres_runtime_memories(self, tmp_path: Path):
         config = _fake_config(tmp_path)
-        memory_file = config.storage.data_dir / "memories" / "preferences.md"
-        memory_file.parent.mkdir(parents=True, exist_ok=True)
-        memory_file.write_text("Prefer concise summaries.\n", encoding="utf-8")
+        state_manager = FakeContentStateManager()
+        state_manager._docs["memory"]["preferences.md"] = "Prefer concise summaries.\n"
 
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_model,
-            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create.return_value = MagicMock()
             mock_model.return_value = MagicMock()
-            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import create_progenitor_agent
 
-            create_progenitor_agent(
+            await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
+                state_manager=state_manager,
                 project_root=tmp_path,
             )
 
         call_kwargs = mock_create.call_args.kwargs
         assert call_kwargs["memory"] == [
-            "/data/memories/AGENTS.md",
-            "/data/memories/preferences.md",
+            "/memories/AGENTS.md",
+            "/memories/preferences.md",
         ]
+
+    async def test_factory_requires_state_manager(self, tmp_path: Path):
+        config = _fake_config(tmp_path)
+
+        from app.progenitor.agent.agent import create_progenitor_agent
+
+        try:
+            await create_progenitor_agent(config=config, checkpointer=MagicMock())
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("expected ValueError when state_manager is None")

@@ -1,16 +1,34 @@
-"""Prompt discovery utilities for the workspace UI."""
+"""Prompt discovery utilities for the workspace UI.
+
+Prompt content lives in Postgres now (see ``app.progenitor.content_documents``
+and ``app/progenitor/state/manager.py``) — the same shared ``store`` table used
+for ``mcp.json``/``schedule.json``/etc, keyed under the ``prompt:`` prefix. This
+is what makes a backend-side edit immediately visible to the agent's
+``/prompts/`` virtual mount with no extra sync step. Only the agent-usage
+inference below (``_build_usage_index``) still reads real files: it statically
+scans ``app/**.py`` source for prompt-filename literals, which is unrelated to
+prompt *content* storage.
+"""
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
+from app.progenitor.content_documents import content_document_key, content_document_prefix
 from app.progenitor.prompts import resolve_project_root, resolve_prompts_dir
 
+from .document_store import (
+    PROGENITOR_STATE_PREFIX,
+    BackendDocumentStore,
+    get_default_document_store,
+)
 from .state_reader import StateReader, get_state_reader
 
 _PROMPT_LITERAL_RE = re.compile(r"['\"]([A-Za-z0-9_./-]+\.md)['\"]")
+_PROMPT_KIND = "prompt"
 
 
 def _normalize_name(value: str) -> str:
@@ -51,14 +69,14 @@ class PromptRecord:
 
 
 class PromptService:
-    """Discover prompt files and infer the agents that use them."""
+    """Discover Postgres-backed prompt documents and infer the agents that use them."""
 
     def __init__(
         self,
-        prompts_dir: Path | str | None = None,
+        store: BackendDocumentStore | None = None,
         state_reader: StateReader | None = None,
     ) -> None:
-        self.prompts_dir = resolve_prompts_dir(prompts_dir)
+        self.store = store or get_default_document_store()
         self.state_reader = state_reader or get_state_reader()
         self._known_agents = self._load_known_agents()
         self._usage_index = self._build_usage_index()
@@ -73,8 +91,13 @@ class PromptService:
         return known_agents
 
     def _build_usage_index(self) -> dict[str, set[str]]:
+        """Scan ``app/**.py`` source for prompt-filename literals.
+
+        Unrelated to prompt content storage (real files, not Postgres) — this
+        infers which agent's code references which prompt file by name.
+        """
         usage_index: dict[str, set[str]] = {}
-        search_root = resolve_project_root(self.prompts_dir) / "app"
+        search_root = resolve_project_root(resolve_prompts_dir()) / "app"
         if not search_root.exists():
             return usage_index
 
@@ -103,14 +126,13 @@ class PromptService:
             return "progenitor"
         return None
 
-    def _sanitize_relative_path(self, relative_path: str) -> Path:
-        candidate = (self.prompts_dir / relative_path).resolve()
-        candidate.relative_to(self.prompts_dir.resolve())
+    def _sanitize_relative_path(self, relative_path: str) -> str:
+        candidate = Path(relative_path)
+        if candidate.is_absolute() or ".." in candidate.parts:
+            raise ValueError("Invalid prompt path")
         if candidate.suffix.lower() != ".md":
             raise ValueError("Only markdown prompt files can be accessed")
-        if not candidate.is_file():
-            raise FileNotFoundError(relative_path)
-        return candidate
+        return candidate.as_posix()
 
     def _infer_agents(self, relative_path: Path) -> tuple[str | None, list[str]]:
         agents: set[str] = set(self._usage_index.get(relative_path.as_posix(), set()))
@@ -139,30 +161,42 @@ class PromptService:
 
         return primary_agent, ordered_agents
 
-    def _build_record(self, prompt_file: Path) -> PromptRecord:
-        relative_path = prompt_file.relative_to(self.prompts_dir)
-        content = prompt_file.read_text(encoding="utf-8")
-        stat = prompt_file.stat()
-        primary_agent, associated_agents = self._infer_agents(relative_path)
+    def _build_record(
+        self, relative_path: str, content: str, updated_at: datetime | None
+    ) -> PromptRecord:
+        path = Path(relative_path)
+        primary_agent, associated_agents = self._infer_agents(path)
         preview = content.strip().replace("\r\n", "\n").replace("\n", " ")[:200]
-        directory = relative_path.parent.as_posix()
-        category = relative_path.parts[0] if relative_path.parts else None
+        directory = path.parent.as_posix()
+        category = path.parts[0] if path.parts else None
+        updated_ts = (updated_at or datetime.now(UTC)).timestamp()
         return PromptRecord(
-            path=relative_path.as_posix(),
-            filename=prompt_file.name,
+            path=path.as_posix(),
+            filename=path.name,
             directory="" if directory == "." else directory,
             category=category,
             primary_agent=primary_agent,
             associated_agents=associated_agents,
-            size_bytes=stat.st_size,
-            updated_at=stat.st_mtime,
+            size_bytes=len(content.encode("utf-8")),
+            updated_at=updated_ts,
             preview=preview,
             content=content,
         )
 
     def list_prompts(self, agent: str | None = None) -> list[PromptRecord]:
         filter_names = _expand_filter_names(agent) if agent else None
-        prompts = [self._build_record(path) for path in sorted(self.prompts_dir.rglob("*.md"))]
+        rows = self.store.list_documents(
+            PROGENITOR_STATE_PREFIX, content_document_prefix(_PROMPT_KIND)
+        )
+        prefix_len = len(content_document_prefix(_PROMPT_KIND))
+        prompts = [
+            self._build_record(
+                key[prefix_len:], document.payload.get("content", ""), document.updated_at
+            )
+            for key, document in sorted(rows, key=lambda row: row[0])
+            if isinstance(document.payload, dict)
+            and isinstance(document.payload.get("content"), str)
+        ]
         if filter_names is None:
             return prompts
         return [
@@ -173,10 +207,29 @@ class PromptService:
         ]
 
     def get_prompt(self, relative_path: str) -> PromptRecord:
-        prompt_file = self._sanitize_relative_path(relative_path)
-        return self._build_record(prompt_file)
+        sanitized = self._sanitize_relative_path(relative_path)
+        document = self.store.get_document(
+            PROGENITOR_STATE_PREFIX, content_document_key(_PROMPT_KIND, sanitized), None
+        )
+        if (
+            document is None
+            or not isinstance(document.payload, dict)
+            or not isinstance(document.payload.get("content"), str)
+        ):
+            raise FileNotFoundError(relative_path)
+        return self._build_record(sanitized, document.payload["content"], document.updated_at)
 
     def save_prompt(self, relative_path: str, content: str) -> PromptRecord:
-        prompt_file = self._sanitize_relative_path(relative_path)
-        prompt_file.write_text(content, encoding="utf-8")
-        return self._build_record(prompt_file)
+        sanitized = self._sanitize_relative_path(relative_path)
+        key = content_document_key(_PROMPT_KIND, sanitized)
+        existing = self.store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        if existing is None or not isinstance(existing.payload, dict):
+            raise FileNotFoundError(relative_path)
+        self.store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            key,
+            {"content": content, "updated_at": datetime.now(UTC).isoformat()},
+        )
+        document = self.store.get_document(PROGENITOR_STATE_PREFIX, key, None)
+        assert document is not None
+        return self._build_record(sanitized, content, document.updated_at)

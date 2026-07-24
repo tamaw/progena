@@ -24,7 +24,7 @@ registry (Postgres `registry` document — canonical; read-through to the backen
 
 The runtime registry is **database-backed**: `ToolRegistry` reads and writes the
 Postgres `registry` document through `StateManager` (`registry/runtime.py`
-`bind_state_manager`). The agent-facing `/state/agents.json` virtual file is a
+`bind_state_manager`). The agent-facing `/config/agents.json` virtual file is a
 validated view of that same document. It is not a local file under
 `data/config/`. Registering through `register_acp_agent` persists to Postgres,
 so a restart picks it up without touching the filesystem. An unbound

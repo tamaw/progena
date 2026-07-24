@@ -1,23 +1,23 @@
 ---
 name: managing-schedules
-description: Create, update, pause/resume, reschedule, or remove scheduled tasks (one-off and recurring) by editing the /state/schedule.json config file. Use when users ask to schedule work, review upcoming jobs, pause/resume, reschedule, or debug task timing.
+description: Create, update, pause/resume, reschedule, or remove scheduled tasks (one-off and recurring) by editing the /config/schedule.json config file. Use when users ask to schedule work, review upcoming jobs, pause/resume, reschedule, or debug task timing.
 allowed-tools: read_file write_file edit_file ls generate_id current_time structured_output
 ---
 
 # Managing Schedules
 
-All scheduled tasks live in a single virtual file: `/state/schedule.json` — a JSON
-object keyed by schedule id, one key per task (mirrors `/state/mcp.json`'s
+All scheduled tasks live in a single virtual file: `/config/schedule.json` — a JSON
+object keyed by schedule id, one key per task (mirrors `/config/mcp.json`'s
 `mcpServers` map). It is backed by the runtime state document (Postgres is the
 source of truth), so editing it is the supported way to manage schedules — there is
 no separate "add task" or "delete task" tool. Every successful write is validated
 and picked up by the scheduler automatically, and the Schedules page updates live.
 
 ## Always Read Before You Edit
-`/state/schedule.json` is serialized with sorted keys and 2-space indentation. Read
+`/config/schedule.json` is serialized with sorted keys and 2-space indentation. Read
 it first so your `edit_file` `old_string` matches exactly:
 
-1. `read_file /state/schedule.json`
+1. `read_file /config/schedule.json`
 2. Make the change with `edit_file` (preferred — touches only the one key you're
    adding/changing/removing, leaving every other task untouched) or `write_file`
    (only when the file is empty, i.e. adding the very first task).
@@ -69,7 +69,7 @@ top level must be a JSON object; every entry value must be an object with a
 2. `current_time` if you need to resolve relative wording into the cron expression.
 3. `read_file /schemas/schedule_entry.schema.v1.json`
 4. `structured_output json_schema=<content from step 3> instruction="Build a schedule entry with message '<what to do>' and cron_expression '0 9 * * *'."`
-5. `edit_file /state/schedule.json` to insert `"<id>": <result from step 4>` as a
+5. `edit_file /config/schedule.json` to insert `"<id>": <result from step 4>` as a
    new key (or `write_file` if the file is currently `{}`), keeping every other task
    untouched.
 

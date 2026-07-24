@@ -262,10 +262,33 @@ class TestSchemaCompaction:
         assert tool.args_schema is compacted_ref
 
 
+class FakeContentStateManager:
+    """Minimal async state_manager stub for get/save/list content documents."""
+
+    def __init__(self, *, prompt: str = "GENESIS") -> None:
+        self._docs: dict[str, dict[str, str]] = {
+            "prompt": {"progenitor/genesis.md": prompt},
+            "skill": {},
+            "memory": {},
+        }
+
+    async def get_content_document(self, kind: str, relative_path: str) -> str | None:
+        return self._docs[kind].get(relative_path)
+
+    async def save_content_document(self, kind: str, relative_path: str, content: str) -> None:
+        self._docs[kind][relative_path] = content
+
+    async def delete_content_document(self, kind: str, relative_path: str) -> None:
+        self._docs[kind].pop(relative_path, None)
+
+    async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
+        return list(self._docs[kind].items())
+
+
 class TestDeepAgentFactory:
     """Tests for the DeepAgent factory."""
 
-    def test_create_agent_returns_compiled_graph(self):
+    async def test_create_agent_returns_compiled_graph(self):
         """Factory returns a compiled LangGraph state graph."""
         with (
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
@@ -282,7 +305,9 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
-            result = create_progenitor_agent(config=config)
+            result = await create_progenitor_agent(
+                config=config, state_manager=FakeContentStateManager()
+            )
 
             assert result is mock_graph
             mock_create_model.assert_called_once_with(config.llm)
@@ -296,7 +321,7 @@ class TestDeepAgentFactory:
             assert "backend" in call_kwargs.kwargs
             assert "store" in call_kwargs.kwargs
 
-    def test_create_agent_uses_custom_checkpointer(self):
+    async def test_create_agent_uses_custom_checkpointer(self):
         """Custom checkpointer is passed through."""
         with (
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
@@ -311,39 +336,36 @@ class TestDeepAgentFactory:
             from app.progenitor.config import ProgenitorConfig
 
             custom_checkpointer = MagicMock()
-            create_progenitor_agent(
+            await create_progenitor_agent(
                 config=ProgenitorConfig(),
                 checkpointer=custom_checkpointer,
+                state_manager=FakeContentStateManager(),
             )
 
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["checkpointer"] is custom_checkpointer
 
-    def test_create_agent_uses_genesis_prompt(self):
+    async def test_create_agent_uses_genesis_prompt(self):
         """DeepAgent factory uses the canonical genesis prompt."""
         with (
             patch("app.progenitor.agent.agent.create_langchain_model") as mock_create_model,
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create_deep_agent,
-            patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt,
             patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
         ):
             mock_create_model.return_value = MagicMock()
             mock_create_deep_agent.return_value = MagicMock()
-            mock_load_prompt.return_value = "GENESIS"
             mock_backend.return_value = MagicMock()
 
             from app.progenitor.agent.agent import create_progenitor_agent
             from app.progenitor.config import ProgenitorConfig
 
             config = ProgenitorConfig()
-            create_progenitor_agent(
+            state_manager = FakeContentStateManager(prompt="GENESIS")
+            await create_progenitor_agent(
                 config=config,
                 checkpointer=MagicMock(),
+                state_manager=state_manager,
             )
 
             call_kwargs = mock_create_deep_agent.call_args
             assert call_kwargs.kwargs["system_prompt"] == "GENESIS"
-            mock_load_prompt.assert_called_once_with(
-                "progenitor/genesis.md",
-                prompts_dir=config.storage.prompts_dir,
-            )

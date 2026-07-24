@@ -389,7 +389,7 @@ class TestAsyncSubagentTrackingMiddleware:
 class TestMiddlewareIntegration:
     """Integration test: middleware wired into factory."""
 
-    def test_factory_accepts_middleware_param(self):
+    async def test_factory_accepts_middleware_param(self):
         """create_progenitor_agent accepts log_sink param."""
         from types import SimpleNamespace
         from unittest.mock import patch
@@ -402,33 +402,52 @@ class TestMiddlewareIntegration:
             mock_backend.return_value = MagicMock()
             with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
                 mock_model.return_value = MagicMock()
-                with patch("app.progenitor.agent.agent.load_prompt") as mock_load_prompt:
-                    mock_load_prompt.return_value = "Genesis"
-                    from app.progenitor.agent.agent import create_progenitor_agent
+                from app.progenitor.agent.agent import create_progenitor_agent
 
-                    with tempfile.TemporaryDirectory() as tmpdir:
-                        prompts_dir = Path(tmpdir) / "prompts"
-                        prompts_dir.mkdir()
-                        fake_config = SimpleNamespace(
-                            llm=SimpleNamespace(model_default="gpt-chat-latest"),
-                            storage=SimpleNamespace(
-                                prompts_dir=prompts_dir,
-                            ),
-                        )
-                        create_progenitor_agent(
-                            config=fake_config,
-                            checkpointer=MagicMock(),
-                            store=MagicMock(),
-                            skills_dirs=[],
-                            memory_paths=[],
-                            log_sink=MagicMock(),
-                        )
+                class _FakeStateManager:
+                    def __init__(self):
+                        self._docs = {
+                            "prompt": {"progenitor/genesis.md": "Genesis"},
+                            "skill": {},
+                            "memory": {},
+                        }
 
-                # Verify middleware was passed
-                call_kwargs = mock_create.call_args.kwargs
-                assert "middleware" in call_kwargs
-                middleware = call_kwargs["middleware"]
-                types = [type(m).__name__ for m in middleware]
-                assert "DynamicMCPToolMiddleware" in types
-                assert "SecretRedactionMiddleware" in types
-                assert "AuditLoggingMiddleware" in types
+                    async def get_content_document(self, kind, relative_path):
+                        return self._docs[kind].get(relative_path)
+
+                    async def save_content_document(self, kind, relative_path, content):
+                        self._docs[kind][relative_path] = content
+
+                    async def delete_content_document(self, kind, relative_path):
+                        self._docs[kind].pop(relative_path, None)
+
+                    async def list_content_documents(self, kind):
+                        return list(self._docs[kind].items())
+
+                with tempfile.TemporaryDirectory() as tmpdir:
+                    prompts_dir = Path(tmpdir) / "prompts"
+                    prompts_dir.mkdir()
+                    fake_config = SimpleNamespace(
+                        llm=SimpleNamespace(model_default="gpt-chat-latest"),
+                        storage=SimpleNamespace(
+                            prompts_dir=prompts_dir,
+                        ),
+                    )
+                    await create_progenitor_agent(
+                        config=fake_config,
+                        checkpointer=MagicMock(),
+                        store=MagicMock(),
+                        state_manager=_FakeStateManager(),
+                        skills_dirs=[],
+                        memory_paths=[],
+                        log_sink=MagicMock(),
+                    )
+
+            # Verify middleware was passed
+            call_kwargs = mock_create.call_args.kwargs
+            assert "middleware" in call_kwargs
+            middleware = call_kwargs["middleware"]
+            types = [type(m).__name__ for m in middleware]
+            assert "DynamicMCPToolMiddleware" in types
+            assert "SecretRedactionMiddleware" in types
+            assert "AuditLoggingMiddleware" in types

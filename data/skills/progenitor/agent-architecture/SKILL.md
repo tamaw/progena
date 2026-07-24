@@ -38,13 +38,13 @@ The runtime state namespace is `("progenitor", "state")`; structured logs use
 `("progenitor", "logs", <source>)`. The agent receives validated virtual-file
 views backed by those documents:
 
-- `/state/mcp.json` — MCP server configuration.
-- `/state/knowledge.json` — knowledge-base settings.
-- `/state/schedule.json` — scheduled tasks keyed by ID.
-- `/state/agents.json` — A2A registry agents and runtime tools.
-- `/state/health.json` — read-only heartbeat status.
-- `/state/tasks/board.json` and `/state/tasks/<id>.md` — kanban structure and cards.
-- `/state/workflows/<id>.json` — workflow definitions.
+- `/config/mcp.json` — MCP server configuration.
+- `/config/knowledge.json` — knowledge-base settings.
+- `/config/schedule.json` — scheduled tasks keyed by ID.
+- `/config/agents.json` — A2A registry agents and runtime tools.
+- `/config/health.json` — read-only heartbeat status.
+- `/config/tasks/board.json` and `/config/tasks/<id>.md` — kanban structure and cards.
+- `/config/workflows/<id>.json` — workflow definitions.
 
 Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual
 paths. The state backend validates the resulting document and persists it

@@ -105,7 +105,7 @@ create_progenitor_agent()
   -> create_langchain_model(config.llm)
   -> use injected Postgres checkpointer/store
   -> create_progenitor_backend(...)
-       -> mount /state/* virtual documents over StateManager
+       -> mount /config/* virtual documents over StateManager
        -> mount read-only /data/, /schemas/, /prompts/, /self/, /repos/
   -> create_deepagent_tools(...)
   -> [DynamicMCPToolMiddleware, SecretRedactionMiddleware,
@@ -395,9 +395,9 @@ Runtime:
   -> write_log() for conversation, schedule, checkpoint, and audit events
 
 DeepAgent virtual filesystem:
-  -> /state/*.json reads/writes StateManager documents
-  -> /state/tasks/* reads/writes kanban documents
-  -> /state/workflows/*.json reads/writes workflow documents
+  -> /config/*.json reads/writes StateManager documents
+  -> /config/tasks/* reads/writes kanban documents
+  -> /config/workflows/*.json reads/writes workflow documents
 ```
 
 State documents are Postgres records, not local JSON files. Conversation

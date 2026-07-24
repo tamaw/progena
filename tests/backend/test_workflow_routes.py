@@ -95,7 +95,7 @@ def test_workflow_crud_round_trip(workflow_env):
             updated = envelopes[0]
             workflow_id = updated.payload["workflow"]["id"]
             path = updated.payload["path"]
-            assert path == f"/state/workflows/{workflow_id}.json"
+            assert path == f"/config/workflows/{workflow_id}.json"
 
             list_request_id = "workflow-list-request"
             listed = client.get(

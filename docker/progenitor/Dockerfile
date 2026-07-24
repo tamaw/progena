@@ -22,11 +22,13 @@ WORKDIR /app
 # Copy project metadata and source (including app.chat_server and app.progenitor)
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
+# One-time Postgres seed source for prompts/skills (see content_documents.py) --
+# not a runtime read path once the store has rows.
 COPY data/prompts/ ./data/prompts/
 COPY data/skills/ ./data/skills/
 COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir . \
-    && mkdir -p /app/data/state /app/data/prompts /app/data/skills /app/logs /app/tmp
+    && mkdir -p /app/data /app/logs /app/tmp
 
 # Set environment variables
 ENV PYTHONPATH=/app

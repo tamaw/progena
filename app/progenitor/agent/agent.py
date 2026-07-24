@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
-from ..prompts import load_prompt
+from ..content_documents import ensure_content_documents_seeded
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
@@ -41,7 +41,7 @@ from .subagents import (
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_RUNTIME_MEMORY_PATH = "/data/memories/AGENTS.md"
+DEFAULT_RUNTIME_MEMORY_PATH = "/memories/AGENTS.md"
 DEFAULT_RUNTIME_MEMORY_CONTENT = """# Progenitor Runtime Memory
 
 This file stores durable runtime memory for Progenitor.
@@ -89,22 +89,16 @@ def _build_checkpointer(db_path: Path) -> Any:
         return MemorySaver()
 
 
-def _resolve_runtime_memory_paths(
-    data_dir: Path,
+async def _resolve_runtime_memory_paths(
+    state_manager: Any,
     explicit_memory_paths: list[str] | None,
 ) -> list[str] | None:
-    """Resolve runtime memory files to backend-visible /data/memories paths."""
+    """Resolve runtime memory documents to backend-visible /memories paths."""
     if explicit_memory_paths is not None:
         return explicit_memory_paths or None
 
-    memories_dir = data_dir / "memories"
-    discovered: list[str] = []
-    if memories_dir.is_dir():
-        for memory_file in sorted(memories_dir.rglob("*.md")):
-            if not memory_file.is_file():
-                continue
-            rel_path = memory_file.relative_to(memories_dir).as_posix()
-            discovered.append(f"/data/memories/{rel_path}")
+    rows = await state_manager.list_content_documents("memory")
+    discovered = sorted(f"/memories/{relative_path}" for relative_path, _content in rows)
 
     memory_paths: list[str] = [DEFAULT_RUNTIME_MEMORY_PATH]
     for memory_path in discovered:
@@ -113,16 +107,15 @@ def _resolve_runtime_memory_paths(
     return memory_paths
 
 
-def _ensure_default_runtime_memory(data_dir: Path) -> None:
-    """Ensure the canonical runtime memory file exists."""
-    memory_file = data_dir / "memories" / "AGENTS.md"
-    if memory_file.exists():
+async def _ensure_default_runtime_memory(state_manager: Any) -> None:
+    """Ensure the canonical runtime memory document exists."""
+    existing = await state_manager.get_content_document("memory", "AGENTS.md")
+    if existing is not None:
         return
-    memory_file.parent.mkdir(parents=True, exist_ok=True)
-    memory_file.write_text(DEFAULT_RUNTIME_MEMORY_CONTENT, encoding="utf-8")
+    await state_manager.save_content_document("memory", "AGENTS.md", DEFAULT_RUNTIME_MEMORY_CONTENT)
 
 
-def create_progenitor_agent(
+async def create_progenitor_agent(
     config: ProgenitorConfig | None = None,
     checkpointer: Any | None = None,
     tool_registry: Any | None = None,
@@ -143,22 +136,34 @@ def create_progenitor_agent(
                       If None, uses in-memory checkpointer (dev mode).
         tool_registry: Progenitor's tool/agent registry (for tool context).
         llm_client: Progenitor's LLM client (for tools that need AI).
-        state_manager: Progenitor's StateManager (for tools that need persistence).
+        state_manager: Progenitor's StateManager. Required: prompts, skills,
+                       and runtime memories are Postgres-backed content
+                       documents (see ``content_documents.py``), and the
+                       genesis system prompt is loaded from there.
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_sink: Optional async sink for Postgres audit logs.
         skills_dirs: Paths to skill directories for progressive disclosure.
-                     If None, auto-discovers from data/skills/progenitor/.
+                     If None, auto-discovers ``/skills/progenitor`` from the
+                     Postgres-backed skill documents.
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
                       via Deep Agents' `memory=` middleware. If None, Progenitor
-                      loads runtime memory from `/data/memories/*.md`.
+                      loads runtime memory from the Postgres-backed `/memories/*`
+                      content documents.
         live_state_provider: Callable returning the running loop's live state
                              dict for tool execution; falls back to the
                              state manager snapshot when None.
     Returns:
         Compiled DeepAgent graph ready for invoke/stream.
     """
+    if state_manager is None:
+        raise ValueError(
+            "create_progenitor_agent requires state_manager: prompts, skills, and "
+            "runtime memories are Postgres-backed content documents with no "
+            "filesystem fallback."
+        )
+
     if config is None:
         resolved_project_root = Path(project_root) if project_root else None
         config = get_config(project_root=resolved_project_root, validate=False)
@@ -174,9 +179,13 @@ def create_progenitor_agent(
     state_dir = (
         Path(getattr(config.storage, "state_dir", data_dir / "state")).expanduser().resolve()
     )
-    prompts_dir = (
+    # Not a runtime mount anymore -- only the one-time Postgres seed source
+    # (see content_documents.ensure_content_documents_seeded), baked into the
+    # container image via `COPY data/prompts/`` / `COPY data/skills/``.
+    prompts_seed_dir = (
         Path(getattr(config.storage, "prompts_dir", data_dir / "prompts")).expanduser().resolve()
     )
+    skills_seed_dir = data_dir / "skills"
     worktree_dir = (
         Path(getattr(config.storage, "worktree_dir", resolved_project_root / "worktrees"))
         .expanduser()
@@ -191,14 +200,12 @@ def create_progenitor_agent(
         db_path = state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
-    # Writes to /state/mcp.json persist via the StateManager; the runtime's store
+    # Writes to /config/mcp.json persist via the StateManager; the runtime's store
     # listener re-discovers MCP tools when the mcp document changes (the same path
     # used for UI-driven server/tool toggles), so no per-backend write-hook is
     # needed. The managing-mcp skill documents this edit flow for the agent.
     backend = create_progenitor_backend(
         project_root=project_root,
-        data_dir=data_dir,
-        prompts_dir=prompts_dir,
         worktree_dir=worktree_dir,
         state_manager=state_manager,
     )
@@ -219,24 +226,29 @@ def create_progenitor_agent(
         AuditLoggingMiddleware(log_sink=log_sink),
     ]
 
-    if not prompts_dir.is_dir():
-        raise FileNotFoundError(
-            f"Configured prompts_dir does not exist: {prompts_dir}. "
-            "Set PROGENITOR_DATA_DIR (or legacy PROGENITOR_PROMPTS_DIR) or update config.storage.prompts_dir."
-        )
+    # One-time bootstrap: populate Postgres from the image's baked-in prompt/
+    # skill files if the store is empty (fresh database). No-op afterward.
+    await ensure_content_documents_seeded(state_manager, "prompt", prompts_seed_dir)
+    await ensure_content_documents_seeded(state_manager, "skill", skills_seed_dir)
 
     # Auto-discover skills through the DeepAgent backend mount.
     if skills_dirs is None:
-        skills_path = data_dir / "skills" / "progenitor"
-        if skills_path.is_dir():
-            skills_dirs = ["/data/skills/progenitor"]
+        skill_rows = await state_manager.list_content_documents("skill")
+        if any(relative_path.startswith("progenitor/") for relative_path, _content in skill_rows):
+            skills_dirs = ["/skills/progenitor"]
 
     if memory_paths is None:
-        _ensure_default_runtime_memory(data_dir)
-    memory_paths = _resolve_runtime_memory_paths(data_dir, memory_paths)
+        await _ensure_default_runtime_memory(state_manager)
+    memory_paths = await _resolve_runtime_memory_paths(state_manager, memory_paths)
 
     # Use the canonical genesis prompt so every conversation starts with it.
-    system_prompt = load_prompt("progenitor/genesis.md", prompts_dir=prompts_dir).strip()
+    genesis_prompt = await state_manager.get_content_document("prompt", "progenitor/genesis.md")
+    if genesis_prompt is None:
+        raise RuntimeError(
+            "Missing 'progenitor/genesis.md' prompt document in Postgres after seeding. "
+            f"Checked seed source: {prompts_seed_dir / 'progenitor' / 'genesis.md'}"
+        )
+    system_prompt = genesis_prompt.strip()
     runtime_config = getattr(config, "runtime", None)
     http_host = getattr(runtime_config, "http_host", "127.0.0.1")
     if http_host in {"0.0.0.0", "::"}:  # nosec B104 - normalize wildcard binds to loopback for local callbacks
@@ -249,7 +261,7 @@ def create_progenitor_agent(
     async_subagents = create_progenitor_async_subagents(http_base_url)
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
-    # durable filesystem-backed memories directory.
+    # Postgres-backed memory documents (see backends.py's /memories/ mount).
     custom_middleware.insert(
         4,
         AsyncSubagentTrackingMiddleware(

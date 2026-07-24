@@ -340,7 +340,7 @@ class PostgresDocumentStore:
 
         Fires for both backend writes and the runtime's LangGraph store writes
         (same ``store`` table), including deletes (e.g. the agent removing a
-        task from ``/state/schedule.json`` in the separate runtime process,
+        task from ``/config/schedule.json`` in the separate runtime process,
         which has no other way to tell the backend a row disappeared). Scoped
         to state-namespace prefixes so the noisy append-only
         ``progenitor.logs.*`` rows do not flood the channel. ``CREATE OR
