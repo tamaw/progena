@@ -27,12 +27,11 @@ from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
 
-# Bounds one tool call's returned payload, not the file's readable size --
-# the full markdown always persists to text_content (see update_text_content
-# below), so a caller that needs more just pages through /attachments/<file>
-# with offset/limit like any other virtual-fs file. Matches shell.py's
-# _MAX_OUTPUT_CHARS precedent for "don't blow up one tool result."
-MAX_MARKDOWN_CHARS = 10_000
+# No manual size cap here: deepagents' FilesystemMiddleware (baked into
+# every create_deep_agent() call, see graph.py) already evicts any tool
+# result over ~80k chars (20k tokens) to /large_tool_results/<tool_call_id>
+# and replaces it with a read_file/grep pointer -- lossless, unlike a hard
+# truncate, and this tool isn't in TOOLS_EXCLUDED_FROM_EVICTION.
 
 
 def _database_url() -> str:
@@ -105,26 +104,18 @@ class ConvertAttachmentTool(BaseSystemTool):
             return ToolResult.fail(f"Could not convert '{filename}': {exc}")
 
         markdown = result.markdown or ""
-        truncated = len(markdown) > MAX_MARKDOWN_CHARS
-        returned_markdown = markdown[:MAX_MARKDOWN_CHARS] if truncated else markdown
 
         await attachments_db.update_text_content(database_url, str(row["id"]), markdown)
 
-        response: dict[str, object] = {
-            "attachment_id": row["id"],
-            "filename": filename,
-            "mime_type": row["mime_type"],
-            "markdown": returned_markdown,
-            "truncated": truncated,
-            "total_chars": len(markdown),
-        }
-        if truncated:
-            response["note"] = (
-                f"Showing the first {MAX_MARKDOWN_CHARS} of {len(markdown)} characters. "
-                f"Read the rest with the file tools at /attachments/{filename} "
-                f"(offset={MAX_MARKDOWN_CHARS})."
-            )
-        return ToolResult.ok(response)
+        return ToolResult.ok(
+            {
+                "attachment_id": row["id"],
+                "filename": filename,
+                "mime_type": row["mime_type"],
+                "markdown": markdown,
+                "total_chars": len(markdown),
+            }
+        )
 
     @staticmethod
     async def _convert(converter, data: bytes, extension: str | None):
