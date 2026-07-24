@@ -6093,9 +6093,12 @@ body,
 
 /* Dense meta row: items fit on one line (Agents/Models/Channels/Schedules), so
    widen the gap vs the wrapping chat/tasks rows. */
-.detail-pane--dense .detail-header__meta,
 .detail-pane--dense .detail-header__meta-group {
   gap: 12px;
+}
+
+.detail-pane--dense .detail-header__meta-group + .detail-header__meta-group {
+  margin-left: 12px;
 }
 
 /* Migrated pages whose surface stays on the primary background. */
