@@ -925,12 +925,18 @@
     box-shadow: 0 0 0 4px var(--color-accent-soft);
 }
 
-/* Whole-window drop zone (ConversationPage): .chat-detail is the DetailPane
-   wrapping header + message history + composer. Needs its own
-   position: relative since the shared .detail-pane base doesn't set one --
-   scoped to this className so other DetailPane consumers are unaffected. */
-.chat-detail {
+/* Whole-window drop zone (ConversationPage): wraps message history +
+   composer, but deliberately excludes LiveConversationHeader (a sibling
+   inside .chat-detail) -- the drop target and its dashed-border overlay
+   should read as "drop it in the conversation", not swallow the header
+   bar too. Mirrors .chat-detail's flex column so .chat-messages' own
+   flex: 1 + overflow-y: auto still works nested one level deeper. */
+.chat-detail-body-wrap {
     position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
 .chat-detail-drop-overlay {
@@ -938,8 +944,10 @@
     inset: 0;
     z-index: 5;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
+    gap: 10px;
     background-color: color-mix(in srgb, var(--chat-pane-bg) 92%, transparent);
     border: 2px dashed var(--color-accent);
     border-radius: 12px;

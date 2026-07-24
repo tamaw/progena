@@ -1902,14 +1902,7 @@ function ConversationPage() {
         flush
         className="chat-detail"
         label="Chat conversation"
-        onDragEnter={handleChatDragEnter}
-        onDragOver={handleChatDragOver}
-        onDragLeave={handleChatDragLeave}
-        onDrop={handleChatDrop}
       >
-        {isDraggingOverChat && (
-          <div className="chat-detail-drop-overlay" aria-hidden="true">Drop files to attach</div>
-        )}
         <LiveConversationHeader
           liveTurnStore={liveTurnStore}
           messages={messages}
@@ -1935,6 +1928,23 @@ function ConversationPage() {
           title={chatTitle}
         />
 
+        <div
+          className="chat-detail-body-wrap"
+          onDragEnter={handleChatDragEnter}
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
+        >
+        {isDraggingOverChat && (
+          <div className="chat-detail-drop-overlay" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span>Drop files to attach</span>
+          </div>
+        )}
         <RegenerateDisabledContext.Provider value={isGenerating}>
           <div
             className="chat-messages sess-detail__body chat-detail-body"
@@ -2011,6 +2021,7 @@ function ConversationPage() {
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
         />
+        </div>
       </DetailPane>
     </PageShell>
   );
