@@ -1140,6 +1140,7 @@ function QuickChatPanel({
         autoFocus
         keepFocusAfterSend
         initialMessage={composerSeed.message}
+        enableAttachments={false}
       />
     </TopNavPane>
   );

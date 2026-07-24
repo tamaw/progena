@@ -33,6 +33,9 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
+from .attachment_routes import get_attachment_manager
+from .attachment_routes import router as attachments_router
+from .attachments import format_attachments_for_context
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
@@ -977,6 +980,7 @@ app = FastAPI(
 
 app.include_router(ui_router)
 app.include_router(knowledge_router)
+app.include_router(attachments_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
 # The frontend proxies /api and /v1 requests to this backend.
@@ -1289,6 +1293,7 @@ async def responses(
 
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
+    last_user_msg = _resolve_message_attachments(last_user_msg, request_metadata)
     await session_manager.record_chat_activity(
         session.session_id,
         message_increment=1,
@@ -1412,6 +1417,43 @@ def _extract_response_input(request: ResponseRequest) -> str:
     if not last_input.strip():
         raise ValueError("Input cannot be empty")
     return last_input
+
+
+def _resolve_message_attachments(message: str, request_metadata: dict[str, Any]) -> str:
+    """Resolve ``request_metadata["attachments"]`` ids into document content.
+
+    Replaces the id list in place with a compact summary (for persistence
+    alongside the message) and returns ``message`` with the resolved
+    attachment content appended so the agent can read it.
+    """
+    raw_ids = request_metadata.get("attachments")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        request_metadata.pop("attachments", None)
+        return message
+
+    manager = get_attachment_manager()
+    resolved = [
+        attachment
+        for attachment_id in raw_ids
+        if isinstance(attachment_id, str)
+        and (attachment := manager.get_by_id(attachment_id)) is not None
+    ]
+    if not resolved:
+        request_metadata.pop("attachments", None)
+        return message
+
+    request_metadata["attachments"] = [
+        {
+            "id": attachment.id,
+            "name": attachment.original_filename,
+            "mime_type": attachment.mime_type,
+            "size_bytes": attachment.size_bytes,
+            "error": attachment.error,
+        }
+        for attachment in resolved
+    ]
+    context_block = format_attachments_for_context(resolved)
+    return f"{message}\n\n{context_block}" if context_block else message
 
 
 def _default_conversation_id(session: SessionState) -> str:

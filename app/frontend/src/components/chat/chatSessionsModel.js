@@ -304,6 +304,7 @@ export function normalizeBackendChatMessage(message, index) {
       return typeof rm.model_name === 'string' ? rm.model_name : (typeof rm.model === 'string' ? rm.model : '');
     })(),
     streamEvents,
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
   };
 

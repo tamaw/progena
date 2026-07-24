@@ -132,6 +132,7 @@ class ChatMessage(BaseModel):
     display_model_name: str | None = None
     display_tool_calls: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -683,6 +684,23 @@ def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
     return extract_display_metadata(raw)
 
 
+def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
+    """Extract the ``attachments`` list stamped onto a HumanMessage's kwargs."""
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    if not isinstance(additional, dict):
+        return []
+    attachments = additional.get("attachments")
+    return (
+        [item for item in attachments if isinstance(item, dict)]
+        if isinstance(attachments, list)
+        else []
+    )
+
+
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     """Return tool_calls list from an AIMessage (normalized LangChain format).
 
@@ -752,6 +770,7 @@ def _chat_message_from_raw(
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
         tool_calls=tool_calls or [],
+        attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
     )
 

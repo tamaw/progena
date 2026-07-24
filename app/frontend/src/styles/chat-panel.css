@@ -122,6 +122,79 @@
     margin-top: var(--spacing-sm);
 }
 
+.message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-sm);
+}
+
+.message-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    font-size: var(--font-size-sm);
+    line-height: 1.4;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.chat-input-file-picker {
+    display: none;
+}
+
+.chat-input-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+}
+
+.chat-input-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 6px 2px 10px;
+    border-radius: 999px;
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    font-size: var(--font-size-sm);
+    max-width: 220px;
+}
+
+.chat-input-attachment-chip__name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-input-attachment-chip--uploading {
+    opacity: 0.6;
+}
+
+.chat-input-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.chat-input-attachment-chip__remove {
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: var(--font-size-md);
+    line-height: 1;
+    padding: 0 2px;
+}
+
 /* Aligns with the content column of the .entry grid (28px gutter + 10px gap)
    since this sits outside any individual .entry row, after the whole chain. */
 .chat-entry-chain__images {
