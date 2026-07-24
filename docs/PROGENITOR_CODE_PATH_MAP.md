@@ -101,19 +101,21 @@ skills, memory, subagents, and DeepAgent graph.
 Important construction steps:
 
 ```text
-create_progenitor_agent()
+create_progenitor_agent()  # async; requires state_manager
   -> create_langchain_model(config.llm)
   -> use injected Postgres checkpointer/store
+  -> ensure_content_documents_seeded(state_manager, "prompt"/"skill", ...)  # no-op once seeded
   -> create_progenitor_backend(...)
        -> mount /config/* virtual documents over StateManager
-       -> mount read-only /data/, /schemas/, /prompts/, /self/, /repos/
+       -> mount Postgres-backed /prompts/, /skills/ (read-only), /memories/ (read-write)
+       -> mount read-only /schemas/, /self/, /repos/, /logs/ (disk)
   -> create_deepagent_tools(...)
   -> [DynamicMCPToolMiddleware, SecretRedactionMiddleware,
       AuditLoggingMiddleware]
-  -> resolve_skills_dir("progenitor", prompts_dir=...)
-  -> _ensure_default_runtime_memory(data_dir)
-  -> _resolve_runtime_memory_paths(data_dir, memory_paths)
-  -> PromptTemplates(...).get_genesis_prompt()
+  -> auto-discover skills from Postgres "skill" content documents
+  -> _ensure_default_runtime_memory(state_manager)
+  -> _resolve_runtime_memory_paths(state_manager, memory_paths)
+  -> state_manager.get_content_document("prompt", "progenitor/genesis.md")
   -> create_progenitor_subagents()
   -> create_deep_agent(...)
 ```
@@ -124,10 +126,13 @@ Conditional branches:
 
 - A local checkpointer fallback may be used only when the standalone factory is
   called without an injected checkpointer; the production runtime injects the
-  Postgres checkpointer/store.
-- Skills are loaded when `data/skills/progenitor/` exists.
-- Runtime memory files are discovered under `data/memories/*.md`; a default
-  runtime memory file is created if needed.
+  Postgres checkpointer/store. `state_manager` itself has no fallback --
+  `create_progenitor_agent()` raises if it's `None`.
+- Skills are loaded when Postgres has `skill:` content documents under
+  `progenitor/`.
+- Runtime memory documents are discovered via
+  `state_manager.list_content_documents("memory")`; a default `AGENTS.md`
+  memory document is seeded if none exists.
 - ~~Build subagent / `inner_loop_graph` wiring~~ was removed.
 
 ### `agent/langchain_adapter.py`
@@ -156,17 +161,18 @@ Strength: strongly used.
 
 DeepAgent backend map:
 
-| Virtual route | Backing path | Mode | Purpose |
+| Virtual route | Backing store | Mode | Purpose |
 | --- | --- | --- | --- |
-| `/memories/` | `data/memories/` | read-write | Durable agent memory. |
-| `/self/` | project `app/` | read-only | Self-inspection of application code. |
-| `/data/` | configured data dir | read-only | Runtime data visibility and config-bridge inspection. |
-| `/logs/` | configured log dir | read-only | Audit/log visibility. |
-| `/prompts/` | configured prompts dir | read-only | Prompt pack visibility. |
+| `/memories/` | Postgres content documents (`memory:`) | read-write | Durable agent memory. |
+| `/prompts/` | Postgres content documents (`prompt:`) | read-only | Prompt pack visibility. |
+| `/skills/` | Postgres content documents (`skill:`) | read-only | Skill pack visibility. |
+| `/self/` | project `app/` (disk) | read-only | Self-inspection of application code. |
+| `/schemas/` | configured schemas dir (disk) | read-only | JSON Schema contracts for `structured_output`. |
+| `/logs/` | configured log dir (disk) | read-only | Audit/log visibility. |
 | default | DeepAgents `StateBackend` | read-write | Ephemeral workspace state. |
 
-`ReadOnlyFilesystemBackend` denies write/delete operations while delegating
-reads/listing to the wrapped filesystem backend.
+`ReadOnlyBackend` denies write/delete operations while delegating
+reads/listing to the wrapped backend (disk or Postgres-backed).
 
 ### `agent/tools_adapter.py`
 
@@ -677,8 +683,8 @@ Evidence:
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
 | Code-review/research subagents | `agent/subagents.py` | Registered, actual use depends on model delegation. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
-| Skills | `agent/deep_agent.py` | `data/skills/progenitor` exists. |
-| Runtime memories | `agent/deep_agent.py` | `data/memories/*.md`; default is ensured. |
+| Skills | `agent/agent.py` | Postgres `skill:` content documents under `progenitor/` exist. |
+| Runtime memories | `agent/agent.py` | Postgres `memory:` content documents; default `AGENTS.md` is seeded. |
 | Direct `LLMClient` helper APIs | `llm/client.py` | Tools call `chat()` / `chat_structured()` where needed. |
 | ~~Mock LLM~~ | ~~`llm/mock_client.py`~~ | Removed; tests should use test-local mocks. |
 | ~~Old build/backlog state helpers~~ | ~~`state/manager.py`, `state/models.py`~~ | Removed with old node/build-state concepts. |
