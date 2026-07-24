@@ -74,7 +74,7 @@ If you need direct host access to backend port `8000`, add your own port mapping
 
 ## Volumes and ephemeral storage
 
-- `progenitor`: `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data` (full data dir, incl. `state/`, `config/`, `memories/`)
+- `progenitor`: `${PROGENITOR_HOST_DATA_DIR:-../data}:/app/data` (full data dir, effectively only `memories/` is live — see note below)
 - `progenitor` and `backend`: `${PROGENITOR_HOST_PROMPTS_DIR:-../data/prompts}:/app/data/prompts:ro`, `${PROGENITOR_HOST_SKILLS_DIR:-../data/skills}:/app/data/skills:ro`
 - `progenitor`: `${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro` (mounted explicitly, like `prompts`/`skills` — see note below)
 - `progenitor` and `backend`: `${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs`, `${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos`
@@ -87,6 +87,7 @@ Notes:
 - Prompt assets now live inside `${PROGENITOR_HOST_DATA_DIR}/prompts` and resolve to `/app/data/prompts` in containers.
 - Skill assets now live inside `${PROGENITOR_HOST_DATA_DIR}/skills` and resolve to `/app/data/skills` in containers.
 - Schema contracts (`data/schemas/`) are checked into git and mount explicitly from the checkout (`PROGENITOR_HOST_SCHEMAS_DIR`, default `../data/schemas`) rather than relying on `PROGENITOR_HOST_DATA_DIR`, which on real deployments points at a persistent host directory that is never seeded from the repo. This mirrors the `prompts`/`skills` pattern so schema updates land on every deploy.
+- `state/`, `config/`, `attachments/`, and `sessions/` under `PROGENITOR_HOST_DATA_DIR` are pre-Postgres-migration leftovers: `current_state`, `schedule`, `registry/agents`, `mcp`, `knowledge`, `health`, `kanban`, `attachments`, and `sessions` all persist through the shared LangGraph/Postgres document store (`app/progenitor/state/manager.py`, `app/backend/attachments.py`, `app/backend/session.py`) with no filesystem fallback. Only `memories/` (agent-authored markdown, read/write) and now `schemas/` (explicit read-only mount above) are still genuinely file-backed for `progenitor`.
 - Repository/worktree state now mounts from `${PROGENITOR_HOST_REPOS_DIR:-../repos}` to `/app/repos`.
 - `PROGENITOR_WORKTREE_DIR` is set to `/app/repos` in `progenitor` and `backend`.
 
