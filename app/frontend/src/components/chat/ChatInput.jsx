@@ -57,6 +57,8 @@ function ChatInput({
   const [activeMentionIndex, setActiveMentionIndex] = useState(0);
   const [selectionStart, setSelectionStart] = useState(initialMessage.length);
   const [pendingAttachments, setPendingAttachments] = useState([]);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const textareaRef = useRef(null);
@@ -246,6 +248,37 @@ function ChatInput({
     }));
   };
 
+  const handleDragEnter = (e) => {
+    if (!enableAttachments || disabled || isGenerating) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setIsDraggingFiles(true);
+  };
+
+  const handleDragOver = (e) => {
+    if (!enableAttachments || disabled || isGenerating) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+  };
+
+  const handleDragLeave = (e) => {
+    if (!enableAttachments) return;
+    e.preventDefault();
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) {
+      setIsDraggingFiles(false);
+    }
+  };
+
+  const handleDrop = (e) => {
+    if (!enableAttachments || disabled || isGenerating) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    handleFilesSelected(e.dataTransfer?.files);
+  };
+
   const handleSend = () => {
     const trimmedMessage = message.trim();
     if ((!trimmedMessage && pendingAttachments.length === 0) || isGenerating || disabled || hasUploadingAttachments) {
@@ -339,7 +372,16 @@ function ChatInput({
             ))}
           </div>
         )}
-        <div className="input-wrapper">
+        <div
+          className={`input-wrapper${isDraggingFiles ? ' input-wrapper--drag-active' : ''}`}
+          onDragEnter={handleDragEnter}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          {isDraggingFiles && (
+            <div className="chat-input-drop-overlay" aria-hidden="true">Drop files to attach</div>
+          )}
           <textarea
             ref={textareaRef}
             className="chat-input"

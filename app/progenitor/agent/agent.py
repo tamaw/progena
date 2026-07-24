@@ -208,6 +208,7 @@ async def create_progenitor_agent(
         project_root=project_root,
         worktree_dir=worktree_dir,
         state_manager=state_manager,
+        database_url=getattr(getattr(config, "database", None), "url", None) or None,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools

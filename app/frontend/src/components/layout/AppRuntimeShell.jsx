@@ -31,7 +31,7 @@ import {
 } from '../../data/solutions';
 import {
   AgentsNavIcon,
-  AlertsIcon,
+  AttachmentsNavIcon,
   ChannelsNavIcon,
   ChatNavIcon,
   InboxNavIcon,
@@ -127,6 +127,7 @@ const navGroups = [
       { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
       { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },
+      { to: '/attachments', icon: <AttachmentsNavIcon />, label: 'Attachments', trackActivity: true },
     ],
   },
   {
@@ -902,10 +903,11 @@ function QuickChatPanel({
   }, [cancelStream, startFreshQuickThread]);
 
 
-  const submit = useCallback(async (message) => {
+  const submit = useCallback(async (message, attachments = []) => {
     const text = message.trim();
-    if (!text || isSending) return;
+    if ((!text && attachments.length === 0) || isSending) return;
     const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text, normalizedConfig);
+    const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
 
     const now = Date.now();
     const assistantId = `qchat_assistant_${now + 1}`;
@@ -972,7 +974,7 @@ function QuickChatPanel({
           activeAssistantIdRef.current = null;
         },
         undefined,
-        { thread_id: threadId },
+        { thread_id: threadId, ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}) },
       );
 
       if (!isStale()) {
@@ -1140,7 +1142,7 @@ function QuickChatPanel({
         autoFocus
         keepFocusAfterSend
         initialMessage={composerSeed.message}
-        enableAttachments={false}
+        enableAttachments
       />
     </TopNavPane>
   );
