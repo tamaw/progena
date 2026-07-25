@@ -23,7 +23,6 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _MAX_TIMEOUT_SECONDS = 300.0
-_MAX_OUTPUT_CHARS = 10_000
 
 
 def _detect_docker() -> bool:
@@ -110,12 +109,6 @@ def _extract_command_from_request(request: str) -> str:
             return text[len(prefix) :].strip()
 
     return text
-
-
-def _truncate(text: str) -> str:
-    if len(text) <= _MAX_OUTPUT_CHARS:
-        return text
-    return text[:_MAX_OUTPUT_CHARS] + "\n... (truncated)"
 
 
 class ShellCheckTool(BaseSystemTool):
@@ -207,6 +200,10 @@ class ShellExecTool(BaseSystemTool):
         stdout = (stdout_b or b"").decode(errors="replace")
         stderr = (stderr_b or b"").decode(errors="replace")
 
+        line_count = stdout.count("\n") + stderr.count("\n")
+        status_bit = "timed out" if timed_out else f"exit {process.returncode}"
+        preview_command = command if len(command) <= 80 else command[:77] + "..."
+
         return ToolResult.ok(
             {
                 "enabled": True,
@@ -217,7 +214,13 @@ class ShellExecTool(BaseSystemTool):
                 "timeout_seconds": timeout,
                 "timed_out": timed_out,
                 "returncode": process.returncode,
-                "stdout": _truncate(stdout),
-                "stderr": _truncate(stderr),
-            }
+                "stdout": stdout,
+                "stderr": stderr,
+            },
+            artifact={
+                "kind": "shell",
+                "count": line_count,
+                "status": "error" if timed_out or process.returncode else "success",
+                "summary": f"`{preview_command}` -> {status_bit}, {line_count} lines",
+            },
         )

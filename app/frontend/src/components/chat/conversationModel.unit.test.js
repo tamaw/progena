@@ -16,6 +16,8 @@ import {
   getActiveRouteThreadId,
   shouldDeferInitialRosterSelection,
   shouldDeferRouteSelection,
+  shouldDismissEmptySelection,
+  shouldSkipRoutedMountOpen,
   areChatTranscriptsEquivalent,
   shouldRetireLiveOwnerAfterCanonicalReconciliation,
   mergeCanonicalMessages,
@@ -63,6 +65,74 @@ describe('chat selection race guards', () => {
       urlThreadId: 'chat-a',
       selectedBackendChatId: null,
     })).toBe(false);
+  });
+
+  it('skips the routed mount open only when a request is in flight or the detail is already present', () => {
+    // Request already in flight for the routed thread.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: 'chat-a',
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(true);
+    // SPA revisit: detail for the routed thread is already loaded.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: 'chat-a',
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(true);
+    // Detail request loading for the routed thread.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: true,
+      activeLoadingThreadId: 'chat-a',
+    })).toBe(true);
+    // Regression: fresh page load — selection was initialized from the URL
+    // but nothing is loading and no detail exists. The open MUST happen.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(false);
+    // Stale detail from a different thread does not count.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: 'chat-b',
+      activeLoading: true,
+      activeLoadingThreadId: 'chat-b',
+    })).toBe(false);
+  });
+
+  it('dismisses an empty selection only after mount selection has run', () => {
+    const emptySelection = {
+      selectedBackendChatId: 'chat-a',
+      activeLoading: false,
+      activeDetail: null,
+      activeError: null,
+    };
+    // Regression: URL-initialized selection before the mount effect has issued
+    // any request must not be dismissed (it bounced /chat/<id> loads to /chat).
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: false })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true })).toBe(true);
+    // Loading, loaded, and errored selections are never dismissed.
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeLoading: true })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeDetail: { thread_id: 'chat-a' } })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeError: 'boom' })).toBe(false);
+    // No selection at all.
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, selectedBackendChatId: null })).toBe(false);
   });
 });
 
@@ -653,8 +723,9 @@ describe('getTimeBucket', () => {
   it('classifies relative to the start of today', () => {
     expect(getTimeBucket(now, now)).toBe('today');
     expect(getTimeBucket(startOfToday - 1, now)).toBe('yesterday');
-    expect(getTimeBucket(startOfToday - 3 * day, now)).toBe('last-week');
-    expect(getTimeBucket(startOfToday - 10 * day, now)).toBe('earlier');
+    expect(getTimeBucket(startOfToday - 3 * day, now)).toBe('this-week');
+    expect(getTimeBucket(startOfToday - 10 * day, now)).toBe('last-week');
+    expect(getTimeBucket(startOfToday - 20 * day, now)).toBe('later');
   });
 
   it('treats missing timestamps as today', () => {
@@ -665,11 +736,12 @@ describe('getTimeBucket', () => {
 describe('groupSessionItems', () => {
   it('buckets items and keeps SIDEBAR order, omitting empty groups', () => {
     const groups = groupSessionItems([
-      { id: 'p', pinned: true, bucket: 'earlier' },
+      { id: 'p', pinned: true, bucket: 'later' },
       { id: 't', pinned: false, bucket: 'today' },
-      { id: 'e', pinned: false, bucket: 'earlier' },
+      { id: 'w', pinned: false, bucket: 'this-week' },
+      { id: 'e', pinned: false, bucket: 'later' },
     ]);
-    expect(groups.map((g) => g.key)).toEqual(['pinned', 'today', 'earlier']);
+    expect(groups.map((g) => g.key)).toEqual(['pinned', 'today', 'this-week', 'later']);
     expect(groups[0].items.map((i) => i.id)).toEqual(['p']);
   });
 });

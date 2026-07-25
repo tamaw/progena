@@ -33,7 +33,12 @@ import aiohttp
 from aiohttp.abc import AbstractResolver, ResolveResult
 from pydantic import BaseModel, Field
 
-from .document_store import BACKEND_STATE_PREFIX, BackendDocumentStore, get_default_document_store
+from .attachment_blob_store import (
+    AttachmentBlob,
+    AttachmentBlobMeta,
+    AttachmentBlobStore,
+    get_attachment_blob_store,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -145,10 +150,10 @@ class AttachmentManager:
     def __init__(
         self,
         config: AttachmentConfig | None = None,
-        document_store: BackendDocumentStore | None = None,
+        blob_store: AttachmentBlobStore | None = None,
     ):
         self.config = config or AttachmentConfig()
-        self.document_store = document_store
+        self.blob_store = blob_store
         self._cache: dict[str, AttachmentResult] = {}
         self._executor = ThreadPoolExecutor(max_workers=4)
 
@@ -382,15 +387,16 @@ class AttachmentManager:
         # Calculate checksum
         checksum = self._calculate_checksum(content)
 
-        # Check cache
+        # Check cache / existing blob (dedup by content checksum)
         if checksum in self._cache:
             logger.debug("Returning cached attachment: %s", checksum[:8])
             return self._cache[checksum]
-        stored_attachment = self._get_stored_attachment(checksum)
-        if stored_attachment is not None:
-            self._cache[checksum] = stored_attachment
+        stored_meta = self._store().get_by_checksum(checksum)
+        if stored_meta is not None:
+            stored_result = self._result_from_meta(stored_meta)
+            self._cache[checksum] = stored_result
             logger.debug("Returning stored attachment: %s", checksum[:8])
-            return stored_attachment
+            return stored_result
 
         # Determine MIME type
         mime_type, _ = mimetypes.guess_type(filename)
@@ -406,7 +412,9 @@ class AttachmentManager:
             mime_type,
         )
 
-        # Truncate if needed
+        # Truncate if needed (prompt-injection budget only -- the full
+        # extracted text is persisted in the blob for the agent's direct
+        # paged file reads via /attachments/).
         truncated_content, was_truncated, orig_tokens, trunc_tokens = self._truncate_content(
             text_content,
             self.config.max_content_tokens,
@@ -427,9 +435,17 @@ class AttachmentManager:
             metadata=metadata or {},
         )
 
-        # Cache result
+        # Persist the raw bytes + full extracted text as one blob row.
+        self._store().create(
+            id=result.id,
+            filename=filename,
+            mime_type=mime_type,
+            data=content,
+            checksum=checksum,
+            text_content=text_content or None,
+            extraction_error=None,
+        )
         self._cache[checksum] = result
-        self._save_cache()
 
         logger.info(
             "Processed attachment: %s (%s, %d bytes, truncated=%s)",
@@ -596,12 +612,31 @@ class AttachmentManager:
 
     def get_cached(self, checksum: str) -> AttachmentResult | None:
         """Get cached attachment by checksum."""
-        return self._cache.get(checksum) or self._get_stored_attachment(checksum)
+        cached = self._cache.get(checksum)
+        if cached is not None:
+            return cached
+        meta = self._store().get_by_checksum(checksum)
+        if meta is None:
+            return None
+        result = self._result_from_meta(meta)
+        self._cache[checksum] = result
+        return result
+
+    def get_by_id(self, attachment_id: str) -> AttachmentResult | None:
+        """Look up a processed attachment by its ``att_...`` id (not checksum)."""
+        for attachment in self._cache.values():
+            if attachment.id == attachment_id:
+                return attachment
+        blob = self._store().get(attachment_id)
+        if blob is None:
+            return None
+        result = self._result_from_meta(blob)
+        self._cache[result.checksum] = result
+        return result
 
     def clear_cache(self) -> None:
-        """Clear the attachment cache."""
+        """Clear the in-process attachment cache (blob storage is untouched)."""
         self._cache.clear()
-        self._save_cache()
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
@@ -611,68 +646,60 @@ class AttachmentManager:
             "total_content_chars": sum(len(a.content) for a in self._cache.values()),
         }
 
-    def _store(self) -> BackendDocumentStore:
-        return self.document_store or get_default_document_store()
+    def _store(self) -> AttachmentBlobStore:
+        return self.blob_store or get_attachment_blob_store()
 
-    def _load_cache_document(self) -> dict[str, Any]:
-        document = self._store().get_document(BACKEND_STATE_PREFIX, "attachments", {})
-        payload = document.payload if document is not None else {}
-        return payload if isinstance(payload, dict) else {}
-
-    def _get_stored_attachment(self, checksum: str) -> AttachmentResult | None:
-        raw = self._load_cache_document().get(checksum)
-        if not isinstance(raw, dict):
-            return None
-        try:
-            return AttachmentResult.model_validate(raw)
-        except Exception as exc:
-            logger.warning("Failed to load stored attachment %s: %s", checksum[:8], exc)
-            return None
-
-    def _save_cache(self) -> None:
-        data = self._load_cache_document()
-        for checksum, attachment in self._cache.items():
-            data[checksum] = attachment.model_dump(mode="json")
-        self._store().save_document(BACKEND_STATE_PREFIX, "attachments", data)
+    @staticmethod
+    def _result_from_meta(meta: AttachmentBlobMeta | AttachmentBlob) -> AttachmentResult:
+        """Rebuild an :class:`AttachmentResult` (prompt-facing view) from a blob row."""
+        return AttachmentResult(
+            id=meta.id,
+            name=Path(meta.filename).stem,
+            original_filename=meta.filename,
+            mime_type=meta.mime_type,
+            size_bytes=meta.size_bytes,
+            content=meta.text_content or "",
+            checksum=meta.checksum,
+            source_type="upload",
+            error=meta.extraction_error,
+        )
 
 
 # FastAPI integration helpers
 
 
-def format_attachments_for_context(
-    attachments: list[AttachmentResult],
-    max_total_tokens: int = 16000,
-) -> str:
-    """
-    Format attachments for inclusion in LLM context.
+# Precedes the machine-only attachment note appended to a user's message so
+# the note can be sent to the LLM (it needs to know a file just arrived and
+# where to read it) while still being stripped back out before the message
+# is persisted/displayed as chat history -- see
+# chat_sessions._strip_attachment_context, the matching consumer.
+ATTACHMENT_CONTEXT_MARKER = "<!--progenitor:attachment-context-->"
 
-    Returns formatted string with all attachment contents.
+
+def format_attachments_for_context(attachments: list[AttachmentResult]) -> str:
+    """
+    Build a compact, agent-only note listing this turn's attachments.
+
+    Deliberately does NOT inline extracted content: the agent already has
+    direct read access to it via the `/attachments/<filename>` virtual
+    filesystem mount (see `agent/attachment_backend.py`) and the
+    `convert_attachment` tool for binary formats that need markitdown, so
+    duplicating potentially large extracted text into every turn's prompt
+    would only burn tokens for content the agent can already fetch itself.
+    This note just tells the agent *that* something was attached and
+    *where* to find it.
     """
     if not attachments:
         return ""
 
-    parts = ["## Attached Documents\n"]
-    total_tokens = 0
-
+    lines = [
+        "Attached this turn (read via /attachments/<name>, or use the "
+        "convert_attachment tool for binary formats):"
+    ]
     for att in attachments:
-        if att.error:
-            parts.append(f"### {att.name} (Error: {att.error})\n\n")
-            continue
-
-        header = f"### {att.name}"
-        if att.source_url:
-            header += f" (from: {att.source_url})"
-        header += f"\n*Type: {att.mime_type}, Size: {att.size_bytes:,} bytes*\n\n"
-
-        content_tokens = att.truncated_tokens or 0
-        if total_tokens + content_tokens > max_total_tokens:
-            parts.append(f"{header}[Content omitted - token limit reached]\n\n")
-            continue
-
-        parts.append(f"{header}{att.content}\n\n")
-        total_tokens += content_tokens
-
-    return "".join(parts)
+        detail = f"error: {att.error}" if att.error else f"{att.size_bytes:,} bytes"
+        lines.append(f"- {att.original_filename} ({att.mime_type}, {detail})")
+    return "\n".join(lines)
 
 
 async def create_attachment_from_upload(

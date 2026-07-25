@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 
+from app.backend.attachments import ATTACHMENT_CONTEXT_MARKER
 from app.backend.chat_sessions import (
     ChatCreateRequest,
     ChatDraftRequest,
@@ -206,6 +207,58 @@ class TestCheckpointSnapshotCache:
 
         assert result is snapshot
         assert store.get_checkpoint_thread_snapshot_calls == 0
+
+
+class TestAttachmentContextStripping:
+    """The backend appends a machine-only note (see
+    `app.backend.attachments.format_attachments_for_context`) behind
+    `ATTACHMENT_CONTEXT_MARKER` onto a user's message so the agent learns
+    an attachment arrived, without that note leaking into the chat bubble
+    the user actually sees on reload.
+    """
+
+    def test_note_is_stripped_from_the_displayed_user_message(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_attach"))
+        raw_content = (
+            "i think i added a file lol\n\n"
+            f"{ATTACHMENT_CONTEXT_MARKER}\n"
+            "Attached this turn (read via /attachments/<name>, or use the "
+            "convert_attachment tool for binary formats):\n"
+            "- report.pdf (application/pdf, 294,275 bytes)"
+        )
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_attach",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-24T00:00:00Z",
+                messages=[{"id": "u1", "type": "human", "content": raw_content}],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_attach")
+
+        assert detail is not None
+        user_message = next(message for message in detail.messages if message.role == "user")
+        assert user_message.content == "i think i added a file lol"
+
+    def test_message_without_a_marker_is_left_untouched(self):
+        store = InMemoryDocumentStore()
+        create_chat_metadata(store, ChatCreateRequest(thread_id="thread_plain"))
+        store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id="thread_plain",
+                checkpoint_id="checkpoint-1",
+                checkpoint_ts="2026-07-24T00:00:00Z",
+                messages=[{"id": "u1", "type": "human", "content": "hello"}],
+            )
+        )
+
+        detail = get_chat_detail(store, "thread_plain")
+
+        assert detail is not None
+        user_message = next(message for message in detail.messages if message.role == "user")
+        assert user_message.content == "hello"
 
 
 class TestDisplayMetadataNormalization:

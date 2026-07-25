@@ -212,13 +212,16 @@ export function useChatStream({
     }
   }, [dispatch, getApiUrl, reloadOpenChat]);
 
-  const handleSend = useCallback(async (content) => {
+  const handleSend = useCallback(async (content, attachments = []) => {
     preserveStreamInBackground();
     const userMessage = {
       id: `msg_${Date.now()}`,
       role: 'user',
       content,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      attachments: attachments.map(({ id, name, mime_type: mimeType, size_bytes: sizeBytes }) => (
+        { id, name, mime_type: mimeType, size_bytes: sizeBytes }
+      )),
     };
 
     setMessages(prev => [...prev, userMessage]);
@@ -248,9 +251,11 @@ export function useChatStream({
       activeBackendChat,
       selectedBackendChatId,
     );
+    const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
     const threadMetadata = {
       [FRONTEND_RESPONSE_OPTIONS_KEY]: { allowDesyncedCompletion: true },
       ...(selectedBackendChat?.thread_id ? { thread_id: selectedBackendChat.thread_id } : {}),
+      ...(attachmentIds.length > 0 ? { attachments: attachmentIds } : {}),
     };
 
     // The chat this stream belongs to, captured as a closure-local so

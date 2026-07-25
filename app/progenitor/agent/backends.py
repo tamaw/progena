@@ -36,6 +36,7 @@ from deepagents.backends import (
     StateBackend,
 )
 
+from .attachment_backend import AttachmentDirectoryBackend
 from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
@@ -76,6 +77,7 @@ def create_progenitor_backend(
     schemas_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
+    database_url: str | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -86,6 +88,9 @@ def create_progenitor_backend(
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
         state_manager: Required for prompts/skills/memories/config mounts (all
             Postgres-backed); without it those routes are omitted entirely.
+        database_url: Required for the ``/attachments/`` mount (raw SQL over the
+            same Postgres ``attachments`` blob table the backend writes to);
+            without it the mount is omitted entirely.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
@@ -152,6 +157,12 @@ def create_progenitor_backend(
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)
+
+    if database_url:
+        # Uploaded chat attachments, read directly from the same Postgres
+        # blob table the backend writes to (see attachment_backend.py) --
+        # read-only, so no state_manager dependency.
+        routes["/attachments/"] = ReadOnlyBackend(AttachmentDirectoryBackend(database_url))
 
     state_backend_cls: Any = StateBackend
     logger.info("Created progenitor backend with scoped filesystem mounts")

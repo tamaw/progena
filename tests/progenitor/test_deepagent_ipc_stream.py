@@ -13,8 +13,10 @@ class _FakeGraph:
     def __init__(self, items):
         self.items = items
         self.last_kwargs = None
+        self.last_input = None
 
-    async def astream(self, *args, **kwargs):
+    async def astream(self, graph_input, *args, **kwargs):
+        self.last_input = graph_input
         self.last_kwargs = kwargs
         for item in self.items:
             yield item
@@ -56,6 +58,41 @@ async def test_graph_message_events_stream_incrementally_without_duplicate_final
         {"type": "stream_chunk", "content": "", "is_final": True},
     ]
     assert bridge.last_response == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_attachments_are_stamped_onto_the_human_message():
+    """See app.backend.main._resolve_message_attachments: the backend
+    resolves attachment ids into a compact metadata list and passes it
+    through as request metadata. RuntimeChatService forwards that list here
+    (see app.progenitor.runtime.http_chat._extract_attachments) so
+    chat_sessions can surface it as the attachment chip on the user's
+    message, independent of the machine-only note appended to the message
+    text for the LLM's benefit.
+    """
+    graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    attachments = [
+        {"id": "att_1", "name": "report.pdf", "mime_type": "application/pdf", "size_bytes": 1024}
+    ]
+
+    async for _ in bridge.stream("hi", thread_id="thread-1", attachments=attachments):
+        pass
+
+    human_message = graph.last_input["messages"][0]
+    assert human_message.additional_kwargs["attachments"] == attachments
+
+
+@pytest.mark.asyncio
+async def test_no_attachments_key_when_none_provided():
+    graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
+    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+
+    async for _ in bridge.stream("hi", thread_id="thread-1"):
+        pass
+
+    human_message = graph.last_input["messages"][0]
+    assert "attachments" not in human_message.additional_kwargs
 
 
 @pytest.mark.asyncio

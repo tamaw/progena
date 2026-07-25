@@ -65,6 +65,8 @@ import {
   shouldShowNewChatEmptyState,
   shouldDeferInitialRosterSelection,
   shouldDeferRouteSelection,
+  shouldDismissEmptySelection,
+  shouldSkipRoutedMountOpen,
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
@@ -514,6 +516,41 @@ function ConversationPage() {
   const messagesContainerRef = useRef(null);
   const isPinnedToBottomRef = useRef(true);
   const messagesScrollFrameRef = useRef(null);
+  const chatInputRef = useRef(null);
+  // Lets a drag/drop anywhere over the chat window (message history, header)
+  // attach files, not just a drop directly onto the composer -- forwards
+  // through chatInputRef into ChatInput's own upload pipeline so there's one
+  // staging/AbortController implementation, not two. ChatInput's own local
+  // drag handlers stopPropagation, so a drag that starts and ends over the
+  // composer itself never reaches these (its own inline zone handles that).
+  const [isDraggingOverChat, setIsDraggingOverChat] = useState(false);
+  const chatDragDepthRef = useRef(0);
+  const handleChatDragEnter = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+    chatDragDepthRef.current += 1;
+    setIsDraggingOverChat(true);
+  }, [connectionState, isClearingSession]);
+  const handleChatDragOver = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
+    e.preventDefault();
+  }, [connectionState, isClearingSession]);
+  const handleChatDragLeave = useCallback((e) => {
+    e.preventDefault();
+    chatDragDepthRef.current = Math.max(0, chatDragDepthRef.current - 1);
+    if (chatDragDepthRef.current === 0) {
+      setIsDraggingOverChat(false);
+    }
+  }, []);
+  const handleChatDrop = useCallback((e) => {
+    if (connectionState === 'error' || isClearingSession) return;
+    e.preventDefault();
+    chatDragDepthRef.current = 0;
+    setIsDraggingOverChat(false);
+    chatInputRef.current?.addFiles(e.dataTransfer?.files);
+  }, [connectionState, isClearingSession]);
   const handleMessagesScroll = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return;
@@ -630,6 +667,12 @@ function ConversationPage() {
       return;
     }
     pendingOpenThreadIdRef.current = threadId;
+    // Every programmatic selection change must register its intent BEFORE the
+    // route reconciler can observe the (still stale) URL. Without this, opening
+    // a chat that the address bar hasn't caught up with yet makes the
+    // reconciler treat the old URL as a user navigation and reopen it, which
+    // ping-pongs with useEntityUrlSync into an infinite redirect loop.
+    selectionIntentRef.current = { threadId };
     const requestId = createUuid();
     beginForegroundStream();
     activeStreamIdRef.current = null;
@@ -795,6 +838,14 @@ function ConversationPage() {
     let cancelled = false;
 
     const ensureSession = async () => {
+      // A backend chat is already selected — e.g. deleting a chat routed
+      // through bare /chat while its neighbour was being opened. Creating a
+      // draft row here would add an unused "New chat" session nobody asked
+      // for. Leave any quick-chat handoff in storage for a real bare visit.
+      if (selectedBackendChatIdRef.current) {
+        setDraftBootstrapSettled(true);
+        return;
+      }
       const quickChatHandoff = initialQuickChatHandoffRef.current;
       if (quickChatHandoff) {
         localStorage.removeItem(config.storage.quickChatHandoff);
@@ -1192,6 +1243,7 @@ function ConversationPage() {
 
   const clearBackendSelection = useCallback(({ clearRoute = false } = {}) => {
     setSelectedBackendChatId(null);
+    selectionIntentRef.current = null;
     dispatch(clearActiveChatSession());
     lastAppliedBackendChatRequestIdRef.current = null;
     if (clearRoute) {
@@ -1221,7 +1273,13 @@ function ConversationPage() {
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
-    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat || activeBackendChatState.error) {
+    if (!shouldDismissEmptySelection({
+      hasAutoSelectedOnMount: hasAutoSelectedOnMountRef.current,
+      selectedBackendChatId,
+      activeLoading: activeBackendChatState.loading,
+      activeDetail: activeBackendChat,
+      activeError: activeBackendChatState.error,
+    })) {
       return;
     }
     dismissCurrentSession({ clearRoute: true });
@@ -1255,7 +1313,7 @@ function ConversationPage() {
       });
       return;
     }
-    if (selectedBackendChatId) {
+    if (selectedBackendChatId && !pendingOpenThreadIdRef.current && !selectionIntentRef.current) {
       dismissCurrentSession();
     }
   }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, selectedBackendChatId, urlThreadId]);
@@ -1559,10 +1617,19 @@ function ConversationPage() {
     if (!backendChatSessionsState.loaded) return;
     if (urlThreadId) {
       hasAutoSelectedOnMountRef.current = true;
-      if (
-        selectedBackendChatIdRef.current === urlThreadId
-        || pendingOpenThreadIdRef.current === urlThreadId
-      ) {
+      if (shouldSkipRoutedMountOpen({
+        pendingThreadId: pendingOpenThreadIdRef.current,
+        selectedBackendChatId: selectedBackendChatIdRef.current,
+        urlThreadId,
+        activeDetailThreadId: activeBackendChat?.thread_id,
+        activeLoading: activeBackendChatState.loading,
+        activeLoadingThreadId: activeBackendChatState.threadId,
+      })) {
+        // A request for this thread is already in flight or its detail is
+        // already loaded (SPA revisit). A bare selectedBackendChatId match is
+        // NOT enough: on a fresh page load the selection is initialized from
+        // the URL with no request behind it, and skipping the open here left
+        // the page permanently without a detail request.
         return;
       }
       openBackendChat(urlThreadId).catch(() => {
@@ -1599,6 +1666,9 @@ function ConversationPage() {
     visibleSessionGroups,
     selectSessionItem,
     openBackendChat,
+    activeBackendChat,
+    activeBackendChatState.loading,
+    activeBackendChatState.threadId,
   ]);
 
   // Keep the URL in sync with whichever session is actually selected (either
@@ -1863,7 +1933,11 @@ function ConversationPage() {
         )}
       </PaneSection>
 
-      <DetailPane flush className="chat-detail" label="Chat conversation">
+      <DetailPane
+        flush
+        className="chat-detail"
+        label="Chat conversation"
+      >
         <LiveConversationHeader
           liveTurnStore={liveTurnStore}
           messages={messages}
@@ -1889,6 +1963,23 @@ function ConversationPage() {
           title={chatTitle}
         />
 
+        <div
+          className="chat-detail-body-wrap"
+          onDragEnter={handleChatDragEnter}
+          onDragOver={handleChatDragOver}
+          onDragLeave={handleChatDragLeave}
+          onDrop={handleChatDrop}
+        >
+        {isDraggingOverChat && (
+          <div className="chat-detail-drop-overlay" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <span>Drop files to attach</span>
+          </div>
+        )}
         <RegenerateDisabledContext.Provider value={isGenerating}>
           <div
             className="chat-messages sess-detail__body chat-detail-body"
@@ -1955,6 +2046,7 @@ function ConversationPage() {
         </RegenerateDisabledContext.Provider>
 
         <ChatInput
+          ref={chatInputRef}
           onSend={handleSend}
           onStop={handleStop}
           onCommand={handleCommand}
@@ -1964,6 +2056,7 @@ function ConversationPage() {
           focusToken={`${threadId ?? 'no-session'}:${composerFocusTick}`}
           keepFocusAfterSend
         />
+        </div>
       </DetailPane>
     </PageShell>
   );

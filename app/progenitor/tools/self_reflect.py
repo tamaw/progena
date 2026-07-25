@@ -40,11 +40,10 @@ ALLOWED_EXTENSIONS = {".py", ".md", ".txt", ".json"}
 # Files/folders to skip
 SKIP_ITEMS = {"__pycache__", ".pyc", ".pyo", "__init__.py"}
 
-# Maximum file size to read (prevent memory issues)
-MAX_FILE_SIZE = 50_000  # 50KB
-
-# Maximum total content to return in a single operation
-MAX_TOTAL_CONTENT = 100_000  # 100KB
+# Files over this size are read as a whole (not truncated) -- deepagents'
+# FilesystemMiddleware already evicts any tool result over its own token
+# threshold to /large_tool_results/<tool_call_id> losslessly, so a blind
+# byte-cap here would just be a smaller, lossier duplicate of that.
 
 
 class DirectoryEntry(BaseModel):
@@ -315,15 +314,7 @@ class SelfReflection:
 
         size = target.stat().st_size
         truncated = False
-
-        if size > MAX_FILE_SIZE:
-            truncated = True
-            content = target.read_text(encoding="utf-8", errors="ignore")[:MAX_FILE_SIZE]
-            content += (
-                f"\n\n... (file truncated at {MAX_FILE_SIZE} bytes, total size: {size} bytes)"
-            )
-        else:
-            content = target.read_text(encoding="utf-8", errors="ignore")
+        content = target.read_text(encoding="utf-8", errors="ignore")
 
         if max_lines is not None and max_lines > 0:
             lines = content.split("\n")

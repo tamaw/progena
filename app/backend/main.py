@@ -33,6 +33,10 @@ from starlette.middleware.gzip import GZipMiddleware
 
 from .agent_store import configure_agent_store
 from .alerts import AlertInfo
+from .attachment_blob_store import configure_attachment_blob_store, get_attachment_blob_store
+from .attachment_routes import get_attachment_manager
+from .attachment_routes import router as attachments_router
+from .attachments import ATTACHMENT_CONTEXT_MARKER, format_attachments_for_context
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .client import ProgenitorClient
 from .config import ChatServerConfig
@@ -727,9 +731,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting backend with enhanced features...")
     document_store = configure_default_document_store(config.database_url)
+    attachment_blob_store = configure_attachment_blob_store(config.database_url)
 
     async def close_document_store() -> None:
         document_store.close()
+
+    async def close_attachment_blob_store() -> None:
+        attachment_blob_store.close()
 
     # Backend-owned agent data lives in a separate database on the same server.
     try:
@@ -766,6 +774,12 @@ async def lifespan(app: FastAPI):
     graceful_shutdown.register_callback(
         "close_document_store",
         close_document_store,
+        priority=45,
+        timeout=5.0,
+    )
+    graceful_shutdown.register_callback(
+        "close_attachment_blob_store",
+        close_attachment_blob_store,
         priority=45,
         timeout=5.0,
     )
@@ -977,6 +991,7 @@ app = FastAPI(
 
 app.include_router(ui_router)
 app.include_router(knowledge_router)
+app.include_router(attachments_router)
 
 # Note: This backend is API-only. Frontend is served separately via npm/vite.
 # The frontend proxies /api and /v1 requests to this backend.
@@ -1289,6 +1304,7 @@ async def responses(
 
     session = await get_session_from_request(request, session_manager)
     thread_id, request_metadata = _build_chat_request_metadata(session, body.metadata)
+    last_user_msg = _resolve_message_attachments(last_user_msg, request_metadata, thread_id)
     await session_manager.record_chat_activity(
         session.session_id,
         message_increment=1,
@@ -1399,19 +1415,84 @@ async def cancel_response(
 
 
 def _extract_response_input(request: ResponseRequest) -> str:
-    """Normalize Responses API input to the validated final user string."""
+    """Normalize Responses API input to the validated final user string.
+
+    Empty text is allowed when the request carries attachments -- see
+    `StreamingResponseRequest.validate_for_streaming`'s matching allowance
+    for the streaming path. The frontend always sends `input` as a message
+    list (`buildResponsesInput` in useChatApi.js), and it drops any entry
+    with empty content, so an attachment-only send arrives as `input: []`
+    -- not an empty string -- and must be allowed here too, not just in
+    the `isinstance(raw_input, str)` branch.
+    """
     raw_input = request.input
+    has_attachments = bool(
+        isinstance(request.metadata, dict) and request.metadata.get("attachments")
+    )
     if isinstance(raw_input, str):
         last_input = raw_input
     elif raw_input:
         item = raw_input[-1]
         last_input = item if isinstance(item, str) else item.content or ""
+    elif has_attachments:
+        last_input = ""
     else:
         raise ValueError("No input provided")
 
-    if not last_input.strip():
+    if not last_input.strip() and not has_attachments:
         raise ValueError("Input cannot be empty")
     return last_input
+
+
+def _resolve_message_attachments(
+    message: str, request_metadata: dict[str, Any], thread_id: str
+) -> str:
+    """Resolve ``request_metadata["attachments"]`` ids into blob content.
+
+    Replaces the id list in place with a compact summary (for persistence
+    alongside the message), stamps each blob's ``thread_id`` for the
+    file-browser view, and returns ``message`` with a compact, marker-wrapped
+    attachment note appended so the agent knows a file arrived and where to
+    read it (see ``format_attachments_for_context``). Callers that persist or
+    display ``message`` must strip everything from ``ATTACHMENT_CONTEXT_MARKER``
+    onward first -- see ``chat_sessions._strip_attachment_context``.
+    """
+    raw_ids = request_metadata.get("attachments")
+    if not isinstance(raw_ids, list) or not raw_ids:
+        request_metadata.pop("attachments", None)
+        return message
+
+    manager = get_attachment_manager()
+    blob_store = get_attachment_blob_store()
+    resolved = []
+    for attachment_id in raw_ids:
+        if not isinstance(attachment_id, str):
+            continue
+        attachment = manager.get_by_id(attachment_id)
+        if attachment is None:
+            continue
+        blob_store.set_thread_id(attachment_id, thread_id)
+        resolved.append(attachment)
+    if not resolved:
+        request_metadata.pop("attachments", None)
+        return message
+
+    request_metadata["attachments"] = [
+        {
+            "id": attachment.id,
+            "name": attachment.original_filename,
+            "mime_type": attachment.mime_type,
+            "size_bytes": attachment.size_bytes,
+            "error": attachment.error,
+        }
+        for attachment in resolved
+    ]
+    context_block = format_attachments_for_context(resolved)
+    if not context_block:
+        return message
+    if not message.strip():
+        return f"{ATTACHMENT_CONTEXT_MARKER}\n{context_block}"
+    return f"{message}\n\n{ATTACHMENT_CONTEXT_MARKER}\n{context_block}"
 
 
 def _default_conversation_id(session: SessionState) -> str:

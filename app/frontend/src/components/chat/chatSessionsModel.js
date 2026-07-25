@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CHAT_TITLE,
   buildSessionItems,
   formatPreview,
   formatRelativeAge,
@@ -304,6 +305,7 @@ export function normalizeBackendChatMessage(message, index) {
       return typeof rm.model_name === 'string' ? rm.model_name : (typeof rm.model === 'string' ? rm.model : '');
     })(),
     streamEvents,
+    attachments: Array.isArray(message.attachments) ? message.attachments : [],
     raw,
   };
 
@@ -392,6 +394,44 @@ export function shouldLoadSelectedBackendChat({
   );
 }
 
+// An empty draft ("New chat", zero messages) is a real backend row created
+// eagerly so a thread exists before the first send, but it isn't a
+// conversation yet — keep it out of the sidebar until it has content.
+// Exceptions that force the card visible:
+// - it's the selected chat and the local transcript already has messages
+//   (first send settling before the server bumps message_count),
+// - it carries runtime flags (unread/generating/errored — something is
+//   happening in it that the user must be able to see),
+// - the user pinned or renamed it (deliberate acts that make it theirs).
+export function isHiddenEmptyDraft(chat, {
+  selectedBackendChatId,
+  localMessageCount,
+  unreadChatIds,
+  backgroundGeneratingChatIds,
+  backgroundErrorChatIds,
+}) {
+  const messageCount = Number.isFinite(chat.message_count) ? chat.message_count : 0;
+  if (messageCount > 0 || chat.archived || chat.pinned) {
+    return false;
+  }
+  if ((chat.title || DEFAULT_CHAT_TITLE) !== DEFAULT_CHAT_TITLE) {
+    return false;
+  }
+  if (chat.thread_id === selectedBackendChatId && localMessageCount > 0) {
+    return false;
+  }
+  if (unreadChatIds instanceof Set && unreadChatIds.has(chat.thread_id)) {
+    return false;
+  }
+  if (backgroundGeneratingChatIds instanceof Set && backgroundGeneratingChatIds.has(chat.thread_id)) {
+    return false;
+  }
+  if (backgroundErrorChatIds instanceof Set && backgroundErrorChatIds.has(chat.thread_id)) {
+    return false;
+  }
+  return true;
+}
+
 export function buildChatSessionItems({
   messages,
   threadId,
@@ -444,6 +484,13 @@ export function buildChatSessionItems({
     .filter((chat) => (
       chat.thread_id
       && !localIds.has(chat.thread_id)
+      && !isHiddenEmptyDraft(chat, {
+        selectedBackendChatId,
+        localMessageCount: messages.length,
+        unreadChatIds,
+        backgroundGeneratingChatIds,
+        backgroundErrorChatIds,
+      })
     ))
     .map((chat) => buildBackendSessionItem(chat, selectedBackendChatId, unreadChatIds, backgroundGeneratingChatIds, backgroundErrorChatIds, isGenerating));
 

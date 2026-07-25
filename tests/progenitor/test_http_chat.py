@@ -58,7 +58,14 @@ class ScriptedBridge:
         self._script = script
         self.thread_id: str | None = None
 
-    async def stream(self, message: str, *, thread_id: str, received_at: float | None = None):
+    async def stream(
+        self,
+        message: str,
+        *,
+        thread_id: str,
+        received_at: float | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ):
         self.thread_id = thread_id
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
@@ -439,7 +446,14 @@ async def test_direct_stream_queue_applies_backpressure(monkeypatch) -> None:
     produced = 0
 
     class _FloodBridge:
-        async def stream(self, _message: str, *, thread_id: str, received_at: float | None = None):
+        async def stream(
+            self,
+            _message: str,
+            *,
+            thread_id: str,
+            received_at: float | None = None,
+            attachments: list[dict[str, Any]] | None = None,
+        ):
             del thread_id, received_at
             nonlocal produced
             for index in range(30):
