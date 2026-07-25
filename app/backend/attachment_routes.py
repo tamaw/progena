@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from .attachment_blob_store import get_attachment_blob_store
@@ -48,8 +48,18 @@ def _metadata_payload(meta) -> dict:  # meta: AttachmentBlobMeta
 
 
 @router.post("")
-async def upload_attachment(file: UploadFile = File(...)) -> dict:
+async def upload_attachment(
+    file: UploadFile = File(...),
+    thread_id: str | None = Form(default=None),
+) -> dict:
     """Upload one file: persisted as a blob row, returns its id.
+
+    ``thread_id`` is optional -- a brand-new chat may not have a thread yet
+    when the first attachment is picked, in which case the row starts
+    unclaimed and gets stamped once the message carrying it is actually
+    sent (see ``app.backend.main._resolve_message_attachments``). The
+    Attachments management page always has a thread selected, so it always
+    passes one, claiming the row immediately.
 
     The caller sends the returned ``id`` back in ``POST /api/ui/responses``
     metadata (``{"attachments": [id, ...]}``) to attach it to a message.
@@ -67,7 +77,10 @@ async def upload_attachment(file: UploadFile = File(...)) -> dict:
     if result.error:
         raise HTTPException(status_code=400, detail=result.error)
 
-    meta = get_attachment_blob_store().get_by_checksum(result.checksum)
+    store = get_attachment_blob_store()
+    if thread_id:
+        store.set_thread_id(result.id, thread_id)
+    meta = store.get_by_checksum(result.checksum)
     if meta is not None:
         broadcast_ui_event("attachment.uploaded", _metadata_payload(meta), scope="global")
 
@@ -76,19 +89,28 @@ async def upload_attachment(file: UploadFile = File(...)) -> dict:
 
 @router.get("")
 async def list_attachments(
-    thread_id: str | None = Query(default=None),
+    thread_id: str = Query(...),
     limit: int = Query(default=200, le=1000),
 ) -> dict:
-    """List attachment metadata (no bytes) for the file-browser view."""
+    """List attachment metadata (no bytes) for one thread's file-browser view.
+
+    ``thread_id`` is required: attachments are scoped per conversation
+    thread, so there is no "list everything" mode -- a caller with access to
+    one thread must not be able to enumerate another thread's uploads.
+    """
     rows = get_attachment_blob_store().list_metadata(thread_id=thread_id, limit=limit)
     return {"attachments": [_metadata_payload(row) for row in rows]}
 
 
 @router.get("/{attachment_id}")
-async def download_attachment(attachment_id: str) -> Response:
-    """Return the raw bytes of one attachment (preview/download)."""
+async def download_attachment(attachment_id: str, thread_id: str = Query(...)) -> Response:
+    """Return the raw bytes of one attachment (preview/download), scoped to
+    the requesting thread. A blob whose ``thread_id`` doesn't match the
+    caller's is reported as not-found (same as truly missing), so this
+    endpoint can't be used to probe another thread's attachment ids.
+    """
     blob = get_attachment_blob_store().get(attachment_id)
-    if blob is None:
+    if blob is None or blob.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
     return Response(
         content=blob.data,
@@ -98,10 +120,14 @@ async def download_attachment(attachment_id: str) -> Response:
 
 
 @router.delete("/{attachment_id}", status_code=204)
-async def delete_attachment(attachment_id: str) -> Response:
-    deleted = get_attachment_blob_store().delete(attachment_id)
-    if not deleted:
+async def delete_attachment(attachment_id: str, thread_id: str = Query(...)) -> Response:
+    """Delete one attachment, scoped to the requesting thread (see
+    ``download_attachment`` for the same not-found-on-mismatch rationale)."""
+    store = get_attachment_blob_store()
+    blob = store.get(attachment_id)
+    if blob is None or blob.thread_id != thread_id:
         raise HTTPException(status_code=404, detail="Attachment not found")
+    store.delete(attachment_id)
     broadcast_ui_event("attachment.deleted", {"id": attachment_id}, scope="global")
     return Response(status_code=204)
 

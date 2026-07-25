@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { subscribeUiEvent } from '../store/realtimeEvents';
+import { selectChatSessions } from '../store/uiDataSlice';
 import PageShell from '../components/layout/PageShell';
 
 function formatBytes(bytes) {
@@ -48,8 +50,10 @@ function AttachmentRow({ attachment, downloadUrl, onDelete, deleting }) {
 
 export default function AttachmentsPage() {
   const { getApiUrl } = useConfig();
+  const chatSessions = useSelector(selectChatSessions);
+  const [threadId, setThreadId] = useState('');
   const [attachments, setAttachments] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -57,11 +61,26 @@ export default function AttachmentsPage() {
   const fileInputRef = useRef(null);
   const dragDepthRef = useRef(0);
 
+  // Default to the most recently active chat once the (already app-wide
+  // loaded, see RealtimeBridge.jsx) session list arrives; leaves the
+  // selector on "no chat selected" if there are none yet.
+  useEffect(() => {
+    if (!threadId && chatSessions.length > 0) {
+      setThreadId(chatSessions[0].thread_id);
+    }
+  }, [chatSessions, threadId]);
+
+  // Attachments are scoped per conversation thread (see attachment_routes.py):
+  // there is no "list everything" view, so nothing loads until a thread is picked.
   const load = useCallback(async () => {
+    if (!threadId) {
+      setAttachments([]);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(getApiUrl('attachments'));
+      const response = await fetch(`${getApiUrl('attachments')}?thread_id=${encodeURIComponent(threadId)}`);
       if (!response.ok) {
         throw new Error(`Failed to load attachments (${response.status})`);
       }
@@ -72,11 +91,7 @@ export default function AttachmentsPage() {
     } finally {
       setLoading(false);
     }
-  }, [getApiUrl]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  }, [getApiUrl, threadId]);
 
   // Uploads (from this page or another tab/the chat composer) and deletes
   // both broadcast on the canonical /api/ui/stream -- refresh the list
@@ -89,13 +104,14 @@ export default function AttachmentsPage() {
 
   const uploadFiles = useCallback(async (fileList) => {
     const files = Array.from(fileList || []);
-    if (files.length === 0) return;
+    if (files.length === 0 || !threadId) return;
     setUploading(true);
     setError('');
     try {
       await Promise.all(files.map(async (file) => {
         const formData = new FormData();
         formData.append('file', file);
+        formData.append('thread_id', threadId);
         const response = await fetch(getApiUrl('attachments'), { method: 'POST', body: formData });
         if (!response.ok) {
           const payload = await response.json().catch(() => null);
@@ -108,13 +124,17 @@ export default function AttachmentsPage() {
     } finally {
       setUploading(false);
     }
-  }, [getApiUrl, load]);
+  }, [getApiUrl, load, threadId]);
 
   const handleDelete = useCallback(async (id) => {
+    if (!threadId) return;
     setDeletingId(id);
     setError('');
     try {
-      const response = await fetch(`${getApiUrl('attachments')}/${id}`, { method: 'DELETE' });
+      const response = await fetch(
+        `${getApiUrl('attachments')}/${id}?thread_id=${encodeURIComponent(threadId)}`,
+        { method: 'DELETE' },
+      );
       if (!response.ok && response.status !== 404) {
         throw new Error(`Delete failed (${response.status})`);
       }
@@ -124,7 +144,7 @@ export default function AttachmentsPage() {
     } finally {
       setDeletingId(null);
     }
-  }, [getApiUrl]);
+  }, [getApiUrl, threadId]);
 
   const handleDragEnter = (e) => {
     if (!Array.from(e.dataTransfer?.types || []).includes('Files')) return;
@@ -169,6 +189,19 @@ export default function AttachmentsPage() {
             </p>
           </div>
           <div className="attachments-page__actions">
+            <select
+              className="attachments-page__thread-select"
+              value={threadId}
+              onChange={(e) => setThreadId(e.target.value)}
+              aria-label="Chat"
+            >
+              {chatSessions.length === 0 && <option value="">No chats yet</option>}
+              {chatSessions.map((session) => (
+                <option key={session.thread_id} value={session.thread_id}>
+                  {session.title || 'Untitled chat'}
+                </option>
+              ))}
+            </select>
             <input
               ref={fileInputRef}
               type="file"
@@ -183,7 +216,7 @@ export default function AttachmentsPage() {
               type="button"
               className="attachments-page__upload-btn"
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
+              disabled={uploading || !threadId}
             >
               {uploading ? 'Uploading...' : 'Upload files'}
             </button>
@@ -196,7 +229,9 @@ export default function AttachmentsPage() {
 
         {error && <div className="attachments-page__error">{error}</div>}
 
-        {loading ? (
+        {!threadId ? (
+          <div className="attachments-page__empty">Select a chat above to see its attachments.</div>
+        ) : loading ? (
           <div className="attachments-page__empty">Loading...</div>
         ) : attachments.length === 0 ? (
           <div className="attachments-page__empty">
@@ -220,7 +255,7 @@ export default function AttachmentsPage() {
                 <AttachmentRow
                   key={attachment.id}
                   attachment={attachment}
-                  downloadUrl={`${getApiUrl('attachments')}/${attachment.id}`}
+                  downloadUrl={`${getApiUrl('attachments')}/${attachment.id}?thread_id=${encodeURIComponent(threadId)}`}
                   onDelete={handleDelete}
                   deleting={deletingId === attachment.id}
                 />

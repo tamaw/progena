@@ -2662,6 +2662,22 @@
     display: none;
 }
 
+.attachments-page__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.attachments-page__thread-select {
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-bg-secondary, transparent);
+    color: var(--color-text);
+    font-size: var(--font-size-sm);
+    max-width: 220px;
+}
+
 .attachments-page__upload-btn {
     padding: 6px 14px;
     border-radius: 8px;

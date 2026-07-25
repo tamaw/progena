@@ -23,6 +23,7 @@ import os
 from pydantic import BaseModel, Field
 
 from .. import attachments_db
+from ..runtime.thread_context import get_current_thread_id
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)
@@ -78,7 +79,11 @@ class ConvertAttachmentTool(BaseSystemTool):
         if not database_url:
             return ToolResult.fail("PROGENITOR_DATABASE_URL is not configured.")
 
-        row = await attachments_db.fetch_attachment(database_url, identifier)
+        thread_id = get_current_thread_id()
+        if thread_id is None:
+            return ToolResult.fail("No active conversation thread; cannot resolve attachments.")
+
+        row = await attachments_db.fetch_attachment(database_url, identifier, thread_id=thread_id)
         if row is None:
             return ToolResult.fail(f"No attachment found matching '{identifier}'.")
 
@@ -105,7 +110,9 @@ class ConvertAttachmentTool(BaseSystemTool):
 
         markdown = result.markdown or ""
 
-        await attachments_db.update_text_content(database_url, str(row["id"]), markdown)
+        await attachments_db.update_text_content(
+            database_url, str(row["id"]), markdown, thread_id=thread_id
+        )
 
         return ToolResult.ok(
             {
