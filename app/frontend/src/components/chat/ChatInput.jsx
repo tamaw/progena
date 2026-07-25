@@ -503,20 +503,20 @@ const ChatInput = forwardRef(function ChatInput({
                   </svg>
                 </button>
               )}
-              <div className="chat-help-control" tabIndex={0} aria-label="Keyboard shortcuts">
-                <span className="btn-icon chat-help-btn" aria-hidden="true">
+              <div className="chat-info-control" tabIndex={0} aria-label="Keyboard shortcuts">
+                <span className="btn-icon chat-info-btn" aria-hidden="true">
                   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.25" strokeLinecap="round" strokeLinejoin="round">
                     <circle cx="12" cy="12" r="10" />
-                    <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
-                    <line x1="12" y1="17" x2="12.01" y2="17" />
+                    <line x1="12" y1="16" x2="12" y2="12" />
+                    <line x1="12" y1="8" x2="12.01" y2="8" />
                   </svg>
                 </span>
-                <div className="chat-help-tooltip" role="tooltip">
-                  <div className="chat-help-tooltip__row">Type <kbd>/</kbd> for commands</div>
-                  <div className="chat-help-tooltip__row">Type <kbd>@</kbd> for agents</div>
-                  <div className="chat-help-tooltip__row">Press <kbd>Enter</kbd> to send</div>
-                  <div className="chat-help-tooltip__row">Press <kbd>Shift+Enter</kbd> for new line</div>
-                  <div className="chat-help-tooltip__row">Press <kbd>Esc</kbd> to stop generation</div>
+                <div className="chat-info-tooltip" role="tooltip">
+                  <div className="chat-info-tooltip__row">Type <kbd>/</kbd> for commands</div>
+                  <div className="chat-info-tooltip__row">Type <kbd>@</kbd> for agents</div>
+                  <div className="chat-info-tooltip__row">Press <kbd>Enter</kbd> to send</div>
+                  <div className="chat-info-tooltip__row">Press <kbd>Shift+Enter</kbd> for new line</div>
+                  <div className="chat-info-tooltip__row">Press <kbd>Esc</kbd> to stop generation</div>
                 </div>
               </div>
             </div>

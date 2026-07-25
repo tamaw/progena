@@ -221,8 +221,9 @@ const SIDEBAR_GROUPS = [
   { key: 'pinned', label: 'Pinned' },
   { key: 'today', label: 'Today' },
   { key: 'yesterday', label: 'Yesterday' },
+  { key: 'this-week', label: 'This Week' },
   { key: 'last-week', label: 'Last Week' },
-  { key: 'earlier', label: 'Earlier' },
+  { key: 'later', label: 'Later' },
 ];
 
 export function toValidTimestamp(value) {
@@ -485,7 +486,8 @@ export function getTimeBucket(timestamp, now = Date.now()) {
 
   const today = startOfToday.getTime();
   const yesterday = today - (24 * 60 * 60 * 1000);
-  const lastWeek = today - (7 * 24 * 60 * 60 * 1000);
+  const thisWeek = today - (7 * 24 * 60 * 60 * 1000);
+  const lastWeek = today - (14 * 24 * 60 * 60 * 1000);
 
   if (activityAt >= today) {
     return 'today';
@@ -493,10 +495,13 @@ export function getTimeBucket(timestamp, now = Date.now()) {
   if (activityAt >= yesterday) {
     return 'yesterday';
   }
+  if (activityAt >= thisWeek) {
+    return 'this-week';
+  }
   if (activityAt >= lastWeek) {
     return 'last-week';
   }
-  return 'earlier';
+  return 'later';
 }
 
 function buildArchivedSessionItem(entry, pinnedKeys) {
