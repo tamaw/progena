@@ -52,13 +52,23 @@ class StreamingResponseRequest(ResponseRequest):
 
     @classmethod
     def validate_for_streaming(cls, request: ResponseRequest) -> None:
-        """Additional validation for streaming requests."""
+        """Additional validation for streaming requests.
+
+        Empty text is allowed when the request carries attachments (an
+        attachment-only send, e.g. drag-and-drop with no typed message) --
+        see `_extract_response_input`'s matching allowance and
+        `_resolve_message_attachments`, which gives the agent a note about
+        the attachment even with no user text.
+        """
+        has_attachments = bool(
+            isinstance(request.metadata, dict) and request.metadata.get("attachments")
+        )
         if isinstance(request.input, str):
             if len(request.input) > 500000:
                 raise ValueError(
                     f"Input ({len(request.input)} chars) exceeds streaming limit of 500000 chars"
                 )
-            if not request.input.strip():
+            if not request.input.strip() and not has_attachments:
                 raise ValueError("Input cannot be empty")
         else:
             total_length = 0
@@ -69,5 +79,5 @@ class StreamingResponseRequest(ResponseRequest):
                 raise ValueError(
                     f"Total input ({total_length} chars) exceeds streaming limit of 500000 chars"
                 )
-            if not request.input:
+            if not request.input and not has_attachments:
                 raise ValueError("Input cannot be empty")

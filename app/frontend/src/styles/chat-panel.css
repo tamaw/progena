@@ -122,6 +122,159 @@
     margin-top: var(--spacing-sm);
 }
 
+.message-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-sm);
+}
+
+.message-attachment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 4px 6px;
+    border-radius: var(--border-radius-md, 8px);
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    border: 1px solid var(--color-border-light, transparent);
+    max-width: 260px;
+}
+
+.attachment-file-icon {
+    flex: 0 0 auto;
+}
+
+.message-attachment-chip__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.message-attachment-chip__name {
+    font-size: var(--font-size-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-chip__meta {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.message-attachment-chip--error .message-attachment-chip__meta {
+    color: inherit;
+}
+
+.chat-input-file-picker {
+    display: none;
+}
+
+.chat-input-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
+}
+
+.chat-input-attachment-chip {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px 5px 6px;
+    border-radius: var(--border-radius-md, 8px);
+    background-color: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+    border: 1px solid var(--color-border-light, transparent);
+    max-width: 260px;
+    overflow: hidden;
+}
+
+.chat-input-attachment-chip__body {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.chat-input-attachment-chip__name {
+    font-size: var(--font-size-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.chat-input-attachment-chip__meta {
+    font-size: var(--font-size-xs, 11px);
+    color: var(--color-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Sits flush along the chip's bottom edge, inside the existing bottom
+   padding. Unlike the uploading dim (opacity: 0.6 on the whole chip), this
+   bar stays fully visible once the upload completes -- see
+   --progress--complete below -- so "this attachment made it to the
+   server" remains legible after the fact, not just mid-transfer. */
+.chat-input-attachment-chip__progress {
+    position: absolute;
+    left: 6px;
+    right: 6px;
+    bottom: 1px;
+    height: 2px;
+    border-radius: 999px;
+    background-color: var(--color-accent);
+    transform-origin: left center;
+    transform: scaleX(0);
+}
+
+.chat-input-attachment-chip__progress--active {
+    animation: chat-attachment-upload-progress 1.1s ease-in-out infinite;
+}
+
+.chat-input-attachment-chip__progress--complete {
+    transform: scaleX(1);
+    transition: transform 0.3s ease;
+}
+
+@keyframes chat-attachment-upload-progress {
+    0% { transform: scaleX(0); }
+    100% { transform: scaleX(1); }
+}
+
+.chat-input-attachment-chip--uploading {
+    opacity: 0.6;
+}
+
+.chat-input-attachment-chip--error {
+    color: var(--color-error);
+}
+
+.chat-input-attachment-chip--error .chat-input-attachment-chip__meta {
+    color: inherit;
+}
+
+.chat-input-attachment-chip__remove {
+    flex: 0 0 auto;
+    border: none;
+    background: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: var(--font-size-md);
+    line-height: 1;
+    padding: 0 2px;
+}
+
 /* Aligns with the content column of the .entry grid (28px gutter + 10px gap)
    since this sits outside any individual .entry row, after the whole chain. */
 .chat-entry-chain__images {
@@ -756,6 +909,7 @@
 }
 
 .input-wrapper {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 4px;
@@ -764,6 +918,60 @@
     border: 1px solid var(--color-border);
     border-radius: 12px;
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.input-wrapper--drag-active {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+
+/* Whole-window drop zone (ConversationPage): wraps message history +
+   composer, but deliberately excludes LiveConversationHeader (a sibling
+   inside .chat-detail) -- the drop target and its dashed-border overlay
+   should read as "drop it in the conversation", not swallow the header
+   bar too. Mirrors .chat-detail's flex column so .chat-messages' own
+   flex: 1 + overflow-y: auto still works nested one level deeper. */
+.chat-detail-body-wrap {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+}
+
+.chat-detail-drop-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background-color: color-mix(in srgb, var(--chat-pane-bg) 92%, transparent);
+    border: 2px dashed var(--color-accent);
+    border-radius: 12px;
+    margin: 8px;
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+}
+
+.chat-input-drop-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--chat-pane-bg);
+    opacity: 0.92;
+    border-radius: 12px;
+    font-size: var(--font-size-md);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+    z-index: 1;
 }
 
 .input-wrapper:focus-within {
@@ -811,18 +1019,18 @@
     gap: 6px;
 }
 
-.chat-help-control {
+.chat-info-control {
     position: relative;
     display: flex;
     align-items: center;
     outline: none;
 }
 
-.chat-help-btn {
-    cursor: help;
+.chat-info-btn {
+    cursor: default;
 }
 
-.chat-help-tooltip {
+.chat-info-tooltip {
     position: absolute;
     bottom: calc(100% + 10px);
     left: 0;
@@ -843,20 +1051,20 @@
     transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
-.chat-help-control:hover .chat-help-tooltip,
-.chat-help-control:focus-within .chat-help-tooltip,
-.chat-help-control:focus-visible .chat-help-tooltip {
+.chat-info-control:hover .chat-info-tooltip,
+.chat-info-control:focus-within .chat-info-tooltip,
+.chat-info-control:focus-visible .chat-info-tooltip {
     opacity: 1;
     transform: translateY(0);
 }
 
-.chat-help-tooltip__row {
+.chat-info-tooltip__row {
     font-size: 11px;
     color: var(--color-text-secondary);
     white-space: nowrap;
 }
 
-.chat-help-tooltip__row kbd {
+.chat-info-tooltip__row kbd {
     margin: 0 2px;
     padding: 1px 5px;
     font-size: 10px;
@@ -2419,4 +2627,144 @@
 .chat-detail-header .detail-header-action--danger.chat-detail-header__delete:hover,
 .chat-detail-header .detail-header-action--danger.chat-detail-header__delete:focus-visible {
     color: var(--color-text-primary);
+}
+
+/* Attachments page (file-browser view) */
+.attachments-page__body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-md);
+    padding: var(--spacing-lg);
+    width: 100%;
+    overflow-y: auto;
+}
+
+.attachments-page__body.is-drag-active {
+    outline: 2px dashed var(--color-accent);
+    outline-offset: -8px;
+}
+
+.attachments-page__head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+}
+
+.attachments-page__sub {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    max-width: 60ch;
+}
+
+.attachments-page__file-picker {
+    display: none;
+}
+
+.attachments-page__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+}
+
+.attachments-page__thread-select {
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-bg-secondary, transparent);
+    color: var(--color-text);
+    font-size: var(--font-size-sm);
+    max-width: 220px;
+}
+
+.attachments-page__upload-btn {
+    padding: 6px 14px;
+    border-radius: 8px;
+    border: 1px solid var(--color-border);
+    background-color: var(--color-accent);
+    color: var(--color-accent-contrast, #fff);
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.attachments-page__upload-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.attachments-page__drop-overlay {
+    position: absolute;
+    inset: var(--spacing-lg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background-color: var(--chat-pane-bg);
+    opacity: 0.92;
+    border-radius: 12px;
+    font-size: var(--font-size-lg);
+    font-weight: 500;
+    color: var(--color-accent);
+    pointer-events: none;
+    z-index: 1;
+}
+
+.attachments-page__error {
+    color: var(--color-error);
+    font-size: var(--font-size-sm);
+}
+
+.attachments-page__empty {
+    color: var(--color-text-muted);
+    font-size: var(--font-size-sm);
+    padding: var(--spacing-lg) 0;
+}
+
+.attachments-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-sm);
+}
+
+.attachments-table th {
+    text-align: left;
+    color: var(--color-text-muted);
+    font-weight: 500;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.attachments-row td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--color-border);
+}
+
+.attachments-row__name a {
+    color: var(--color-accent);
+    text-decoration: none;
+}
+
+.attachments-row__error {
+    margin-left: 6px;
+    color: var(--color-error);
+    font-size: var(--font-size-xs, 11px);
+}
+
+.attachments-row__muted {
+    color: var(--color-text-muted);
+}
+
+.attachments-row__delete {
+    border: 1px solid var(--color-border);
+    background: none;
+    color: var(--color-error);
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: var(--font-size-xs, 11px);
+    cursor: pointer;
+}
+
+.attachments-row__delete:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }

@@ -83,8 +83,9 @@ const TYPE_RANK = { subagent: 0, a2a: 1, acp: 2 };
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
   ['yesterday', 'Yesterday'],
+  ['this-week', 'This Week'],
   ['last-week', 'Last Week'],
-  ['earlier', 'Earlier'],
+  ['later', 'Later'],
 ];
 // The agent graph now lives on the Sequences page; the Agents page shows only
 // Details, so the detail tab row is hidden in both views.
@@ -511,7 +512,7 @@ function AgentsPage({ variant = 'agents' }) {
       const buckets = new Map(RECENCY_BUCKETS.map(([key]) => [key, []]));
       visibleAgents.forEach((agent) => {
         const bucket = getTimeBucket(agent.updated);
-        (buckets.get(bucket) || buckets.get('earlier')).push(agent);
+        (buckets.get(bucket) || buckets.get('later')).push(agent);
       });
       return RECENCY_BUCKETS
         .map(([key, label]) => ({ key, title: label, agents: buckets.get(key) }))

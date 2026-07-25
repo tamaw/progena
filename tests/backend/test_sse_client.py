@@ -45,7 +45,14 @@ class ScriptedBridge:
         self.state = state
         self._script = script
 
-    async def stream(self, message: str, *, thread_id: str, received_at: float | None = None):
+    async def stream(
+        self,
+        message: str,
+        *,
+        thread_id: str,
+        received_at: float | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+    ):
         items = self._script(message) if callable(self._script) else self._script
         for item in items:
             if isinstance(item, _Wait):

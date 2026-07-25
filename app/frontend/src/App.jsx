@@ -36,6 +36,7 @@ const ModelsPage = lazy(() => import('./pages/ModelsPage'));
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
+const AttachmentsPage = lazy(() => import('./pages/AttachmentsPage'));
 
 function DeferredRoute({ Page, fallback, ...pageProps }) {
   return (
@@ -74,6 +75,7 @@ function App() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
+                    <Route path="/attachments" element={<DeferredRoute Page={AttachmentsPage} fallback="Loading attachments..." />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>

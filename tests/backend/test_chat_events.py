@@ -85,6 +85,58 @@ class TestUserMessageEvents:
         assert all(event.payload["request_id"] == request_id for event in events)
         assert events[1].payload["delta"] == "Hello from agent"
 
+    def test_attachment_only_send_with_real_frontend_payload_shape_accepted(self, client):
+        """Regression: the frontend never sends `input` as a plain string --
+        buildResponsesInput in useChatApi.js always sends a message list and
+        drops any entry with empty content, so an attachment-only send (drop
+        a file, no typed text) posts `input: []`, `stream: true`. A prior
+        fix only handled `input: ""`, so this exact browser payload shape
+        still 400'd with "No input provided".
+        """
+        import app.backend.main as backend_main
+        from app.backend import ui_routes
+
+        original_client = backend_main.client
+        request_id = "attachment-only-request"
+
+        class _MockClient:
+            async def send_message_stream_events(
+                self,
+                message: str,
+                request_id: str | None = None,
+                metadata: dict[str, object] | None = None,
+            ):
+                del message, request_id, metadata
+                yield {"type": "stream_chunk", "content": "Got it.", "is_final": False}
+                yield {"type": "stream_chunk", "content": "", "is_final": True}
+
+        queue = asyncio.Queue()
+        ui_routes._ui_stream_subscribers[queue] = None
+        backend_main.client = _MockClient()
+        try:
+            response = client.post(
+                "/api/ui/responses",
+                json={
+                    "model": "progenitor-v1",
+                    "input": [],
+                    "stream": True,
+                    "metadata": {
+                        "thread_id": "thread-attachment-only",
+                        "attachments": ["att_1"],
+                    },
+                },
+                headers={"X-Request-ID": request_id},
+            )
+        finally:
+            ui_routes._ui_stream_subscribers.pop(queue, None)
+            backend_main.client = original_client
+
+        assert response.status_code == 202
+        assert response.json() == {
+            "request_id": request_id,
+            "event_types": ["chat.response.started"],
+        }
+
     def test_response_request_preserves_nonempty_message_content(self):
         contents = [
             "Line 1\nLine 2\nLine 3",
@@ -123,6 +175,66 @@ class TestStreamingEvents:
         empty_list = ResponseRequest(model="test", input=[], stream=True)
         with pytest.raises(ValueError, match="empty"):
             StreamingResponseRequest.validate_for_streaming(empty_list)
+
+        # Empty string input is allowed when attachments are present --
+        # an attachment-only send (e.g. drag-and-drop with no typed
+        # message), matching how ChatGPT-style clients let a lone
+        # attachment stand in for the message.
+        attachment_only = ResponseRequest(
+            model="test",
+            input="",
+            stream=True,
+            metadata={"attachments": ["att_1"]},
+        )
+        StreamingResponseRequest.validate_for_streaming(attachment_only)
+
+        # An empty `attachments` list must not bypass the empty-input check.
+        empty_attachments = ResponseRequest(
+            model="test", input="", stream=True, metadata={"attachments": []}
+        )
+        with pytest.raises(ValueError, match="empty"):
+            StreamingResponseRequest.validate_for_streaming(empty_attachments)
+
+
+class TestExtractResponseInput:
+    """`_extract_response_input` mirrors StreamingResponseRequest's
+    attachment-only allowance for the non-streaming path."""
+
+    def test_empty_text_raises_without_attachments(self):
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(model="test", input="   ", stream=False)
+        with pytest.raises(ValueError, match="empty"):
+            _extract_response_input(request)
+
+    def test_empty_text_allowed_with_attachments(self):
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(
+            model="test", input="", stream=False, metadata={"attachments": ["att_1"]}
+        )
+        assert _extract_response_input(request) == ""
+
+    def test_empty_message_list_allowed_with_attachments(self):
+        """The frontend never sends a plain string -- buildResponsesInput in
+        useChatApi.js always sends `input` as a message list and filters out
+        any entry with empty content, so an attachment-only send (no typed
+        text) arrives as `input: []`, not `input: ""`. This is the shape
+        that actually reaches the backend from the browser.
+        """
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(
+            model="test", input=[], stream=False, metadata={"attachments": ["att_1"]}
+        )
+        assert _extract_response_input(request) == ""
+
+    def test_empty_message_list_raises_without_attachments(self):
+        from app.backend.main import _extract_response_input
+
+        request = ResponseRequest(model="test", input=[], stream=False)
+        with pytest.raises(ValueError, match="No input provided"):
+            _extract_response_input(request)
 
 
 class TestResponsesAPIEvents:

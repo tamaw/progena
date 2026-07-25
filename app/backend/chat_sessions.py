@@ -25,6 +25,7 @@ from app.progenitor.runtime.messages import (
 )
 from app.progenitor.state.models import redact_secrets
 
+from .attachments import ATTACHMENT_CONTEXT_MARKER
 from .document_store import BackendDocumentStore, CheckpointThreadSnapshot
 
 # History must not replay arbitrary tool artifacts (which may contain raw files,
@@ -132,6 +133,7 @@ class ChatMessage(BaseModel):
     display_model_name: str | None = None
     display_tool_calls: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -479,6 +481,17 @@ def _message_text(value: Any) -> str:
     return str(value)
 
 
+def _strip_attachment_context(text: str) -> str:
+    """Drop the machine-only attachment note appended by
+    ``_resolve_message_attachments`` (see ``ATTACHMENT_CONTEXT_MARKER``'s
+    doc comment) so the persisted/displayed chat text is exactly what the
+    user typed, not the extra pointer note the LLM needed to notice the
+    upload.
+    """
+    marker_index = text.find(ATTACHMENT_CONTEXT_MARKER)
+    return text[:marker_index].rstrip() if marker_index != -1 else text
+
+
 def _thread_id_from_session_id(session_id: str | None) -> str | None:
     if not session_id:
         return None
@@ -683,6 +696,23 @@ def _display_metadata_from_raw(raw: Any) -> dict[str, Any]:
     return extract_display_metadata(raw)
 
 
+def _attachments_from_raw(raw: Any) -> list[dict[str, Any]]:
+    """Extract the ``attachments`` list stamped onto a HumanMessage's kwargs."""
+    additional = (
+        raw.get("additional_kwargs")
+        if isinstance(raw, dict)
+        else getattr(raw, "additional_kwargs", None)
+    )
+    if not isinstance(additional, dict):
+        return []
+    attachments = additional.get("attachments")
+    return (
+        [item for item in attachments if isinstance(item, dict)]
+        if isinstance(attachments, list)
+        else []
+    )
+
+
 def _extract_raw_tool_calls(raw: Any) -> list[dict[str, Any]]:
     """Return tool_calls list from an AIMessage (normalized LangChain format).
 
@@ -732,9 +762,13 @@ def _chat_message_from_raw(
     if role == "tool":
         return None
     if isinstance(raw, dict):
-        content = _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        content = _strip_attachment_context(
+            _message_text(raw.get("content") or raw.get("message") or raw.get("text"))
+        )
     else:
-        content = extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
+        content = _strip_attachment_context(
+            extract_message_text(raw) or _message_text(getattr(raw, "content", ""))
+        )
     if not content and role == "assistant":
         return None
     reasoning_text = extract_reasoning_trace(raw) or ""
@@ -752,6 +786,7 @@ def _chat_message_from_raw(
         display_model_name=_display_metadata_from_raw(raw).get("display_model_name"),
         display_tool_calls=_display_metadata_from_raw(raw).get("display_tool_calls", []),
         tool_calls=tool_calls or [],
+        attachments=_attachments_from_raw(raw),
         raw=_raw_message_payload(raw),
     )
 
