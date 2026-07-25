@@ -65,6 +65,8 @@ import {
   shouldShowNewChatEmptyState,
   shouldDeferInitialRosterSelection,
   shouldDeferRouteSelection,
+  shouldDismissEmptySelection,
+  shouldSkipRoutedMountOpen,
 } from '../components/chat/conversationModel';
 import {
   buildChatSessionItems,
@@ -665,6 +667,12 @@ function ConversationPage() {
       return;
     }
     pendingOpenThreadIdRef.current = threadId;
+    // Every programmatic selection change must register its intent BEFORE the
+    // route reconciler can observe the (still stale) URL. Without this, opening
+    // a chat that the address bar hasn't caught up with yet makes the
+    // reconciler treat the old URL as a user navigation and reopen it, which
+    // ping-pongs with useEntityUrlSync into an infinite redirect loop.
+    selectionIntentRef.current = { threadId };
     const requestId = createUuid();
     beginForegroundStream();
     activeStreamIdRef.current = null;
@@ -1227,6 +1235,7 @@ function ConversationPage() {
 
   const clearBackendSelection = useCallback(({ clearRoute = false } = {}) => {
     setSelectedBackendChatId(null);
+    selectionIntentRef.current = null;
     dispatch(clearActiveChatSession());
     lastAppliedBackendChatRequestIdRef.current = null;
     if (clearRoute) {
@@ -1256,7 +1265,13 @@ function ConversationPage() {
   }, [activeStreamIdRef, clearBackendSelection, config.storage.chatHistory, setIsGenerating, setLiveAssistantTurn]);
 
   useEffect(() => {
-    if (!selectedBackendChatId || activeBackendChatState.loading || activeBackendChat || activeBackendChatState.error) {
+    if (!shouldDismissEmptySelection({
+      hasAutoSelectedOnMount: hasAutoSelectedOnMountRef.current,
+      selectedBackendChatId,
+      activeLoading: activeBackendChatState.loading,
+      activeDetail: activeBackendChat,
+      activeError: activeBackendChatState.error,
+    })) {
       return;
     }
     dismissCurrentSession({ clearRoute: true });
@@ -1290,7 +1305,7 @@ function ConversationPage() {
       });
       return;
     }
-    if (selectedBackendChatId) {
+    if (selectedBackendChatId && !pendingOpenThreadIdRef.current && !selectionIntentRef.current) {
       dismissCurrentSession();
     }
   }, [backendChatSessionsState.loaded, dismissCurrentSession, openBackendChat, selectedBackendChatId, urlThreadId]);
@@ -1594,10 +1609,19 @@ function ConversationPage() {
     if (!backendChatSessionsState.loaded) return;
     if (urlThreadId) {
       hasAutoSelectedOnMountRef.current = true;
-      if (
-        selectedBackendChatIdRef.current === urlThreadId
-        || pendingOpenThreadIdRef.current === urlThreadId
-      ) {
+      if (shouldSkipRoutedMountOpen({
+        pendingThreadId: pendingOpenThreadIdRef.current,
+        selectedBackendChatId: selectedBackendChatIdRef.current,
+        urlThreadId,
+        activeDetailThreadId: activeBackendChat?.thread_id,
+        activeLoading: activeBackendChatState.loading,
+        activeLoadingThreadId: activeBackendChatState.threadId,
+      })) {
+        // A request for this thread is already in flight or its detail is
+        // already loaded (SPA revisit). A bare selectedBackendChatId match is
+        // NOT enough: on a fresh page load the selection is initialized from
+        // the URL with no request behind it, and skipping the open here left
+        // the page permanently without a detail request.
         return;
       }
       openBackendChat(urlThreadId).catch(() => {
@@ -1634,6 +1658,9 @@ function ConversationPage() {
     visibleSessionGroups,
     selectSessionItem,
     openBackendChat,
+    activeBackendChat,
+    activeBackendChatState.loading,
+    activeBackendChatState.threadId,
   ]);
 
   // Keep the URL in sync with whichever session is actually selected (either
