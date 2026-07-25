@@ -16,6 +16,8 @@ import {
   getActiveRouteThreadId,
   shouldDeferInitialRosterSelection,
   shouldDeferRouteSelection,
+  shouldDismissEmptySelection,
+  shouldSkipRoutedMountOpen,
   areChatTranscriptsEquivalent,
   shouldRetireLiveOwnerAfterCanonicalReconciliation,
   mergeCanonicalMessages,
@@ -63,6 +65,74 @@ describe('chat selection race guards', () => {
       urlThreadId: 'chat-a',
       selectedBackendChatId: null,
     })).toBe(false);
+  });
+
+  it('skips the routed mount open only when a request is in flight or the detail is already present', () => {
+    // Request already in flight for the routed thread.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: 'chat-a',
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(true);
+    // SPA revisit: detail for the routed thread is already loaded.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: 'chat-a',
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(true);
+    // Detail request loading for the routed thread.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: true,
+      activeLoadingThreadId: 'chat-a',
+    })).toBe(true);
+    // Regression: fresh page load — selection was initialized from the URL
+    // but nothing is loading and no detail exists. The open MUST happen.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: null,
+      activeLoading: false,
+      activeLoadingThreadId: null,
+    })).toBe(false);
+    // Stale detail from a different thread does not count.
+    expect(shouldSkipRoutedMountOpen({
+      pendingThreadId: null,
+      selectedBackendChatId: 'chat-a',
+      urlThreadId: 'chat-a',
+      activeDetailThreadId: 'chat-b',
+      activeLoading: true,
+      activeLoadingThreadId: 'chat-b',
+    })).toBe(false);
+  });
+
+  it('dismisses an empty selection only after mount selection has run', () => {
+    const emptySelection = {
+      selectedBackendChatId: 'chat-a',
+      activeLoading: false,
+      activeDetail: null,
+      activeError: null,
+    };
+    // Regression: URL-initialized selection before the mount effect has issued
+    // any request must not be dismissed (it bounced /chat/<id> loads to /chat).
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: false })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true })).toBe(true);
+    // Loading, loaded, and errored selections are never dismissed.
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeLoading: true })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeDetail: { thread_id: 'chat-a' } })).toBe(false);
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, activeError: 'boom' })).toBe(false);
+    // No selection at all.
+    expect(shouldDismissEmptySelection({ ...emptySelection, hasAutoSelectedOnMount: true, selectedBackendChatId: null })).toBe(false);
   });
 });
 

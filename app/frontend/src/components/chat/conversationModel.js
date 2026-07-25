@@ -76,6 +76,50 @@ export function shouldDeferRouteSelection({
   );
 }
 
+// On mount, a routed URL must always end up with a real detail request behind
+// it. Skipping the open is only safe when a request for that thread is already
+// in flight or its detail is already loaded (SPA revisit). A bare
+// selectedBackendChatId match is NOT enough: a fresh page load initializes the
+// selection from the URL with no request behind it, and skipping the open left
+// the page without a detail request — the empty-selection dismissal then
+// bounced every direct /chat/<id> load back to /chat.
+export function shouldSkipRoutedMountOpen({
+  pendingThreadId,
+  selectedBackendChatId,
+  urlThreadId,
+  activeDetailThreadId,
+  activeLoading,
+  activeLoadingThreadId,
+}) {
+  return Boolean(
+    pendingThreadId === urlThreadId
+    || (selectedBackendChatId === urlThreadId
+      && (activeDetailThreadId === urlThreadId
+        || (activeLoading && activeLoadingThreadId === urlThreadId))),
+  );
+}
+
+// A selection with no detail, no error, and no request in flight refers to an
+// empty or deleted chat and should be dismissed — but only after the mount
+// effect has issued the initial URL/roster selection. Before that point a
+// URL-initialized selection legitimately has no request yet, and dismissing
+// it would discard the routed chat before its detail request even starts.
+export function shouldDismissEmptySelection({
+  hasAutoSelectedOnMount,
+  selectedBackendChatId,
+  activeLoading,
+  activeDetail,
+  activeError,
+}) {
+  return Boolean(
+    hasAutoSelectedOnMount
+    && selectedBackendChatId
+    && !activeLoading
+    && !activeDetail
+    && !activeError,
+  );
+}
+
 function eventRenderSignature(event) {
   const metadata = event?.metadata && typeof event.metadata === 'object' ? event.metadata : {};
   return {
