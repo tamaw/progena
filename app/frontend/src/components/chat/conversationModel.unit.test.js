@@ -723,8 +723,9 @@ describe('getTimeBucket', () => {
   it('classifies relative to the start of today', () => {
     expect(getTimeBucket(now, now)).toBe('today');
     expect(getTimeBucket(startOfToday - 1, now)).toBe('yesterday');
-    expect(getTimeBucket(startOfToday - 3 * day, now)).toBe('last-week');
-    expect(getTimeBucket(startOfToday - 10 * day, now)).toBe('earlier');
+    expect(getTimeBucket(startOfToday - 3 * day, now)).toBe('this-week');
+    expect(getTimeBucket(startOfToday - 10 * day, now)).toBe('last-week');
+    expect(getTimeBucket(startOfToday - 20 * day, now)).toBe('later');
   });
 
   it('treats missing timestamps as today', () => {
@@ -735,11 +736,12 @@ describe('getTimeBucket', () => {
 describe('groupSessionItems', () => {
   it('buckets items and keeps SIDEBAR order, omitting empty groups', () => {
     const groups = groupSessionItems([
-      { id: 'p', pinned: true, bucket: 'earlier' },
+      { id: 'p', pinned: true, bucket: 'later' },
       { id: 't', pinned: false, bucket: 'today' },
-      { id: 'e', pinned: false, bucket: 'earlier' },
+      { id: 'w', pinned: false, bucket: 'this-week' },
+      { id: 'e', pinned: false, bucket: 'later' },
     ]);
-    expect(groups.map((g) => g.key)).toEqual(['pinned', 'today', 'earlier']);
+    expect(groups.map((g) => g.key)).toEqual(['pinned', 'today', 'this-week', 'later']);
     expect(groups[0].items.map((i) => i.id)).toEqual(['p']);
   });
 });
