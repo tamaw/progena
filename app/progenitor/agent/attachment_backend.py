@@ -30,6 +30,7 @@ from deepagents.backends.protocol import (
 from deepagents.backends.utils import create_file_data, slice_read_response
 
 from .. import attachments_db
+from ..runtime.thread_context import get_current_thread_id
 from .state_backend import _AsyncOnlyFileBackendMixin
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,10 @@ class AttachmentDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         name = self._name(file_path)
-        row = await attachments_db.fetch_by_name(self._database_url, name)
+        thread_id = get_current_thread_id()
+        if thread_id is None:
+            return ReadResult(error="No active conversation thread; cannot resolve attachments.")
+        row = await attachments_db.fetch_by_name(self._database_url, name, thread_id=thread_id)
         if row is None:
             return ReadResult(error=f"File '{file_path}' not found")
         content = row.get("text_content")
@@ -85,7 +89,10 @@ class AttachmentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         return WriteResult(error=_UPLOAD_ONLY_ERROR.format(verb="deleted"))
 
     async def als(self, path: str) -> LsResult:
-        filenames = await attachments_db.list_filenames(self._database_url)
+        thread_id = get_current_thread_id()
+        if thread_id is None:
+            return LsResult(entries=[])
+        filenames = await attachments_db.list_filenames(self._database_url, thread_id=thread_id)
         return LsResult(entries=[FileInfo(path=f"/{name}", is_dir=False) for name in filenames])
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
