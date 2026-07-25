@@ -15,7 +15,9 @@ attachment (PDF, DOCX, ...) to markdown on demand, use the
 
 from __future__ import annotations
 
+import base64
 import logging
+from pathlib import Path
 
 from deepagents.backends.protocol import (
     EditResult,
@@ -28,6 +30,20 @@ from deepagents.backends.protocol import (
     WriteResult,
 )
 from deepagents.backends.utils import create_file_data, slice_read_response
+
+try:
+    # deepagents' own extension classification: any of these are ALWAYS
+    # wrapped by the built-in read_file tool as a multimodal content block
+    # (see deepagents.middleware.filesystem's read_file), regardless of
+    # what `encoding` a backend declares -- the check is purely on the file
+    # extension. So for these extensions we must hand back real raw bytes,
+    # base64-encoded, never our best-effort extracted text: handing back
+    # plain text here (as this module used to, unconditionally) gets
+    # mislabeled "base64" downstream and breaks every read of e.g. a .pdf
+    # with "invalid base64-encoded value" once it reaches the LLM API.
+    from deepagents.backends.utils import _EXTENSION_TO_FILE_TYPE as _MULTIMODAL_EXTENSIONS
+except ImportError:  # pragma: no cover - defensive against a deepagents version bump
+    _MULTIMODAL_EXTENSIONS = {}
 
 from .. import attachments_db
 from ..runtime.thread_context import get_current_thread_id
@@ -62,6 +78,16 @@ class AttachmentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         row = await attachments_db.fetch_by_name(self._database_url, name, thread_id=thread_id)
         if row is None:
             return ReadResult(error=f"File '{file_path}' not found")
+
+        if Path(name).suffix.lower() in _MULTIMODAL_EXTENSIONS:
+            # deepagents' read_file always treats this extension as binary
+            # multimodal content (image/audio/video/PDF-like "file"); offset
+            # and limit don't apply -- see the module-level comment on
+            # _MULTIMODAL_EXTENSIONS.
+            raw = bytes(row["data"])
+            encoded = base64.b64encode(raw).decode("ascii")
+            return ReadResult(file_data=FileData(content=encoded, encoding="base64"))
+
         content = row.get("text_content")
         if not content:
             reason = row.get("extraction_error") or (
