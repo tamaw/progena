@@ -3,6 +3,7 @@ import {
   compareSessionItems,
   normalizeBackendChatMessage,
   buildChatSessionItems,
+  isHiddenEmptyDraft,
   findAdjacentSessionItem,
   shouldMaterializeBeforeSwitching,
   shouldLoadSelectedBackendChat,
@@ -614,6 +615,63 @@ describe('buildChatSessionItems', () => {
     expect(items.some((i) => i.source === 'local' && i.id === 'archived-1')).toBe(true);
     // The transient current-draft card is still correctly hidden.
     expect(items.some((i) => i.source === 'local' && i.id === 'sess1')).toBe(false);
+  });
+
+  // An empty backend draft ("New chat", zero messages) is infrastructure,
+  // not a conversation — it must not render a sidebar card until it has
+  // content (or the user has deliberately interacted with it).
+  it('hides empty backend drafts until they have content', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      selectedBackendChatId: null,
+      backendChatSessions: [
+        { thread_id: 'draft-1', title: 'New chat', message_count: 0 },
+        { thread_id: 'real-1', title: 'Real chat', message_count: 3 },
+      ],
+    });
+    expect(items.map((i) => i.id)).toEqual(['real-1']);
+  });
+
+  it('shows the selected draft card as soon as the local transcript has messages', () => {
+    const items = buildChatSessionItems({
+      ...base,
+      messages: [{ role: 'user', content: 'first message', timestamp: 1 }],
+      selectedBackendChatId: 'draft-1',
+      backendChatSessions: [
+        { thread_id: 'draft-1', title: 'New chat', message_count: 0 },
+      ],
+    });
+    expect(items.map((i) => i.id)).toEqual(['draft-1']);
+  });
+});
+
+describe('isHiddenEmptyDraft', () => {
+  const emptyDraft = { thread_id: 'd1', title: 'New chat', message_count: 0 };
+  const ctx = {
+    selectedBackendChatId: null,
+    localMessageCount: 0,
+    unreadChatIds: new Set(),
+    backgroundGeneratingChatIds: new Set(),
+    backgroundErrorChatIds: new Set(),
+  };
+
+  it('hides a plain empty draft', () => {
+    expect(isHiddenEmptyDraft(emptyDraft, ctx)).toBe(true);
+  });
+
+  it('shows drafts the user made theirs (renamed or pinned)', () => {
+    expect(isHiddenEmptyDraft({ ...emptyDraft, title: 'My plan' }, ctx)).toBe(false);
+    expect(isHiddenEmptyDraft({ ...emptyDraft, pinned: true }, ctx)).toBe(false);
+  });
+
+  it('shows drafts with runtime activity flags', () => {
+    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, unreadChatIds: new Set(['d1']) })).toBe(false);
+    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, backgroundGeneratingChatIds: new Set(['d1']) })).toBe(false);
+    expect(isHiddenEmptyDraft(emptyDraft, { ...ctx, backgroundErrorChatIds: new Set(['d1']) })).toBe(false);
+  });
+
+  it('never hides sessions with persisted messages', () => {
+    expect(isHiddenEmptyDraft({ ...emptyDraft, message_count: 1 }, ctx)).toBe(false);
   });
 });
 

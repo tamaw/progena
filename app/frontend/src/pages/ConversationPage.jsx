@@ -838,6 +838,14 @@ function ConversationPage() {
     let cancelled = false;
 
     const ensureSession = async () => {
+      // A backend chat is already selected — e.g. deleting a chat routed
+      // through bare /chat while its neighbour was being opened. Creating a
+      // draft row here would add an unused "New chat" session nobody asked
+      // for. Leave any quick-chat handoff in storage for a real bare visit.
+      if (selectedBackendChatIdRef.current) {
+        setDraftBootstrapSettled(true);
+        return;
+      }
       const quickChatHandoff = initialQuickChatHandoffRef.current;
       if (quickChatHandoff) {
         localStorage.removeItem(config.storage.quickChatHandoff);
