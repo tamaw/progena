@@ -953,7 +953,7 @@ export default function TasksPage({ context = null }) {
         {loading ? <PaneEmptyState>Loading tasks...</PaneEmptyState> : null}
         {error ? <div className="task-alert">{error}</div> : null}
         {!loading && !visibleCards.length ? <PaneEmptyState>No matching tasks.</PaneEmptyState> : null}
-        {!loading && groupedColumns.length ? (
+        {!loading && groupedColumns.some((column) => column.cards.length) ? (
           <PaneListVirtualized
             groups={groupedColumns
               .filter((column) => column.cards.length)

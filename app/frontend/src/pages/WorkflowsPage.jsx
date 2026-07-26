@@ -927,6 +927,37 @@ function WorkflowRunsList({ runs, loading }) {
   );
 }
 
+function WorkflowDeleteModal({ workflowTitle, onClose, onConfirm, busy }) {
+  return (
+    <div className="sidebar-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="sidebar-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="workflow-delete-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="sidebar-modal__head">
+          <div>
+            <span className="sidebar-modal__eyebrow">Delete workflow</span>
+            <h3 id="workflow-delete-title">Delete “{workflowTitle}”?</h3>
+          </div>
+          <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
+        </header>
+        <p className="sidebar-modal__field">
+          This workflow and its configuration will be permanently deleted.
+        </p>
+        <footer className="sidebar-modal__foot">
+          <button type="button" className="task-btn task-btn--secondary" onClick={onClose} disabled={busy}>Cancel</button>
+          <button type="button" className="workflow-delete-modal__confirm" onClick={onConfirm} disabled={busy} autoFocus>
+            {busy ? 'Deleting…' : 'Delete workflow'}
+          </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
 function WorkflowsInner() {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
@@ -952,6 +983,8 @@ function WorkflowsInner() {
   const [jsonError, setJsonError] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState('');
+  const [localDraftDirty, setLocalDraftDirty] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const selectedLatestRun = useSelector((state) => {
@@ -963,6 +996,7 @@ function WorkflowsInner() {
   const viewportRef = useRef(DEFAULT_VIEWPORT);
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
+  const hydratingGraphRef = useRef(false);
 
   const loadWorkflows = useCallback(async () => {
     try {
@@ -1053,7 +1087,7 @@ function WorkflowsInner() {
     () => (selectedDetail?.workflow ? JSON.stringify(selectedDetail.workflow) : ''),
     [selectedDetail],
   );
-  const hasUnsavedChanges = Boolean(selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
+  const hasUnsavedChanges = Boolean(localDraftDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
 
   const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
     if (!workflow) {
@@ -1069,6 +1103,8 @@ function WorkflowsInner() {
       return;
     }
     syncedPathRef.current = path;
+    hydratingGraphRef.current = true;
+    setLocalDraftDirty(false);
     syncedHashRef.current = nextHash;
     const cloned = cloneValue(workflow);
     const flow = workflowToFlow(cloned, {
@@ -1078,6 +1114,7 @@ function WorkflowsInner() {
             node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
           ));
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1089,6 +1126,7 @@ function WorkflowsInner() {
           nodesRef.current = nextNodes;
           edgesRef.current = nextEdges;
           setGraphEdges(nextEdges);
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
           return nextNodes;
         });
@@ -1111,6 +1149,7 @@ function WorkflowsInner() {
             };
           });
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1129,6 +1168,7 @@ function WorkflowsInner() {
             };
           });
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1145,8 +1185,12 @@ function WorkflowsInner() {
     requestAnimationFrame(() => {
       if (flow.nodes.length) {
         reactFlow.setViewport(flow.viewport || DEFAULT_VIEWPORT);
-        reactFlow.fitView({ padding: 0.18, duration: 200 });
+        // Preserve the workflow's stored viewport without emitting synthetic
+        // node-position changes that look like unsaved edits.
       }
+      setTimeout(() => {
+        hydratingGraphRef.current = false;
+      }, 250);
     });
   }, [hasUnsavedChanges, reactFlow]);
 
@@ -1186,21 +1230,30 @@ function WorkflowsInner() {
         return current;
       }
       const next = typeof updater === 'function' ? updater(current) : updater;
+    setLocalDraftDirty(true);
       return next;
     });
   }, []);
 
-  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current) => {
+  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
     nodesRef.current = nextNodes;
     edgesRef.current = nextEdges;
     viewportRef.current = nextViewport;
+    if (markDirty) {
+      setLocalDraftDirty(true);
+    }
     setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
   }, []);
 
   const onNodesChange = useCallback((changes) => {
     setGraphNodes((currentNodes) => {
       const nextNodes = applyNodeChanges(changes, currentNodes);
-      syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+      if (!hydratingGraphRef.current) {
+        const marksDirty = changes.some((change) => (
+          change.type === 'add' || change.type === 'remove' || change.dragging === true
+        ));
+        syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
+      }
       return nextNodes;
     });
   }, [syncWorkflowFromGraph]);
@@ -1208,7 +1261,10 @@ function WorkflowsInner() {
   const onEdgesChange = useCallback((changes) => {
     setGraphEdges((currentEdges) => {
       const nextEdges = applyEdgeChanges(changes, currentEdges);
-      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      if (!hydratingGraphRef.current) {
+        const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
+        syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
+      }
       return nextEdges;
     });
   }, [syncWorkflowFromGraph]);
@@ -1517,17 +1573,26 @@ function WorkflowsInner() {
     }
   };
 
-  const handleDeleteWorkflow = async () => {
+  const handleDeleteWorkflow = () => {
+    if (selectedDetail?.workflow?.id) {
+      setDeleteConfirmationOpen(true);
+    }
+  };
+
+  const confirmDeleteWorkflow = async () => {
     const workflowId = selectedDetail?.workflow?.id;
     if (!workflowId) {
-      return;
-    }
-    if (!window.confirm(`Delete workflow "${selectedDetail.workflow.title}"?`)) {
+      setDeleteConfirmationOpen(false);
       return;
     }
     setBusyAction('delete');
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
+      setDeleteConfirmationOpen(false);
+      setSelectedPath('');
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('path');
+      setSearchParams(nextParams, { replace: true });
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {
@@ -1580,14 +1645,22 @@ function WorkflowsInner() {
           </>
         )}
       </PaneSection>
+      {deleteConfirmationOpen && selectedDetail?.workflow ? (
+        <WorkflowDeleteModal
+          workflowTitle={selectedDetail.workflow.title}
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDeleteWorkflow}
+          busy={busyAction === 'delete'}
+        />
+      ) : null}
 
       <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
         {!selectedPath && !workflowsState.loading ? (
-          <PaneEmptyState>Select a workflow to edit or create a new one.</PaneEmptyState>
+          <PaneEmptyState detail>Select a workflow to edit or create a new one.</PaneEmptyState>
         ) : null}
 
         {selectedPath && !selectedDetail ? (
-          <PaneEmptyState>Loading workflow detail...</PaneEmptyState>
+          <PaneEmptyState detail>Loading workflow detail...</PaneEmptyState>
         ) : null}
 
         {selectedDetail?.workflow && draftWorkflow ? (

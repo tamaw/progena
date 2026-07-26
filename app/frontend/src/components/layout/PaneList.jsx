@@ -125,7 +125,7 @@ export function PaneList({ label, className = '', children }) {
 export function PaneEmptyState({ children, detail = false, className = '', ...props }) {
   return (
     <div
-      className={`pane-empty-state ${detail ? 'pane-empty-state--detail' : ''} ${className}`.trim()}
+      className={`pane-empty-state pane-empty-state--centered ${detail ? 'pane-empty-state--detail' : ''} ${className}`.trim()}
       {...props}
     >
       {children}
