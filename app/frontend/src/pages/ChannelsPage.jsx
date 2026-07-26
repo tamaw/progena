@@ -1,4 +1,5 @@
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListToolbar,
@@ -224,7 +225,7 @@ export default function ChannelsPage() {
             )}
           />
         ) : (
-          <div className="agents-empty-state">No channels match this view.</div>
+          <PaneEmptyState>No channels match this view.</PaneEmptyState>
         )}
       </PaneList>
 
@@ -290,14 +291,14 @@ export default function ChannelsPage() {
                   ))}
                 </div>
               ) : (
-                <div className="agents-empty-state">No agents are routed to this channel yet.</div>
+                <PaneEmptyState>No agents are routed to this channel yet.</PaneEmptyState>
               )}
             </section>
           </div>
         </DetailPane>
       ) : (
         <DetailPane className="detail-pane--dense" label="Channel">
-          <div className="agents-empty-state agents-empty-state--detail">Select a channel to view its details.</div>
+          <PaneEmptyState detail>Select a channel to view its details.</PaneEmptyState>
         </DetailPane>
       )}
     </PageShell>

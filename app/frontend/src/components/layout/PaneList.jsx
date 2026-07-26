@@ -122,6 +122,17 @@ export function PaneList({ label, className = '', children }) {
   );
 }
 
+export function PaneEmptyState({ children, detail = false, className = '', ...props }) {
+  return (
+    <div
+      className={`pane-empty-state ${detail ? 'pane-empty-state--detail' : ''} ${className}`.trim()}
+      {...props}
+    >
+      {children}
+    </div>
+  );
+}
+
 // `filters` items may be plain strings (value === label) or `{ value, label }`
 // objects when the stored filter value differs from its display text. The
 // optional `renderFilter(item)` lets a page decorate a tab (e.g. an unread dot).

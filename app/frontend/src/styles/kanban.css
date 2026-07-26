@@ -947,13 +947,6 @@
   color: var(--color-text-muted);
 }
 
-.task-alert,
-.task-empty {
-  margin: 8px 0;
-  padding: 10px 12px;
-  border-radius: 8px;
-  font-size: 12px;
-}
 
 .task-alert {
   color: var(--color-error);
@@ -961,11 +954,6 @@
   border: 1px solid color-mix(in oklab, var(--color-error) 35%, var(--color-border));
 }
 
-.task-empty {
-  color: var(--color-text-muted);
-  background: var(--color-bg-secondary);
-  border: 1px dashed var(--color-border-light);
-}
 
 .taskid {
   color: var(--color-text-secondary);
@@ -1024,12 +1012,6 @@
   flex: 1 1 100%;
 }
 
-.task-detail__empty {
-  display: grid;
-  flex: 1;
-  place-items: center;
-  color: var(--color-text-muted);
-}
 
 .task-sec {
   margin-top: 18px;

@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListFooter,
@@ -369,11 +370,11 @@ export default function ToolsPage() {
         </PaneListToolbar>
 
         {servers.length === 0 ? (
-          <div className="tools-empty-state">
+          <PaneEmptyState>
             No MCP servers configured. Use “+ New” to ask Progenitor to connect one.
-          </div>
+          </PaneEmptyState>
         ) : visibleServers.length === 0 ? (
-          <div className="tools-empty-state">No MCP servers match this view.</div>
+          <PaneEmptyState>No MCP servers match this view.</PaneEmptyState>
         ) : (
           <PaneListVirtualized
             groups={GROUP_ORDER
@@ -415,9 +416,9 @@ export default function ToolsPage() {
       <DetailPane className="detail-pane--dense tools-detail" label="MCP server detail">
         {!selectedServer ? (
           <div className="detail-pane__body">
-            <div className="tools-empty-state">
+            <PaneEmptyState>
               Select a server, or use “+ New” to ask Progenitor to connect one.
-            </div>
+            </PaneEmptyState>
           </div>
         ) : (
           <>
@@ -454,7 +455,7 @@ export default function ToolsPage() {
             />
 
             <div className="detail-pane__body">
-              {error ? <div className="tools-empty-state">{error}</div> : null}
+              {error ? <PaneEmptyState>{error}</PaneEmptyState> : null}
 
               <section className="tools-metrics" aria-label="MCP server metrics">
                 <MetricCard label="Status" value={statusLabel(selectedStatus)} detail={selectedServer.enabled === false ? 'disabled' : 'enabled'} />
@@ -545,13 +546,11 @@ export default function ToolsPage() {
                       </article>
                     );
                   }) : (
-                    <div className="tools-empty-state">
-                      {isDetailLoading
-                        ? 'Loading tools…'
-                        : (selectedServer.enabled === false
-                          ? 'Enable the server to discover its tools.'
-                          : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.')}
-                    </div>
+                    <PaneEmptyState>{isDetailLoading
+                      ? 'Loading tools…'
+                      : (selectedServer.enabled === false
+                        ? 'Enable the server to discover its tools.'
+                        : 'No tools discovered yet. Progenitor lists them on its next MCP refresh.')}</PaneEmptyState>
                   )}
                 </div>
               </section>
@@ -569,9 +568,7 @@ export default function ToolsPage() {
                       <span className="tools-tool-row__calls">{String(entry.level || entry.source || 'info').toLowerCase()}</span>
                     </article>
                   )) : (
-                    <div className="tools-empty-state">
-                      {isDetailLoading ? 'Loading activity…' : 'No recent activity for this server.'}
-                    </div>
+                    <PaneEmptyState>{isDetailLoading ? 'Loading activity…' : 'No recent activity for this server.'}</PaneEmptyState>
                   )}
                 </div>
               </section>

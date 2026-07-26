@@ -130,7 +130,6 @@
 .prompts-tree-label,
 .prompts-tree-file-path,
 .prompts-editor-path,
-.prompts-empty-state,
 .prompts-editor-footer {
   font-size: 10.5px;
   color: var(--color-text-muted);
@@ -318,9 +317,6 @@
   letter-spacing: 0;
 }
 
-.prompts-empty-state {
-  padding: 10px 12px;
-}
 
 .prompts-editor-footer {
   display: flex;
