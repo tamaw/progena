@@ -116,7 +116,7 @@ different architecture: one Postgres document per card
 (`kanban_card:<id>`) plus a structure document (`board.json` with columns and
 `card_order`), surfaced as per-card `.md` virtual files with YAML frontmatter
 and Markdown bodies. Workflow definitions have their own
-`WorkflowDirectoryBackend` and are exposed as `/config/workflows/<id>.json`.
+`WorkflowDirectoryBackend` and are exposed as `/workflows/<id>.json`.
 
 JSON Schemas under `data/schemas/` validate entry shapes and workflow
 definitions. The state backend also performs semantic validation such as cron

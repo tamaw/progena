@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Definition",
-  "description": "One backend-native workflow definition stored as the 'workflow:<id>' document and exposed as a virtual file at /state/workflows/<id>.json. Edit one workflow file at a time; execution state lives in separate workflow_run:* documents.",
+  "description": "One backend-native workflow definition stored as the 'workflow:<id>' document and exposed as a virtual file at /workflows/<id>.json. Edit one workflow file at a time; execution state lives in separate workflow_run:* documents.",
   "type": "object",
   "additionalProperties": false,
   "required": [

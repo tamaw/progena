@@ -499,7 +499,7 @@ class StateSnapshot:
     inbox_fingerprint: str = ""
     # Content fingerprint of all workflow definition, run, and queue documents.
     # Like kanban/inbox, no other snapshot field changes when the agent writes
-    # /config/workflows/<id>.json (or the executor updates a run), so this is
+    # /workflows/<id>.json (or the executor updates a run), so this is
     # the sole signal _state_changed() has for a workflow-only write.
     workflow_fingerprint: str = ""
 

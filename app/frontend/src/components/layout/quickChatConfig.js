@@ -215,7 +215,7 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
       'specific kanban columns for a card move (e.g. "from Backlog to Plan"), use',
       'trigger.event_type "kanban.card.moved" plus trigger.from_column/to_column',
       '(backlog | plan | build | validate | done) to filter to that transition.',
-      'Write it to /state/workflows/<id>.json. Saving the file persists it and the',
+      'Write it to /workflows/<id>.json. Saving the file persists it and the',
       'Workflows page updates live.',
       'Only ask a follow-up question if the trigger event or the desired action is',
       'unclear; otherwise build it.',

@@ -149,7 +149,7 @@ function resolveNodeSizes(kind, storedSize) {
 }
 
 function workflowPath(workflowId) {
-  return workflowId ? `/state/workflows/${workflowId}.json` : '';
+  return workflowId ? `/workflows/${workflowId}.json` : '';
 }
 
 // The `.json` suffix on workflowPath() is the backing virtual-file extension

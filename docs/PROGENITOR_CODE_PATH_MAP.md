@@ -403,7 +403,7 @@ Runtime:
 DeepAgent virtual filesystem:
   -> /config/*.json reads/writes StateManager documents
   -> /config/tasks/* reads/writes kanban documents
-  -> /config/workflows/*.json reads/writes workflow documents
+  -> /workflows/*.json reads/writes workflow documents
 ```
 
 State documents are Postgres records, not local JSON files. Conversation

@@ -1,11 +1,11 @@
 ---
 name: managing-workflows
-description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /config/workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to kanban events and runs prompt, user-message, or code nodes through the backend workflow executor.
+description: Create, inspect, update, pause/resume, wire, or delete backend-native workflow definitions by editing one file under /workflows/ at a time. Use when a user asks to create or modify a workflow that reacts to kanban events and runs prompt, user-message, or code nodes through the backend workflow executor.
 allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
 ---
 
 Workflow definitions live as one JSON file per workflow:
-- `/config/workflows/<workflow-id>.json`
+- `/workflows/<workflow-id>.json`
 
 Schemas are mounted read-only under `/schemas/`:
 - `/schemas/definition.workflow.schema.v1.json` — the whole document; self-contained (embeds the trigger shape and all four node-kind shapes via `oneOf`), so it is the only schema `structured_output` needs to build or rewrite a complete workflow in one call.
@@ -26,15 +26,15 @@ Core rules:
 6. Use `structured_output` against a schema (the full definition, or one `node_*`/`trigger` schema for a focused edit) whenever creating or reshaping nodes/edges — don't hand-assemble JSON from memory.
 
 Recommended flow for a new workflow:
-1. `ls /config/workflows/`
+1. `ls /workflows/`
 2. `read_file /schemas/definition.workflow.schema.v1.json`
 3. Generate ids for the workflow and its nodes.
 4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, instruction describing the whole workflow (trigger, every node, and the edges connecting them) — this produces the complete, schema-valid definition in a single shot.
-5. `write_file /config/workflows/<workflow-id>.json`
+5. `write_file /workflows/<workflow-id>.json`
 
 Recommended flow for editing an existing workflow:
-1. `ls /config/workflows/`
-2. `read_file /config/workflows/<workflow-id>.json`
+1. `ls /workflows/`
+2. `read_file /workflows/<workflow-id>.json`
 3. If only one field changes, update it with `edit_file` directly.
 4. If one node's shape changes (e.g. rewriting a prompt node into a user node), `read_file` that node kind's `node_*.workflow.schema.v1.json`, run `structured_output` scoped to just that node object, then `edit_file` to replace `graph.nodes.<id>` in place — smaller and safer than regenerating the whole document.
 5. If the trigger, several nodes, or the edge wiring all change together, `read_file /schemas/definition.workflow.schema.v1.json` and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
