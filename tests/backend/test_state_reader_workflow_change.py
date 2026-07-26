@@ -1,7 +1,7 @@
 """Workflow change detection in StateReader (the NOTIFY -> SSE live-update path).
 
 A write to a ``workflow:<id>`` document (e.g. the agent writing
-/state/workflows/<id>.json) fires the Postgres ``store_changed`` NOTIFY. Like
+/workflows/<id>.json) fires the Postgres ``store_changed`` NOTIFY. Like
 kanban/inbox, no other snapshot field changes on a workflow-only write, so
 ``workflow_fingerprint`` is the sole signal ``_state_changed`` has for it.
 """

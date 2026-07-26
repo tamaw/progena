@@ -8,7 +8,7 @@ import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } fro
 import { withQuery } from '../http';
 
 function workflowPathForId(workflowId) {
-  return workflowId ? `/state/workflows/${workflowId}.json` : '';
+  return workflowId ? `/workflows/${workflowId}.json` : '';
 }
 
 export const initialState = {

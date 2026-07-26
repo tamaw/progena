@@ -470,7 +470,7 @@ describe('applyUiEvent reducer', () => {
     s = reducer(s, applyUiEvent({
       type: 'workflow.updated',
       payload: {
-        path: '/state/workflows/wf_1.json',
+        path: '/workflows/wf_1.json',
         workflow: {
           id: 'wf_1',
           title: 'Card created',
@@ -492,7 +492,7 @@ describe('applyUiEvent reducer', () => {
         },
       },
     }));
-    expect(selectWorkflowDetailByPath({ uiData: s }, '/state/workflows/wf_1.json')?.workflow?.id).toBe('wf_1');
+    expect(selectWorkflowDetailByPath({ uiData: s }, '/workflows/wf_1.json')?.workflow?.id).toBe('wf_1');
 
     s = reducer(s, applyUiEvent({
       type: 'workflow.run.completed',
@@ -793,7 +793,7 @@ describe('nav activity tracking (unseen-page dots)', () => {
     s = reducer(s, applyUiEvent({
       type: 'workflow.updated',
       payload: {
-        path: '/state/workflows/wf_1.json',
+        path: '/workflows/wf_1.json',
         workflow: {
           id: 'wf_1',
           title: 'Workflow',

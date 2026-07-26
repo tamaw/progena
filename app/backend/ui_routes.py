@@ -2099,7 +2099,7 @@ def _build_schedule_entry(
 
 def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowContentResponse:
     return WorkflowContentResponse(
-        path=f"/config/workflows/{definition.id}.json",
+        path=f"/workflows/{definition.id}.json",
         workflow=definition,
     )
 
