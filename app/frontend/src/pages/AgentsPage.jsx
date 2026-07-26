@@ -13,6 +13,7 @@ import {
   updateAgentGraph,
 } from '../store/uiDataSlice';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListFooter,
@@ -579,9 +580,7 @@ function AgentsPage({ variant = 'agents' }) {
             )}
           />
         ) : (
-          <div className="agents-empty-state">
-            {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}
-          </div>
+          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}</PaneEmptyState>
         )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
@@ -677,9 +676,7 @@ function AgentsPage({ variant = 'agents' }) {
         </DetailPane>
       ) : (
         <DetailPane className="detail-pane--dense agents-detail" label="Agent profile">
-          <div className="agents-empty-state agents-empty-state--detail">
-            {agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}
-          </div>
+          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>
         </DetailPane>
       )}
 

@@ -6025,14 +6025,6 @@ body,
   text-decoration-color: var(--color-text-muted);
 }
 
-.tools-empty-state {
-  padding: 16px;
-  color: var(--color-text-muted);
-  background: var(--color-bg-secondary);
-  border: 1px dashed var(--color-border);
-  border-radius: 8px;
-  font-size: 12px;
-}
 
 /* Shared two-pane page skeleton (PageShell) and detail pane (DetailPane). The
    grid is identical across every list page; only the background differs, so the
@@ -6071,6 +6063,37 @@ body,
   width: 100%;
   max-width: none;
   padding: 20px 28px 34px;
+}
+.pane-empty-state,
+.chrome-empty,
+.empty-state {
+  text-align: center;
+}
+
+/* Keep detail/card panes consistent when there is no selected item. */
+.sess-list > .pane-empty-state,
+.prompts-editor > .pane-empty-state,
+.pane-empty-state--detail {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: transparent;
+  border: 0;
+  text-align: center;
+}
+
+.detail-pane__body:has(> .pane-empty-state:only-child) {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-pane__body:has(> .pane-empty-state:only-child) > .pane-empty-state {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
 }
 
 .detail-pane__body--graph {
@@ -7038,7 +7061,7 @@ body,
   white-space: nowrap;
 }
 
-.agents-empty-state {
+.pane-empty-state {
   padding: 14px;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);

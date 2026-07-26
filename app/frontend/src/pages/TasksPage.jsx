@@ -1,3 +1,4 @@
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -12,6 +13,7 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
@@ -19,9 +21,8 @@ import {
   PaneListSortButton,
   PaneListToolbar,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
-import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import { useConfig } from '../context/ConfigContext';
@@ -949,9 +950,9 @@ export default function TasksPage({ context = null }) {
           />
         </PaneListToolbar>
 
-        {loading ? <div className="task-empty">Loading tasks...</div> : null}
+        {loading ? <PaneEmptyState>Loading tasks...</PaneEmptyState> : null}
         {error ? <div className="task-alert">{error}</div> : null}
-        {!loading && !visibleCards.length ? <div className="task-empty">No matching tasks.</div> : null}
+        {!loading && !visibleCards.length ? <PaneEmptyState>No matching tasks.</PaneEmptyState> : null}
         {!loading && groupedColumns.length ? (
           <PaneListVirtualized
             groups={groupedColumns
@@ -1295,7 +1296,7 @@ export default function TasksPage({ context = null }) {
             </div>
           </>
         ) : (
-          <div className="task-detail__empty">Select a task to inspect details.</div>
+          <PaneEmptyState detail>Select a task to inspect details.</PaneEmptyState>
         )}
       </DetailPane>
 

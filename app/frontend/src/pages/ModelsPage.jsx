@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListToolbar,
@@ -232,7 +233,7 @@ export default function ModelsPage() {
             )}
           />
         ) : (
-          <div className="agents-empty-state">No models match this view.</div>
+          <PaneEmptyState>No models match this view.</PaneEmptyState>
         )}
       </PaneList>
 
@@ -301,14 +302,14 @@ export default function ModelsPage() {
                   ))}
                 </div>
               ) : (
-                <div className="agents-empty-state">No agents are using this model yet.</div>
+                <PaneEmptyState>No agents are using this model yet.</PaneEmptyState>
               )}
             </section>
           </div>
         </DetailPane>
       ) : (
         <DetailPane className="detail-pane--dense" label="Model">
-          <div className="agents-empty-state agents-empty-state--detail">Select a model to view its details.</div>
+          <PaneEmptyState detail>Select a model to view its details.</PaneEmptyState>
         </DetailPane>
       )}
     </PageShell>

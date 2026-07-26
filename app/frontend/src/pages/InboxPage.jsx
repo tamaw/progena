@@ -12,6 +12,7 @@ import DetailHeader, {
   EditActionIcon,
 } from '../components/layout/DetailHeader';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListSearch,
@@ -224,7 +225,7 @@ export default function InboxPage() {
           />
         </PaneListToolbar>
         {visibleMessages.length === 0 ? (
-          <div className="chat-pane-empty">{listEmptyMessage}</div>
+          <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
         ) : (
           <PaneListVirtualized
             items={visibleMessages}

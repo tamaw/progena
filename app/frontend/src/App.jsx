@@ -1,4 +1,4 @@
-import { createElement, Suspense, lazy } from 'react';
+import { Component, createElement, Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider } from './context/ConfigContext';
 import { NotificationProvider } from './context/NotificationContext';
@@ -36,12 +36,32 @@ const ModelsPage = lazy(() => import('./pages/ModelsPage'));
 const ChannelsPage = lazy(() => import('./pages/ChannelsPage'));
 const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage'));
 const AgentsPage = lazy(() => import('./pages/AgentsPage'));
-const AttachmentsPage = lazy(() => import('./pages/AttachmentsPage'));
+
+class RouteErrorBoundary extends Component {
+  state = { error: null };
+
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+
+  componentDidCatch(error) {
+    console.error('Route failed to render:', error);
+  }
+
+  render() {
+    if (this.state.error) {
+      return <div className="chrome-route-error">Error loading page: {this.state.error.message}</div>;
+    }
+    return this.props.children;
+  }
+}
 
 function DeferredRoute({ Page, fallback, ...pageProps }) {
   return (
     <Suspense fallback={<div className="chrome-route-loading">{fallback}</div>}>
-      {createElement(Page, pageProps)}
+      <RouteErrorBoundary>
+        {createElement(Page, pageProps)}
+      </RouteErrorBoundary>
     </Suspense>
   );
 }
@@ -75,7 +95,6 @@ function App() {
                     <Route path="/repositories" element={<DeferredRoute Page={RepositoriesPage} fallback="Loading repositories..." />} />
                     <Route path="/knowledge/:baseId?/:titleSlug?" element={<DeferredRoute Page={KnowledgePage} fallback="Loading knowledge..." />} />
                     <Route path="/workflows" element={<DeferredRoute Page={WorkflowsPage} fallback="Loading workflows..." />} />
-                    <Route path="/attachments" element={<DeferredRoute Page={AttachmentsPage} fallback="Loading attachments..." />} />
                   </Route>
                   <Route path="*" element={<Navigate to="/chat" replace />} />
                 </Routes>
