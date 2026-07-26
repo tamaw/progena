@@ -1,3 +1,4 @@
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { memo, useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, useSyncExternalStore } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -34,15 +35,15 @@ import StreamFilterMenu from '../components/chat/StreamFilterMenu';
 import DetailHeader, { DetailHeaderAction, DetailHeaderActions } from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
-import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
@@ -1881,7 +1882,7 @@ function ConversationPage() {
           />
         </PaneListToolbar>
         {visibleSessionGroups.length === 0 ? (
-          <div className="chat-pane-empty">{sidebarEmptyMessageText}</div>
+          <PaneEmptyState>{sidebarEmptyMessageText}</PaneEmptyState>
         ) : (
           <PaneListVirtualized
             groups={visibleSessionGroups.map((group) => ({

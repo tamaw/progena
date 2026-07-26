@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { buildEntityPath, useEntityUrlSync } from '../lib/routes';
 import { createUuid } from '../lib/uuid';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListFooter,
@@ -622,9 +623,9 @@ function SchedulesPage() {
           />
         </PaneListToolbar>
         {loading ? (
-          <div className="agents-empty-state">Loading schedules…</div>
+          <PaneEmptyState>Loading schedules…</PaneEmptyState>
         ) : error && !schedules.length ? (
-          <div className="agents-empty-state">{error}</div>
+          <PaneEmptyState>{error}</PaneEmptyState>
         ) : visibleSchedules.length ? (
           <PaneListVirtualized
             groups={order
@@ -644,7 +645,7 @@ function SchedulesPage() {
             )}
           />
         ) : (
-          <div className="agents-empty-state">No schedules match this view.</div>
+          <PaneEmptyState>No schedules match this view.</PaneEmptyState>
         )}
         <PaneListFooter>
           <span>
@@ -662,11 +663,11 @@ function SchedulesPage() {
       <DetailPane className="detail-pane--dense schedules-detail" label="Schedule detail">
         {loading ? (
           <div className="detail-pane__body">
-            <div className="agents-empty-state">Loading schedules…</div>
+            <PaneEmptyState>Loading schedules…</PaneEmptyState>
           </div>
         ) : !selectedSchedule ? (
           <div className="detail-pane__body">
-            <div className="agents-empty-state">Select a schedule, or use New to ask Progenitor to create one.</div>
+            <PaneEmptyState>Select a schedule, or use New to ask Progenitor to create one.</PaneEmptyState>
           </div>
         ) : (
           <>
@@ -757,7 +758,7 @@ function SchedulesPage() {
             />
 
             <div className="detail-pane__body">
-              {error ? <div className="agents-empty-state">{error}</div> : null}
+              {error ? <PaneEmptyState>{error}</PaneEmptyState> : null}
               <div className="agents-metrics">
                 <MetricCard
                   label="Next run"

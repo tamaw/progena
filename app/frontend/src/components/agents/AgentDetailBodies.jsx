@@ -1,3 +1,4 @@
+import { PaneEmptyState } from '../layout/PaneList';
 import { MetricCard, CardFact, CapabilityChip } from '../common/DetailCards';
 import { formatAge } from './agentFormat';
 
@@ -134,7 +135,7 @@ export function A2ADetailBody({ agent }) {
                 </ul>
               ) : null}
             </article>
-          )) : <div className="agents-empty-state">No skills advertised.</div>}
+          )) : <PaneEmptyState>No skills advertised.</PaneEmptyState>}
         </div>
       </MiniListSection>
 
@@ -154,7 +155,7 @@ export function A2ADetailBody({ agent }) {
                 {task.source || 'a2a'}{task.context_id ? ` · thread ${task.context_id}` : ''}
               </p>
             </article>
-          )) : <div className="agents-empty-state">No A2A tasks yet.</div>}
+          )) : <PaneEmptyState>No A2A tasks yet.</PaneEmptyState>}
         </div>
       </MiniListSection>
     </div>
@@ -217,7 +218,7 @@ export function ACPDetailBody({ agent }) {
               meta={tool.enabled ? 'on' : 'off'}
               tone={tool.enabled ? 'ok' : 'muted'}
             />
-          )) : <div className="agents-empty-state">No tools exposed.</div>}
+          )) : <PaneEmptyState>No tools exposed.</PaneEmptyState>}
         </div>
       </MiniListSection>
 
@@ -234,7 +235,7 @@ export function ACPDetailBody({ agent }) {
               </header>
               {run.summary ? <p className="agents-skill-card__desc">{run.summary}</p> : null}
             </article>
-          )) : <div className="agents-empty-state">No ACP runs yet.</div>}
+          )) : <PaneEmptyState>No ACP runs yet.</PaneEmptyState>}
         </div>
       </MiniListSection>
     </div>
@@ -276,7 +277,7 @@ export function SubagentDetailBody({ agent }) {
                 meta={tool.enabled ? 'on' : 'off'}
                 tone={tool.enabled ? 'ok' : 'muted'}
               />
-            )) : <div className="agents-empty-state">No tools connected.</div>}
+            )) : <PaneEmptyState>No tools connected.</PaneEmptyState>}
           </div>
         </MiniListSection>
 
@@ -291,7 +292,7 @@ export function SubagentDetailBody({ agent }) {
                 meta={repo.access}
                 tone={repo.access === 'write' ? 'ok' : 'info'}
               />
-            )) : <div className="agents-empty-state">No repositories connected.</div>}
+            )) : <PaneEmptyState>No repositories connected.</PaneEmptyState>}
           </div>
         </MiniListSection>
 
@@ -306,7 +307,7 @@ export function SubagentDetailBody({ agent }) {
                 meta={item.freshness}
                 tone="info"
               />
-            )) : <div className="agents-empty-state">No knowledge linked.</div>}
+            )) : <PaneEmptyState>No knowledge linked.</PaneEmptyState>}
           </div>
         </MiniListSection>
       </div>
@@ -322,7 +323,7 @@ export function SubagentDetailBody({ agent }) {
                   <p>{memory.scope} - {memory.age}</p>
                 </div>
               </div>
-            )) : <div className="agents-empty-state">No memories yet.</div>}
+            )) : <PaneEmptyState>No memories yet.</PaneEmptyState>}
           </div>
         </MiniListSection>
 
@@ -336,7 +337,7 @@ export function SubagentDetailBody({ agent }) {
                   <p>{session.outcome} - {session.age}</p>
                 </div>
               </div>
-            )) : <div className="agents-empty-state">No sessions yet.</div>}
+            )) : <PaneEmptyState>No sessions yet.</PaneEmptyState>}
           </div>
         </MiniListSection>
 
@@ -351,7 +352,7 @@ export function SubagentDetailBody({ agent }) {
                 </div>
                 <span className={`agents-chip agents-chip--${task.state === 'active' ? 'ok' : 'info'}`}>{task.state}</span>
               </div>
-            )) : <div className="agents-empty-state">No tasks tracked.</div>}
+            )) : <PaneEmptyState>No tasks tracked.</PaneEmptyState>}
           </div>
         </MiniListSection>
       </div>

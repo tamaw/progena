@@ -1,15 +1,13 @@
 import { useMemo, useState } from 'react';
 import {
   PaneList,
-  PaneListFilters,
   PaneListFooter,
+  PaneListFilters,
+  PaneListToolbar,
   PaneListSearch,
   PaneListSortButton,
-  PaneListToolbar,
   PaneListVirtualized,
 } from '../components/layout/PaneList';
-import PageShell from '../components/layout/PageShell';
-import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   CloneActionIcon,
   DetailHeaderAction,
@@ -18,6 +16,8 @@ import DetailHeader, {
   OpenActionIcon,
   PullActionIcon,
 } from '../components/layout/DetailHeader';
+import PageShell from '../components/layout/PageShell';
+import DetailPane from '../components/layout/DetailPane';
 
 const SOURCE_FILTERS = ['All sources', 'GitHub', 'Local', 'Warnings'];
 

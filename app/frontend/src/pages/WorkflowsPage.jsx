@@ -35,6 +35,7 @@ import {
 } from '../store/uiDataSlice';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
@@ -900,10 +901,10 @@ function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
 
 function WorkflowRunsList({ runs, loading }) {
   if (loading) {
-    return <div className="prompts-empty-state">Loading workflow runs...</div>;
+    return <PaneEmptyState>Loading workflow runs...</PaneEmptyState>;
   }
   if (!runs.length) {
-    return <div className="prompts-empty-state">No runs yet. Trigger the workflow to inspect its execution path.</div>;
+    return <PaneEmptyState>No runs yet. Trigger the workflow to inspect its execution path.</PaneEmptyState>;
   }
   return (
     <div className="workflow-runs">
@@ -1554,9 +1555,9 @@ function WorkflowsInner() {
               <PaneListSearch value={query} placeholder="Search workflows" onChange={setQuery} />
               <PaneListSortButton title="Sort workflows" options={SORTS} value={sortMode} onSelect={setSortMode} />
             </PaneListToolbar>
-            {workflowsState.loading && !workflowsState.loaded ? <div className="prompts-empty-state">Loading workflows...</div> : null}
-            {workflowsState.error && !workflows.length ? <div className="prompts-empty-state">Failed to load workflows.</div> : null}
-            {!workflowsState.loading && !visibleItems.length ? <div className="prompts-empty-state">No workflows match the current filters.</div> : null}
+            {workflowsState.loading && !workflowsState.loaded ? <PaneEmptyState>Loading workflows...</PaneEmptyState> : null}
+            {workflowsState.error && !workflows.length ? <PaneEmptyState>Failed to load workflows.</PaneEmptyState> : null}
+            {!workflowsState.loading && !visibleItems.length ? <PaneEmptyState>No workflows match the current filters.</PaneEmptyState> : null}
             {!workflowsState.loading && visibleItems.length ? (
               <PaneListVirtualized
                 className="workspace-sidebar__scroll"
@@ -1582,11 +1583,11 @@ function WorkflowsInner() {
 
       <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
         {!selectedPath && !workflowsState.loading ? (
-          <div className="prompts-empty-state">Select a workflow to edit or create a new one.</div>
+          <PaneEmptyState>Select a workflow to edit or create a new one.</PaneEmptyState>
         ) : null}
 
         {selectedPath && !selectedDetail ? (
-          <div className="prompts-empty-state">Loading workflow detail...</div>
+          <PaneEmptyState>Loading workflow detail...</PaneEmptyState>
         ) : null}
 
         {selectedDetail?.workflow && draftWorkflow ? (
