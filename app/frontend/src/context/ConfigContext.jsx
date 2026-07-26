@@ -148,6 +148,14 @@ export function ConfigProvider({ children }) {
     }));
     localStorage.setItem('progenitor_sounds', enabled.toString());
   };
+  const resetSettings = () => {
+    setConfig({
+      ...defaultConfig,
+      api: { ...defaultConfig.api, baseUrl: '' },
+    });
+    Object.values(defaultConfig.storage).forEach((key) => localStorage.removeItem(key));
+  };
+
 
   return (
     <ConfigContext.Provider value={{
@@ -156,7 +164,8 @@ export function ConfigProvider({ children }) {
       setTheme,
       setApiUrl,
       setNotifications,
-      setSounds
+      setSounds,
+      resetSettings
     }}>
       {children}
     </ConfigContext.Provider>

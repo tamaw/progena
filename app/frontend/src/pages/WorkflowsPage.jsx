@@ -57,6 +57,7 @@ import {
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { JsonCodeEditor } from '../components/workspace/WorkflowJsonPanel';
+import PopupModal from '../components/common/PopupModal';
 import '../styles/workspace.css';
 import '../styles/nodes.css';
 
@@ -927,36 +928,6 @@ function WorkflowRunsList({ runs, loading }) {
   );
 }
 
-function WorkflowDeleteModal({ workflowTitle, onClose, onConfirm, busy }) {
-  return (
-    <div className="sidebar-modal-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="sidebar-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workflow-delete-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <header className="sidebar-modal__head">
-          <div>
-            <span className="sidebar-modal__eyebrow">Delete workflow</span>
-            <h3 id="workflow-delete-title">Delete “{workflowTitle}”?</h3>
-          </div>
-          <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
-        </header>
-        <p className="sidebar-modal__field">
-          This workflow and its configuration will be permanently deleted.
-        </p>
-        <footer className="sidebar-modal__foot">
-          <button type="button" className="task-btn task-btn--secondary" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="button" className="workflow-delete-modal__confirm" onClick={onConfirm} disabled={busy} autoFocus>
-            {busy ? 'Deleting…' : 'Delete workflow'}
-          </button>
-        </footer>
-      </section>
-    </div>
-  );
-}
 
 function WorkflowsInner() {
   const dispatch = useDispatch();
@@ -1646,8 +1617,12 @@ function WorkflowsInner() {
         )}
       </PaneSection>
       {deleteConfirmationOpen && selectedDetail?.workflow ? (
-        <WorkflowDeleteModal
-          workflowTitle={selectedDetail.workflow.title}
+        <PopupModal
+          eyebrow="Delete workflow"
+          title={`Delete “${selectedDetail.workflow.title}”?`}
+          message="This workflow and its configuration will be permanently deleted."
+          confirmLabel="Delete workflow"
+          busyLabel="Deleting…"
           onClose={() => setDeleteConfirmationOpen(false)}
           onConfirm={confirmDeleteWorkflow}
           busy={busyAction === 'delete'}
