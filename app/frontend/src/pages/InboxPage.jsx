@@ -1,3 +1,4 @@
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -12,6 +13,7 @@ import DetailHeader, {
   EditActionIcon,
 } from '../components/layout/DetailHeader';
 import {
+  PaneEmptyState,
   PaneList,
   PaneListFilters,
   PaneListSearch,
@@ -224,7 +226,7 @@ export default function InboxPage() {
           />
         </PaneListToolbar>
         {visibleMessages.length === 0 ? (
-          <div className="chat-pane-empty">{listEmptyMessage}</div>
+          <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
         ) : (
           <PaneListVirtualized
             items={visibleMessages}

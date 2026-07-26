@@ -24,14 +24,15 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListFooter,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneSection,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import NumberStepper from '../components/common/NumberStepper';
@@ -574,9 +575,7 @@ export default function KnowledgePage() {
 
             {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
             {!visibleBases.length && loaded ? (
-              <div className="task-empty">
-                {bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}
-              </div>
+              <PaneEmptyState>{bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}</PaneEmptyState>
             ) : null}
             {groups.length ? (
               <PaneListVirtualized
@@ -735,7 +734,7 @@ export default function KnowledgePage() {
                           <InfoRow key={agent} title={agent} sub="Retrieval source via knowledge_search" chip="connected" />
                         ))}
                       </div>
-                    ) : <div className="agents-empty-state">Not attached to any agent yet.</div>}
+                    ) : <PaneEmptyState>Not attached to any agent yet.</PaneEmptyState>}
                   </section>
 
                   <section className="agents-section">
@@ -847,7 +846,7 @@ export default function KnowledgePage() {
                         );
                       })}
                     </div>
-                  ) : <div className="agents-empty-state">No folder sources yet — use “+ Add folder” to index one.</div>}
+                  ) : <PaneEmptyState>No folder sources yet — use “+ Add folder” to index one.</PaneEmptyState>}
                   <p className="task-meta-sub">
                     Folders on the server whose text files are read, embedded, and indexed into this store.
                     Re-index to pick up changes; files land in a collection named after the folder.
@@ -870,7 +869,7 @@ export default function KnowledgePage() {
                         </div>
                       ))}
                     </div>
-                  ) : <div className="agents-empty-state">No collections yet — add a folder source to populate this store.</div>}
+                  ) : <PaneEmptyState>No collections yet — add a folder source to populate this store.</PaneEmptyState>}
                   <p className="task-meta-sub">Named groupings of the documents embedded into this store (from folder sources).</p>
                 </section>
                 </>
@@ -1116,14 +1115,14 @@ export default function KnowledgePage() {
                             </div>
                           ))}
                         </div>
-                      ) : <div className="agents-empty-state">No matching passages.</div>
+                      ) : <PaneEmptyState>No matching passages.</PaneEmptyState>
                     ) : null}
                   </section>
               ) : null}
             </div>
           </>
         ) : (
-          <div className="task-detail__empty">Select a knowledge base to inspect details.</div>
+          <PaneEmptyState detail>Select a knowledge base to inspect details.</PaneEmptyState>
         )}
       </DetailPane>
     </PageShell>

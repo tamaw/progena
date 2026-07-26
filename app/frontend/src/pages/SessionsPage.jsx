@@ -3,17 +3,17 @@ import DetailHeader, { CopyActionIcon, DetailHeaderAction, DetailHeaderActions, 
 import {
   PaneCollapseSeam,
   PaneExpandRail,
-  PaneListFilters,
   PaneListFooter,
+  PaneListFilters,
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
-import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { PaneSection } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 
 const AGENTS = {
   Codex: { color: '#2f6ff6', initial: 'C' },

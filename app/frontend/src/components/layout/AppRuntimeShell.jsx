@@ -32,7 +32,6 @@ import {
 import {
   AgentsNavIcon,
   AlertsIcon,
-  AttachmentsNavIcon,
   ChannelsNavIcon,
   ChatNavIcon,
   InboxNavIcon,
@@ -128,7 +127,6 @@ const navGroups = [
       { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
       { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },
-      { to: '/attachments', icon: <AttachmentsNavIcon />, label: 'Attachments', trackActivity: true },
     ],
   },
   {

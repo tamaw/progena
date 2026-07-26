@@ -1,3 +1,4 @@
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
@@ -25,14 +26,14 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListSearch,
   PaneListToolbar,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
-import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { PaneSection } from '../components/layout/PaneList';
 
 function skillRefreshDisconnectedError() {
   return new Error('Skill refresh could not be confirmed because the realtime stream disconnected. Reconnect and refresh again.');
@@ -534,16 +535,16 @@ export default function SkillsPage() {
           </button>
         </PaneListToolbar>
 
-        {loading && <div className="prompts-empty-state">Loading skills...</div>}
-        {(error || skillsState.error) && !loading && skills.length === 0 && <div className="prompts-empty-state">{error?.message || skillsState.error}</div>}
+        {loading && <PaneEmptyState>Loading skills...</PaneEmptyState>}
+        {(error || skillsState.error) && !loading && skills.length === 0 && <PaneEmptyState>{error?.message || skillsState.error}</PaneEmptyState>}
         {!loading && !realtime.connected && skills.length === 0 && !(error || skillsState.error) && (
-          <div className="prompts-empty-state">Reconnect the realtime stream to load skills.</div>
+          <PaneEmptyState>Reconnect the realtime stream to load skills.</PaneEmptyState>
         )}
         {!loading && skills.length === 0 && realtime.connected && !(error || skillsState.error) && (
-          <div className="prompts-empty-state">No skills found. Create one to share reusable behavior with agents.</div>
+          <PaneEmptyState>No skills found. Create one to share reusable behavior with agents.</PaneEmptyState>
         )}
         {!loading && visibleSkills.length === 0 && skills.length > 0 && (
-          <div className="prompts-empty-state">No skills match the current filters.</div>
+          <PaneEmptyState>No skills match the current filters.</PaneEmptyState>
         )}
         {!loading && skillTree.length ? (
           <PaneListVirtualized
@@ -566,7 +567,7 @@ export default function SkillsPage() {
 
       <main className="skills-editor prompts-editor">
         {!selectedSkill && !creating && !loading && (
-          <div className="prompts-empty-state">Select a skill to edit or create a new one.</div>
+          <PaneEmptyState>Select a skill to edit or create a new one.</PaneEmptyState>
         )}
 
         {(selectedSkill || creating) && (
@@ -651,7 +652,7 @@ export default function SkillsPage() {
                 </div>
 
               ) : isSkillContentLoading ? (
-                <div className="prompts-empty-state">Loading skill…</div>
+                <PaneEmptyState>Loading skill…</PaneEmptyState>
               ) : editorMode === 'preview' && !creating ? (
                 <div
                   className="markdown-content"

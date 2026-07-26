@@ -1,3 +1,4 @@
+import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useSearchParams } from 'react-router-dom';
@@ -16,14 +17,14 @@ import {
 import { SNAPSHOT_EVENT_TIMEOUT_MS, useSnapshotSave } from '../store/uiData/snapshotSave';
 import {
   PaneCollapseSeam,
+  PaneEmptyState,
   PaneExpandRail,
   PaneListFilters,
   PaneListSearch,
   PaneListToolbar,
   PaneListVirtualized,
+  PaneSection,
 } from '../components/layout/PaneList';
-import { usePaneCollapse } from '../components/layout/usePaneCollapse';
-import { PaneSection } from '../components/layout/PaneList';
 
 function promptRefreshDisconnectedError() {
   return new Error('Prompt refresh could not be confirmed because the realtime stream disconnected. Reconnect and refresh again.');
@@ -401,16 +402,16 @@ export default function PromptsPage() {
           </button>
         </PaneListToolbar>
 
-        {loading && <div className="prompts-empty-state">Loading prompts...</div>}
-        {(error || promptsState.error) && !loading && prompts.length === 0 && <div className="prompts-empty-state">{error?.message || promptsState.error}</div>}
+        {loading && <PaneEmptyState>Loading prompts...</PaneEmptyState>}
+        {(error || promptsState.error) && !loading && prompts.length === 0 && <PaneEmptyState>{error?.message || promptsState.error}</PaneEmptyState>}
         {!loading && !realtime.connected && prompts.length === 0 && !(error || promptsState.error) && (
-          <div className="prompts-empty-state">Reconnect the realtime stream to load prompts.</div>
+          <PaneEmptyState>Reconnect the realtime stream to load prompts.</PaneEmptyState>
         )}
         {!loading && prompts.length === 0 && realtime.connected && !(error || promptsState.error) && (
-          <div className="prompts-empty-state">No prompts found.</div>
+          <PaneEmptyState>No prompts found.</PaneEmptyState>
         )}
         {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
-          <div className="prompts-empty-state">No prompts match the current filters.</div>
+          <PaneEmptyState>No prompts match the current filters.</PaneEmptyState>
         )}
         {!loading && virtualPromptGroups.length ? (
           <PaneListVirtualized
@@ -453,7 +454,7 @@ export default function PromptsPage() {
 
       <main className="prompts-editor">
         {!selectedPrompt && !loading && (
-          <div className="prompts-empty-state">Select a prompt to edit.</div>
+          <PaneEmptyState>Select a prompt to edit.</PaneEmptyState>
         )}
 
         {selectedPrompt && (
@@ -499,7 +500,7 @@ export default function PromptsPage() {
             </div>
 
             {isPromptContentLoading ? (
-              <div className="prompts-empty-state">Loading prompt…</div>
+              <PaneEmptyState>Loading prompt…</PaneEmptyState>
             ) : editorMode === 'preview' ? (
               <div
                 className="prompts-markdown-preview message-content"
