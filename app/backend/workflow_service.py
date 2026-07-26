@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from app.backend.document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 from app.progenitor.utils import utcnow_isoformat
 from app.progenitor.workflows import (
+    MAX_WORKFLOW_INVOKE_DEPTH,
     WORKFLOW_ALLOWED_EVENT_TYPES,
     WorkflowDefinition,
     WorkflowListItem,
@@ -21,6 +22,7 @@ from app.progenitor.workflows import (
     WorkflowNodePrompt,
     WorkflowNodeUser,
     WorkflowRun,
+    WorkflowRunSource,
     WorkflowTrigger,
     build_workflow_list_item,
     coerce_workflow_definition,
@@ -352,6 +354,34 @@ def _trigger_column_filter_matches(trigger: WorkflowTrigger, event: Mapping[str,
     )
 
 
+def _build_queued_run(
+    workflow_id: str,
+    trigger: Mapping[str, Any],
+    *,
+    now: str,
+) -> WorkflowRun:
+    """Construct a queued run, preserving invocation metadata."""
+
+    invocation = trigger.get("_invocation")
+    invocation = invocation if isinstance(invocation, Mapping) else {}
+    raw_source = invocation.get("source")
+    source: WorkflowRunSource = (
+        raw_source if raw_source in ("kanban", "manual", "progenitor") else "manual"
+    )
+    ancestry_raw = invocation.get("ancestry")
+    ancestry = [str(item) for item in ancestry_raw] if isinstance(ancestry_raw, list) else []
+    return WorkflowRun(
+        run_id=f"workflow_run_{uuid.uuid4().hex[:12]}",
+        workflow_id=workflow_id,
+        status="queued",
+        trigger_event=dict(trigger),
+        source=source,
+        ancestry=ancestry,
+        queued_at=now,
+        updated_at=now,
+    )
+
+
 class WorkflowExecutor:
     """Backend-resident workflow executor for v1 event -> prompt chains."""
 
@@ -391,7 +421,7 @@ class WorkflowExecutor:
         ]
         started: list[WorkflowRun] = []
         for definition in definitions:
-            run = await self.trigger_workflow(definition.id, trigger)
+            run = await self.trigger_workflow(definition.id, trigger, source="kanban")
             if run is not None:
                 started.append(run)
         return started
@@ -400,8 +430,32 @@ class WorkflowExecutor:
         self,
         workflow_id: str,
         trigger: Mapping[str, Any],
+        *,
+        source: WorkflowRunSource = "manual",
+        ancestry: list[str] | None = None,
     ) -> WorkflowRun | None:
-        """Start or queue a run for one workflow definition."""
+        """Start or queue a run with bounded, cycle-safe ancestry."""
+
+        resolved_ancestry = [str(item) for item in (ancestry or [])]
+        if workflow_id in resolved_ancestry:
+            logger.warning(
+                "Refusing workflow %r: already present in ancestry %r",
+                workflow_id,
+                resolved_ancestry,
+            )
+            return None
+        if len(resolved_ancestry) >= MAX_WORKFLOW_INVOKE_DEPTH:
+            logger.warning(
+                "Refusing workflow %r: invocation depth %d reached limit %d",
+                workflow_id,
+                len(resolved_ancestry),
+                MAX_WORKFLOW_INVOKE_DEPTH,
+            )
+            return None
+        trigger_with_meta = {
+            **dict(trigger),
+            "_invocation": {"source": source, "ancestry": resolved_ancestry},
+        }
 
         async with self._lock_for(workflow_id):
             store = self._store_getter()
@@ -412,19 +466,12 @@ class WorkflowExecutor:
             active_run = find_active_workflow_run(store, workflow_id)
             if active_run is not None:
                 queue = get_workflow_queue(store, workflow_id)
-                queue.append(dict(trigger))
+                queue.append(trigger_with_meta)
                 save_workflow_queue(store, workflow_id, queue)
                 return active_run
 
             now = utcnow_isoformat()
-            run = WorkflowRun(
-                run_id=f"workflow_run_{uuid.uuid4().hex[:12]}",
-                workflow_id=workflow_id,
-                status="queued",
-                trigger_event=dict(trigger),
-                queued_at=now,
-                updated_at=now,
-            )
+            run = _build_queued_run(workflow_id, trigger_with_meta, now=now)
             save_workflow_run(store, run)
             self._start_task(workflow_id, run.run_id)
             return run
@@ -467,14 +514,7 @@ class WorkflowExecutor:
                 queue = get_workflow_queue(store, workflow_id)
                 if queue:
                     now = utcnow_isoformat()
-                    candidate = WorkflowRun(
-                        run_id=f"workflow_run_{uuid.uuid4().hex[:12]}",
-                        workflow_id=workflow_id,
-                        status="queued",
-                        trigger_event=queue.pop(0),
-                        queued_at=now,
-                        updated_at=now,
-                    )
+                    candidate = _build_queued_run(workflow_id, queue.pop(0), now=now)
                     save_workflow_run(store, candidate)
                     save_workflow_queue(store, workflow_id, queue)
         if candidate is not None:
@@ -643,14 +683,7 @@ class WorkflowExecutor:
                 save_workflow_queue(store, workflow_id, [])
                 return
             now = utcnow_isoformat()
-            next_run = WorkflowRun(
-                run_id=f"workflow_run_{uuid.uuid4().hex[:12]}",
-                workflow_id=workflow_id,
-                status="queued",
-                trigger_event=queue.pop(0),
-                queued_at=now,
-                updated_at=now,
-            )
+            next_run = _build_queued_run(workflow_id, queue.pop(0), now=now)
             save_workflow_run(store, next_run)
             save_workflow_queue(store, workflow_id, queue)
             # Hand the slot over to the queued run now; otherwise `_start_task()`

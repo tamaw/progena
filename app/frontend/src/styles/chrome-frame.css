@@ -6070,13 +6070,11 @@ body,
   text-align: center;
 }
 
-/* Keep detail/card panes consistent when there is no selected item. */
-.sess-list > .pane-empty-state,
-.prompts-editor > .pane-empty-state,
-.pane-empty-state--detail {
+.pane-empty-state--centered {
   flex: 1;
   display: grid;
   place-items: center;
+  min-height: 0;
   padding: 28px;
   background: transparent;
   border: 0;
@@ -7061,7 +7059,8 @@ body,
   white-space: nowrap;
 }
 
-.pane-empty-state {
+.chrome-empty,
+.empty-state {
   padding: 14px;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);

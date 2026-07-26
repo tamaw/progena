@@ -161,9 +161,10 @@ no response-body token SSE.
 Runtime and backend state, including the Progenitor state documents and
 operational logs, are persisted in the configured Postgres stores. The
 Progenitor agent receives selected documents through a validated virtual
-filesystem (`/config/*.json`, task Markdown files, and workflow JSON paths);
-these are database-backed views, not local files. State changes relevant to the
-browser are represented as typed canonical stream events after persistence.
+filesystem (`/config/*.json`, task Markdown files under `/config/tasks/`, and
+workflow JSON files under `/workflows/`); these are database-backed views, not
+local files. State changes relevant to the browser are represented as typed
+canonical stream events after persistence.
 Streaming chat content is transient transport data unless it is persisted into
 the underlying conversation state and later surfaced again via canonical
 snapshots/detail loads.

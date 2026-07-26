@@ -17,6 +17,7 @@ from .utils import utcnow_isoformat
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
 WORKFLOW_QUEUE_KEY_PREFIX = "workflow_queue:"
+WORKFLOW_INVOKE_REQUEST_KEY_PREFIX = "workflow_invoke_request:"
 
 WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.created",
@@ -28,12 +29,15 @@ WORKFLOW_ALLOWED_EVENT_TYPES = (
 WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
 WORKFLOW_DEFAULT_AGENT_NAME = "progenitor"
 WORKFLOW_VERSION = 1
+# Max chained Progenitor-initiated workflow invocations.
+MAX_WORKFLOW_INVOKE_DEPTH = 3
 
 # Kanban columns a kanban.card.moved trigger can filter on. Mirrors the fixed
 # pipeline in app/backend/ui_routes.py:_kanban_default_columns().
 WORKFLOW_KANBAN_COLUMNS = ("backlog", "plan", "build", "validate", "done")
 
 WorkflowRunStatus = Literal["queued", "running", "paused", "completed", "failed"]
+WorkflowRunSource = Literal["kanban", "manual", "progenitor"]
 
 
 class WorkflowTrigger(BaseModel):
@@ -176,6 +180,8 @@ class WorkflowRun(BaseModel):
     completed_node_ids: list[str] = Field(default_factory=list)
     thread_id: str | None = None
     trigger_event: dict[str, Any] = Field(default_factory=dict)
+    source: WorkflowRunSource = "manual"
+    ancestry: list[str] = Field(default_factory=list)
     last_output: str | None = None
     last_error: str | None = None
     queued_at: str
@@ -198,6 +204,12 @@ def workflow_run_key(run_id: str) -> str:
 def workflow_queue_key(workflow_id: str) -> str:
     """Return the runtime document key for one workflow trigger queue."""
     return f"{WORKFLOW_QUEUE_KEY_PREFIX}{workflow_id}"
+
+
+def workflow_invoke_request_key(request_id: str) -> str:
+    """Return the runtime document key for one workflow invoke request."""
+
+    return f"{WORKFLOW_INVOKE_REQUEST_KEY_PREFIX}{request_id}"
 
 
 def workflow_file_name(workflow_id: str) -> str:
@@ -386,6 +398,26 @@ def coerce_workflow_run(payload: Mapping[str, Any]) -> WorkflowRun:
     """Validate and coerce a stored payload to ``WorkflowRun``."""
 
     return WorkflowRun.model_validate(dict(payload))
+
+
+class WorkflowInvokeRequest(BaseModel):
+    """Durable request for the backend executor to start one workflow run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    workflow_id: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    ancestry: list[str] = Field(default_factory=list)
+    requested_at: str
+
+
+def parse_workflow_invoke_request_document(
+    payload: Mapping[str, Any],
+) -> WorkflowInvokeRequest:
+    """Validate and coerce a stored payload to WorkflowInvokeRequest."""
+
+    return WorkflowInvokeRequest.model_validate(dict(payload))
 
 
 def _validate_workflow_graph(definition: WorkflowDefinition) -> None:

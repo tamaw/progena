@@ -95,6 +95,7 @@ const workflowQuickChatConfig = {
   prompts: workflowQuickPrompts,
 };
 
+
 const QUICK_CHAT_CONFIGS_BY_MODE = {
   'schedule-create': scheduleQuickChatConfig,
   'mcp-create': mcpQuickChatConfig,
