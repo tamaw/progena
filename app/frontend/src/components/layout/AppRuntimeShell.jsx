@@ -1547,7 +1547,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const preferencesUrl = getApiUrl('preferences');
   const [displayNameDraft, setDisplayNameDraft] = useState('');
   const [timezoneDraft, setTimezoneDraft] = useState('');
-  const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState('');
   const themeSelectOptions = useMemo(
     () => config.theme.options.map((theme) => ({ value: theme, label: theme })),
@@ -1568,28 +1567,49 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
     if (!preferences.loaded) {
       return;
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing local edit drafts from the loaded backend value, not derivable render state.
     setDisplayNameDraft(preferences.displayName);
     setTimezoneDraft(preferences.timezone);
   }, [preferences.loaded, preferences.displayName, preferences.timezone]);
 
-  const handleSaveProfile = useCallback(async () => {
-    setSavingProfile(true);
-    setProfileError('');
-    try {
-      await dispatch(
-        savePreferences({
-          preferencesUrl,
-          ...preferencesSaveRequest,
-          displayName: displayNameDraft,
-          timezone: timezoneDraft,
-        }),
-      ).unwrap();
-    } catch {
-      setProfileError('Failed to save profile.');
-    } finally {
-      setSavingProfile(false);
-    }
-  }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
+  const saveProfile = useCallback(
+    async (overrides = {}) => {
+      setProfileError('');
+      try {
+        await dispatch(
+          savePreferences({
+            preferencesUrl,
+            ...preferencesSaveRequest,
+            displayName: displayNameDraft,
+            timezone: timezoneDraft,
+            ...overrides,
+          }),
+        ).unwrap();
+      } catch {
+        setProfileError('Failed to save profile.');
+      }
+    },
+    [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft],
+  );
+
+  // Commit-on-blur, not on every keystroke: typing a name shouldn't fire a
+  // save per character. Skipped when nothing actually changed.
+  const handleDisplayNameBlur = useCallback(() => {
+    if (displayNameDraft === preferences.displayName) return;
+    saveProfile();
+  }, [displayNameDraft, preferences.displayName, saveProfile]);
+
+  // Timezone is a discrete choice from a list, so - unlike free-text display
+  // name - selecting a row IS the commit; no separate save step needed.
+  // Pass the picked value as an override rather than relying on
+  // timezoneDraft, since setTimezoneDraft hasn't re-rendered yet here.
+  const handleTimezoneChange = useCallback(
+    (value) => {
+      setTimezoneDraft(value);
+      saveProfile({ timezone: value });
+    },
+    [saveProfile],
+  );
 
   const persistNotificationPreference = useCallback(
     (patch) => {
@@ -1622,6 +1642,10 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
               value={displayNameDraft}
               placeholder="Your name"
               onChange={(event) => setDisplayNameDraft(event.target.value)}
+              onBlur={handleDisplayNameBlur}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') event.currentTarget.blur();
+              }}
             />
           </span>
         </div>
@@ -1633,14 +1657,11 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           <span className="set-inline-control">
             <Select
               value={timezoneDraft}
-              onChange={setTimezoneDraft}
+              onChange={handleTimezoneChange}
               options={timezoneSelectOptions}
               searchable
               ariaLabel="Timezone"
             />
-            <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
-              {savingProfile ? 'Saving…' : 'Save'}
-            </button>
           </span>
         </div>
         {profileError ? <div className="task-alert">{profileError}</div> : null}
