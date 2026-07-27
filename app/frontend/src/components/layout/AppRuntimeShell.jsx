@@ -1627,7 +1627,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
         <div className="account-pane__id">
           <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
           <div className="account-pane__id-text">
-            <div className="account-pane__name">{preferences.displayName || 'Unnamed'}</div>
+            <div className="account-pane__name">{displayNameDraft || 'Unnamed'}</div>
             <div className="account-pane__email">me@tama.id.au</div>
           </div>
         </div>
