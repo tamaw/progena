@@ -2042,8 +2042,13 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
                     source="progenitor",
                     ancestry=request.ancestry,
                 )
-            finally:
-                store.delete_document(PROGENITOR_STATE_PREFIX, key)
+            except Exception:
+                logger.exception(
+                    "Workflow invoke request %r failed; retaining it for retry",
+                    request.request_id,
+                )
+                continue
+            store.delete_document(PROGENITOR_STATE_PREFIX, key)
 
 
 def _parse_once_datetime(expression: str) -> datetime:

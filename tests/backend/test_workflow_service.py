@@ -379,6 +379,62 @@ async def test_executor_routes_condition_and_sends_inbox_message():
 
 
 @pytest.mark.asyncio
+async def test_executor_ends_when_condition_port_is_unmatched():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(title="Unmatched condition")
+    event_id, prompt_id = list(workflow["graph"]["nodes"])
+    condition_id = "condition_1"
+    inbox_id = "inbox_1"
+    workflow["graph"]["nodes"].pop(prompt_id)
+    workflow["graph"]["nodes"][condition_id] = {
+        "kind": "condition",
+        "title": "Done?",
+        "expression": 'payload.card.status == "done"',
+    }
+    workflow["graph"]["nodes"][inbox_id] = {
+        "kind": "inbox",
+        "title": "Inbox",
+        "message_title": "Completed",
+        "message": "The card is done.",
+        "level": "success",
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "default"},
+            "to": {"node": condition_id, "port": "default"},
+        },
+        {
+            "from": {"node": condition_id, "port": "true"},
+            "to": {"node": inbox_id, "port": "default"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=lambda **_kwargs: None,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    run = await executor.trigger_workflow(
+        definition.id,
+        build_manual_trigger_event(definition, payload={"card": {"status": "not_done"}}),
+    )
+    assert run is not None
+    completed = await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == run.run_id and item.status == "completed"
+            ),
+            None,
+        )
+    )
+    assert completed.last_output == "false"
+    assert store.list_documents("progenitor.state", "inbox_message:") == []
+
+
+@pytest.mark.asyncio
 async def test_executor_pauses_and_resolves_approval():
     store = InMemoryDocumentStore()
     workflow = default_workflow_definition(title="Approval")

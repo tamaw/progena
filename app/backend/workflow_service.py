@@ -736,7 +736,7 @@ class WorkflowExecutor:
             outgoing = workflow_outgoing_edges(definition, previous_node_id)
             node_id = next(
                 (target for port, target in outgoing if port == previous_port),
-                next((target for _port, target in outgoing), None),
+                None,
             )
         else:
             node_id = next(
@@ -855,7 +855,7 @@ class WorkflowExecutor:
             outgoing = workflow_outgoing_edges(definition_after, node_id)
             node_id = next(
                 (target for port, target in outgoing if port == selected_port),
-                next((target for port, target in outgoing if port == "default"), None),
+                None,
             )
 
         run = run.model_copy(
