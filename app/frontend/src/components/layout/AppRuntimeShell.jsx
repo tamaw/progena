@@ -1172,39 +1172,8 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
   const [section, setSection] = useState('general');
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
-  const [displayNameDraft, setDisplayNameDraft] = useState('');
-  const [timezoneDraft, setTimezoneDraft] = useState('');
-  const [savingProfile, setSavingProfile] = useState(false);
-  const [profileError, setProfileError] = useState('');
 
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
-
-  useEffect(() => {
-    if (!preferences.loaded) {
-      return;
-    }
-    setDisplayNameDraft(preferences.displayName);
-    setTimezoneDraft(preferences.timezone);
-  }, [preferences.loaded, preferences.displayName, preferences.timezone]);
-
-  const handleSaveProfile = useCallback(async () => {
-    setSavingProfile(true);
-    setProfileError('');
-    try {
-      await dispatch(
-        savePreferences({
-          preferencesUrl,
-          ...preferencesSaveRequest,
-          displayName: displayNameDraft,
-          timezone: timezoneDraft,
-        }),
-      ).unwrap();
-    } catch {
-      setProfileError('Failed to save profile.');
-    } finally {
-      setSavingProfile(false);
-    }
-  }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
 
   const persistNotificationPreference = useCallback(
     (patch) => {
@@ -1236,40 +1205,6 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                   <h3>General</h3>
                   <p>Workspace defaults and session behavior.</p>
                 </header>
-
-                <div className="set-row">
-                  <span className="set-row__label">
-                    <span className="set-row__title">Display name</span>
-                    <span className="set-row__sub">Shown across the workspace and agent transcripts.</span>
-                  </span>
-                  <span className="set-inline-control">
-                    <input
-                      className="set-text-input"
-                      value={displayNameDraft}
-                      placeholder="Your name"
-                      onChange={(event) => setDisplayNameDraft(event.target.value)}
-                    />
-                  </span>
-                </div>
-
-                <div className="set-row">
-                  <span className="set-row__label">
-                    <span className="set-row__title">Timezone</span>
-                    <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
-                  </span>
-                  <span className="set-inline-control">
-                    <input
-                      className="set-text-input"
-                      value={timezoneDraft}
-                      placeholder="e.g. America/New_York"
-                      onChange={(event) => setTimezoneDraft(event.target.value)}
-                    />
-                    <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
-                      {savingProfile ? 'Saving…' : 'Save'}
-                    </button>
-                  </span>
-                </div>
-                {profileError ? <div className="task-alert">{profileError}</div> : null}
 
                 <div className="set-row">
                   <div className="set-row__label">
@@ -1644,14 +1579,85 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 }
 
 function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const preferences = useSelector(selectPreferences);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  const preferencesUrl = getApiUrl('preferences');
+  const [displayNameDraft, setDisplayNameDraft] = useState('');
+  const [timezoneDraft, setTimezoneDraft] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState('');
+
+  useEffect(() => {
+    if (!preferences.loaded) {
+      return;
+    }
+    setDisplayNameDraft(preferences.displayName);
+    setTimezoneDraft(preferences.timezone);
+  }, [preferences.loaded, preferences.displayName, preferences.timezone]);
+
+  const handleSaveProfile = useCallback(async () => {
+    setSavingProfile(true);
+    setProfileError('');
+    try {
+      await dispatch(
+        savePreferences({
+          preferencesUrl,
+          ...preferencesSaveRequest,
+          displayName: displayNameDraft,
+          timezone: timezoneDraft,
+        }),
+      ).unwrap();
+    } catch {
+      setProfileError('Failed to save profile.');
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
+
   return (
     <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
       <div className="account-pane__id">
         <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
         <div className="account-pane__id-text">
-          <div className="account-pane__name">Tama Waddell</div>
+          <div className="account-pane__name">{preferences.displayName || 'Unnamed'}</div>
           <div className="account-pane__email">me@tama.id.au</div>
         </div>
+      </div>
+      <div className="account-pane__profile">
+        <div className="set-row">
+          <span className="set-row__label">
+            <span className="set-row__title">Display name</span>
+            <span className="set-row__sub">Shown across the workspace and agent transcripts.</span>
+          </span>
+          <span className="set-inline-control">
+            <input
+              className="set-text-input"
+              value={displayNameDraft}
+              placeholder="Your name"
+              onChange={(event) => setDisplayNameDraft(event.target.value)}
+            />
+          </span>
+        </div>
+        <div className="set-row">
+          <span className="set-row__label">
+            <span className="set-row__title">Timezone</span>
+            <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
+          </span>
+          <span className="set-inline-control">
+            <input
+              className="set-text-input"
+              value={timezoneDraft}
+              placeholder="e.g. America/New_York"
+              onChange={(event) => setTimezoneDraft(event.target.value)}
+            />
+            <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
+              {savingProfile ? 'Saving…' : 'Save'}
+            </button>
+          </span>
+        </div>
+        {profileError ? <div className="task-alert">{profileError}</div> : null}
       </div>
       <dl className="account-pane__facts">
         <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
