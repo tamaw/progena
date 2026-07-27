@@ -179,6 +179,19 @@ const settingsSections = [
 
 const workspaceOptions = ['progenitor-main', 'local-development', 'agent-lab'];
 
+// The full IANA tz database, as the runtime actually knows it - matches what
+// the backend's zoneinfo-based validation accepts, so nothing typed here can
+// fail to save. Computed once at module load, not per-render.
+const TIMEZONE_OPTIONS = (() => {
+  try {
+    return Intl.supportedValuesOf('timeZone').sort();
+  } catch {
+    // Very old browsers only: Intl.supportedValuesOf isn't universally
+    // available. A minimal fallback still lets the dropdown function.
+    return ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'];
+  }
+})();
+
 function getPageLabel(pathname) {
   if (pathname.startsWith('/solutions') || pathname.startsWith('/projects')) {
     return 'Projects';
@@ -1599,12 +1612,16 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
           </span>
           <span className="set-inline-control">
-            <input
-              className="set-text-input"
+            <select
+              className="set-input"
               value={timezoneDraft}
-              placeholder="e.g. America/New_York"
               onChange={(event) => setTimezoneDraft(event.target.value)}
-            />
+            >
+              {timezoneDraft && !TIMEZONE_OPTIONS.includes(timezoneDraft) ? (
+                <option value={timezoneDraft}>{timezoneDraft}</option>
+              ) : null}
+              {TIMEZONE_OPTIONS.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
+            </select>
             <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
               {savingProfile ? 'Saving…' : 'Save'}
             </button>
@@ -1655,19 +1672,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             <span className="set-switch__knob" aria-hidden="true" />
           </label>
         </div>
-      </section>
-
-      <section className="set-section is-active">
-        <header className="set-section__head">
-          <h3>Account</h3>
-          <p>Plan, role, and workspace.</p>
-        </header>
-        <dl className="account-pane__facts">
-          <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
-          <div className="account-pane__fact"><dt>Role</dt><dd>Owner</dd></div>
-          <div className="account-pane__fact"><dt>Workspace</dt><dd>progenitor-main</dd></div>
-          <div className="account-pane__fact"><dt>Member since</dt><dd>June 2026</dd></div>
-        </dl>
       </section>
 
       <div className="account-pane__foot">
