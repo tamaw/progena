@@ -35,17 +35,26 @@ def default_preferences_payload() -> dict[str, Any]:
     """Return the empty-profile default (used to seed a fresh document)."""
     from ..schedule import default_timezone_name
 
-    return {"display_name": "", "timezone": default_timezone_name()}
+    return {
+        "display_name": "",
+        "timezone": default_timezone_name(),
+        "theme": "system",
+        "nav_collapsed": False,
+        "pinned_panel": None,
+    }
 
 
 def validate_preferences_payload(payload: Any) -> dict[str, Any]:
-    """Validate a decoded ``{"display_name": ..., "timezone": ...}`` payload.
+    """Validate a decoded preferences payload (display_name, timezone, plus the
+    UI-only theme/nav_collapsed/pinned_panel settings).
 
     Raises ``ValueError`` (never a raw ``TypeError``/``KeyError``) on anything
     malformed, so both call sites can surface one consistent error message.
     Checks the JSON Schema floor first (object shape, allowed fields, required
-    ``timezone``), then layers the one rule a schema can't express: whether
-    ``timezone`` is a real IANA zone name.
+    ``timezone``, correct types/enums for the UI fields), then layers the one
+    rule a schema can't express: whether ``timezone`` is a real IANA zone name.
+    Missing optional fields are normalized to their schema defaults, so every
+    saved document is complete and self-describing for the agent to read back.
     """
     if not isinstance(payload, dict):
         raise ValueError("preferences document must be a JSON object")
@@ -64,7 +73,13 @@ def validate_preferences_payload(payload: Any) -> dict[str, Any]:
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError(f"Unknown timezone: {timezone!r}") from exc
 
-    return {"display_name": display_name.strip(), "timezone": timezone}
+    return {
+        "display_name": display_name.strip(),
+        "timezone": timezone,
+        "theme": payload.get("theme", "system"),
+        "nav_collapsed": payload.get("nav_collapsed", False),
+        "pinned_panel": payload.get("pinned_panel"),
+    }
 
 
 def validate_preferences_document(content: str) -> dict[str, Any]:

@@ -11,6 +11,7 @@ import {
   selectChatIndicators,
   selectInboxUnreadCount,
   selectPreferences,
+  selectPreferencesSaveRequest,
   selectUnseenNavRoutes,
   selectUiStatus,
   selectUiWidgets,
@@ -156,6 +157,13 @@ const breadcrumbRoutes = [
   { to: '/sessions', label: 'Sessions' },
   { to: '/logs', label: 'Logs' },
 ];
+
+// Panels PanelHost actually grants isPinned/onTogglePin to (Settings/Account
+// are modal popups, never pinned) - the only values worth persisting as
+// preferences.pinnedPanel.
+const PINNABLE_PANELS = new Set(['quickChat', 'alerts', 'insights']);
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'progenitor_sidebar_collapsed';
+const PINNED_PANEL_STORAGE_KEY = 'progenitor_pinned_panel';
 
 const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
@@ -1153,9 +1161,9 @@ function QuickChatPanel({
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const { config, getApiUrl, setApiUrl, setNotifications, setSounds, setTheme, resetSettings } = useConfig();
+  const { config, getApiUrl, setApiUrl, setNotifications, setSounds, resetSettings } = useConfig();
+  const { setTheme } = useTheme();
   const dispatch = useDispatch();
-  const realtime = useSelector(selectRealtime);
   const preferences = useSelector(selectPreferences);
   const preferencesUrl = getApiUrl('preferences');
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
@@ -1166,12 +1174,7 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState('');
 
-  useEffect(() => {
-    if (!isOpen || !realtime.connected) {
-      return;
-    }
-    void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
-  }, [dispatch, preferencesUrl, isOpen, realtime.connected]);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
 
   useEffect(() => {
     if (!preferences.loaded) {
@@ -1186,14 +1189,19 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
     setProfileError('');
     try {
       await dispatch(
-        savePreferences({ preferencesUrl, displayName: displayNameDraft, timezone: timezoneDraft }),
+        savePreferences({
+          preferencesUrl,
+          ...preferencesSaveRequest,
+          displayName: displayNameDraft,
+          timezone: timezoneDraft,
+        }),
       ).unwrap();
     } catch {
       setProfileError('Failed to save profile.');
     } finally {
       setSavingProfile(false);
     }
-  }, [dispatch, preferencesUrl, displayNameDraft, timezoneDraft]);
+  }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
   return (
     <>
       <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1412,6 +1420,21 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           onClose={() => setResetConfirmationOpen(false)}
           onConfirm={() => {
             resetSettings();
+            // resetSettings() only clears ConfigContext/localStorage. Theme,
+            // nav-collapse, and pinned-panel are also backend-persisted now
+            // (see /config/preferences.json) - reset those to their schema
+            // defaults too, preserving the profile identity fields.
+            if (preferences.loaded) {
+              dispatch(
+                savePreferences({
+                  preferencesUrl,
+                  ...preferencesSaveRequest,
+                  theme: 'system',
+                  navCollapsed: false,
+                  pinnedPanel: null,
+                }),
+              );
+            }
             setResetConfirmationOpen(false);
           }}
         />
@@ -1736,21 +1759,47 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
 }
 
 function AppRuntimeShell() {
-  const [activePanel, setActivePanel] = useState(null);
+  const dispatch = useDispatch();
+  const realtime = useSelector(selectRealtime);
+  const preferences = useSelector(selectPreferences);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  const { getApiUrl } = useConfig();
+  const preferencesUrl = getApiUrl('preferences');
+
+  // Seed the whole profile once per app load - theme (useTheme), nav-collapse,
+  // and pinned-panel all read from this same fetch.
+  useEffect(() => {
+    if (!realtime.connected) {
+      return;
+    }
+    void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
+  }, [dispatch, preferencesUrl, realtime.connected]);
+
+  const [activePanel, setActivePanel] = useState(() => {
+    const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+    return cached && PINNABLE_PANELS.has(cached) ? cached : null;
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const searchQuery = '';
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
   const quickChatInputRef = useRef(null);
-  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true',
+  );
   const [isNavOpen, setIsNavOpen] = useState(false);
-  const [isPinned, setIsPinned] = useState(false);
+  // Mirrors activePanel's initial cache read: a panel only restores open+docked
+  // (rather than open+floating) if it was the pinned one.
+  const [isPinned, setIsPinned] = useState(() => {
+    const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+    return Boolean(cached && PINNABLE_PANELS.has(cached));
+  });
   // Below 980px the sidebar becomes a fixed overlay drawer (CSS handles it).
   // Ensure the nav is not in icon-rail mode at those widths — the drawer is
   // either open (is-open class) or hidden off-screen, never a collapsed rail.
-  // Note: isNavCollapsed initialises to false so no synchronous setState is
-  // needed in the effect body; only future viewport-change events need handling.
+  // This is a transient viewport override, not a user preference change, so
+  // it deliberately bypasses persistTogglePin/persistCollapse below.
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 980px)');
     const handler = (e) => {
@@ -1763,9 +1812,69 @@ function AppRuntimeShell() {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
+  // Live sync: whenever the backend-persisted profile's nav-collapse/pinned-
+  // panel disagree with the local cache (initial load, an agent edit to
+  // /config/preferences.json, the reset-settings button, or a change from
+  // another device/tab), adopt them. Safe from feedback loops: the toggle
+  // handlers below write localStorage synchronously before their own save
+  // round-trips back through Redux, so by the time the snapshot arrives the
+  // cached values already match and this is a no-op.
+  useEffect(() => {
+    if (!preferences.loaded) {
+      return;
+    }
+    const cachedNavCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+    if (preferences.navCollapsed !== cachedNavCollapsed) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing external (Redux/backend) state into local UI state, not derived-from-render state
+      setIsNavCollapsed(preferences.navCollapsed);
+      localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(preferences.navCollapsed));
+    }
+    const cachedPinned = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+    if (preferences.pinnedPanel !== (cachedPinned && PINNABLE_PANELS.has(cachedPinned) ? cachedPinned : null)) {
+      if (preferences.pinnedPanel && PINNABLE_PANELS.has(preferences.pinnedPanel)) {
+        localStorage.setItem(PINNED_PANEL_STORAGE_KEY, preferences.pinnedPanel);
+        setActivePanel(preferences.pinnedPanel);
+        setIsPinned(true);
+      } else {
+        localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
+        setIsPinned(false);
+      }
+    }
+  }, [preferences.loaded, preferences.navCollapsed, preferences.pinnedPanel]);
+
+  const persistNavCollapsed = useCallback(
+    (next) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+      if (preferences.loaded) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, navCollapsed: next }));
+      }
+    },
+    [dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest],
+  );
+
   const handleTogglePin = useCallback(() => {
     setIsPinned((current) => !current);
   }, []);
+
+  // Whatever panel is open+pinned right now is the one that reopens docked on
+  // the next load; persist it whenever that derived value actually changes
+  // (pin toggled, panel switched while pinned, or the panel closed/unpinned).
+  const pinnedPanelValue = activePanel && isPinned && PINNABLE_PANELS.has(activePanel) ? activePanel : null;
+  const prevPinnedPanelRef = useRef(pinnedPanelValue);
+  useEffect(() => {
+    if (prevPinnedPanelRef.current === pinnedPanelValue) {
+      return;
+    }
+    prevPinnedPanelRef.current = pinnedPanelValue;
+    if (pinnedPanelValue) {
+      localStorage.setItem(PINNED_PANEL_STORAGE_KEY, pinnedPanelValue);
+    } else {
+      localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
+    }
+    if (preferences.loaded) {
+      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, pinnedPanel: pinnedPanelValue }));
+    }
+  }, [pinnedPanelValue, dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest]);
 
   const shellClass = [
     'app-shell',
@@ -1833,7 +1942,11 @@ function AppRuntimeShell() {
         isCollapsed={isNavCollapsed}
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
-        onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
+        onToggleCollapse={() => setIsNavCollapsed((current) => {
+          const next = !current;
+          persistNavCollapsed(next);
+          return next;
+        })}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccount={() => setActivePanel('account')}
       />
