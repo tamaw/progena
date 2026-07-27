@@ -67,7 +67,6 @@ import {
   SettingsGeneralIcon,
   SettingsIntegrationsIcon,
   SettingsKeyboardIcon,
-  SettingsNotificationsIcon,
   SettingsTeamIcon,
   SkillsNavIcon,
   SunIcon,
@@ -172,7 +171,6 @@ const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
   { id: 'appearance', label: 'Appearance', icon: <SettingsAppearanceIcon /> },
   { id: 'agents', label: 'Agents & Models', icon: <SettingsAgentsIcon /> },
-  { id: 'notifications', label: 'Notifications', icon: <SettingsNotificationsIcon /> },
   { id: 'keyboard', label: 'Keyboard', icon: <SettingsKeyboardIcon /> },
   { id: 'integrations', label: 'Integrations', icon: <SettingsIntegrationsIcon /> },
   { id: 'team', label: 'Team', icon: <SettingsTeamIcon /> },
@@ -1165,7 +1163,6 @@ function QuickChatPanel({
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const { config, getApiUrl, setApiUrl, resetSettings } = useConfig();
-  const { setTheme } = useTheme();
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
   const preferencesUrl = getApiUrl('preferences');
@@ -1174,13 +1171,6 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
 
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
-
-  const persistNotificationPreference = useCallback(
-    (patch) => {
-      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, ...patch }));
-    },
-    [dispatch, preferencesUrl, preferencesSaveRequest],
-  );
   return (
     <>
       <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1277,18 +1267,8 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
               <section className="set-section is-active">
                 <header className="set-section__head">
                   <h3>Appearance</h3>
-                  <p>Theme, density, and font preferences.</p>
+                  <p>Density and font preferences.</p>
                 </header>
-
-                <div className="set-row">
-                  <div className="set-row__label">
-                    <div className="set-row__title">Theme</div>
-                    <div className="set-row__sub">Choose the default interface palette.</div>
-                  </div>
-                  <select className="set-input" value={config.theme.default} onChange={(event) => setTheme(event.target.value)}>
-                    {config.theme.options.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
-                  </select>
-                </div>
 
                 <div className="set-row">
                   <div className="set-row__label">
@@ -1304,46 +1284,7 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
               </section>
             ) : null}
 
-            {section === 'notifications' ? (
-              <section className="set-section is-active">
-                <header className="set-section__head">
-                  <h3>Notifications</h3>
-                  <p>Choose which events trigger alerts, sounds, and desktop notices.</p>
-                </header>
-
-                <div className="set-row">
-                  <div className="set-row__label">
-                    <div className="set-row__title">Enable notifications</div>
-                    <div className="set-row__sub">Show alerts from the status stream and background tasks.</div>
-                  </div>
-                  <label className={`set-switch ${preferences.notificationsEnabled ? 'is-on' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={preferences.notificationsEnabled}
-                      onChange={(event) => persistNotificationPreference({ notificationsEnabled: event.target.checked })}
-                    />
-                    <span className="set-switch__knob" aria-hidden="true" />
-                  </label>
-                </div>
-
-                <div className="set-row">
-                  <div className="set-row__label">
-                    <div className="set-row__title">Notification sounds</div>
-                    <div className="set-row__sub">Play a subtle sound when important work completes.</div>
-                  </div>
-                  <label className={`set-switch ${preferences.notificationSounds ? 'is-on' : ''}`}>
-                    <input
-                      type="checkbox"
-                      checked={preferences.notificationSounds}
-                      onChange={(event) => persistNotificationPreference({ notificationSounds: event.target.checked })}
-                    />
-                    <span className="set-switch__knob" aria-hidden="true" />
-                  </label>
-                </div>
-              </section>
-            ) : null}
-
-            {!['general', 'appearance', 'notifications'].includes(section) ? (
+            {!['general', 'appearance'].includes(section) ? (
               <section className="set-section is-active">
                 <div className="set-stub">
                   <div className="set-stub__glyph">{settingsSections.find((item) => item.id === section)?.icon}</div>
@@ -1580,7 +1521,8 @@ function InsightsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 
 function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
+  const { config, getApiUrl } = useConfig();
+  const { setTheme } = useTheme();
   const preferences = useSelector(selectPreferences);
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const preferencesUrl = getApiUrl('preferences');
@@ -1616,16 +1558,27 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
     }
   }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
 
+  const persistNotificationPreference = useCallback(
+    (patch) => {
+      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, ...patch }));
+    },
+    [dispatch, preferencesUrl, preferencesSaveRequest],
+  );
+
   return (
     <TopNavPane title="Account" className="topnav-pane--account" bodyClassName="account-pane" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
-      <div className="account-pane__id">
-        <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
-        <div className="account-pane__id-text">
-          <div className="account-pane__name">{preferences.displayName || 'Unnamed'}</div>
-          <div className="account-pane__email">me@tama.id.au</div>
+      <section className="set-section is-active">
+        <header className="set-section__head">
+          <h3>Profile</h3>
+          <p>Your identity across the workspace and agent transcripts.</p>
+        </header>
+        <div className="account-pane__id">
+          <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
+          <div className="account-pane__id-text">
+            <div className="account-pane__name">{preferences.displayName || 'Unnamed'}</div>
+            <div className="account-pane__email">me@tama.id.au</div>
+          </div>
         </div>
-      </div>
-      <div className="account-pane__profile">
         <div className="set-row">
           <span className="set-row__label">
             <span className="set-row__title">Display name</span>
@@ -1658,13 +1611,65 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           </span>
         </div>
         {profileError ? <div className="task-alert">{profileError}</div> : null}
-      </div>
-      <dl className="account-pane__facts">
-        <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
-        <div className="account-pane__fact"><dt>Role</dt><dd>Owner</dd></div>
-        <div className="account-pane__fact"><dt>Workspace</dt><dd>progenitor-main</dd></div>
-        <div className="account-pane__fact"><dt>Member since</dt><dd>June 2026</dd></div>
-      </dl>
+      </section>
+
+      <section className="set-section is-active">
+        <header className="set-section__head">
+          <h3>Preferences</h3>
+          <p>Theme and notification behavior.</p>
+        </header>
+        <div className="set-row">
+          <div className="set-row__label">
+            <div className="set-row__title">Theme</div>
+            <div className="set-row__sub">Choose the interface palette.</div>
+          </div>
+          <select className="set-input" value={config.theme.default} onChange={(event) => setTheme(event.target.value)}>
+            {config.theme.options.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
+          </select>
+        </div>
+        <div className="set-row">
+          <div className="set-row__label">
+            <div className="set-row__title">Enable notifications</div>
+            <div className="set-row__sub">Show alerts from the status stream and background tasks.</div>
+          </div>
+          <label className={`set-switch ${preferences.notificationsEnabled ? 'is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={preferences.notificationsEnabled}
+              onChange={(event) => persistNotificationPreference({ notificationsEnabled: event.target.checked })}
+            />
+            <span className="set-switch__knob" aria-hidden="true" />
+          </label>
+        </div>
+        <div className="set-row">
+          <div className="set-row__label">
+            <div className="set-row__title">Notification sounds</div>
+            <div className="set-row__sub">Play a subtle sound when important work completes.</div>
+          </div>
+          <label className={`set-switch ${preferences.notificationSounds ? 'is-on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={preferences.notificationSounds}
+              onChange={(event) => persistNotificationPreference({ notificationSounds: event.target.checked })}
+            />
+            <span className="set-switch__knob" aria-hidden="true" />
+          </label>
+        </div>
+      </section>
+
+      <section className="set-section is-active">
+        <header className="set-section__head">
+          <h3>Account</h3>
+          <p>Plan, role, and workspace.</p>
+        </header>
+        <dl className="account-pane__facts">
+          <div className="account-pane__fact"><dt>Plan</dt><dd>Free</dd></div>
+          <div className="account-pane__fact"><dt>Role</dt><dd>Owner</dd></div>
+          <div className="account-pane__fact"><dt>Workspace</dt><dd>progenitor-main</dd></div>
+          <div className="account-pane__fact"><dt>Member since</dt><dd>June 2026</dd></div>
+        </dl>
+      </section>
+
       <div className="account-pane__foot">
         <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
         <button type="button" className="task-btn task-btn--secondary" disabled>Sign out</button>
