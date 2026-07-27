@@ -1339,7 +1339,6 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                   theme: 'system',
                   navCollapsed: false,
                   pinnedPanel: null,
-                  notificationsEnabled: true,
                   notificationSounds: false,
                 }),
               );
@@ -1667,22 +1666,8 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
         </div>
         <div className="set-row">
           <div className="set-row__label">
-            <div className="set-row__title">Enable notifications</div>
-            <div className="set-row__sub">Show alerts from the status stream and background tasks.</div>
-          </div>
-          <label className={`set-switch ${preferences.notificationsEnabled ? 'is-on' : ''}`}>
-            <input
-              type="checkbox"
-              checked={preferences.notificationsEnabled}
-              onChange={(event) => persistNotificationPreference({ notificationsEnabled: event.target.checked })}
-            />
-            <span className="set-switch__knob" aria-hidden="true" />
-          </label>
-        </div>
-        <div className="set-row">
-          <div className="set-row__label">
             <div className="set-row__title">Notification sounds</div>
-            <div className="set-row__sub">Play a subtle sound when important work completes.</div>
+            <div className="set-row__sub">Play a chime when an alert appears top-right.</div>
           </div>
           <label className={`set-switch ${preferences.notificationSounds ? 'is-on' : ''}`}>
             <input
@@ -1824,11 +1809,10 @@ function AppRuntimeShell() {
     void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
   }, [dispatch, preferencesUrl, realtime.connected]);
 
-  // Global "important work completed" notification: fires a toast (and,
-  // if enabled, a chime) for every new backend alert on every page - not
-  // just while Chat happens to be mounted. Gated on
-  // preferences.notificationsEnabled/notificationSounds (Settings >
-  // Notifications), matching /config/preferences.json.
+  // Global alert toast: fires for every new backend alert on every page -
+  // not just while Chat happens to be mounted. A chime plays alongside it
+  // when preferences.notificationSounds is on (Account > Notification
+  // sounds), matching /config/preferences.json.
   const { show } = useNotifications();
   const lastReceivedAlert = useSelector(selectLastReceivedAlert);
   const lastHandledAlertSeqRef = useRef(0);
@@ -1837,14 +1821,11 @@ function AppRuntimeShell() {
       return;
     }
     lastHandledAlertSeqRef.current = lastReceivedAlert.seq;
-    if (!preferences.notificationsEnabled) {
-      return;
-    }
     show(lastReceivedAlert.type || 'info', lastReceivedAlert.title || 'Alert', lastReceivedAlert.message || '');
     if (preferences.notificationSounds) {
       playNotificationSound();
     }
-  }, [lastReceivedAlert, preferences.notificationsEnabled, preferences.notificationSounds, show]);
+  }, [lastReceivedAlert, preferences.notificationSounds, show]);
 
   const [activePanel, setActivePanel] = useState(() => {
     const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
