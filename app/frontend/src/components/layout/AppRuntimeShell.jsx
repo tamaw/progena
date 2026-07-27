@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -74,6 +75,7 @@ import {
   normalizeAiPrompt,
   normalizeQuickChatConfig,
 } from './quickChatConfig';
+import PopupModal from '../common/PopupModal';
 
 // Grouped by owner/level (see the entity-relationship model):
 //   Operate  — the surfaces you work in (Progenitor chat, overview, projects)
@@ -1148,12 +1150,13 @@ function QuickChatPanel({
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const { config, setApiUrl, setNotifications, setSounds, setTheme } = useConfig();
+  const { config, setApiUrl, setNotifications, setSounds, setTheme, resetSettings } = useConfig();
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
   const [section, setSection] = useState('general');
-
+  const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
   return (
-    <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
+    <>
+      <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
           <nav className="settings-nav" aria-label="Settings sections">
             {settingsSections.map((item) => (
               <button
@@ -1238,7 +1241,7 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Reset all settings</div>
                     <div className="set-row__sub">Restore Progenitor to factory defaults.</div>
                   </div>
-                  <button type="button" className="set-btn set-btn--danger">Reset</button>
+                  <button type="button" className="set-btn set-btn--danger" onClick={() => setResetConfirmationOpen(true)}>Reset</button>
                 </div>
               </section>
             ) : null}
@@ -1326,6 +1329,20 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             ) : null}
           </div>
     </TopNavPane>
+      {resetConfirmationOpen ? (
+        <PopupModal
+          eyebrow="Reset settings"
+          title="Reset all settings?"
+          message="This restores the default Progenitor settings and clears saved local preferences, including chat-related preferences."
+          confirmLabel="Reset settings"
+          onClose={() => setResetConfirmationOpen(false)}
+          onConfirm={() => {
+            resetSettings();
+            setResetConfirmationOpen(false);
+          }}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -1543,8 +1560,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // Transition durations must match the CSS transition on .topnav-pane.
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
-
-function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, isPinned, onTogglePin }) {
+function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin }) {
   const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -1584,16 +1600,28 @@ function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickC
   }, [activePanel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!activePanel) return undefined;
-    const handleKeyDown = (event) => { if (event.key === 'Escape') closePanel(); };
+    if (!activePanel && !settingsOpen) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        if (settingsOpen) setSettingsOpen(false);
+        else closePanel();
+      }
+    };
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [activePanel, closePanel]);
-
-  if (!displayed) return null;
+  }, [activePanel, closePanel, settingsOpen, setSettingsOpen]);
+  if (!displayed && !settingsOpen) return null;
 
   // Settings and Account are modal popups (centered window), not the right-side
   // slide-in used by the other chrome tools — they are never pinned.
+  const settingsOverlay = settingsOpen ? createPortal(
+    <>
+      <button type="button" className="settings-modal-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
+      <SettingsPanel onClose={() => setSettingsOpen(false)} isOpen />
+    </>,
+    document.body,
+  ) : null;
+  if (!displayed) return settingsOverlay;
   const isModalPanel = displayed === 'settings' || displayed === 'account';
   // Scrim: visible for the full lifetime of the pane (including enter/exit
   // transitions), full-width, so clicks never pass through and the page
@@ -1602,7 +1630,7 @@ function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickC
   const scrim = (isModalPanel || !isPinned) ? (
     <button
       type="button"
-      className="topnav-scrim is-open"
+      className={`topnav-scrim is-open${isModalPanel ? ' topnav-scrim--modal' : ''}`}
       aria-label="Close panel"
       onClick={closePanel}
     />
@@ -1610,7 +1638,7 @@ function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickC
 
   const shared = { isOpen, isPinned, onTogglePin };
 
-  if (displayed === 'alerts') return <>{scrim}<AlertsPanel onClose={closePanel} {...shared} /></>;
+  if (displayed === 'alerts') return <>{scrim}<AlertsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
   if (displayed === 'quickChat') {
     return (
       <>
@@ -1622,18 +1650,20 @@ function PanelHost({ activePanel, quickChatConfig, quickChatSubmission, onQuickC
           onSubmissionConsumed={onQuickChatSubmissionConsumed}
           {...shared}
         />
+        {settingsOverlay}
       </>
     );
   }
-  if (displayed === 'settings') return <>{scrim}<SettingsPanel onClose={closePanel} isOpen={isOpen} /></>;
-  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} isOpen={isOpen} /></>;
-  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} /></>;
-  if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} /></>;
+  if (displayed === 'settings') return settingsOverlay;
+  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} isOpen={isOpen} />{settingsOverlay}</>;
+  if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />{settingsOverlay}</>;
+  if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
   return null;
 }
 
 function AppRuntimeShell() {
   const [activePanel, setActivePanel] = useState(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const searchQuery = '';
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
@@ -1730,7 +1760,7 @@ function AppRuntimeShell() {
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
         onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
-        onOpenSettings={() => setActivePanel('settings')}
+        onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccount={() => setActivePanel('account')}
       />
       <Header
@@ -1749,8 +1779,10 @@ function AppRuntimeShell() {
       </main>
       <PanelHost
         activePanel={activePanel}
+        settingsOpen={settingsOpen}
         quickChatConfig={quickChatConfig}
         quickChatSubmission={quickChatSubmission}
+        setSettingsOpen={setSettingsOpen}
         onQuickChatSubmissionConsumed={handleQuickChatSubmissionConsumed}
         searchQuery={searchQuery}
         setActivePanel={setActivePanel}

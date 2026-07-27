@@ -96,7 +96,7 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
 
     def test_state_manager_mounts_config_and_inbox_routes(self, monkeypatch):
-        """A state_manager adds the /config/, /config/tasks/, /config/workflows/, and /inbox/ mounts."""
+        """A state_manager adds the /config/, /config/tasks/, /workflows/, and /inbox/ mounts."""
         from unittest.mock import MagicMock
 
         from app.progenitor.agent.state_backend import (
@@ -113,7 +113,7 @@ class TestBackendFactory:
         backend = create_progenitor_backend(project_root=".", state_manager=MagicMock())
         assert isinstance(backend.routes["/config/"], StateDocumentBackend)
         assert isinstance(backend.routes["/config/tasks/"], KanbanTaskDirectoryBackend)
-        assert isinstance(backend.routes["/config/workflows/"], WorkflowDirectoryBackend)
+        assert isinstance(backend.routes["/workflows/"], WorkflowDirectoryBackend)
         assert isinstance(backend.routes["/inbox/"], InboxDirectoryBackend)
 
     def test_factory_defaults_to_cwd(self, monkeypatch):

@@ -57,6 +57,7 @@ import {
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { JsonCodeEditor } from '../components/workspace/WorkflowJsonPanel';
+import PopupModal from '../components/common/PopupModal';
 import '../styles/workspace.css';
 import '../styles/nodes.css';
 
@@ -107,10 +108,26 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 360, height: 160 },
     settings: { width: 460, height: 340 },
   },
+  condition: {
+    data: { width: 300, height: 130 },
+    settings: { width: 380, height: 220 },
+  },
+  approval: {
+    data: { width: 320, height: 130 },
+    settings: { width: 400, height: 240 },
+  },
+  inbox: {
+    data: { width: 320, height: 130 },
+    settings: { width: 400, height: 260 },
+  },
+  agent: {
+    data: { width: 340, height: 140 },
+    settings: { width: 440, height: 280 },
+  },
 };
 // Node kinds addable from the dock/JSON editor beyond the fixed event start
 // node. Order here drives the dock's button order.
-const DOCK_NODE_KINDS = ['prompt', 'user', 'code'];
+const DOCK_NODE_KINDS = ['prompt', 'user', 'code', 'condition', 'approval', 'inbox', 'agent'];
 const USER_MESSAGE_TYPES = [
   { value: 'say_to_user', label: 'say_to_user' },
   { value: 'notify_user', label: 'notify_user' },
@@ -132,6 +149,21 @@ const DOCK_NODE_DEFAULTS = {
   code: () => ({
     title: 'Code', language: 'javascript', content: '// Write code for the agent to run',
   }),
+  condition: () => ({ title: 'Condition', expression: 'payload.card.status == "done"' }),
+  approval: () => ({ title: 'Approval', message: 'Approve this workflow action.' }),
+  inbox: () => ({
+    title: 'Send to Inbox',
+    messageTitle: 'Workflow message',
+    message: 'Workflow completed an action.',
+    level: 'info',
+  }),
+  agent: () => ({
+    title: 'Call Agent',
+    transport: 'a2a',
+    agentName: '',
+    request: 'Handle this workflow input.',
+    timeoutSeconds: 300,
+  }),
 };
 
 function resolveNodeSizes(kind, storedSize) {
@@ -149,7 +181,7 @@ function resolveNodeSizes(kind, storedSize) {
 }
 
 function workflowPath(workflowId) {
-  return workflowId ? `/state/workflows/${workflowId}.json` : '';
+  return workflowId ? `/workflows/${workflowId}.json` : '';
 }
 
 // The `.json` suffix on workflowPath() is the backing virtual-file extension
@@ -269,6 +301,36 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
       canDelete: true,
     };
   }
+  if (kind === 'condition') {
+    return {
+      ...shared, ...runState, kind, title: node.title || 'Condition',
+      expression: node.expression || '',
+      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+    };
+  }
+  if (kind === 'approval') {
+    return {
+      ...shared, ...runState, kind, title: node.title || 'Approval',
+      message: node.message || '',
+      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+    };
+  }
+  if (kind === 'inbox') {
+    return {
+      ...shared, ...runState, kind, title: node.title || 'Send to Inbox',
+      messageTitle: node.message_title || 'Workflow message',
+      message: node.message || '', level: node.level || 'info',
+      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+    };
+  }
+  if (kind === 'agent') {
+    return {
+      ...shared, ...runState, kind, title: node.title || 'Call Agent',
+      transport: node.transport || 'a2a', agentName: node.agent_name || '',
+      request: node.request || '', timeoutSeconds: node.timeout_seconds || 300,
+      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+    };
+  }
   return {
     ...shared,
     ...runState,
@@ -314,9 +376,11 @@ function workflowToFlow(definition, callbacks, latestRun) {
     };
   });
   const edges = (definition?.graph?.edges || []).map((edge) => ({
-    id: `edge_${edge.from.node}_${edge.to.node}`,
+    id: `edge_${edge.from.node}_${edge.to.node}_${edge.from.port || 'default'}`,
     source: edge.from.node,
+    ...(edge.from.port && edge.from.port !== 'default' ? { sourceHandle: edge.from.port } : {}),
     target: edge.to.node,
+    ...(edge.to.port && edge.to.port !== 'default' ? { targetHandle: edge.to.port } : {}),
     type: 'smoothstep',
     animated: true,
   }));
@@ -366,6 +430,35 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
         language: String(node.data?.language || 'javascript'),
         content: String(node.data?.content || ''),
       };
+    } else if (node.type === 'condition') {
+      graphNodes[node.id] = {
+        kind: 'condition',
+        title: String(node.data?.title || 'Condition'),
+        expression: String(node.data?.expression || ''),
+      };
+    } else if (node.type === 'approval') {
+      graphNodes[node.id] = {
+        kind: 'approval',
+        title: String(node.data?.title || 'Approval'),
+        message: String(node.data?.message || ''),
+      };
+    } else if (node.type === 'inbox') {
+      graphNodes[node.id] = {
+        kind: 'inbox',
+        title: String(node.data?.title || 'Send to Inbox'),
+        message_title: String(node.data?.messageTitle || 'Workflow message'),
+        message: String(node.data?.message || ''),
+        level: node.data?.level || 'info',
+      };
+    } else if (node.type === 'agent') {
+      graphNodes[node.id] = {
+        kind: 'agent',
+        title: String(node.data?.title || 'Call Agent'),
+        transport: node.data?.transport || 'a2a',
+        agent_name: String(node.data?.agentName || ''),
+        request: String(node.data?.request || ''),
+        timeout_seconds: Number(node.data?.timeoutSeconds || 300),
+      };
     } else {
       graphNodes[node.id] = {
         kind: 'prompt',
@@ -404,8 +497,8 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
     graph: {
       nodes: graphNodes,
       edges: edges.map((edge) => ({
-        from: { node: edge.source, port: 'default' },
-        to: { node: edge.target, port: 'default' },
+        from: { node: edge.source, port: edge.sourceHandle || 'default' },
+        to: { node: edge.target, port: edge.targetHandle || 'default' },
       })),
     },
     ui: {
@@ -781,11 +874,64 @@ function CodeNode({ id, data, selected }) {
   );
 }
 
+function WorkflowControlNode({ id, data, selected }) {
+  const labels = {
+    condition: 'Condition',
+    approval: 'Approval',
+    inbox: 'Send to Inbox',
+    agent: data.transport === 'acp' ? 'Call ACP Agent' : 'Call A2A Agent',
+  };
+  const label = labels[data.kind] || data.kind;
+  const field = data.kind === 'condition' ? 'expression'
+    : data.kind === 'approval' ? 'message'
+      : data.kind === 'inbox' ? 'message'
+        : 'request';
+  const value = data[field] || '';
+  return (
+    <>
+      <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`workspace-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="workspace-handle" />
+        <div className="node-title-bar drag-handle">
+          <span className={`node-type-icon ${data.kind}`}>{data.kind === 'agent' ? 'A' : data.kind[0].toUpperCase()}</span>
+          <input className="node-title-input" value={data.title} onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
+        </div>
+        <div className="node-body">
+          {data.kind === 'inbox' && <input className="node-field-input" value={data.messageTitle} onChange={(event) => data.onChange(id, { messageTitle: event.target.value })} placeholder="Inbox title" />}
+          {data.kind === 'agent' && (
+            <select className="node-field-input" value={data.transport} onChange={(event) => data.onChange(id, { transport: event.target.value })}>
+              <option value="a2a">A2A</option><option value="acp">ACP</option>
+            </select>
+          )}
+          {data.kind === 'agent' && <input className="node-field-input" value={data.agentName} onChange={(event) => data.onChange(id, { agentName: event.target.value })} placeholder="Agent name" />}
+          <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
+        </div>
+        {data.kind === 'condition' ? (
+          <>
+            <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} className="workspace-handle" />
+            <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} className="workspace-handle" />
+          </>
+        ) : data.kind === 'approval' ? (
+          <>
+            <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="workspace-handle" />
+            <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="workspace-handle" />
+          </>
+        ) : <Handle type="source" position={Position.Right} className="workspace-handle" />}
+      </div>
+    </>
+  );
+}
+
 const NODE_TYPES = {
   event: EventNode,
   prompt: PromptNode,
   user: UserNode,
   code: CodeNode,
+  condition: WorkflowControlNode,
+  approval: WorkflowControlNode,
+  inbox: WorkflowControlNode,
+  agent: WorkflowControlNode,
 };
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
@@ -811,6 +957,10 @@ const DOCK_ITEM_META = {
   prompt: { icon: 'P', label: 'Prompt', title: 'Add a prompt step' },
   user: { icon: 'U', label: 'User', title: 'Add a user message step' },
   code: { icon: '<>', label: 'Code', title: 'Add a code step' },
+  condition: { icon: '◇', label: 'Condition', title: 'Add a condition branch' },
+  approval: { icon: '✓', label: 'Approval', title: 'Add an approval gate' },
+  inbox: { icon: '↓', label: 'Inbox', title: 'Send a message to Inbox' },
+  agent: { icon: 'A', label: 'Agent', title: 'Call an A2A or ACP agent' },
 };
 
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
@@ -899,7 +1049,7 @@ function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
   );
 }
 
-function WorkflowRunsList({ runs, loading }) {
+function WorkflowRunsList({ runs, loading, workflowId }) {
   if (loading) {
     return <PaneEmptyState>Loading workflow runs...</PaneEmptyState>;
   }
@@ -919,6 +1069,21 @@ function WorkflowRunsList({ runs, loading }) {
             {run.current_node_id ? <span>Current: {run.current_node_id}</span> : null}
             {run.thread_id ? <span>Thread: {run.thread_id}</span> : null}
           </div>
+          {run.pending_approval ? (
+            <div className="workflow-run-card__approval">
+              <p>{run.pending_approval.message || 'Approval required.'}</p>
+              <button type="button" onClick={() => fetch(`/api/ui/workflows/${workflowId}/runs/${run.run_id}/approval`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approved: true }),
+              })}>Approve</button>
+              <button type="button" onClick={() => fetch(`/api/ui/workflows/${workflowId}/runs/${run.run_id}/approval`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ approved: false }),
+              })}>Reject</button>
+            </div>
+          ) : null}
           {run.last_error ? <p className="workflow-run-card__error">{run.last_error}</p> : null}
           {run.last_output ? <pre className="workflow-run-card__output">{run.last_output}</pre> : null}
         </article>
@@ -926,6 +1091,7 @@ function WorkflowRunsList({ runs, loading }) {
     </div>
   );
 }
+
 
 function WorkflowsInner() {
   const dispatch = useDispatch();
@@ -952,6 +1118,8 @@ function WorkflowsInner() {
   const [jsonError, setJsonError] = useState('');
   const [saving, setSaving] = useState(false);
   const [busyAction, setBusyAction] = useState('');
+  const [localDraftDirty, setLocalDraftDirty] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const requestedPath = withJsonExtension(searchParams.get('path') || '');
   const selectedDetail = useSelector((state) => selectWorkflowDetailByPath(state, selectedPath));
   const selectedLatestRun = useSelector((state) => {
@@ -963,6 +1131,7 @@ function WorkflowsInner() {
   const viewportRef = useRef(DEFAULT_VIEWPORT);
   const syncedPathRef = useRef('');
   const syncedHashRef = useRef('');
+  const hydratingGraphRef = useRef(false);
 
   const loadWorkflows = useCallback(async () => {
     try {
@@ -1053,7 +1222,7 @@ function WorkflowsInner() {
     () => (selectedDetail?.workflow ? JSON.stringify(selectedDetail.workflow) : ''),
     [selectedDetail],
   );
-  const hasUnsavedChanges = Boolean(selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
+  const hasUnsavedChanges = Boolean(localDraftDirty && selectedDetail?.workflow && draftHash && draftHash !== selectedHash);
 
   const syncDraftFromWorkflow = useCallback((workflow, latestRun, path, preserveDirty = false) => {
     if (!workflow) {
@@ -1069,6 +1238,8 @@ function WorkflowsInner() {
       return;
     }
     syncedPathRef.current = path;
+    hydratingGraphRef.current = true;
+    setLocalDraftDirty(false);
     syncedHashRef.current = nextHash;
     const cloned = cloneValue(workflow);
     const flow = workflowToFlow(cloned, {
@@ -1078,6 +1249,7 @@ function WorkflowsInner() {
             node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
           ));
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1089,6 +1261,7 @@ function WorkflowsInner() {
           nodesRef.current = nextNodes;
           edgesRef.current = nextEdges;
           setGraphEdges(nextEdges);
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, nextEdges, viewportRef.current));
           return nextNodes;
         });
@@ -1111,6 +1284,7 @@ function WorkflowsInner() {
             };
           });
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1129,6 +1303,7 @@ function WorkflowsInner() {
             };
           });
           nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
           setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
           return nextNodes;
         });
@@ -1145,8 +1320,12 @@ function WorkflowsInner() {
     requestAnimationFrame(() => {
       if (flow.nodes.length) {
         reactFlow.setViewport(flow.viewport || DEFAULT_VIEWPORT);
-        reactFlow.fitView({ padding: 0.18, duration: 200 });
+        // Preserve the workflow's stored viewport without emitting synthetic
+        // node-position changes that look like unsaved edits.
       }
+      setTimeout(() => {
+        hydratingGraphRef.current = false;
+      }, 250);
     });
   }, [hasUnsavedChanges, reactFlow]);
 
@@ -1186,21 +1365,30 @@ function WorkflowsInner() {
         return current;
       }
       const next = typeof updater === 'function' ? updater(current) : updater;
+    setLocalDraftDirty(true);
       return next;
     });
   }, []);
 
-  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current) => {
+  const syncWorkflowFromGraph = useCallback((nextNodes, nextEdges, nextViewport = viewportRef.current, markDirty = true) => {
     nodesRef.current = nextNodes;
     edgesRef.current = nextEdges;
     viewportRef.current = nextViewport;
+    if (markDirty) {
+      setLocalDraftDirty(true);
+    }
     setDraftWorkflow((current) => (current ? flowToWorkflow(current, nextNodes, nextEdges, nextViewport) : current));
   }, []);
 
   const onNodesChange = useCallback((changes) => {
     setGraphNodes((currentNodes) => {
       const nextNodes = applyNodeChanges(changes, currentNodes);
-      syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+      if (!hydratingGraphRef.current) {
+        const marksDirty = changes.some((change) => (
+          change.type === 'add' || change.type === 'remove' || change.dragging === true
+        ));
+        syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current, marksDirty);
+      }
       return nextNodes;
     });
   }, [syncWorkflowFromGraph]);
@@ -1208,7 +1396,10 @@ function WorkflowsInner() {
   const onEdgesChange = useCallback((changes) => {
     setGraphEdges((currentEdges) => {
       const nextEdges = applyEdgeChanges(changes, currentEdges);
-      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      if (!hydratingGraphRef.current) {
+        const marksDirty = changes.some((change) => change.type === 'add' || change.type === 'remove');
+        syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current, marksDirty);
+      }
       return nextEdges;
     });
   }, [syncWorkflowFromGraph]);
@@ -1517,17 +1708,26 @@ function WorkflowsInner() {
     }
   };
 
-  const handleDeleteWorkflow = async () => {
+  const handleDeleteWorkflow = () => {
+    if (selectedDetail?.workflow?.id) {
+      setDeleteConfirmationOpen(true);
+    }
+  };
+
+  const confirmDeleteWorkflow = async () => {
     const workflowId = selectedDetail?.workflow?.id;
     if (!workflowId) {
-      return;
-    }
-    if (!window.confirm(`Delete workflow "${selectedDetail.workflow.title}"?`)) {
+      setDeleteConfirmationOpen(false);
       return;
     }
     setBusyAction('delete');
     try {
       await dispatch(deleteWorkflow({ workflowsUrl, workflowId })).unwrap();
+      setDeleteConfirmationOpen(false);
+      setSelectedPath('');
+      const nextParams = new URLSearchParams(searchParams);
+      nextParams.delete('path');
+      setSearchParams(nextParams, { replace: true });
     } catch (error) {
       show('error', 'Workflow delete failed', error.message);
     } finally {
@@ -1580,14 +1780,26 @@ function WorkflowsInner() {
           </>
         )}
       </PaneSection>
+      {deleteConfirmationOpen && selectedDetail?.workflow ? (
+        <PopupModal
+          eyebrow="Delete workflow"
+          title={`Delete “${selectedDetail.workflow.title}”?`}
+          message="This workflow and its configuration will be permanently deleted."
+          confirmLabel="Delete workflow"
+          busyLabel="Deleting…"
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDeleteWorkflow}
+          busy={busyAction === 'delete'}
+        />
+      ) : null}
 
       <DetailPane flush className={`workflow-detail ${selectedDetail?.workflow ? 'is-graph-mode' : ''}`} label="Workflow detail">
         {!selectedPath && !workflowsState.loading ? (
-          <PaneEmptyState>Select a workflow to edit or create a new one.</PaneEmptyState>
+          <PaneEmptyState detail>Select a workflow to edit or create a new one.</PaneEmptyState>
         ) : null}
 
         {selectedPath && !selectedDetail ? (
-          <PaneEmptyState>Loading workflow detail...</PaneEmptyState>
+          <PaneEmptyState detail>Loading workflow detail...</PaneEmptyState>
         ) : null}
 
         {selectedDetail?.workflow && draftWorkflow ? (
@@ -1760,6 +1972,7 @@ function WorkflowsInner() {
                       <WorkflowRunsList
                         runs={visibleRuns}
                         loading={workflowsState.runsLoading && !workflowsState.runsLoaded}
+                        workflowId={selectedDetail?.workflow?.id}
                       />
                     ) : null}
                   </div>
@@ -1775,6 +1988,9 @@ function WorkflowsInner() {
   );
 }
 
+// This helper is exported for the focused workflow graph unit test.
+// eslint-disable-next-line react-refresh/only-export-components
+export { workflowToFlow };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

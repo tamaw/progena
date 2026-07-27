@@ -815,7 +815,7 @@ class InboxDirectoryBackend(_AsyncOnlyFileBackendMixin):
 
 
 class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
-    """Async backend exposing workflow definitions as ``/config/workflows/*.json``."""
+    """Async backend exposing workflow definitions as ``/workflows/*.json``."""
 
     _ASYNC_ONLY = "WorkflowDirectoryBackend is async-only; use the async file tools."
 
