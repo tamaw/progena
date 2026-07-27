@@ -16,6 +16,7 @@ export default function PopupModal({
   const openerRef = useRef(document.activeElement);
 
   useEffect(() => {
+    const opener = openerRef.current;
     confirmRef.current?.focus();
     const handleKeyDown = (event) => {
       if (event.key === 'Escape' && !busy) onClose();
@@ -23,7 +24,7 @@ export default function PopupModal({
     document.addEventListener('keydown', handleKeyDown);
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      if (openerRef.current?.isConnected) openerRef.current.focus();
+      if (opener?.isConnected) opener.focus();
     };
   }, [busy, onClose]);
 

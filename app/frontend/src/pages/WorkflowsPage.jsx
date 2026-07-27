@@ -1988,6 +1988,8 @@ function WorkflowsInner() {
   );
 }
 
+// This helper is exported for the focused workflow graph unit test.
+// eslint-disable-next-line react-refresh/only-export-components
 export { workflowToFlow };
 export default function WorkflowsPage() {
   return (
