@@ -27,28 +27,9 @@ export function currentPageHost() {
   return window.location.host;
 }
 
-// RFC 1918 private ranges + loopback -- unmanaged dev/homelab networks that
-// never have real TLS in front of them. Anything else (a real DNS name) is
-// assumed to be a proper team deployment behind TLS.
-const PRIVATE_IPV4_RE = /^(?:127|10)\.\d{1,3}\.\d{1,3}\.\d{1,3}$|^172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}$|^192\.168\.\d{1,3}\.\d{1,3}$/;
-
-/**
- * http for loopback/private-network hosts and bare (unqualified) hostnames --
- * local dev, homelab, mDNS/NetBIOS names like `cronix` -- https everywhere
- * else. An unqualified hostname (no dot) can never hold a publicly-trusted
- * TLS cert, so it's never a real production deployment.
- */
-export function inferScheme(host) {
-  const hostname = host.split(':')[0];
-  if (hostname === 'localhost' || PRIVATE_IPV4_RE.test(hostname) || !hostname.includes('.')) {
-    return 'http';
-  }
-  return 'https';
-}
-
 /** The backend origin a workspace host resolves to, e.g. `https://team-a.example.com`. */
 export function resolveWorkspaceOrigin(host) {
-  return `${inferScheme(host)}://${host}`;
+  return `https://${host}`;
 }
 
 /** Build a `/w/<host><rest>` path. `rest` defaults to the app root. */

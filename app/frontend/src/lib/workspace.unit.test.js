@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   parseWorkspacePath,
   currentPageHost,
-  inferScheme,
   resolveWorkspaceOrigin,
   buildWorkspacePath,
   normalizeWorkspaceHost,
@@ -55,51 +54,12 @@ describe('currentPageHost', () => {
   });
 });
 
-describe('inferScheme', () => {
-  it('infers http for localhost', () => {
-    expect(inferScheme('localhost:8000')).toBe('http');
-  });
-
-  it('infers http for loopback', () => {
-    expect(inferScheme('127.0.0.1:8000')).toBe('http');
-  });
-
-  it('infers http for a 192.168.x.x LAN address', () => {
-    expect(inferScheme('192.168.0.2')).toBe('http');
-  });
-
-  it('infers http for a 10.x.x.x private address', () => {
-    expect(inferScheme('10.1.2.3')).toBe('http');
-  });
-
-  it('infers http for a 172.16-31.x.x private address', () => {
-    expect(inferScheme('172.16.0.5')).toBe('http');
-    expect(inferScheme('172.31.255.255')).toBe('http');
-  });
-
-  it('does not treat 172.x outside 16-31 as private', () => {
-    expect(inferScheme('172.32.0.5')).toBe('https');
-    expect(inferScheme('172.15.0.5')).toBe('https');
-  });
-
-  it('infers https for a real DNS name', () => {
-    expect(inferScheme('team-a.example.com')).toBe('https');
-  });
-
-  it('infers https for a public IPv4 address', () => {
-    expect(inferScheme('8.8.8.8')).toBe('https');
-  });
-
-  it('infers http for a bare unqualified hostname', () => {
-    expect(inferScheme('cronix')).toBe('http');
-    expect(inferScheme('cronix:8000')).toBe('http');
-  });
-});
-
 describe('resolveWorkspaceOrigin', () => {
-  it('combines the inferred scheme with the host', () => {
+  it('always uses https, even for loopback/private/bare hosts -- no insecure fallback', () => {
     expect(resolveWorkspaceOrigin('team-a.example.com')).toBe('https://team-a.example.com');
-    expect(resolveWorkspaceOrigin('localhost:8000')).toBe('http://localhost:8000');
+    expect(resolveWorkspaceOrigin('localhost:8000')).toBe('https://localhost:8000');
+    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('https://192.168.0.2');
+    expect(resolveWorkspaceOrigin('cronix')).toBe('https://cronix');
   });
 });
 
