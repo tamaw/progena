@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useConfig } from '../context/ConfigContext';
 import { savePreferences, selectPreferences, selectPreferencesSaveRequest } from '../store/uiDataSlice';
@@ -22,7 +22,10 @@ export function useTheme() {
     ),
   );
 
-  useEffect(() => {
+  // useLayoutEffect (not useEffect): must set the DOM attribute that drives
+  // CSS *before* the browser paints, not after - otherwise every mount
+  // flashes the wrong theme for one frame while the effect queue drains.
+  useLayoutEffect(() => {
     const resolved = resolveTheme(
       config.theme.default,
       window.matchMedia('(prefers-color-scheme: dark)').matches,
