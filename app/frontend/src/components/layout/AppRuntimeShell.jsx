@@ -1603,7 +1603,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       <section className="set-section is-active">
         <header className="set-section__head">
           <h3>Profile</h3>
-          <p>Your identity across the workspace and agent transcripts.</p>
         </header>
         <div className="account-pane__id">
           <span className="account-pane__avatar" aria-hidden="true"><UserAvatarIcon /></span>
@@ -1650,7 +1649,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       <section className="set-section is-active">
         <header className="set-section__head">
           <h3>Preferences</h3>
-          <p>Theme and notification behavior.</p>
         </header>
         <div className="set-row">
           <div className="set-row__label">
@@ -1679,11 +1677,6 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           </label>
         </div>
       </section>
-
-      <div className="account-pane__foot">
-        <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
-        <button type="button" className="task-btn task-btn--secondary" disabled>Sign out</button>
-      </div>
     </TopNavPane>
   );
 }
@@ -1743,25 +1736,34 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
   }, [activePanel, closePanel, settingsOpen, setSettingsOpen]);
   if (!displayed && !settingsOpen) return null;
 
-  // Settings and Account are modal popups (centered window), not the right-side
-  // slide-in used by the other chrome tools — they are never pinned.
+  // Settings and Account are modal popups (centered window) — both portal to
+  // document.body with a full-viewport scrim so the blurred backdrop covers
+  // the whole app shell, including the top bar, not just the content area
+  // below it (the right-side slide-in panels' scrim starts under the header
+  // instead, since it never needs to blur the app's own chrome).
   const settingsOverlay = settingsOpen ? createPortal(
     <>
-      <button type="button" className="settings-modal-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
+      <button type="button" className="modal-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
       <SettingsPanel onClose={() => setSettingsOpen(false)} isOpen />
     </>,
     document.body,
   ) : null;
   if (!displayed) return settingsOverlay;
-  const isModalPanel = displayed === 'settings' || displayed === 'account';
+  const accountOverlay = displayed === 'account' ? createPortal(
+    <>
+      <button type="button" className="modal-scrim" aria-label="Close account" onClick={closePanel} />
+      <AccountPanel onClose={closePanel} isOpen={isOpen} />
+    </>,
+    document.body,
+  ) : null;
   // Scrim: visible for the full lifetime of the pane (including enter/exit
   // transitions), full-width, so clicks never pass through and the page
   // behind is already grayed out before the panel finishes sliding into
   // place. Skipped when pinned (non-modal): the docked column stays clickable.
-  const scrim = (isModalPanel || !isPinned) ? (
+  const scrim = !isPinned ? (
     <button
       type="button"
-      className={`topnav-scrim is-open${isModalPanel ? ' topnav-scrim--modal' : ''}`}
+      className="topnav-scrim is-open"
       aria-label="Close panel"
       onClick={closePanel}
     />
@@ -1786,7 +1788,7 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
     );
   }
   if (displayed === 'settings') return settingsOverlay;
-  if (displayed === 'account') return <>{scrim}<AccountPanel onClose={closePanel} isOpen={isOpen} />{settingsOverlay}</>;
+  if (displayed === 'account') return <>{accountOverlay}{settingsOverlay}</>;
   if (displayed === 'search') return <>{scrim}<SearchPanel query={searchQuery} widgets={widgets} onClose={closePanel} {...shared} />{settingsOverlay}</>;
   if (displayed === 'insights') return <>{scrim}<InsightsPanel onClose={closePanel} {...shared} />{settingsOverlay}</>;
   return null;

@@ -1971,12 +1971,7 @@ body,
   cursor: default;
 }
 
-
-.topnav-scrim--modal {
-  backdrop-filter: blur(8px);
-}
-
-.settings-modal-scrim {
+.modal-scrim {
   position: fixed;
   inset: 0;
   z-index: 1000;
@@ -2042,6 +2037,7 @@ body,
    the centered transform wins. */
 .topnav-pane--settings,
 .topnav-pane--account {
+  z-index: 1001;
   top: 50%;
   left: 50%;
   right: auto;
@@ -2123,14 +2119,6 @@ body,
 }
 
 .account-pane .set-section + .set-section {
-  border-top: 1px solid var(--color-border);
-}
-
-.account-pane__foot {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  padding: 18px 22px 22px;
   border-top: 1px solid var(--color-border);
 }
 
