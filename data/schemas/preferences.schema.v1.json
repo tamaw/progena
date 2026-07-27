@@ -12,6 +12,23 @@
     "timezone": {
       "type": "string",
       "description": "IANA timezone name (e.g. 'America/New_York', 'UTC'). Used to schedule tasks and display timestamps."
+    },
+    "theme": {
+      "type": "string",
+      "description": "UI color theme. 'system' follows the OS light/dark preference.",
+      "enum": ["system", "dark", "light"],
+      "default": "system"
+    },
+    "nav_collapsed": {
+      "type": "boolean",
+      "description": "Whether the primary nav rail renders collapsed to icons-only.",
+      "default": false
+    },
+    "pinned_panel": {
+      "type": ["string", "null"],
+      "description": "Which right-hand panel, if any, is docked open instead of floating as a modal. null means none pinned.",
+      "enum": [null, "quickChat", "alerts", "insights"],
+      "default": null
     }
   },
   "required": ["timezone"],

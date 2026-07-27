@@ -82,6 +82,7 @@ const defaultConfig = {
     settings: 'progenitor_settings',
     inputHistory: 'progenitor_input_history',
     sidebarCollapsed: 'progenitor_sidebar_collapsed',
+    pinnedPanel: 'progenitor_pinned_panel',
     streamFilters: 'progenitor_stream_filters',
     quickChatHandoff: 'progenitor_quick_chat_handoff'
   }

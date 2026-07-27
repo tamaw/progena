@@ -267,6 +267,7 @@ export {
   fetchPreferences,
   savePreferences,
   selectPreferences,
+  selectPreferencesSaveRequest,
 } from './uiData/preferences';
 
 export default uiDataSlice.reducer;
