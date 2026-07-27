@@ -1178,11 +1178,6 @@ function ConversationPage() {
       }
     }
 
-    // Handle alerts
-    if (event.type === 'alert') {
-      show(event.data?.type || 'info', event.data?.title || 'Alert', event.data?.message || '');
-    }
-
     if (event.type === 'message_queued') {
       show(
         'info',

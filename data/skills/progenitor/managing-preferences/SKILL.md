@@ -1,6 +1,6 @@
 ---
 name: managing-preferences
-description: View or update the user's profile (display name, timezone) and UI settings (theme, nav-rail collapse, pinned panel) by editing the /config/preferences.json file. Use when a user asks to set/change their name, timezone, theme/dark mode, or nav/panel layout, or asks what their current preferences are.
+description: View or update the user's profile (display name, timezone), UI settings (theme, nav-rail collapse, pinned panel), and notification settings by editing the /config/preferences.json file. Use when a user asks to set/change their name, timezone, theme/dark mode, nav/panel layout, or notifications/sounds, or asks what their current preferences are.
 allowed-tools: read_file write_file edit_file structured_output
 ---
 
@@ -12,16 +12,19 @@ The user's profile and UI settings live in a single virtual file:
 change these settings — there is no separate "update profile" tool. Every
 successful write is validated and the Settings page updates live.
 
-The UI fields (`theme`, `nav_collapsed`, `pinned_panel`) are normally set from
-the app itself (theme toggle, nav-rail collapse button, panel pin button), not
-usually something a user asks the agent to change — but they're valid,
+The UI fields (`theme`, `nav_collapsed`, `pinned_panel`, `notifications_enabled`,
+`notification_sounds`) are normally set from the app itself (theme toggle,
+nav-rail collapse button, panel pin button, Settings > Notifications toggles),
+not usually something a user asks the agent to change — but they're valid,
 schema-validated fields like the rest of this document if a user does ask
-("switch me to dark mode", "collapse the nav by default").
+("switch me to dark mode", "collapse the nav by default", "turn off
+notification sounds").
 
 ## When to Use
 - User asks to set or change their display name
 - User asks to set or change their timezone
 - User asks to change their theme (light/dark/system) or nav-rail/panel layout
+- User asks to enable/disable notifications or notification sounds
 - User asks what their current profile / preferences are
 
 ## File Schema
@@ -33,12 +36,14 @@ Authoritative shape: `/schemas/preferences.schema.v1.json`.
   "timezone": "America/New_York",
   "theme": "system",
   "nav_collapsed": false,
-  "pinned_panel": null
+  "pinned_panel": null,
+  "notifications_enabled": true,
+  "notification_sounds": false
 }
 ```
 
 Rules enforced on every write (a violating edit is rejected and nothing changes):
-- Top level must be a JSON object with exactly these five fields — no others.
+- Top level must be a JSON object with exactly these seven fields — no others.
 - `display_name` is a string (may be empty).
 - `timezone` is required and must be a non-empty IANA timezone name (e.g.
   `America/New_York`, `Europe/London`, `UTC`) — anything `zoneinfo` doesn't
@@ -49,6 +54,10 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
   panel currently docked open instead of floating as a modal. `null` means
   none pinned. (`search`, `settings`, and `account` are never pinnable, so
   they're not valid values here.)
+- `notifications_enabled` is a boolean — whether backend alerts show as
+  in-app toasts.
+- `notification_sounds` is a boolean — whether a chime plays alongside the
+  toast. Only meaningful when `notifications_enabled` is true.
 
 ## How to Update
 1. `read_file /config/preferences.json`
