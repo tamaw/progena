@@ -4,19 +4,26 @@ import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ensureDraftChatSession,
+  fetchPreferences,
   fetchWidgets,
   markAlertsViewed,
+  savePreferences,
   selectChatIndicators,
   selectInboxUnreadCount,
+  selectLastReceivedAlert,
+  selectPreferences,
+  selectPreferencesSaveRequest,
   selectUnseenNavRoutes,
   selectUiStatus,
   selectUiWidgets,
   selectUiAlerts,
   setActiveNavRoute,
 } from '../../store/uiDataSlice';
-import { selectUiEventQueue } from '../../store/realtimeSlice';
+import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
+import { useNotifications } from '../../context/NotificationContext';
+import { playNotificationSound } from '../../lib/notificationSound';
 import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
@@ -153,6 +160,13 @@ const breadcrumbRoutes = [
   { to: '/sessions', label: 'Sessions' },
   { to: '/logs', label: 'Logs' },
 ];
+
+// Panels PanelHost actually grants isPinned/onTogglePin to (Settings/Account
+// are modal popups, never pinned) - the only values worth persisting as
+// preferences.pinnedPanel.
+const PINNABLE_PANELS = new Set(['quickChat', 'alerts', 'insights']);
+const SIDEBAR_COLLAPSED_STORAGE_KEY = 'progenitor_sidebar_collapsed';
+const PINNED_PANEL_STORAGE_KEY = 'progenitor_pinned_panel';
 
 const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
@@ -1150,10 +1164,54 @@ function QuickChatPanel({
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const { config, setApiUrl, setNotifications, setSounds, setTheme, resetSettings } = useConfig();
+  const { config, getApiUrl, setApiUrl, resetSettings } = useConfig();
+  const { setTheme } = useTheme();
+  const dispatch = useDispatch();
+  const preferences = useSelector(selectPreferences);
+  const preferencesUrl = getApiUrl('preferences');
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
   const [section, setSection] = useState('general');
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  const [displayNameDraft, setDisplayNameDraft] = useState('');
+  const [timezoneDraft, setTimezoneDraft] = useState('');
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileError, setProfileError] = useState('');
+
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+
+  useEffect(() => {
+    if (!preferences.loaded) {
+      return;
+    }
+    setDisplayNameDraft(preferences.displayName);
+    setTimezoneDraft(preferences.timezone);
+  }, [preferences.loaded, preferences.displayName, preferences.timezone]);
+
+  const handleSaveProfile = useCallback(async () => {
+    setSavingProfile(true);
+    setProfileError('');
+    try {
+      await dispatch(
+        savePreferences({
+          preferencesUrl,
+          ...preferencesSaveRequest,
+          displayName: displayNameDraft,
+          timezone: timezoneDraft,
+        }),
+      ).unwrap();
+    } catch {
+      setProfileError('Failed to save profile.');
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
+
+  const persistNotificationPreference = useCallback(
+    (patch) => {
+      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, ...patch }));
+    },
+    [dispatch, preferencesUrl, preferencesSaveRequest],
+  );
   return (
     <>
       <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1178,6 +1236,40 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                   <h3>General</h3>
                   <p>Workspace defaults and session behavior.</p>
                 </header>
+
+                <div className="set-row">
+                  <span className="set-row__label">
+                    <span className="set-row__title">Display name</span>
+                    <span className="set-row__sub">Shown across the workspace and agent transcripts.</span>
+                  </span>
+                  <span className="set-inline-control">
+                    <input
+                      className="set-text-input"
+                      value={displayNameDraft}
+                      placeholder="Your name"
+                      onChange={(event) => setDisplayNameDraft(event.target.value)}
+                    />
+                  </span>
+                </div>
+
+                <div className="set-row">
+                  <span className="set-row__label">
+                    <span className="set-row__title">Timezone</span>
+                    <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
+                  </span>
+                  <span className="set-inline-control">
+                    <input
+                      className="set-text-input"
+                      value={timezoneDraft}
+                      placeholder="e.g. America/New_York"
+                      onChange={(event) => setTimezoneDraft(event.target.value)}
+                    />
+                    <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
+                      {savingProfile ? 'Saving…' : 'Save'}
+                    </button>
+                  </span>
+                </div>
+                {profileError ? <div className="task-alert">{profileError}</div> : null}
 
                 <div className="set-row">
                   <div className="set-row__label">
@@ -1289,11 +1381,11 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Enable notifications</div>
                     <div className="set-row__sub">Show alerts from the status stream and background tasks.</div>
                   </div>
-                  <label className={`set-switch ${config.notifications.enabled ? 'is-on' : ''}`}>
+                  <label className={`set-switch ${preferences.notificationsEnabled ? 'is-on' : ''}`}>
                     <input
                       type="checkbox"
-                      checked={config.notifications.enabled}
-                      onChange={(event) => setNotifications(event.target.checked)}
+                      checked={preferences.notificationsEnabled}
+                      onChange={(event) => persistNotificationPreference({ notificationsEnabled: event.target.checked })}
                     />
                     <span className="set-switch__knob" aria-hidden="true" />
                   </label>
@@ -1304,11 +1396,11 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Notification sounds</div>
                     <div className="set-row__sub">Play a subtle sound when important work completes.</div>
                   </div>
-                  <label className={`set-switch ${config.notifications.soundEnabled ? 'is-on' : ''}`}>
+                  <label className={`set-switch ${preferences.notificationSounds ? 'is-on' : ''}`}>
                     <input
                       type="checkbox"
-                      checked={config.notifications.soundEnabled}
-                      onChange={(event) => setSounds(event.target.checked)}
+                      checked={preferences.notificationSounds}
+                      onChange={(event) => persistNotificationPreference({ notificationSounds: event.target.checked })}
                     />
                     <span className="set-switch__knob" aria-hidden="true" />
                   </label>
@@ -1338,6 +1430,24 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           onClose={() => setResetConfirmationOpen(false)}
           onConfirm={() => {
             resetSettings();
+            // resetSettings() only clears ConfigContext/localStorage. Theme,
+            // nav-collapse, pinned-panel, and notifications are also
+            // backend-persisted now (see /config/preferences.json) - reset
+            // those to their schema defaults too, preserving the profile
+            // identity fields.
+            if (preferences.loaded) {
+              dispatch(
+                savePreferences({
+                  preferencesUrl,
+                  ...preferencesSaveRequest,
+                  theme: 'system',
+                  navCollapsed: false,
+                  pinnedPanel: null,
+                  notificationsEnabled: true,
+                  notificationSounds: false,
+                }),
+              );
+            }
             setResetConfirmationOpen(false);
           }}
         />
@@ -1662,21 +1772,69 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
 }
 
 function AppRuntimeShell() {
-  const [activePanel, setActivePanel] = useState(null);
+  const dispatch = useDispatch();
+  const realtime = useSelector(selectRealtime);
+  const preferences = useSelector(selectPreferences);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  const { getApiUrl } = useConfig();
+  const preferencesUrl = getApiUrl('preferences');
+
+  // Seed the whole profile once per app load - theme (useTheme), nav-collapse,
+  // and pinned-panel all read from this same fetch.
+  useEffect(() => {
+    if (!realtime.connected) {
+      return;
+    }
+    void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
+  }, [dispatch, preferencesUrl, realtime.connected]);
+
+  // Global "important work completed" notification: fires a toast (and,
+  // if enabled, a chime) for every new backend alert on every page - not
+  // just while Chat happens to be mounted. Gated on
+  // preferences.notificationsEnabled/notificationSounds (Settings >
+  // Notifications), matching /config/preferences.json.
+  const { show } = useNotifications();
+  const lastReceivedAlert = useSelector(selectLastReceivedAlert);
+  const lastHandledAlertSeqRef = useRef(0);
+  useEffect(() => {
+    if (!lastReceivedAlert || lastReceivedAlert.seq === lastHandledAlertSeqRef.current) {
+      return;
+    }
+    lastHandledAlertSeqRef.current = lastReceivedAlert.seq;
+    if (!preferences.notificationsEnabled) {
+      return;
+    }
+    show(lastReceivedAlert.type || 'info', lastReceivedAlert.title || 'Alert', lastReceivedAlert.message || '');
+    if (preferences.notificationSounds) {
+      playNotificationSound();
+    }
+  }, [lastReceivedAlert, preferences.notificationsEnabled, preferences.notificationSounds, show]);
+
+  const [activePanel, setActivePanel] = useState(() => {
+    const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+    return cached && PINNABLE_PANELS.has(cached) ? cached : null;
+  });
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [quickChatConfig, setQuickChatConfig] = useState(defaultQuickChatConfig);
   const searchQuery = '';
   const [quickChatSubmission, setQuickChatSubmission] = useState(null);
   const quickChatSubmissionIdRef = useRef(0);
   const quickChatInputRef = useRef(null);
-  const [isNavCollapsed, setIsNavCollapsed] = useState(false);
+  const [isNavCollapsed, setIsNavCollapsed] = useState(
+    () => localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true',
+  );
   const [isNavOpen, setIsNavOpen] = useState(false);
-  const [isPinned, setIsPinned] = useState(false);
+  // Mirrors activePanel's initial cache read: a panel only restores open+docked
+  // (rather than open+floating) if it was the pinned one.
+  const [isPinned, setIsPinned] = useState(() => {
+    const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+    return Boolean(cached && PINNABLE_PANELS.has(cached));
+  });
   // Below 980px the sidebar becomes a fixed overlay drawer (CSS handles it).
   // Ensure the nav is not in icon-rail mode at those widths — the drawer is
   // either open (is-open class) or hidden off-screen, never a collapsed rail.
-  // Note: isNavCollapsed initialises to false so no synchronous setState is
-  // needed in the effect body; only future viewport-change events need handling.
+  // This is a transient viewport override, not a user preference change, so
+  // it deliberately bypasses persistTogglePin/persistCollapse below.
   useEffect(() => {
     const mq = window.matchMedia('(max-width: 980px)');
     const handler = (e) => {
@@ -1689,9 +1847,107 @@ function AppRuntimeShell() {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
+  // Whatever panel is open+pinned right now is the one that reopens docked on
+  // the next load.
+  const pinnedPanelValue = activePanel && isPinned && PINNABLE_PANELS.has(activePanel) ? activePanel : null;
+
+  // Live sync: whenever the backend-persisted profile's nav-collapse/pinned-
+  // panel disagree with the local cache (initial load, an agent edit to
+  // /config/preferences.json, the reset-settings button, or a change from
+  // another device/tab), adopt them - UNLESS a local change happened before
+  // the initial load resolved (see persistNavCollapsed/the pin-write-effect
+  // below), in which case the user's fresher local choice wins and gets
+  // pushed to the backend instead of getting silently overwritten by
+  // whatever was already saved there. Safe from feedback loops otherwise:
+  // the toggle handlers write localStorage synchronously before their own
+  // save round-trips back through Redux, so by the time the snapshot
+  // arrives the cached values already match and this is a no-op.
+  const pendingNavChangeRef = useRef(false);
+  const pendingPinChangeRef = useRef(false);
+  useEffect(() => {
+    if (!preferences.loaded) {
+      return;
+    }
+    if (pendingNavChangeRef.current) {
+      pendingNavChangeRef.current = false;
+      if (preferences.navCollapsed !== isNavCollapsed) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, navCollapsed: isNavCollapsed }));
+      }
+    } else {
+      const cachedNavCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+      if (preferences.navCollapsed !== cachedNavCollapsed) {
+        setIsNavCollapsed(preferences.navCollapsed);
+        localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(preferences.navCollapsed));
+      }
+    }
+
+    if (pendingPinChangeRef.current) {
+      pendingPinChangeRef.current = false;
+      if (preferences.pinnedPanel !== pinnedPanelValue) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, pinnedPanel: pinnedPanelValue }));
+      }
+    } else {
+      const cachedPinned = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+      if (preferences.pinnedPanel !== (cachedPinned && PINNABLE_PANELS.has(cachedPinned) ? cachedPinned : null)) {
+        if (preferences.pinnedPanel && PINNABLE_PANELS.has(preferences.pinnedPanel)) {
+          localStorage.setItem(PINNED_PANEL_STORAGE_KEY, preferences.pinnedPanel);
+          setActivePanel(preferences.pinnedPanel);
+          setIsPinned(true);
+        } else {
+          localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
+          setIsPinned(false);
+        }
+      }
+    }
+    // isNavCollapsed/pinnedPanelValue/preferencesSaveRequest are read (for
+    // the "push a pending local change" branch), never watched: this effect
+    // exists to react to the BACKEND value changing, not the local one.
+    // Depending on isNavCollapsed/pinnedPanelValue would re-run this effect
+    // the instant a toggle fires - while Redux's preferences.navCollapsed/
+    // pinnedPanel are still the pre-save (stale) value - and "adopt" that
+    // stale value right back over the fresh local change, fighting the
+    // write effects below. preferencesSaveRequest is memoized at the source
+    // (selectPreferencesSaveRequest uses createSelector) so it wouldn't
+    // cause that on its own, but it stays out of the deps anyway - this
+    // effect has no reason to re-run for anything but a real backend change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferences.loaded, preferences.navCollapsed, preferences.pinnedPanel, dispatch, preferencesUrl]);
+
+  const persistNavCollapsed = useCallback(
+    (next) => {
+      localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+      if (preferences.loaded) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, navCollapsed: next }));
+      } else {
+        pendingNavChangeRef.current = true;
+      }
+    },
+    [dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest],
+  );
+
   const handleTogglePin = useCallback(() => {
     setIsPinned((current) => !current);
   }, []);
+
+  // Persist pinnedPanelValue whenever it actually changes (pin toggled,
+  // panel switched while pinned, or the panel closed/unpinned).
+  const prevPinnedPanelRef = useRef(pinnedPanelValue);
+  useEffect(() => {
+    if (prevPinnedPanelRef.current === pinnedPanelValue) {
+      return;
+    }
+    prevPinnedPanelRef.current = pinnedPanelValue;
+    if (pinnedPanelValue) {
+      localStorage.setItem(PINNED_PANEL_STORAGE_KEY, pinnedPanelValue);
+    } else {
+      localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
+    }
+    if (preferences.loaded) {
+      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, pinnedPanel: pinnedPanelValue }));
+    } else {
+      pendingPinChangeRef.current = true;
+    }
+  }, [pinnedPanelValue, dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest]);
 
   const shellClass = [
     'app-shell',
@@ -1759,7 +2015,11 @@ function AppRuntimeShell() {
         isCollapsed={isNavCollapsed}
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
-        onToggleCollapse={() => setIsNavCollapsed((current) => !current)}
+        onToggleCollapse={() => setIsNavCollapsed((current) => {
+          const next = !current;
+          persistNavCollapsed(next);
+          return next;
+        })}
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAccount={() => setActivePanel('account')}
       />

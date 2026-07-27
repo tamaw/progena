@@ -79,6 +79,7 @@ from .inbox_routes import (
     create_inbox_router,
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
+from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .request_utils import request_correlation_id as _request_correlation_id
 from .skill_service import SkillService
@@ -4312,6 +4313,8 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_schedule_snapshot()
         if changed_key in (None, "knowledge"):
             broadcast_knowledge_snapshot()
+        if changed_key in (None, "preferences"):
+            broadcast_preferences_snapshot()
         if changed_key in (None, "registry"):
             profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
             _active_agent_profile_broadcast_tasks.add(profile_task)
@@ -4721,6 +4724,23 @@ def broadcast_knowledge_snapshot(
     """
     payload = snapshot_knowledge_bases() if bases is None else bases
     return broadcast_ui_event("knowledge.snapshot", {"bases": payload}, request_id=request_id)
+
+
+def broadcast_preferences_snapshot(
+    preferences: dict[str, Any] | None = None,
+    *,
+    request_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current user preferences to /api/ui/stream subscribers.
+
+    Emitted after backend-side preference mutations and whenever the
+    ``preferences`` state document changes (surfaced via the Postgres NOTIFY
+    watcher), so the Settings page reflects changes live without refetching.
+    Callers that already built the payload can pass it in to avoid a second
+    document read and keep the event consistent with the HTTP response.
+    """
+    payload = load_preferences() if preferences is None else preferences
+    return broadcast_ui_event("preferences.snapshot", payload, request_id=request_id)
 
 
 def broadcast_skills_snapshot(
