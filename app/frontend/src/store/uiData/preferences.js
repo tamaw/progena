@@ -4,6 +4,7 @@
  * notifications), kept live by `preferences.snapshot` events on
  * /api/ui/stream and seeded via REST on app shell mount.
  */
+import { createSelector } from '@reduxjs/toolkit';
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 
 const VALID_PINNED_PANELS = new Set(['quickChat', 'alerts', 'insights']);
@@ -100,15 +101,18 @@ export const selectPreferences = (state) => state.uiData.preferences;
 // Build a `savePreferences` argument (minus `preferencesUrl`) that carries
 // every current field, so a caller can override just the one it's changing:
 // `dispatch(savePreferences({ preferencesUrl, ...selectPreferencesSaveRequest(state), theme: next }))`.
-export const selectPreferencesSaveRequest = (state) => {
-  const preferences = selectPreferences(state);
-  return {
-    displayName: preferences.displayName,
-    timezone: preferences.timezone,
-    theme: preferences.theme,
-    navCollapsed: preferences.navCollapsed,
-    pinnedPanel: preferences.pinnedPanel,
-    notificationsEnabled: preferences.notificationsEnabled,
-    notificationSounds: preferences.notificationSounds,
-  };
-};
+// Memoized (createSelector): returns the SAME object reference across
+// renders as long as the underlying preferences fields haven't changed.
+// Consumers put this in a useEffect dependency array (see useTheme.js,
+// AppRuntimeShell.jsx) to react only to real preferences changes - an
+// unmemoized version would return a fresh object on every store update
+// (any alert, any status tick, ...), firing those effects constantly.
+export const selectPreferencesSaveRequest = createSelector([selectPreferences], (preferences) => ({
+  displayName: preferences.displayName,
+  timezone: preferences.timezone,
+  theme: preferences.theme,
+  navCollapsed: preferences.navCollapsed,
+  pinnedPanel: preferences.pinnedPanel,
+  notificationsEnabled: preferences.notificationsEnabled,
+  notificationSounds: preferences.notificationSounds,
+}));
