@@ -31,6 +31,7 @@ import { renderMarkdownToHtml } from '../../lib/markdown';
 import { createUuid } from '../../lib/uuid';
 import ChatInput from '../chat/ChatInput';
 import NotificationContainer from '../common/NotificationContainer';
+import Select from '../common/Select';
 import {
   createSolutionFromName,
   createProjectFromName,
@@ -191,6 +192,7 @@ const TIMEZONE_OPTIONS = (() => {
     return ['UTC', 'America/New_York', 'America/Los_Angeles', 'Europe/London', 'Europe/Paris', 'Asia/Tokyo', 'Australia/Sydney'];
   }
 })();
+const TIMEZONE_SELECT_OPTIONS = TIMEZONE_OPTIONS.map((tz) => ({ value: tz, label: tz }));
 
 function getPageLabel(pathname) {
   if (pathname.startsWith('/solutions') || pathname.startsWith('/projects')) {
@@ -1543,6 +1545,20 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const [timezoneDraft, setTimezoneDraft] = useState('');
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const themeSelectOptions = useMemo(
+    () => config.theme.options.map((theme) => ({ value: theme, label: theme })),
+    [config.theme.options],
+  );
+  // TIMEZONE_SELECT_OPTIONS is precomputed once at module load (419 entries);
+  // only prepend a synthetic entry when the loaded value isn't in that list,
+  // so this doesn't rebuild the array on every keystroke/render.
+  const timezoneSelectOptions = useMemo(
+    () =>
+      timezoneDraft && !TIMEZONE_OPTIONS.includes(timezoneDraft)
+        ? [{ value: timezoneDraft, label: timezoneDraft }, ...TIMEZONE_SELECT_OPTIONS]
+        : TIMEZONE_SELECT_OPTIONS,
+    [timezoneDraft],
+  );
 
   useEffect(() => {
     if (!preferences.loaded) {
@@ -1612,16 +1628,13 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             <span className="set-row__sub">Used to schedule tasks and display timestamps.</span>
           </span>
           <span className="set-inline-control">
-            <select
-              className="set-input"
+            <Select
               value={timezoneDraft}
-              onChange={(event) => setTimezoneDraft(event.target.value)}
-            >
-              {timezoneDraft && !TIMEZONE_OPTIONS.includes(timezoneDraft) ? (
-                <option value={timezoneDraft}>{timezoneDraft}</option>
-              ) : null}
-              {TIMEZONE_OPTIONS.map((tz) => <option key={tz} value={tz}>{tz}</option>)}
-            </select>
+              onChange={setTimezoneDraft}
+              options={timezoneSelectOptions}
+              searchable
+              ariaLabel="Timezone"
+            />
             <button type="button" className="set-btn" disabled={savingProfile} onClick={handleSaveProfile}>
               {savingProfile ? 'Saving…' : 'Save'}
             </button>
@@ -1640,9 +1653,12 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             <div className="set-row__title">Theme</div>
             <div className="set-row__sub">Choose the interface palette.</div>
           </div>
-          <select className="set-input" value={config.theme.default} onChange={(event) => setTheme(event.target.value)}>
-            {config.theme.options.map((theme) => <option key={theme} value={theme}>{theme}</option>)}
-          </select>
+          <Select
+            value={config.theme.default}
+            onChange={setTheme}
+            options={themeSelectOptions}
+            ariaLabel="Theme"
+          />
         </div>
         <div className="set-row">
           <div className="set-row__label">
