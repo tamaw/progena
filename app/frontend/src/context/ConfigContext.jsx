@@ -46,6 +46,7 @@ const defaultConfig = {
       actionRun: '/api/ui/actions/run',
       actionGenerate: '/api/ui/actions/generate',
       attachments: '/api/attachments',
+      preferences: '/api/ui/preferences',
     },
     timeout: 120000,
     retryAttempts: 3,

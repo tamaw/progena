@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "User preferences",
+  "description": "The whole 'preferences' state document (/config/preferences.json). Unlike the other schemas here it describes a full document, not one entry in a collection, since preferences has no array/map of entries.",
+  "type": "object",
+  "properties": {
+    "display_name": {
+      "type": "string",
+      "description": "How the user wants to be addressed. May be empty.",
+      "default": ""
+    },
+    "timezone": {
+      "type": "string",
+      "description": "IANA timezone name (e.g. 'America/New_York', 'UTC'). Used to schedule tasks and display timestamps."
+    }
+  },
+  "required": ["timezone"],
+  "additionalProperties": false
+}

@@ -43,6 +43,7 @@ from deepagents.backends.utils import (
 from ..schedule.engine import parse_schedule_datetime
 from ..schemas import load_schema
 from ..state.models import ScheduleEntry
+from ..state.preferences import default_preferences_payload, validate_preferences_document
 from ..structured import validate_against_schema
 from ..utils import utcnow, utcnow_isoformat
 from ..workflows import (
@@ -500,6 +501,28 @@ def create_knowledge_state_file(
         save=state_manager.save_knowledge_config,
         validate=validate_knowledge_document,
         default={"bases": []},
+        on_change=on_change,
+    )
+
+
+def create_preferences_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``preferences.json`` state file backed by the StateManager.
+
+    Lets the agent read/update the user's profile (display name, timezone) the
+    same way it manages knowledge/MCP settings. Every write is validated and
+    persists through the normal store path, so the Settings page updates live
+    via the LISTEN/NOTIFY pipeline.
+    """
+    return _simple_state_file(
+        "preferences.json",
+        get=state_manager.get_preferences_config,
+        save=state_manager.save_preferences_config,
+        validate=validate_preferences_document,
+        default=default_preferences_payload(),
         on_change=on_change,
     )
 

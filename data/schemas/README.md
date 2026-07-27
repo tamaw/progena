@@ -22,18 +22,28 @@ the native `write`/`edit` file tools.
 | `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | `managing-agents` |
 | `knowledge_base_entry.schema.v1.json` | One object in `knowledge`'s `bases` array | object | `managing-knowledge` |
 | `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | not currently wired to a skill |
+| `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
+| `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
+| `trigger.workflow.schema.v1.json` | The `trigger` object within a workflow definition | object | `managing-workflows` |
+| `node_event.workflow.schema.v1.json` | One `event` node within a workflow definition | object | `managing-workflows` |
+| `node_prompt.workflow.schema.v1.json` | One `prompt` node within a workflow definition | object | `managing-workflows` |
+| `node_user.workflow.schema.v1.json` | One `user` node within a workflow definition | object | `managing-workflows` |
+| `node_code.workflow.schema.v1.json` | One `code` node within a workflow definition | object | `managing-workflows` |
 
-**Every schema here describes one entry, never a whole document.** `mcp.json`
-(`mcpServers`) and `schedule.json` are JSON objects keyed by name/id, so adding
-one is inserting a new key and updating one is replacing a single key's value
-— `edit_file` never has to touch anything else. `agents.json`'s `agents` and
-`knowledge.json`'s `bases` are arrays instead (each item carries its own
-`name`/`id`), so adding is appending and updating is replacing one array
-element — still never the whole file. This matters most for `agents.json`,
-whose `tools` array is runtime-managed and must survive byte-for-byte; asking
-`structured_output` to regenerate the *whole* document would mean the model
-retyping data nobody asked it to touch. Keeping every schema entry-scoped
-avoids that everywhere, not just there.
+**Most schemas here describe one entry, not a whole document** — that's the
+default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is
+inserting a key, updating is replacing one key's value) and `agents.json`/
+`knowledge.json` (arrays: adding is appending, updating is replacing one
+element) — `edit_file` never has to touch anything else. This matters most for
+`agents.json`, whose `tools` array is runtime-managed and must survive
+byte-for-byte; asking `structured_output` to regenerate the *whole* document
+would mean the model retyping data nobody asked it to touch.
+
+**Whole-document schemas are the exception**, used when the document isn't a
+collection: `definition.workflow.schema.v1.json` (one workflow is one
+self-contained document, not an entry in something bigger) and
+`preferences.schema.v1.json` (a small, fixed-shape object with no array/map of
+entries to scope down to).
 
 ## Naming convention
 
