@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { ChevronDownIcon } from '../layout/navIcons';
 
 /**
@@ -14,6 +15,16 @@ import { ChevronDownIcon } from '../layout/navIcons';
  * `options`: [{ value, label, icon? }]. `searchable` shows a filter input
  * inside the panel - turn it on for any list long enough that scrolling
  * to find an entry is worse than typing a few letters (e.g. timezones).
+ *
+ * `portal`: renders the panel into document.body, fixed-positioned from the
+ * trigger's live getBoundingClientRect() instead of CSS position:absolute.
+ * Required inside any CSS-transformed ancestor (React Flow's canvas pans/
+ * zooms nodes via `transform`) - an absolutely-positioned child inherits
+ * that same transform/scale and renders tiny, huge, or clipped. A native
+ * <select>'s popup doesn't have this problem (OS-rendered, ignores CSS
+ * transforms entirely), which is why it silently worked before. Not the
+ * default because it costs a rect measurement + doesn't live-track canvas
+ * panning while open (closes safely instead - see the pan/zoom effect).
  */
 export default function Select({
   value,
@@ -24,11 +35,15 @@ export default function Select({
   ariaLabel,
   className = '',
   disabled = false,
+  portal = false,
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [panelRect, setPanelRect] = useState(null);
   const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const panelRef = useRef(null);
   const searchRef = useRef(null);
   const listRef = useRef(null);
   const listboxId = useId();
@@ -48,13 +63,45 @@ export default function Select({
       return undefined;
     }
     const handlePointer = (event) => {
-      if (rootRef.current && !rootRef.current.contains(event.target)) {
+      const inRoot = rootRef.current && rootRef.current.contains(event.target);
+      const inPanel = panelRef.current && panelRef.current.contains(event.target);
+      if (!inRoot && !inPanel) {
         setIsOpen(false);
       }
     };
     document.addEventListener('mousedown', handlePointer);
     return () => document.removeEventListener('mousedown', handlePointer);
   }, [isOpen]);
+
+  // Portal mode only: the trigger may sit inside a CSS-transformed ancestor
+  // (e.g. a React Flow node) whose pan/zoom doesn't fire scroll/resize
+  // events. Rather than silently drifting out of place, close on any wheel/
+  // pointer activity outside the panel while open - cheap and correct.
+  useEffect(() => {
+    if (!isOpen || !portal) {
+      return undefined;
+    }
+    const handleReposition = (event) => {
+      if (panelRef.current && panelRef.current.contains(event.target)) {
+        return;
+      }
+      setIsOpen(false);
+    };
+    window.addEventListener('wheel', handleReposition, { passive: true });
+    window.addEventListener('resize', handleReposition);
+    return () => {
+      window.removeEventListener('wheel', handleReposition);
+      window.removeEventListener('resize', handleReposition);
+    };
+  }, [isOpen, portal]);
+
+  useLayoutEffect(() => {
+    if (!isOpen || !portal || !triggerRef.current) {
+      return;
+    }
+    const rect = triggerRef.current.getBoundingClientRect();
+    setPanelRect({ top: rect.bottom + 6, left: rect.left, minWidth: rect.width });
+  }, [isOpen, portal]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -105,11 +152,59 @@ export default function Select({
     [filtered, activeIndex, commit],
   );
 
+  const panel = isOpen ? (
+    <div
+      className="app-listbox__panel"
+      ref={panelRef}
+      style={portal && panelRect ? { position: 'fixed', top: panelRect.top, left: panelRect.left, minWidth: panelRect.minWidth } : undefined}
+    >
+      {searchable ? (
+        <input
+          ref={searchRef}
+          className="app-listbox__search"
+          value={query}
+          placeholder="Filter…"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setActiveIndex(0);
+          }}
+          onKeyDown={handlePanelKeyDown}
+        />
+      ) : null}
+      <ul
+        ref={listRef}
+        className="app-listbox__list"
+        role="listbox"
+        id={listboxId}
+        aria-label={ariaLabel}
+        tabIndex={searchable ? -1 : 0}
+        onKeyDown={searchable ? undefined : handlePanelKeyDown}
+      >
+        {filtered.length === 0 ? <li className="app-listbox__empty">No matches</li> : null}
+        {filtered.map((opt, index) => (
+          <li key={opt.value} role="option" aria-selected={opt.value === value} data-index={index}>
+            <button
+              type="button"
+              className={`app-listbox__option ${opt.value === value ? 'is-selected' : ''} ${index === activeIndex ? 'is-active' : ''}`}
+              onMouseEnter={() => setActiveIndex(index)}
+              onClick={() => commit(opt.value)}
+            >
+              {opt.icon ? <span className="app-listbox__option-icon" aria-hidden="true">{opt.icon}</span> : null}
+              <span className="app-listbox__option-label">{opt.label}</span>
+              {opt.value === value ? <span className="app-listbox__check" aria-hidden="true">✓</span> : null}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  ) : null;
+
   return (
     <div className={`app-listbox ${className}`} ref={rootRef}>
       <button
         type="button"
         className="app-listbox__trigger"
+        ref={triggerRef}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-label={ariaLabel}
@@ -127,48 +222,7 @@ export default function Select({
           <ChevronDownIcon />
         </span>
       </button>
-      {isOpen ? (
-        <div className="app-listbox__panel">
-          {searchable ? (
-            <input
-              ref={searchRef}
-              className="app-listbox__search"
-              value={query}
-              placeholder="Filter…"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setActiveIndex(0);
-              }}
-              onKeyDown={handlePanelKeyDown}
-            />
-          ) : null}
-          <ul
-            ref={listRef}
-            className="app-listbox__list"
-            role="listbox"
-            id={listboxId}
-            aria-label={ariaLabel}
-            tabIndex={searchable ? -1 : 0}
-            onKeyDown={searchable ? undefined : handlePanelKeyDown}
-          >
-            {filtered.length === 0 ? <li className="app-listbox__empty">No matches</li> : null}
-            {filtered.map((opt, index) => (
-              <li key={opt.value} role="option" aria-selected={opt.value === value} data-index={index}>
-                <button
-                  type="button"
-                  className={`app-listbox__option ${opt.value === value ? 'is-selected' : ''} ${index === activeIndex ? 'is-active' : ''}`}
-                  onMouseEnter={() => setActiveIndex(index)}
-                  onClick={() => commit(opt.value)}
-                >
-                  {opt.icon ? <span className="app-listbox__option-icon" aria-hidden="true">{opt.icon}</span> : null}
-                  <span className="app-listbox__option-label">{opt.label}</span>
-                  {opt.value === value ? <span className="app-listbox__check" aria-hidden="true">✓</span> : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
+      {portal ? (isOpen ? createPortal(panel, document.body) : null) : panel}
     </div>
   );
 }

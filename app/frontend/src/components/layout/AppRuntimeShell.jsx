@@ -179,6 +179,7 @@ const settingsSections = [
 ];
 
 const workspaceOptions = ['progenitor-main', 'local-development', 'agent-lab'];
+const WORKSPACE_SELECT_OPTIONS = workspaceOptions.map((name) => ({ value: name, label: name }));
 
 // The full IANA tz database, as the runtime actually knows it - matches what
 // the backend's zoneinfo-based validation accepts, so nothing typed here can
@@ -1184,6 +1185,9 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
   const [apiUrl, setApiUrlDraft] = useState(config.api.baseUrl);
   const [section, setSection] = useState('general');
   const [resetConfirmationOpen, setResetConfirmationOpen] = useState(false);
+  // Mocked client-side only, like the rest of this row (see the stub note
+  // below) - no backend workspace concept exists yet to persist this to.
+  const [defaultWorkspace, setDefaultWorkspace] = useState(workspaceOptions[0]);
 
   const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   return (
@@ -1216,11 +1220,12 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Default workspace</div>
                     <div className="set-row__sub">Opens when you launch Progenitor.</div>
                   </div>
-                  <select className="set-input" defaultValue="progenitor-main">
-                    <option>progenitor-main</option>
-                    <option>local-development</option>
-                    <option>agent-lab</option>
-                  </select>
+                  <Select
+                    value={defaultWorkspace}
+                    onChange={setDefaultWorkspace}
+                    options={WORKSPACE_SELECT_OPTIONS}
+                    ariaLabel="Default workspace"
+                  />
                 </div>
 
                 <div className="set-row">

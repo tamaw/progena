@@ -8,6 +8,7 @@ import { selectLogsExport, selectLogsPage, selectLogsState } from '../store/uiDa
 import { requestAcknowledged, withQuery } from '../store/http';
 import { selectRealtime } from '../store/realtimeSlice';
 import { createUuid } from '../lib/uuid';
+import Select from '../components/common/Select';
 
 const COLLAPSED_ROW_HEIGHT = 38;
 const EXPANDED_ROW_HEIGHT = 180;
@@ -346,6 +347,14 @@ function LogsPage() {
 
     return options;
   }, [sourceGroups]);
+
+  const sourceSelectOptions = useMemo(
+    () => sourceOptions.map((option) => ({
+      value: option.value,
+      label: option.label + (option.detail ? ` - ${option.detail}` : ''),
+    })),
+    [sourceOptions],
+  );
 
   useEffect(() => {
     if (selectedGroup && !sourceGroups.some((group) => group.id === selectedGroup)) {
@@ -746,24 +755,20 @@ function LogsPage() {
                   onChange={(event) => setSearch(event.target.value)}
                 />
               </div>
-              <label className="logs-source-select">
-                <select
+              <div className="logs-source-select">
+                <Select
                   value={selectedSourceValue}
-                  aria-label="Log source"
-                  onChange={(event) => {
-                    const option = sourceOptions.find((item) => item.value === event.target.value) || sourceOptions[0];
+                  onChange={(next) => {
+                    const option = sourceOptions.find((item) => item.value === next) || sourceOptions[0];
                     setSelectedGroup(option.group);
                     setSelectedFile(option.file);
                     setLevel('');
                   }}
-                >
-                  {sourceOptions.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}{option.detail ? ` - ${option.detail}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                  options={sourceSelectOptions}
+                  searchable
+                  ariaLabel="Log source"
+                />
+              </div>
               <div className="logs-date-range" ref={datePickerRef}>
                 <button
                   type="button"

@@ -240,25 +240,15 @@
     display: flex;
     align-items: center;
     min-width: 0;
-    min-height: 42px;
-    padding: 0 10px;
-    border: 1px solid var(--color-border);
-    border-radius: var(--border-radius-sm);
-    background: var(--color-bg-primary);
 }
 
-.logs-source-select select {
+.logs-source-select .app-listbox {
     width: 100%;
-    min-width: 0;
-    color: var(--color-text-primary);
-    background: transparent;
-    border: 0;
-    outline: 0;
-    font: 600 12px/1.2 var(--font-mono);
 }
 
-.logs-source-select option {
-    color: #111827;
+.logs-source-select .app-listbox__trigger {
+    min-width: 0;
+    font: 600 12px/1.2 var(--font-mono);
 }
 
 .logs-toolbar-stats {
