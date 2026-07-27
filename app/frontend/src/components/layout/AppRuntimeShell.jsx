@@ -1177,7 +1177,7 @@ function QuickChatPanel({
   );
 }
 
-function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
+function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiState }) {
   const { config, getApiUrl, setApiUrl, resetSettings } = useConfig();
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
@@ -1330,7 +1330,16 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
             // nav-collapse, pinned-panel, and notifications are also
             // backend-persisted now (see /config/preferences.json) - reset
             // those to their schema defaults too, preserving the profile
-            // identity fields.
+            // identity fields. Nav-collapse/pinned-panel also need their
+            // live React state reset directly here, not left to the
+            // reconciliation effect in AppRuntimeShell: that effect adopts
+            // an incoming backend value only when it disagrees with the
+            // localStorage CACHE, and resetSettings() just cleared that
+            // cache to the same defaults being saved below - so the
+            // effect would see no disagreement and never call
+            // setIsNavCollapsed/setIsPinned, leaving a currently-collapsed
+            // rail or pinned panel stuck open until an unrelated change.
+            onResetLiveUiState?.();
             if (preferences.loaded) {
               dispatch(
                 savePreferences({
@@ -1574,6 +1583,18 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 
   const saveProfile = useCallback(
     async (overrides = {}) => {
+      // Guards against clobbering the stored document: this is a whole-
+      // document PUT (see savePreferences/preferencesSaveRequest), and
+      // before the initial fetch resolves preferencesSaveRequest is built
+      // from the slice's un-loaded defaults, not what's actually saved.
+      // Firing early would silently reset every other field (theme,
+      // nav/pin state, ...) to those defaults. Matches the same guard on
+      // persistNavCollapsed/handleTogglePin below. displayNameDraft/
+      // timezoneDraft only populate once loaded too (see the sync effect
+      // above), so in practice there's nothing meaningful to save yet.
+      if (!preferences.loaded) {
+        return;
+      }
       setProfileError('');
       try {
         await dispatch(
@@ -1589,7 +1610,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
         setProfileError('Failed to save profile.');
       }
     },
-    [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft],
+    [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft, preferences.loaded],
   );
 
   // Commit-on-blur, not on every keystroke: typing a name shouldn't fire a
@@ -1613,9 +1634,13 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 
   const persistNotificationPreference = useCallback(
     (patch) => {
+      // Same whole-document-clobber guard as saveProfile above.
+      if (!preferences.loaded) {
+        return;
+      }
       dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, ...patch }));
     },
-    [dispatch, preferencesUrl, preferencesSaveRequest],
+    [dispatch, preferencesUrl, preferencesSaveRequest, preferences.loaded],
   );
 
   return (
@@ -1705,7 +1730,7 @@ function AccountPanel({ onClose, isPinned, onTogglePin, isOpen }) {
 // Transition durations must match the CSS transition on .topnav-pane.
 const PANEL_EXIT_MS = 200;
 const PANEL_ENTER_DELAY_MS = 16; // one rAF tick
-function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin }) {
+function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmission, onQuickChatSubmissionConsumed, searchQuery, setActivePanel, setSettingsOpen, isPinned, onTogglePin, onResetLiveUiState }) {
   const widgets = useSelector(selectUiWidgets);
   const closePanel = useCallback(() => setActivePanel(null), [setActivePanel]);
 
@@ -1765,7 +1790,7 @@ function PanelHost({ activePanel, settingsOpen, quickChatConfig, quickChatSubmis
   const settingsOverlay = settingsOpen ? createPortal(
     <>
       <button type="button" className="modal-scrim" aria-label="Close settings" onClick={() => setSettingsOpen(false)} />
-      <SettingsPanel onClose={() => setSettingsOpen(false)} isOpen />
+      <SettingsPanel onClose={() => setSettingsOpen(false)} isOpen onResetLiveUiState={onResetLiveUiState} />
     </>,
     document.body,
   ) : null;
@@ -1969,6 +1994,17 @@ function AppRuntimeShell() {
     setIsPinned((current) => !current);
   }, []);
 
+  // Resets the live nav/pin UI directly, called from Settings' reset-to-
+  // defaults confirm (see SettingsPanel) alongside the backend save -
+  // needed because the reconciliation effect above only adopts an
+  // incoming backend value when it disagrees with the localStorage cache,
+  // and resetSettings() (ConfigContext) already cleared that cache to the
+  // same defaults being saved, so the effect alone would never fire.
+  const resetLiveUiState = useCallback(() => {
+    setIsNavCollapsed(false);
+    setIsPinned(false);
+  }, []);
+
   // Persist pinnedPanelValue whenever it actually changes (pin toggled,
   // panel switched while pinned, or the panel closed/unpinned).
   const prevPinnedPanelRef = useRef(pinnedPanelValue);
@@ -2088,6 +2124,7 @@ function AppRuntimeShell() {
         setActivePanel={setActivePanel}
         isPinned={isPinned}
         onTogglePin={handleTogglePin}
+        onResetLiveUiState={resetLiveUiState}
       />
       <NotificationContainer />
     </div>
