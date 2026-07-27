@@ -42,7 +42,11 @@ Authoritative shape: `/schemas/preferences.schema.v1.json`.
 ```
 
 Rules enforced on every write (a violating edit is rejected and nothing changes):
-- Top level must be a JSON object with exactly these six fields — no others.
+- Top level must be a JSON object with these six fields and no others —
+  `timezone` is the only one that must actually be present; the other five
+  are optional and normalize to their schema default (see the example
+  below) when omitted, so every saved document is still complete and
+  self-describing.
 - `display_name` is a string (may be empty).
 - `timezone` is required and must be a non-empty IANA timezone name (e.g.
   `America/New_York`, `Europe/London`, `UTC`) — anything `zoneinfo` doesn't

@@ -18,7 +18,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from app.progenitor.state.preferences import validate_preferences_payload
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
-from .preferences_service import save_preferences
+from .preferences_service import load_preferences, save_preferences
 from .request_utils import request_correlation_id as _request_correlation_id
 from .ui_routes import broadcast_preferences_snapshot
 
@@ -32,7 +32,12 @@ async def get_preferences(
 ) -> UiRequestAcknowledgement:
     """Acknowledge a read and publish the snapshot on the UI stream."""
     request_id = _request_correlation_id(request, x_request_id)
-    broadcast_preferences_snapshot(request_id=request_id)
+    # load_preferences() does blocking document-store I/O (see save_preferences
+    # below, which is threaded for the same reason) - broadcast_preferences_snapshot
+    # would otherwise call it straight from this async handler and block the
+    # event loop for the Postgres round-trip.
+    snapshot = await asyncio.to_thread(load_preferences)
+    broadcast_preferences_snapshot(snapshot, request_id=request_id)
     return acknowledgement_response(request_id, ["preferences.snapshot"])
 
 
