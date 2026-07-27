@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getTimeBucket } from '../components/chat/conversationModel';
+import Select from '../components/common/Select';
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtime } from '../store/realtimeSlice';
 import {
@@ -286,6 +287,21 @@ function DraftField({ label, hint, children }) {
   );
 }
 
+const A2A_TRANSPORT_OPTIONS = [
+  { value: 'jsonrpc', label: 'JSON-RPC' },
+  { value: 'grpc', label: 'gRPC' },
+  { value: 'http', label: 'HTTP+JSON' },
+];
+const ACP_TRANSPORT_OPTIONS = [
+  { value: 'stdio', label: 'stdio' },
+  { value: 'tcp', label: 'TCP' },
+];
+const ACP_PERMISSION_OPTIONS = [
+  { value: 'prompt', label: 'Prompt' },
+  { value: 'auto', label: 'Auto-approve' },
+  { value: 'readonly', label: 'Read-only' },
+];
+
 // Editable body for a not-yet-created agent. Mirrors the read-only detail bodies
 // per kind, but every fact is an input. Values are mocked client-side; nothing
 // persists until the (future) register_*_agent call is wired up.
@@ -336,11 +352,12 @@ function DraftAgentDetailBody({ draft, onChange }) {
           </DraftField>
           <div className="agents-draft-grid">
             <DraftField label="Transport">
-              <select value={draft.transport} onChange={set('transport')}>
-                <option value="jsonrpc">JSON-RPC</option>
-                <option value="grpc">gRPC</option>
-                <option value="http">HTTP+JSON</option>
-              </select>
+              <Select
+                value={draft.transport}
+                onChange={(next) => onChange('transport', next)}
+                options={A2A_TRANSPORT_OPTIONS}
+                ariaLabel="Transport"
+              />
             </DraftField>
             <DraftField label="Skills" hint="Comma-separated skill ids.">
               <input value={draft.skills} onChange={set('skills')} placeholder="build_agent, build_mcp" />
@@ -355,17 +372,20 @@ function DraftAgentDetailBody({ draft, onChange }) {
           </DraftField>
           <div className="agents-draft-grid">
             <DraftField label="Transport">
-              <select value={draft.transport} onChange={set('transport')}>
-                <option value="stdio">stdio</option>
-                <option value="tcp">TCP</option>
-              </select>
+              <Select
+                value={draft.transport}
+                onChange={(next) => onChange('transport', next)}
+                options={ACP_TRANSPORT_OPTIONS}
+                ariaLabel="Transport"
+              />
             </DraftField>
             <DraftField label="Permissions">
-              <select value={draft.permissionMode} onChange={set('permissionMode')}>
-                <option value="prompt">Prompt</option>
-                <option value="auto">Auto-approve</option>
-                <option value="readonly">Read-only</option>
-              </select>
+              <Select
+                value={draft.permissionMode}
+                onChange={(next) => onChange('permissionMode', next)}
+                options={ACP_PERMISSION_OPTIONS}
+                ariaLabel="Permissions"
+              />
             </DraftField>
             <DraftField label="Timeout" hint="Seconds before a run is abandoned.">
               <input value={draft.timeoutSeconds} onChange={set('timeoutSeconds')} inputMode="numeric" placeholder="120" />
