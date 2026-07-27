@@ -1847,41 +1847,79 @@ function AppRuntimeShell() {
     return () => mq.removeEventListener('change', handler);
   }, []);
 
+  // Whatever panel is open+pinned right now is the one that reopens docked on
+  // the next load.
+  const pinnedPanelValue = activePanel && isPinned && PINNABLE_PANELS.has(activePanel) ? activePanel : null;
+
   // Live sync: whenever the backend-persisted profile's nav-collapse/pinned-
   // panel disagree with the local cache (initial load, an agent edit to
   // /config/preferences.json, the reset-settings button, or a change from
-  // another device/tab), adopt them. Safe from feedback loops: the toggle
-  // handlers below write localStorage synchronously before their own save
-  // round-trips back through Redux, so by the time the snapshot arrives the
-  // cached values already match and this is a no-op.
+  // another device/tab), adopt them - UNLESS a local change happened before
+  // the initial load resolved (see persistNavCollapsed/the pin-write-effect
+  // below), in which case the user's fresher local choice wins and gets
+  // pushed to the backend instead of getting silently overwritten by
+  // whatever was already saved there. Safe from feedback loops otherwise:
+  // the toggle handlers write localStorage synchronously before their own
+  // save round-trips back through Redux, so by the time the snapshot
+  // arrives the cached values already match and this is a no-op.
+  const pendingNavChangeRef = useRef(false);
+  const pendingPinChangeRef = useRef(false);
   useEffect(() => {
     if (!preferences.loaded) {
       return;
     }
-    const cachedNavCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
-    if (preferences.navCollapsed !== cachedNavCollapsed) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- syncing external (Redux/backend) state into local UI state, not derived-from-render state
-      setIsNavCollapsed(preferences.navCollapsed);
-      localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(preferences.navCollapsed));
-    }
-    const cachedPinned = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
-    if (preferences.pinnedPanel !== (cachedPinned && PINNABLE_PANELS.has(cachedPinned) ? cachedPinned : null)) {
-      if (preferences.pinnedPanel && PINNABLE_PANELS.has(preferences.pinnedPanel)) {
-        localStorage.setItem(PINNED_PANEL_STORAGE_KEY, preferences.pinnedPanel);
-        setActivePanel(preferences.pinnedPanel);
-        setIsPinned(true);
-      } else {
-        localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
-        setIsPinned(false);
+    if (pendingNavChangeRef.current) {
+      pendingNavChangeRef.current = false;
+      if (preferences.navCollapsed !== isNavCollapsed) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, navCollapsed: isNavCollapsed }));
+      }
+    } else {
+      const cachedNavCollapsed = localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === 'true';
+      if (preferences.navCollapsed !== cachedNavCollapsed) {
+        setIsNavCollapsed(preferences.navCollapsed);
+        localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(preferences.navCollapsed));
       }
     }
-  }, [preferences.loaded, preferences.navCollapsed, preferences.pinnedPanel]);
+
+    if (pendingPinChangeRef.current) {
+      pendingPinChangeRef.current = false;
+      if (preferences.pinnedPanel !== pinnedPanelValue) {
+        dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, pinnedPanel: pinnedPanelValue }));
+      }
+    } else {
+      const cachedPinned = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);
+      if (preferences.pinnedPanel !== (cachedPinned && PINNABLE_PANELS.has(cachedPinned) ? cachedPinned : null)) {
+        if (preferences.pinnedPanel && PINNABLE_PANELS.has(preferences.pinnedPanel)) {
+          localStorage.setItem(PINNED_PANEL_STORAGE_KEY, preferences.pinnedPanel);
+          setActivePanel(preferences.pinnedPanel);
+          setIsPinned(true);
+        } else {
+          localStorage.removeItem(PINNED_PANEL_STORAGE_KEY);
+          setIsPinned(false);
+        }
+      }
+    }
+    // isNavCollapsed/pinnedPanelValue/preferencesSaveRequest are read (for
+    // the "push a pending local change" branch), never watched: this effect
+    // exists to react to the BACKEND value changing, not the local one.
+    // Depending on isNavCollapsed/pinnedPanelValue would re-run this effect
+    // the instant a toggle fires - while Redux's preferences.navCollapsed/
+    // pinnedPanel are still the pre-save (stale) value - and "adopt" that
+    // stale value right back over the fresh local change, fighting the
+    // write effects below. preferencesSaveRequest is memoized at the source
+    // (selectPreferencesSaveRequest uses createSelector) so it wouldn't
+    // cause that on its own, but it stays out of the deps anyway - this
+    // effect has no reason to re-run for anything but a real backend change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preferences.loaded, preferences.navCollapsed, preferences.pinnedPanel, dispatch, preferencesUrl]);
 
   const persistNavCollapsed = useCallback(
     (next) => {
       localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
       if (preferences.loaded) {
         dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, navCollapsed: next }));
+      } else {
+        pendingNavChangeRef.current = true;
       }
     },
     [dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest],
@@ -1891,10 +1929,8 @@ function AppRuntimeShell() {
     setIsPinned((current) => !current);
   }, []);
 
-  // Whatever panel is open+pinned right now is the one that reopens docked on
-  // the next load; persist it whenever that derived value actually changes
-  // (pin toggled, panel switched while pinned, or the panel closed/unpinned).
-  const pinnedPanelValue = activePanel && isPinned && PINNABLE_PANELS.has(activePanel) ? activePanel : null;
+  // Persist pinnedPanelValue whenever it actually changes (pin toggled,
+  // panel switched while pinned, or the panel closed/unpinned).
   const prevPinnedPanelRef = useRef(pinnedPanelValue);
   useEffect(() => {
     if (prevPinnedPanelRef.current === pinnedPanelValue) {
@@ -1908,6 +1944,8 @@ function AppRuntimeShell() {
     }
     if (preferences.loaded) {
       dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, pinnedPanel: pinnedPanelValue }));
+    } else {
+      pendingPinChangeRef.current = true;
     }
   }, [pinnedPanelValue, dispatch, preferencesUrl, preferences.loaded, preferencesSaveRequest]);
 
