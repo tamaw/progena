@@ -2123,6 +2123,12 @@ body,
   color: var(--color-text-muted);
 }
 
+.account-pane__profile {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
 .account-pane__facts {
   display: flex;
   flex-direction: column;
