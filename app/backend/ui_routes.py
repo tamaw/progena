@@ -41,6 +41,7 @@ from app.progenitor.utils import utcnow
 from app.progenitor.workflows import (
     WORKFLOW_ALLOWED_EVENT_TYPES,
     WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
@@ -49,6 +50,7 @@ from app.progenitor.workflows import (
     WorkflowNodeUser,
     WorkflowRun,
     default_workflow_definition,
+    parse_workflow_invoke_request_document,
     workflow_id_from_path,
 )
 
@@ -85,6 +87,7 @@ from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
+    build_agent_node_instruction,
     build_manual_trigger_event,
     build_user_node_instruction,
     delete_workflow_definition,
@@ -477,7 +480,7 @@ class ActionRunRequest(BaseModel):
     language: str | None = None
     broadcast_response: bool = True
     thread_id: str | None = None
-    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_type: Literal["user", "automation", "system", "workflow_step"] = "automation"
     invocation_source: str | None = None
     root_widget_id: str | None = None
 
@@ -490,7 +493,7 @@ class ActionGenerateRequest(BaseModel):
     input: str | None = None
     target: str | None = None
     thread_id: str | None = None
-    invocation_type: Literal["user", "automation", "system"] = "automation"
+    invocation_type: Literal["user", "automation", "system", "workflow_step"] = "automation"
     invocation_source: str | None = None
     root_widget_id: str | None = None
 
@@ -524,6 +527,12 @@ class WorkflowManualTriggerRequest(BaseModel):
 
     event_type: str | None = None
     payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowApprovalRequest(BaseModel):
+    """Resolve a paused workflow approval."""
+
+    approved: bool
 
 
 class WorkflowTriggerResponse(BaseModel):
@@ -565,7 +574,7 @@ def _resolve_action_thread_id(thread_id: str | None) -> str:
 def _build_action_metadata(
     *,
     thread_id: str,
-    invocation_type: Literal["user", "automation", "system"],
+    invocation_type: Literal["user", "automation", "system", "workflow_step"],
     invocation_source: str | None,
     widget_id: str | None,
     root_widget_id: str | None,
@@ -617,7 +626,7 @@ async def _workflow_prompt_runner(
             input=input_text,
             broadcast_response=False,
             thread_id=thread_id,
-            invocation_type="automation",
+            invocation_type="workflow_step",
             invocation_source=widget_id,
             root_widget_id=root_widget_id,
         )
@@ -627,7 +636,18 @@ async def _workflow_prompt_runner(
             prompt=build_user_node_instruction(node, input_text),
             broadcast_response=False,
             thread_id=thread_id,
-            invocation_type="automation",
+            invocation_type="workflow_step",
+            invocation_source=widget_id,
+            root_widget_id=root_widget_id,
+        )
+    elif getattr(node, "kind", "") == "agent":
+        request = ActionRunRequest(
+            widget_id=widget_id,
+            prompt=build_agent_node_instruction(node, input_text),
+            input=input_text,
+            broadcast_response=False,
+            thread_id=thread_id,
+            invocation_type="workflow_step",
             invocation_source=widget_id,
             root_widget_id=root_widget_id,
         )
@@ -638,7 +658,7 @@ async def _workflow_prompt_runner(
             input=input_text,
             broadcast_response=False,
             thread_id=thread_id,
-            invocation_type="automation",
+            invocation_type="workflow_step",
             invocation_source=widget_id,
             root_widget_id=root_widget_id,
         )
@@ -1984,6 +2004,53 @@ async def _dispatch_workflow_triggers(
     await get_workflow_executor().dispatch_triggers(correlated_triggers)
 
 
+_workflow_invoke_lock = asyncio.Lock()
+
+
+async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) -> None:
+    """Consume durable workflow invocation requests from Progenitor."""
+
+    if changed_key is not None and not changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX):
+        return
+    store = get_default_document_store()
+    rows = store.list_documents(PROGENITOR_STATE_PREFIX, WORKFLOW_INVOKE_REQUEST_KEY_PREFIX)
+    if not rows:
+        return
+    executor = get_workflow_executor()
+    async with _workflow_invoke_lock:
+        for key, document in rows:
+            payload = document.payload if isinstance(document.payload, dict) else {}
+            try:
+                request = parse_workflow_invoke_request_document(payload)
+            except Exception:
+                logger.warning("Dropping malformed workflow invoke request %r", key, exc_info=True)
+                store.delete_document(PROGENITOR_STATE_PREFIX, key)
+                continue
+            trigger = {
+                "event_type": "progenitor.invoke",
+                "timestamp": request.requested_at,
+                "payload": {
+                    "event_type": "progenitor.invoke",
+                    "input": request.input,
+                    "source": "progenitor",
+                },
+            }
+            try:
+                await executor.trigger_workflow(
+                    request.workflow_id,
+                    trigger,
+                    source="progenitor",
+                    ancestry=request.ancestry,
+                )
+            except Exception:
+                logger.exception(
+                    "Workflow invoke request %r failed; retaining it for retry",
+                    request.request_id,
+                )
+                continue
+            store.delete_document(PROGENITOR_STATE_PREFIX, key)
+
+
 def _parse_once_datetime(expression: str) -> datetime:
     try:
         return datetime.fromisoformat(expression.replace("Z", "+00:00"))
@@ -2099,7 +2166,7 @@ def _build_schedule_entry(
 
 def _workflow_content_response(definition: WorkflowDefinition) -> WorkflowContentResponse:
     return WorkflowContentResponse(
-        path=f"/config/workflows/{definition.id}.json",
+        path=f"/workflows/{definition.id}.json",
         workflow=definition,
     )
 
@@ -2369,6 +2436,36 @@ async def trigger_workflow(
         request_id=request_id,
     )
     return acknowledgement_response(request_id, ["workflow.run.started"])
+
+
+@router.post(
+    "/workflows/{workflow_id}/runs/{run_id}/approval",
+    status_code=202,
+    response_model=UiRequestAcknowledgement,
+)
+async def resolve_workflow_approval(
+    workflow_id: str,
+    run_id: str,
+    body: WorkflowApprovalRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Approve or reject a paused workflow approval node."""
+
+    request_id = _request_correlation_id(request, x_request_id)
+    run = await get_workflow_executor().resolve_approval(
+        workflow_id,
+        run_id,
+        approved=body.approved,
+    )
+    if run is None:
+        raise HTTPException(status_code=409, detail="Workflow run is not awaiting approval")
+    broadcast_ui_event(
+        "workflow.run.updated",
+        {"workflow_id": workflow_id, "run_id": run_id, "run": run.model_dump(mode="json")},
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["workflow.run.updated"])
 
 
 def _mcp_widget_items() -> list[WidgetResponse]:
@@ -4200,66 +4297,67 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
     global _state_watch_push_task
     if not _ui_stream_subscribers:
         return
-    # Route the changed key to its dedicated event so pages render from a precise
-    # snapshot (None = full resync after a reconnect → refresh everything).
-    if _ui_stream_subscribers:
-        try:
-            if (
-                changed_key is None
-                or changed_key == _kanban_board_store_key()
-                or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
-            ):
-                broadcast_kanban_snapshot()
-            if changed_key is None or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX):
-                _broadcast_inbox_snapshot()
-            if changed_key in (None, "mcp", "mcp_tools"):
-                broadcast_mcp_snapshot()
-            if changed_key in (None, "schedule"):
-                broadcast_schedule_snapshot()
-            if changed_key in (None, "knowledge"):
-                broadcast_knowledge_snapshot()
-            if changed_key in (None, "registry"):
-                # Async (reads the agent store off-thread), so it's a fire-and-forget
-                # task rather than an inline call like the sync broadcasts above.
-                # A strong reference is kept in _active_agent_profile_broadcast_tasks
-                # (and dropped on completion) since asyncio only holds a weak
-                # reference to unreferenced tasks, which risks premature GC.
-                profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
-                _active_agent_profile_broadcast_tasks.add(profile_task)
-                profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)
-            if changed_key is None:
-                board = _read_kanban_board(get_state_reader())
-                for card in board["cards"]:
-                    card_id = str(card.get("id") or "").strip()
-                    if not card_id:
-                        continue
+    try:
+        if (
+            changed_key is None
+            or changed_key == _kanban_board_store_key()
+            or changed_key.startswith(_KANBAN_CARD_KEY_PREFIX)
+        ):
+            broadcast_kanban_snapshot()
+        if changed_key is None or changed_key.startswith(INBOX_MESSAGE_KEY_PREFIX):
+            _broadcast_inbox_snapshot()
+        if changed_key in (None, "mcp", "mcp_tools"):
+            broadcast_mcp_snapshot()
+        if changed_key in (None, "schedule"):
+            broadcast_schedule_snapshot()
+        if changed_key in (None, "knowledge"):
+            broadcast_knowledge_snapshot()
+        if changed_key in (None, "registry"):
+            profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
+            _active_agent_profile_broadcast_tasks.add(profile_task)
+            profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)
+        if changed_key is None:
+            board = _read_kanban_board(get_state_reader())
+            for card in board["cards"]:
+                card_id = str(card.get("id") or "").strip()
+                if card_id:
                     broadcast_task_content(card_id)
                     broadcast_task_activity(card_id)
-            elif changed_key.startswith("kanban_task_content:"):
-                broadcast_task_content(changed_key.split(":", 1)[1])
-            elif changed_key.startswith("kanban_task_activity:"):
-                broadcast_task_activity(changed_key.split(":", 1)[1])
-            if changed_key is None or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
-                broadcast_workflows_snapshot()
-                if changed_key is not None:
-                    workflow_id = changed_key.removeprefix(WORKFLOW_DEFINITION_KEY_PREFIX)
-                    if workflow_id:
-                        broadcast_workflow_detail(workflow_id)
-            if (
-                changed_key is None
-                or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
-                or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
-            ):
-                broadcast_workflow_runs_snapshot()
-            if changed_key is None or changed_key in _WIDGET_KEYS:
-                broadcast_widgets_snapshot()
-        except Exception:
-            logger.debug("Failed to broadcast dedicated snapshot", exc_info=True)
-    # Status (health/agents/loops/sessions) + chat sessions follow on the
-    # coalesced task.
+        elif changed_key.startswith("kanban_task_content:"):
+            card_id = changed_key.split(":", 1)[1]
+            broadcast_task_content(card_id)
+            broadcast_task_activity(card_id)
+        if changed_key is None or changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX):
+            broadcast_workflows_snapshot()
+            if changed_key is not None:
+                workflow_id = changed_key.removeprefix(WORKFLOW_DEFINITION_KEY_PREFIX)
+                if workflow_id:
+                    broadcast_workflow_detail(workflow_id)
+        if (
+            changed_key is None
+            or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
+            or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
+        ):
+            broadcast_workflow_runs_snapshot()
+        if changed_key is None or changed_key in _WIDGET_KEYS:
+            broadcast_widgets_snapshot()
+    except Exception:
+        logger.debug("Failed to broadcast dedicated snapshot", exc_info=True)
     if _state_watch_push_task and not _state_watch_push_task.done():
         return
     _state_watch_push_task = asyncio.create_task(_broadcast_latest_status())
+
+
+_workflow_invoke_watch_callback = None
+_active_workflow_invoke_tasks: set[asyncio.Task] = set()
+
+
+def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = None) -> None:
+    """Queue reconciliation for durable Progenitor workflow requests."""
+
+    task = asyncio.create_task(_reconcile_workflow_invoke_requests(changed_key))
+    _active_workflow_invoke_tasks.add(task)
+    task.add_done_callback(_active_workflow_invoke_tasks.discard)
 
 
 _kanban_trigger_watch_callback = None
@@ -4282,7 +4380,7 @@ def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = No
 
 
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4290,11 +4388,14 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _kanban_trigger_watch_callback is None:
         _kanban_trigger_watch_callback = _queue_kanban_trigger_reconciliation
         state_reader.add_watcher(_kanban_trigger_watch_callback)
+    if _workflow_invoke_watch_callback is None:
+        _workflow_invoke_watch_callback = _queue_workflow_invoke_reconciliation
+        state_reader.add_watcher(_workflow_invoke_watch_callback)
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4302,6 +4403,9 @@ async def stop_state_status_watcher() -> None:
     if _kanban_trigger_watch_callback is not None:
         state_reader.remove_watcher(_kanban_trigger_watch_callback)
         _kanban_trigger_watch_callback = None
+    if _workflow_invoke_watch_callback is not None:
+        state_reader.remove_watcher(_workflow_invoke_watch_callback)
+        _workflow_invoke_watch_callback = None
     await state_reader.stop_watching()
 
 

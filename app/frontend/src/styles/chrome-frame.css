@@ -1099,6 +1099,30 @@ body,
   backdrop-filter: blur(8px);
 }
 
+.popup-modal-backdrop {
+  z-index: 1200;
+}
+
+.popup-modal__confirm {
+  padding: 9px 14px;
+  color: #fff;
+  border: 0;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.popup-modal__confirm--danger {
+  background: var(--color-error, #dc2626);
+}
+
+.popup-modal__confirm:disabled {
+  cursor: progress;
+  opacity: 0.7;
+}
+
 .sidebar-modal {
   width: min(420px, 100%);
   padding: 16px;
@@ -1947,6 +1971,20 @@ body,
   cursor: default;
 }
 
+
+.topnav-scrim--modal {
+  backdrop-filter: blur(8px);
+}
+
+.settings-modal-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  border: 0;
+  background: rgba(10, 14, 23, 0.44);
+  backdrop-filter: blur(8px);
+  cursor: default;
+}
 [data-theme="dark"] .topnav-scrim {
   background: rgba(0, 0, 0, 0.32);
 }
@@ -2030,6 +2068,7 @@ body,
 /* Settings is wider and a fixed height (its own pre-right-pane size), so the
    left options column runs full height and the content pane scrolls. */
 .topnav-pane--settings {
+  z-index: 1001;
   width: min(820px, calc(100vw - 48px));
   height: min(580px, calc(100vh - 80px));
   max-height: calc(100vh - 80px);
@@ -6070,13 +6109,11 @@ body,
   text-align: center;
 }
 
-/* Keep detail/card panes consistent when there is no selected item. */
-.sess-list > .pane-empty-state,
-.prompts-editor > .pane-empty-state,
-.pane-empty-state--detail {
+.pane-empty-state--centered {
   flex: 1;
   display: grid;
   place-items: center;
+  min-height: 0;
   padding: 28px;
   background: transparent;
   border: 0;
@@ -7061,7 +7098,8 @@ body,
   white-space: nowrap;
 }
 
-.pane-empty-state {
+.chrome-empty,
+.empty-state {
   padding: 14px;
   color: var(--color-text-muted);
   background: var(--color-bg-secondary);

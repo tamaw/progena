@@ -327,3 +327,160 @@ async def test_dispatch_event_filters_by_from_and_to_column():
             None,
         )
     )
+
+
+@pytest.mark.asyncio
+async def test_executor_routes_condition_and_sends_inbox_message():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(title="Condition inbox")
+    event_id, _prompt_id = list(workflow["graph"]["nodes"])
+    condition_id = "condition_1"
+    inbox_id = "inbox_1"
+    workflow["graph"]["nodes"].pop(_prompt_id)
+    workflow["graph"]["nodes"][condition_id] = {
+        "kind": "condition",
+        "title": "Done?",
+        "expression": 'payload.card.status == "done"',
+    }
+    workflow["graph"]["nodes"][inbox_id] = {
+        "kind": "inbox",
+        "title": "Inbox",
+        "message_title": "Completed",
+        "message": "The card is done.",
+        "level": "success",
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "default"},
+            "to": {"node": condition_id, "port": "default"},
+        },
+        {
+            "from": {"node": condition_id, "port": "true"},
+            "to": {"node": inbox_id, "port": "default"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=lambda **_kwargs: None,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    trigger = build_manual_trigger_event(
+        definition,
+        payload={"card": {"status": "done"}},
+    )
+    run = await executor.trigger_workflow(definition.id, trigger)
+    assert run is not None
+    await _wait_for(lambda: any(item.status == "completed" for item in list_workflow_runs(store)))
+    inbox = store.list_documents("progenitor.state", "inbox_message:")
+    assert len(inbox) == 1
+    assert inbox[0][1].payload["title"] == "Completed"
+
+
+@pytest.mark.asyncio
+async def test_executor_ends_when_condition_port_is_unmatched():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(title="Unmatched condition")
+    event_id, prompt_id = list(workflow["graph"]["nodes"])
+    condition_id = "condition_1"
+    inbox_id = "inbox_1"
+    workflow["graph"]["nodes"].pop(prompt_id)
+    workflow["graph"]["nodes"][condition_id] = {
+        "kind": "condition",
+        "title": "Done?",
+        "expression": 'payload.card.status == "done"',
+    }
+    workflow["graph"]["nodes"][inbox_id] = {
+        "kind": "inbox",
+        "title": "Inbox",
+        "message_title": "Completed",
+        "message": "The card is done.",
+        "level": "success",
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "default"},
+            "to": {"node": condition_id, "port": "default"},
+        },
+        {
+            "from": {"node": condition_id, "port": "true"},
+            "to": {"node": inbox_id, "port": "default"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=lambda **_kwargs: None,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    run = await executor.trigger_workflow(
+        definition.id,
+        build_manual_trigger_event(definition, payload={"card": {"status": "not_done"}}),
+    )
+    assert run is not None
+    completed = await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == run.run_id and item.status == "completed"
+            ),
+            None,
+        )
+    )
+    assert completed.last_output == "false"
+    assert store.list_documents("progenitor.state", "inbox_message:") == []
+
+
+@pytest.mark.asyncio
+async def test_executor_pauses_and_resolves_approval():
+    store = InMemoryDocumentStore()
+    workflow = default_workflow_definition(title="Approval")
+    event_id, prompt_id = list(workflow["graph"]["nodes"])
+    approval_id = "approval_1"
+    workflow["graph"]["nodes"].pop(prompt_id)
+    workflow["graph"]["nodes"][approval_id] = {
+        "kind": "approval",
+        "title": "Approve",
+        "message": "Proceed?",
+    }
+    workflow["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "default"},
+            "to": {"node": approval_id, "port": "default"},
+        },
+    ]
+    definition = save_workflow_definition(store, workflow)
+    executor = WorkflowExecutor(
+        store_getter=lambda: store,
+        prompt_runner=lambda **_kwargs: None,
+        emit_event=lambda *_args, **_kwargs: None,
+    )
+
+    run = await executor.trigger_workflow(definition.id, build_manual_trigger_event(definition))
+    assert run is not None
+    paused = await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == run.run_id and item.status == "paused"
+            ),
+            None,
+        )
+    )
+    assert paused.waiting_node_id == approval_id
+    resolved = await executor.resolve_approval(definition.id, run.run_id, approved=True)
+    assert resolved is not None
+    await _wait_for(
+        lambda: next(
+            (
+                item
+                for item in list_workflow_runs(store)
+                if item.run_id == run.run_id and item.status == "completed"
+            ),
+            None,
+        )
+    )

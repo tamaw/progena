@@ -9,7 +9,9 @@ from ..content_documents import content_document_key, content_document_prefix
 from ..utils import utcnow_isoformat
 from ..workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_RUN_KEY_PREFIX,
     workflow_definition_key,
+    workflow_invoke_request_key,
 )
 from . import (
     a2a_store,
@@ -455,6 +457,31 @@ class StateManager:
         """Return all workflow definition documents."""
         rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def list_workflow_runs(self) -> list[dict[str, Any]]:
+        """Return all workflow run documents."""
+        rows = await self._runtime_store.list_documents(WORKFLOW_RUN_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    async def request_workflow_run(
+        self,
+        *,
+        request_id: str,
+        workflow_id: str,
+        input: dict[str, Any],
+        ancestry: list[str],
+    ) -> None:
+        """Persist a durable request for the backend workflow executor."""
+        await self._save_runtime_document(
+            workflow_invoke_request_key(request_id),
+            {
+                "request_id": request_id,
+                "workflow_id": workflow_id,
+                "input": input,
+                "ancestry": ancestry,
+                "requested_at": utcnow_isoformat(),
+            },
+        )
 
     # ==========================================================================
     # Content documents (prompts, skills, runtime memories)

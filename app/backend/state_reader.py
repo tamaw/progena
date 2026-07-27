@@ -32,6 +32,7 @@ from app.progenitor.mcp.loader import (
 )
 from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
+    WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
     WORKFLOW_QUEUE_KEY_PREFIX,
     WORKFLOW_RUN_KEY_PREFIX,
 )
@@ -499,7 +500,7 @@ class StateSnapshot:
     inbox_fingerprint: str = ""
     # Content fingerprint of all workflow definition, run, and queue documents.
     # Like kanban/inbox, no other snapshot field changes when the agent writes
-    # /config/workflows/<id>.json (or the executor updates a run), so this is
+    # /workflows/<id>.json (or the executor updates a run), so this is
     # the sole signal _state_changed() has for a workflow-only write.
     workflow_fingerprint: str = ""
 
@@ -989,11 +990,11 @@ class StateReader:
         return _hash_material(material)
 
     def _workflow_fingerprint(self) -> str:
-        """Stable hash of all workflow definition, run, and queue documents.
+        """Stable hash of workflow definitions, runs, queues, and invoke requests.
 
-        Mirrors ``_inbox_fingerprint`` (no index document, so one key-prefix
-        query per document kind), combined into a single fingerprint since a
-        change to any of the three should push a live update the same way.
+        A request document is included because the always-on workflow invoke
+        reconciler is registered as a StateReader watcher and must run when
+        Progenitor writes a durable invoke request.
         """
         if self.document_store is None:
             return ""
@@ -1003,6 +1004,7 @@ class StateReader:
                 WORKFLOW_DEFINITION_KEY_PREFIX,
                 WORKFLOW_RUN_KEY_PREFIX,
                 WORKFLOW_QUEUE_KEY_PREFIX,
+                WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
             ):
                 rows = self.document_store.list_documents(PROGENITOR_STATE_PREFIX, key_prefix)
                 material.extend(
@@ -1853,7 +1855,17 @@ class StateReader:
             logger.error("Failed to read state snapshot: %s", e)
             return
         if not self._state_changed(snapshot):
-            return
+            workflow_change = bool(
+                changed_key
+                and (
+                    changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
+                    or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
+                    or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
+                    or changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX)
+                )
+            )
+            if not workflow_change:
+                return
         self._last_snapshot = snapshot
         for watcher in list(self._watchers):
             try:

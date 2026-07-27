@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     from .list_agents import ListAgentsTool
     from .list_tools import ListToolsTool
     from .new_conversation import NewConversationTool
+    from .run_workflow import RunWorkflowTool
     from .schedule_results import GetScheduleRunResultTool, ListScheduleRunsTool
     from .self_reflect import SELF_REFLECT_TOOL_SPEC, SelfReflection, execute_self_reflect
     from .self_reflect_tool import SelfReflectTool
@@ -27,6 +28,7 @@ def __getattr__(name: str):
         "SelfReflectTool": "self_reflect_tool",
         "ListScheduleRunsTool": "schedule_results",
         "GetScheduleRunResultTool": "schedule_results",
+        "RunWorkflowTool": "run_workflow",
     }
     if name in _tool_modules:
         import importlib
@@ -49,4 +51,5 @@ __all__ = [
     "SelfReflectTool",
     "ListScheduleRunsTool",
     "GetScheduleRunResultTool",
+    "RunWorkflowTool",
 ]

@@ -44,7 +44,7 @@ views backed by those documents:
 - `/config/agents.json` — A2A registry agents and runtime tools.
 - `/config/health.json` — read-only heartbeat status.
 - `/config/tasks/board.json` and `/config/tasks/<id>.md` — kanban structure and cards.
-- `/config/workflows/<id>.json` — workflow definitions.
+- `/workflows/<id>.json` — workflow definitions.
 
 Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual
 paths. The state backend validates the resulting document and persists it

@@ -17,6 +17,7 @@ from .utils import utcnow_isoformat
 WORKFLOW_DEFINITION_KEY_PREFIX = "workflow:"
 WORKFLOW_RUN_KEY_PREFIX = "workflow_run:"
 WORKFLOW_QUEUE_KEY_PREFIX = "workflow_queue:"
+WORKFLOW_INVOKE_REQUEST_KEY_PREFIX = "workflow_invoke_request:"
 
 WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.created",
@@ -26,14 +27,18 @@ WORKFLOW_ALLOWED_EVENT_TYPES = (
     "kanban.card.status_changed",
 )
 WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
+
 WORKFLOW_DEFAULT_AGENT_NAME = "progenitor"
 WORKFLOW_VERSION = 1
+# Max chained Progenitor-initiated workflow invocations.
+MAX_WORKFLOW_INVOKE_DEPTH = 3
 
 # Kanban columns a kanban.card.moved trigger can filter on. Mirrors the fixed
 # pipeline in app/backend/ui_routes.py:_kanban_default_columns().
 WORKFLOW_KANBAN_COLUMNS = ("backlog", "plan", "build", "validate", "done")
 
 WorkflowRunStatus = Literal["queued", "running", "paused", "completed", "failed"]
+WorkflowRunSource = Literal["kanban", "manual", "progenitor"]
 
 
 class WorkflowTrigger(BaseModel):
@@ -96,8 +101,60 @@ class WorkflowNodeCode(BaseModel):
     content: str
 
 
+class WorkflowNodeCondition(BaseModel):
+    """Branch node evaluated against the workflow input and previous output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["condition"] = "condition"
+    title: str = "Condition"
+    expression: str
+
+
+class WorkflowNodeApproval(BaseModel):
+    """Human approval gate that pauses a workflow run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["approval"] = "approval"
+    title: str = "Approval"
+    message: str
+
+
+class WorkflowNodeInbox(BaseModel):
+    """Send a durable message to the user's inbox."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["inbox"] = "inbox"
+    title: str = "Send to Inbox"
+    message_title: str = "Workflow message"
+    message: str
+    level: Literal["info", "warning", "error", "success"] = "info"
+
+
+class WorkflowNodeAgent(BaseModel):
+    """Call a configured A2A or ACP agent and pass its result downstream."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["agent"] = "agent"
+    title: str = "Call Agent"
+    transport: Literal["a2a", "acp"] = "a2a"
+    agent_name: str
+    request: str
+    timeout_seconds: int = Field(default=300, ge=1, le=3600)
+
+
 WorkflowNode = Annotated[
-    WorkflowNodeEvent | WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode,
+    WorkflowNodeEvent
+    | WorkflowNodePrompt
+    | WorkflowNodeUser
+    | WorkflowNodeCode
+    | WorkflowNodeCondition
+    | WorkflowNodeApproval
+    | WorkflowNodeInbox
+    | WorkflowNodeAgent,
     Field(discriminator="kind"),
 ]
 
@@ -174,8 +231,12 @@ class WorkflowRun(BaseModel):
     status: WorkflowRunStatus
     current_node_id: str | None = None
     completed_node_ids: list[str] = Field(default_factory=list)
+    waiting_node_id: str | None = None
+    pending_approval: dict[str, Any] | None = None
     thread_id: str | None = None
     trigger_event: dict[str, Any] = Field(default_factory=dict)
+    source: WorkflowRunSource = "manual"
+    ancestry: list[str] = Field(default_factory=list)
     last_output: str | None = None
     last_error: str | None = None
     queued_at: str
@@ -198,6 +259,12 @@ def workflow_run_key(run_id: str) -> str:
 def workflow_queue_key(workflow_id: str) -> str:
     """Return the runtime document key for one workflow trigger queue."""
     return f"{WORKFLOW_QUEUE_KEY_PREFIX}{workflow_id}"
+
+
+def workflow_invoke_request_key(request_id: str) -> str:
+    """Return the runtime document key for one workflow invoke request."""
+
+    return f"{WORKFLOW_INVOKE_REQUEST_KEY_PREFIX}{request_id}"
 
 
 def workflow_file_name(workflow_id: str) -> str:
@@ -388,6 +455,26 @@ def coerce_workflow_run(payload: Mapping[str, Any]) -> WorkflowRun:
     return WorkflowRun.model_validate(dict(payload))
 
 
+class WorkflowInvokeRequest(BaseModel):
+    """Durable request for the backend executor to start one workflow run."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    request_id: str
+    workflow_id: str
+    input: dict[str, Any] = Field(default_factory=dict)
+    ancestry: list[str] = Field(default_factory=list)
+    requested_at: str
+
+
+def parse_workflow_invoke_request_document(
+    payload: Mapping[str, Any],
+) -> WorkflowInvokeRequest:
+    """Validate and coerce a stored payload to WorkflowInvokeRequest."""
+
+    return WorkflowInvokeRequest.model_validate(dict(payload))
+
+
 def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
     node_ids = set(definition.graph.nodes)
     if not node_ids:
@@ -425,11 +512,40 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
     _assert_acyclic(node_ids, adjacency)
 
     for node_id, node in definition.graph.nodes.items():
-        if isinstance(node, WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode):
+        branching = isinstance(node, WorkflowNodeCondition | WorkflowNodeApproval)
+        if not branching and isinstance(
+            node,
+            WorkflowNodePrompt
+            | WorkflowNodeUser
+            | WorkflowNodeCode
+            | WorkflowNodeInbox
+            | WorkflowNodeAgent,
+        ):
             if inbound[node_id] > 1:
                 raise ValueError(f"node '{node_id}' may have at most one inbound edge in v1")
             if outbound[node_id] > 1:
                 raise ValueError(f"node '{node_id}' may have at most one outbound edge in v1")
+        elif branching:
+            if inbound[node_id] > 1:
+                raise ValueError(f"node '{node_id}' may have at most one inbound edge in v1")
+            if outbound[node_id] > 2:
+                raise ValueError(f"node '{node_id}' may have at most two outbound edges in v1")
+            expected_ports = (
+                {"true", "false"}
+                if isinstance(node, WorkflowNodeCondition)
+                else {
+                    "approved",
+                    "rejected",
+                }
+            )
+            ports = [
+                edge.from_.port for edge in definition.graph.edges if edge.from_.node == node_id
+            ]
+            if any(port not in expected_ports for port in ports) or len(ports) != len(set(ports)):
+                expected = ", ".join(sorted(expected_ports))
+                raise ValueError(
+                    f"{node.kind} node '{node_id}' edges must use distinct ports from: {expected}"
+                )
         if isinstance(node, WorkflowNodePrompt):
             if not node.prompt.strip():
                 raise ValueError(f"prompt node '{node_id}' is missing a prompt")
@@ -448,6 +564,16 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
                 raise ValueError(f"code node '{node_id}' is missing content")
             if not str(node.language or "").strip():
                 raise ValueError(f"code node '{node_id}' is missing a language")
+        elif isinstance(node, WorkflowNodeCondition) and not node.expression.strip():
+            raise ValueError(f"condition node '{node_id}' is missing an expression")
+        elif isinstance(node, WorkflowNodeApproval) and not node.message.strip():
+            raise ValueError(f"approval node '{node_id}' is missing a message")
+        elif isinstance(node, WorkflowNodeInbox) and not node.message.strip():
+            raise ValueError(f"inbox node '{node_id}' is missing a message")
+        elif isinstance(node, WorkflowNodeAgent) and (
+            not node.agent_name.strip() or not node.request.strip()
+        ):
+            raise ValueError(f"agent node '{node_id}' is missing agent_name or request")
 
 
 def _assert_acyclic(node_ids: set[str], adjacency: dict[str, list[str]]) -> None:
