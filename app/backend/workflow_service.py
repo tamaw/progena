@@ -17,8 +17,12 @@ from app.progenitor.workflows import (
     WORKFLOW_ALLOWED_EVENT_TYPES,
     WorkflowDefinition,
     WorkflowListItem,
+    WorkflowNodeAgent,
+    WorkflowNodeApproval,
     WorkflowNodeCode,
+    WorkflowNodeCondition,
     WorkflowNodeEvent,
+    WorkflowNodeInbox,
     WorkflowNodePrompt,
     WorkflowNodeUser,
     WorkflowRun,
@@ -27,7 +31,6 @@ from app.progenitor.workflows import (
     build_workflow_list_item,
     coerce_workflow_definition,
     coerce_workflow_run,
-    ordered_workflow_node_ids,
     validate_workflow_definition_payload,
     workflow_definition_key,
     workflow_id_from_path,
@@ -56,7 +59,15 @@ class WorkflowPromptRunner(Protocol):
         *,
         workflow: WorkflowDefinition,
         node_id: str,
-        node: WorkflowNodePrompt | WorkflowNodeUser | WorkflowNodeCode,
+        node: (
+            WorkflowNodePrompt
+            | WorkflowNodeUser
+            | WorkflowNodeCode
+            | WorkflowNodeCondition
+            | WorkflowNodeApproval
+            | WorkflowNodeInbox
+            | WorkflowNodeAgent
+        ),
         input_text: str,
         thread_id: str | None,
     ) -> PromptExecutionResult: ...
@@ -296,6 +307,7 @@ def build_user_node_instruction(node: WorkflowNodeUser, input_text: str) -> str:
         tool = "ask_user"
     else:
         payload = {"message": message}
+
         tool = "say_to_user"
 
     return "\n".join(
@@ -306,6 +318,23 @@ def build_user_node_instruction(node: WorkflowNodeUser, input_text: str) -> str:
             "```json",
             json.dumps(payload, indent=2),
             "```",
+        ]
+    )
+
+
+def build_agent_node_instruction(node: WorkflowNodeAgent, input_text: str) -> str:
+    """Ask the runtime's unified call_agent tool to invoke A2A or ACP."""
+
+    request = node.request.strip()
+    if input_text.strip():
+        request = f"{request}\n\nConnected workflow input:\n{input_text.strip()}"
+    return "\n".join(
+        [
+            "Use the `call_agent` tool exactly once.",
+            f"Select the registered {node.transport.upper()} agent named `{node.agent_name}`.",
+            f"Use this request:\n{request}",
+            f"Wait for completion with timeout_seconds={node.timeout_seconds}.",
+            "After the tool call, reply with only the returned agent result.",
         ]
     )
 
@@ -327,6 +356,79 @@ def render_workflow_event_output(trigger_event: Mapping[str, Any]) -> str:
         sort_keys=True,
         default=str,
     )
+
+
+def workflow_outgoing_edges(
+    definition: WorkflowDefinition,
+    node_id: str,
+) -> list[tuple[str, str]]:
+    """Return outgoing workflow edges as (port, target) pairs."""
+
+    return [
+        (edge.from_.port, edge.to.node)
+        for edge in definition.graph.edges
+        if edge.from_.node == node_id
+    ]
+
+
+def evaluate_workflow_condition(
+    expression: str,
+    trigger_event: Mapping[str, Any],
+    previous_output: str,
+) -> bool:
+    """Evaluate the deliberately small, non-code condition language."""
+
+    raw = expression.strip()
+    context: dict[str, Any] = {
+        "payload": trigger_event.get("payload")
+        if isinstance(trigger_event.get("payload"), Mapping)
+        else {},
+        "event_type": str(trigger_event.get("event_type") or ""),
+        "previous_output": previous_output,
+    }
+    if raw in context:
+        return bool(context[raw])
+    for operator in ("==", "!="):
+        if operator not in raw:
+            continue
+        left, right = (part.strip() for part in raw.split(operator, 1))
+        value: Any = context.get(left)
+        if left.startswith("payload."):
+            value = context["payload"]
+            for part in left.removeprefix("payload.").split("."):
+                value = value.get(part) if isinstance(value, Mapping) else None
+        try:
+            expected = json.loads(right)
+        except json.JSONDecodeError:
+            expected = right.strip("'\"")
+        return bool(value == expected) if operator == "==" else bool(value != expected)
+    raise ValueError("condition must be a value path or a == / != comparison")
+
+
+def save_workflow_inbox_message(
+    store: BackendDocumentStore,
+    *,
+    title: str,
+    body: str,
+    level: str,
+) -> str:
+    """Persist one workflow-generated inbox message."""
+
+    message_id = f"workflow_{uuid.uuid4().hex[:12]}"
+    store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        f"inbox_message:{message_id}",
+        {
+            "id": message_id,
+            "title": title,
+            "body": body,
+            "level": level,
+            "read": False,
+            "created_at": utcnow_isoformat(),
+            "source": "workflow",
+        },
+    )
+    return message_id
 
 
 def _trigger_column_filter_matches(trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
@@ -521,6 +623,41 @@ class WorkflowExecutor:
             self._start_task(workflow_id, candidate.run_id)
         return candidate
 
+    async def resolve_approval(
+        self,
+        workflow_id: str,
+        run_id: str,
+        *,
+        approved: bool,
+    ) -> WorkflowRun | None:
+        """Resolve a paused approval node and continue its run."""
+
+        async with self._lock_for(workflow_id):
+            store = self._store_getter()
+            run = get_workflow_run(store, run_id)
+            if (
+                run is None
+                or run.workflow_id != workflow_id
+                or run.status != "paused"
+                or run.waiting_node_id is None
+            ):
+                return None
+            updated = run.model_copy(
+                update={
+                    "status": "queued",
+                    "pending_approval": {
+                        **(run.pending_approval or {}),
+                        "approved": approved,
+                        "resolved_at": utcnow_isoformat(),
+                    },
+                    "last_output": "approved" if approved else "rejected",
+                    "updated_at": utcnow_isoformat(),
+                }
+            )
+            save_workflow_run(store, updated)
+        self._start_task(workflow_id, run_id)
+        return updated
+
     def _lock_for(self, workflow_id: str) -> asyncio.Lock:
         lock = self._locks.get(workflow_id)
         if lock is None:
@@ -585,17 +722,30 @@ class WorkflowExecutor:
             save_workflow_run(store, run)
             self._emit_event("workflow.run.started", run.model_dump(mode="json"))
 
-        node_order = ordered_workflow_node_ids(definition)
         completed = list(run.completed_node_ids)
-        next_index = len(completed)
-        if next_index > len(node_order):
-            self._mark_failed(store, run, error="Run checkpoint references more nodes than exist")
-            await self._maybe_start_next_run_locked(store, workflow_id)
-            return
-
         last_output = str(run.last_output or "")
         thread_id = run.thread_id
-        for node_id in node_order[next_index:]:
+        if completed:
+            previous_node_id = completed[-1]
+            previous_node = definition.graph.nodes.get(previous_node_id)
+            previous_port = (
+                last_output
+                if isinstance(previous_node, WorkflowNodeCondition | WorkflowNodeApproval)
+                else "default"
+            )
+            outgoing = workflow_outgoing_edges(definition, previous_node_id)
+            node_id = next(
+                (target for port, target in outgoing if port == previous_port),
+                next((target for _port, target in outgoing), None),
+            )
+        else:
+            node_id = next(
+                node_id
+                for node_id, node in definition.graph.nodes.items()
+                if isinstance(node, WorkflowNodeEvent)
+            )
+
+        while node_id is not None:
             definition = get_workflow_definition(store, workflow_id) or definition
             latest_run = get_workflow_run(store, run_id) or run
             if not definition.enabled:
@@ -612,12 +762,49 @@ class WorkflowExecutor:
 
             node = definition.graph.nodes[node_id]
             try:
+                input_text = compose_workflow_prompt_input(latest_run.trigger_event, last_output)
                 if isinstance(node, WorkflowNodeEvent):
                     output_text = render_workflow_event_output(latest_run.trigger_event)
-                else:
-                    input_text = compose_workflow_prompt_input(
-                        latest_run.trigger_event, last_output
+                elif isinstance(node, WorkflowNodeCondition):
+                    output_text = (
+                        "true"
+                        if evaluate_workflow_condition(
+                            node.expression, latest_run.trigger_event, last_output
+                        )
+                        else "false"
                     )
+                elif isinstance(node, WorkflowNodeApproval):
+                    pending = {
+                        "node_id": node_id,
+                        "title": node.title,
+                        "message": node.message,
+                        "requested_at": utcnow_isoformat(),
+                    }
+                    paused_run = latest_run.model_copy(
+                        update={
+                            "status": "paused",
+                            "current_node_id": node_id,
+                            "completed_node_ids": [
+                                *latest_run.completed_node_ids,
+                                *([] if node_id in latest_run.completed_node_ids else [node_id]),
+                            ],
+                            "waiting_node_id": node_id,
+                            "pending_approval": pending,
+                            "updated_at": utcnow_isoformat(),
+                        }
+                    )
+                    save_workflow_run(store, paused_run)
+                    self._emit_event("workflow.run.updated", paused_run.model_dump(mode="json"))
+                    return
+                elif isinstance(node, WorkflowNodeInbox):
+                    message_id = save_workflow_inbox_message(
+                        store,
+                        title=node.message_title,
+                        body=f"{node.message}\n\n{input_text}",
+                        level=node.level,
+                    )
+                    output_text = f"inbox message sent: {message_id}"
+                else:
                     prompt_result = await self._prompt_runner(
                         workflow=definition,
                         node_id=node_id,
@@ -643,6 +830,8 @@ class WorkflowExecutor:
                     "status": "paused" if paused_after_node else "running",
                     "current_node_id": node_id,
                     "completed_node_ids": completed,
+                    "waiting_node_id": None,
+                    "pending_approval": None,
                     "thread_id": thread_id,
                     "last_output": output_text,
                     "updated_at": utcnow_isoformat(),
@@ -657,6 +846,17 @@ class WorkflowExecutor:
                 self._mark_failed(store, run, error="Workflow was disabled during execution")
                 await self._maybe_start_next_run_locked(store, workflow_id)
                 return
+
+            selected_port = (
+                output_text
+                if isinstance(node, WorkflowNodeCondition | WorkflowNodeApproval)
+                else "default"
+            )
+            outgoing = workflow_outgoing_edges(definition_after, node_id)
+            node_id = next(
+                (target for port, target in outgoing if port == selected_port),
+                next((target for port, target in outgoing if port == "default"), None),
+            )
 
         run = run.model_copy(
             update={

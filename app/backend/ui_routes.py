@@ -87,6 +87,7 @@ from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
+    build_agent_node_instruction,
     build_manual_trigger_event,
     build_user_node_instruction,
     delete_workflow_definition,
@@ -528,6 +529,12 @@ class WorkflowManualTriggerRequest(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class WorkflowApprovalRequest(BaseModel):
+    """Resolve a paused workflow approval."""
+
+    approved: bool
+
+
 class WorkflowTriggerResponse(BaseModel):
     """Response for manual workflow triggers."""
 
@@ -627,6 +634,17 @@ async def _workflow_prompt_runner(
         request = ActionRunRequest(
             widget_id=widget_id,
             prompt=build_user_node_instruction(node, input_text),
+            broadcast_response=False,
+            thread_id=thread_id,
+            invocation_type="workflow_step",
+            invocation_source=widget_id,
+            root_widget_id=root_widget_id,
+        )
+    elif getattr(node, "kind", "") == "agent":
+        request = ActionRunRequest(
+            widget_id=widget_id,
+            prompt=build_agent_node_instruction(node, input_text),
+            input=input_text,
             broadcast_response=False,
             thread_id=thread_id,
             invocation_type="workflow_step",
@@ -2413,6 +2431,36 @@ async def trigger_workflow(
         request_id=request_id,
     )
     return acknowledgement_response(request_id, ["workflow.run.started"])
+
+
+@router.post(
+    "/workflows/{workflow_id}/runs/{run_id}/approval",
+    status_code=202,
+    response_model=UiRequestAcknowledgement,
+)
+async def resolve_workflow_approval(
+    workflow_id: str,
+    run_id: str,
+    body: WorkflowApprovalRequest,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Approve or reject a paused workflow approval node."""
+
+    request_id = _request_correlation_id(request, x_request_id)
+    run = await get_workflow_executor().resolve_approval(
+        workflow_id,
+        run_id,
+        approved=body.approved,
+    )
+    if run is None:
+        raise HTTPException(status_code=409, detail="Workflow run is not awaiting approval")
+    broadcast_ui_event(
+        "workflow.run.updated",
+        {"workflow_id": workflow_id, "run_id": run_id, "run": run.model_dump(mode="json")},
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["workflow.run.updated"])
 
 
 def _mcp_widget_items() -> list[WidgetResponse]:
