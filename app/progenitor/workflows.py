@@ -530,6 +530,22 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
                 raise ValueError(f"node '{node_id}' may have at most one inbound edge in v1")
             if outbound[node_id] > 2:
                 raise ValueError(f"node '{node_id}' may have at most two outbound edges in v1")
+            expected_ports = (
+                {"true", "false"}
+                if isinstance(node, WorkflowNodeCondition)
+                else {
+                    "approved",
+                    "rejected",
+                }
+            )
+            ports = [
+                edge.from_.port for edge in definition.graph.edges if edge.from_.node == node_id
+            ]
+            if any(port not in expected_ports for port in ports) or len(ports) != len(set(ports)):
+                expected = ", ".join(sorted(expected_ports))
+                raise ValueError(
+                    f"{node.kind} node '{node_id}' edges must use distinct ports from: {expected}"
+                )
         if isinstance(node, WorkflowNodePrompt):
             if not node.prompt.strip():
                 raise ValueError(f"prompt node '{node_id}' is missing a prompt")

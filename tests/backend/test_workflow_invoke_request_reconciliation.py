@@ -143,3 +143,22 @@ async def test_malformed_invoke_request_is_dropped(workflow_env, backend_client)
 
     await _reconcile_workflow_invoke_requests(key)
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
+
+
+async def test_failed_invoke_request_is_retained_for_retry(workflow_env, monkeypatch):
+    store = workflow_env
+    key = _write_invoke_request(store, "request-retry", "workflow-transient")
+
+    class FailingExecutor:
+        async def trigger_workflow(self, *_args, **_kwargs):
+            raise RuntimeError("temporary executor failure")
+
+    monkeypatch.setattr(
+        "app.backend.ui_routes.get_workflow_executor",
+        lambda: FailingExecutor(),
+    )
+
+    from app.backend.ui_routes import _reconcile_workflow_invoke_requests
+
+    await _reconcile_workflow_invoke_requests(key)
+    assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is not None
