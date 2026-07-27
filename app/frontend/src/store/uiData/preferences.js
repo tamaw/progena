@@ -1,8 +1,8 @@
 /**
  * Preferences domain: the backend-persisted user profile (display name,
- * timezone, UI/UX settings: theme, nav-rail collapse, pinned panel), kept
- * live by `preferences.snapshot` events on /api/ui/stream and seeded via
- * REST on app shell mount.
+ * timezone, UI/UX settings: theme, nav-rail collapse, pinned panel,
+ * notifications), kept live by `preferences.snapshot` events on
+ * /api/ui/stream and seeded via REST on app shell mount.
  */
 import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } from './async';
 
@@ -15,6 +15,8 @@ export const initialState = {
     theme: 'system',
     navCollapsed: false,
     pinnedPanel: null,
+    notificationsEnabled: true,
+    notificationSounds: false,
     loaded: false,
     loading: false,
     error: null,
@@ -28,6 +30,8 @@ function applyPreferences(state, payload) {
   state.preferences.theme = ['system', 'dark', 'light'].includes(payload.theme) ? payload.theme : 'system';
   state.preferences.navCollapsed = payload.nav_collapsed === true;
   state.preferences.pinnedPanel = VALID_PINNED_PANELS.has(payload.pinned_panel) ? payload.pinned_panel : null;
+  state.preferences.notificationsEnabled = payload.notifications_enabled !== false;
+  state.preferences.notificationSounds = payload.notification_sounds === true;
   state.preferences.loaded = true;
   if (!state.preferences.loading || payload.request_id === state.preferences.requestId) {
     state.preferences.loading = false;
@@ -51,7 +55,16 @@ export const fetchPreferences = createAcknowledgedThunk(
 export const savePreferences = createAcknowledgedThunk(
   'uiData/savePreferences',
   async (
-    { preferencesUrl, displayName, timezone, theme, navCollapsed, pinnedPanel },
+    {
+      preferencesUrl,
+      displayName,
+      timezone,
+      theme,
+      navCollapsed,
+      pinnedPanel,
+      notificationsEnabled,
+      notificationSounds,
+    },
     { requestId },
   ) =>
     requestAcknowledged(preferencesUrl, {
@@ -62,6 +75,8 @@ export const savePreferences = createAcknowledgedThunk(
         theme,
         nav_collapsed: navCollapsed,
         pinned_panel: pinnedPanel,
+        notifications_enabled: notificationsEnabled,
+        notification_sounds: notificationSounds,
       },
       requestId,
     }),
@@ -93,5 +108,7 @@ export const selectPreferencesSaveRequest = (state) => {
     theme: preferences.theme,
     navCollapsed: preferences.navCollapsed,
     pinnedPanel: preferences.pinnedPanel,
+    notificationsEnabled: preferences.notificationsEnabled,
+    notificationSounds: preferences.notificationSounds,
   };
 };

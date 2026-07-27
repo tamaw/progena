@@ -10,6 +10,7 @@ import {
   savePreferences,
   selectChatIndicators,
   selectInboxUnreadCount,
+  selectLastReceivedAlert,
   selectPreferences,
   selectPreferencesSaveRequest,
   selectUnseenNavRoutes,
@@ -21,6 +22,8 @@ import {
 import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
 import { useConfig } from '../../context/ConfigContext';
+import { useNotifications } from '../../context/NotificationContext';
+import { playNotificationSound } from '../../lib/notificationSound';
 import { CHAT_STATUS } from '../../lib/chatStatus';
 import { useTheme } from '../../hooks/useTheme';
 import { useChatApi } from '../../hooks/api/useChatApi';
@@ -1161,7 +1164,7 @@ function QuickChatPanel({
 }
 
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
-  const { config, getApiUrl, setApiUrl, setNotifications, setSounds, resetSettings } = useConfig();
+  const { config, getApiUrl, setApiUrl, resetSettings } = useConfig();
   const { setTheme } = useTheme();
   const dispatch = useDispatch();
   const preferences = useSelector(selectPreferences);
@@ -1202,6 +1205,13 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
       setSavingProfile(false);
     }
   }, [dispatch, preferencesUrl, preferencesSaveRequest, displayNameDraft, timezoneDraft]);
+
+  const persistNotificationPreference = useCallback(
+    (patch) => {
+      dispatch(savePreferences({ preferencesUrl, ...preferencesSaveRequest, ...patch }));
+    },
+    [dispatch, preferencesUrl, preferencesSaveRequest],
+  );
   return (
     <>
       <TopNavPane title="Settings" className="topnav-pane--settings" bodyClassName="settings-pane__body" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
@@ -1371,11 +1381,11 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Enable notifications</div>
                     <div className="set-row__sub">Show alerts from the status stream and background tasks.</div>
                   </div>
-                  <label className={`set-switch ${config.notifications.enabled ? 'is-on' : ''}`}>
+                  <label className={`set-switch ${preferences.notificationsEnabled ? 'is-on' : ''}`}>
                     <input
                       type="checkbox"
-                      checked={config.notifications.enabled}
-                      onChange={(event) => setNotifications(event.target.checked)}
+                      checked={preferences.notificationsEnabled}
+                      onChange={(event) => persistNotificationPreference({ notificationsEnabled: event.target.checked })}
                     />
                     <span className="set-switch__knob" aria-hidden="true" />
                   </label>
@@ -1386,11 +1396,11 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                     <div className="set-row__title">Notification sounds</div>
                     <div className="set-row__sub">Play a subtle sound when important work completes.</div>
                   </div>
-                  <label className={`set-switch ${config.notifications.soundEnabled ? 'is-on' : ''}`}>
+                  <label className={`set-switch ${preferences.notificationSounds ? 'is-on' : ''}`}>
                     <input
                       type="checkbox"
-                      checked={config.notifications.soundEnabled}
-                      onChange={(event) => setSounds(event.target.checked)}
+                      checked={preferences.notificationSounds}
+                      onChange={(event) => persistNotificationPreference({ notificationSounds: event.target.checked })}
                     />
                     <span className="set-switch__knob" aria-hidden="true" />
                   </label>
@@ -1421,9 +1431,10 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
           onConfirm={() => {
             resetSettings();
             // resetSettings() only clears ConfigContext/localStorage. Theme,
-            // nav-collapse, and pinned-panel are also backend-persisted now
-            // (see /config/preferences.json) - reset those to their schema
-            // defaults too, preserving the profile identity fields.
+            // nav-collapse, pinned-panel, and notifications are also
+            // backend-persisted now (see /config/preferences.json) - reset
+            // those to their schema defaults too, preserving the profile
+            // identity fields.
             if (preferences.loaded) {
               dispatch(
                 savePreferences({
@@ -1432,6 +1443,8 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen }) {
                   theme: 'system',
                   navCollapsed: false,
                   pinnedPanel: null,
+                  notificationsEnabled: true,
+                  notificationSounds: false,
                 }),
               );
             }
@@ -1774,6 +1787,28 @@ function AppRuntimeShell() {
     }
     void dispatch(fetchPreferences({ preferencesUrl })).unwrap().catch(() => {});
   }, [dispatch, preferencesUrl, realtime.connected]);
+
+  // Global "important work completed" notification: fires a toast (and,
+  // if enabled, a chime) for every new backend alert on every page - not
+  // just while Chat happens to be mounted. Gated on
+  // preferences.notificationsEnabled/notificationSounds (Settings >
+  // Notifications), matching /config/preferences.json.
+  const { show } = useNotifications();
+  const lastReceivedAlert = useSelector(selectLastReceivedAlert);
+  const lastHandledAlertSeqRef = useRef(0);
+  useEffect(() => {
+    if (!lastReceivedAlert || lastReceivedAlert.seq === lastHandledAlertSeqRef.current) {
+      return;
+    }
+    lastHandledAlertSeqRef.current = lastReceivedAlert.seq;
+    if (!preferences.notificationsEnabled) {
+      return;
+    }
+    show(lastReceivedAlert.type || 'info', lastReceivedAlert.title || 'Alert', lastReceivedAlert.message || '');
+    if (preferences.notificationSounds) {
+      playNotificationSound();
+    }
+  }, [lastReceivedAlert, preferences.notificationsEnabled, preferences.notificationSounds, show]);
 
   const [activePanel, setActivePanel] = useState(() => {
     const cached = localStorage.getItem(PINNED_PANEL_STORAGE_KEY);

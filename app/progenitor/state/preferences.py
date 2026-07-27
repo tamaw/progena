@@ -41,12 +41,14 @@ def default_preferences_payload() -> dict[str, Any]:
         "theme": "system",
         "nav_collapsed": False,
         "pinned_panel": None,
+        "notifications_enabled": True,
+        "notification_sounds": False,
     }
 
 
 def validate_preferences_payload(payload: Any) -> dict[str, Any]:
     """Validate a decoded preferences payload (display_name, timezone, plus the
-    UI-only theme/nav_collapsed/pinned_panel settings).
+    UI-only theme/nav_collapsed/pinned_panel/notifications_enabled/notification_sounds settings).
 
     Raises ``ValueError`` (never a raw ``TypeError``/``KeyError``) on anything
     malformed, so both call sites can surface one consistent error message.
@@ -79,6 +81,8 @@ def validate_preferences_payload(payload: Any) -> dict[str, Any]:
         "theme": payload.get("theme", "system"),
         "nav_collapsed": payload.get("nav_collapsed", False),
         "pinned_panel": payload.get("pinned_panel"),
+        "notifications_enabled": payload.get("notifications_enabled", True),
+        "notification_sounds": payload.get("notification_sounds", False),
     }
 
 

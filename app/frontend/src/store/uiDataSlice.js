@@ -230,6 +230,7 @@ export {
   selectUiAlerts,
   selectUiWidgets,
   selectSchedules,
+  selectLastReceivedAlert,
 } from './uiData/runtime';
 export {
   selectLogsPage,

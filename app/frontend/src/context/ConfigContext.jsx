@@ -63,12 +63,6 @@ const defaultConfig = {
     maxReconnectAttempts: 10,
     keepaliveTimeout: 35000
   },
-  notifications: {
-    enabled: true,
-    soundEnabled: false,
-    autoHideDuration: 5000,
-    maxVisible: 5
-  },
   theme: {
     default: 'system',
     options: ['system', 'dark', 'light']
@@ -76,8 +70,6 @@ const defaultConfig = {
   storage: {
     apiUrl: 'progenitor_api_url',
     theme: 'progenitor_theme',
-    notifications: 'progenitor_notifications',
-    sounds: 'progenitor_sounds',
     chatHistory: 'progenitor_chat_history',
     settings: 'progenitor_settings',
     inputHistory: 'progenitor_input_history',
@@ -91,8 +83,6 @@ const defaultConfig = {
 export function ConfigProvider({ children }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');
-    const savedNotifications = localStorage.getItem('progenitor_notifications');
-    const savedSounds = localStorage.getItem('progenitor_sounds');
 
     return {
       ...defaultConfig,
@@ -103,11 +93,6 @@ export function ConfigProvider({ children }) {
       theme: {
         ...defaultConfig.theme,
         default: savedTheme || defaultConfig.theme.default
-      },
-      notifications: {
-        ...defaultConfig.notifications,
-        enabled: savedNotifications !== 'false',
-        soundEnabled: savedSounds === 'true'
       }
     };
   });
@@ -135,21 +120,6 @@ export function ConfigProvider({ children }) {
     localStorage.setItem('progenitor_api_url', url);
   };
 
-  const setNotifications = (enabled) => {
-    setConfig(prev => ({
-      ...prev,
-      notifications: { ...prev.notifications, enabled }
-    }));
-    localStorage.setItem('progenitor_notifications', enabled.toString());
-  };
-
-  const setSounds = (enabled) => {
-    setConfig(prev => ({
-      ...prev,
-      notifications: { ...prev.notifications, soundEnabled: enabled }
-    }));
-    localStorage.setItem('progenitor_sounds', enabled.toString());
-  };
   const resetSettings = () => {
     setConfig({
       ...defaultConfig,
@@ -158,15 +128,12 @@ export function ConfigProvider({ children }) {
     Object.values(defaultConfig.storage).forEach((key) => localStorage.removeItem(key));
   };
 
-
   return (
     <ConfigContext.Provider value={{
       config,
       getApiUrl,
       setTheme,
       setApiUrl,
-      setNotifications,
-      setSounds,
       resetSettings
     }}>
       {children}
