@@ -1,7 +1,7 @@
-const DB_NAME = 'progenitor-workspace';
+const DB_NAME = 'progenitor-canvas';
 const DB_VERSION = 1;
-const STORE_NAME = 'workspace';
-const WORKSPACE_KEY = 'workspace';
+const STORE_NAME = 'canvas';
+const CANVAS_KEY = 'canvas';
 
 function openDb() {
   return new Promise((resolve, reject) => {
@@ -35,27 +35,27 @@ function withStore(mode, handler) {
   }));
 }
 
-export async function loadWorkspaceState() {
+export async function loadCanvasState() {
   try {
     return await withStore('readonly', (store, resolve, reject) => {
-      const request = store.get(WORKSPACE_KEY);
+      const request = store.get(CANVAS_KEY);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result || null);
     });
   } catch (error) {
-    console.warn('[indexedDb] Failed to load workspace state:', error);
+    console.warn('[indexedDb] Failed to load canvas state:', error);
     return null;
   }
 }
 
-export async function saveWorkspaceState(value) {
+export async function saveCanvasState(value) {
   try {
     await withStore('readwrite', (store, resolve, reject) => {
-      const request = store.put(value, WORKSPACE_KEY);
+      const request = store.put(value, CANVAS_KEY);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve();
     });
   } catch (error) {
-    console.warn('[indexedDb] Failed to save workspace state:', error);
+    console.warn('[indexedDb] Failed to save canvas state:', error);
   }
 }

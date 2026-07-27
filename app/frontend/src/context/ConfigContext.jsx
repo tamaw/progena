@@ -1,29 +1,8 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useState } from 'react';
+import { resolveWorkspaceOrigin } from '../lib/workspace';
 
 const ConfigContext = createContext(null);
-
-function resolveInitialApiBaseUrl() {
-  const savedApiUrl = localStorage.getItem('progenitor_api_url');
-
-  if (!savedApiUrl) {
-    return '';
-  }
-
-  try {
-    const savedUrl = new URL(savedApiUrl, window.location.origin);
-    const isSavedLocalhost = ['localhost', '127.0.0.1'].includes(savedUrl.hostname);
-    const isPageRemote = !['localhost', '127.0.0.1'].includes(window.location.hostname);
-
-    if (isSavedLocalhost && isPageRemote) {
-      return '';
-    }
-  } catch {
-    // Preserve custom relative paths or non-URL values entered by the user.
-  }
-
-  return savedApiUrl;
-}
 
 const defaultConfig = {
   api: {
@@ -73,7 +52,6 @@ const defaultConfig = {
     options: ['system', 'dark', 'light']
   },
   storage: {
-    apiUrl: 'progenitor_api_url',
     theme: 'progenitor_theme',
     notifications: 'progenitor_notifications',
     sounds: 'progenitor_sounds',
@@ -86,7 +64,11 @@ const defaultConfig = {
   }
 };
 
-export function ConfigProvider({ children }) {
+// `workspaceHost` is the host[:port] segment of the active /w/<host>/... route
+// (see lib/workspace.js). It is the single source of truth for which backend
+// this session talks to -- there is no separate user-editable base URL anymore;
+// switching backends means navigating to a different workspace URL.
+export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');
     const savedNotifications = localStorage.getItem('progenitor_notifications');
@@ -96,7 +78,7 @@ export function ConfigProvider({ children }) {
       ...defaultConfig,
       api: {
         ...defaultConfig.api,
-        baseUrl: resolveInitialApiBaseUrl()
+        baseUrl: resolveWorkspaceOrigin(workspaceHost)
       },
       theme: {
         ...defaultConfig.theme,
@@ -125,14 +107,6 @@ export function ConfigProvider({ children }) {
     localStorage.setItem('progenitor_theme', theme);
   };
 
-  const setApiUrl = (url) => {
-    setConfig(prev => ({
-      ...prev,
-      api: { ...prev.api, baseUrl: url }
-    }));
-    localStorage.setItem('progenitor_api_url', url);
-  };
-
   const setNotifications = (enabled) => {
     setConfig(prev => ({
       ...prev,
@@ -148,21 +122,21 @@ export function ConfigProvider({ children }) {
     }));
     localStorage.setItem('progenitor_sounds', enabled.toString());
   };
+
   const resetSettings = () => {
     setConfig({
       ...defaultConfig,
-      api: { ...defaultConfig.api, baseUrl: '' },
+      api: { ...defaultConfig.api, baseUrl: resolveWorkspaceOrigin(workspaceHost) },
     });
     Object.values(defaultConfig.storage).forEach((key) => localStorage.removeItem(key));
   };
 
-
   return (
     <ConfigContext.Provider value={{
       config,
+      workspaceHost,
       getApiUrl,
       setTheme,
-      setApiUrl,
       setNotifications,
       setSounds,
       resetSettings
