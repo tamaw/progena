@@ -131,6 +131,35 @@ def _parse_github_source(source: str) -> tuple[str, str, str | None]:
     return owner, repo, ref
 
 
+def resolve_relative_plugin_source(
+    marketplace_source: str, plugin_source: str, plugin_root: str = ""
+) -> dict[str, Any]:
+    """Turn a plugin's marketplace-relative ``source`` (e.g. ``"./"`` or
+    ``"./formatter"``) into an absolute, self-sufficient source dict.
+
+    A relative-path plugin source is only meaningful together with the
+    marketplace archive it was resolved against -- ``plugins.json`` stores
+    each entry's ``source`` in isolation, with no reference back to its
+    marketplace, so a raw relative path can never be re-fetched by the
+    reconciler. Callers that install a plugin (the backend's install route)
+    must call this at install time, before persisting, so what lands in
+    ``plugins.json`` is a plain GitHub ``git-subdir`` source instead.
+
+    Only GitHub-shaped marketplace sources are supported, matching every
+    other source type in this module.
+    """
+    if not (isinstance(plugin_source, str) and plugin_source.startswith("./")):
+        raise PluginFetchError(f"not a relative plugin source: {plugin_source!r}")
+    owner, repo, ref = _parse_github_source(marketplace_source)
+    rel = plugin_source[2:]
+    path = f"{plugin_root.rstrip('/')}/{rel}" if plugin_root else rel
+    path = path.strip("/")
+    result: dict[str, Any] = {"source": "git-subdir", "url": f"{owner}/{repo}", "path": path}
+    if ref:
+        result["ref"] = ref
+    return result
+
+
 def _build_codeload_url(owner: str, repo: str, ref: str) -> str:
     return f"https://codeload.github.com/{owner}/{repo}/tar.gz/{ref}"
 

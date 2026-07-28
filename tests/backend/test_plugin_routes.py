@@ -149,6 +149,58 @@ class TestPluginRoutes:
         envelopes = capture.event_types()
         assert [e.type for e in envelopes] == ["plugins.snapshot"]
 
+    def test_post_resolves_relative_source_to_absolute(self, client, document_store, monkeypatch):
+        """A plugin whose marketplace entry uses a relative ``source`` (e.g.
+        ``"./"`` -- what real Claude Code marketplaces like
+        anthropics/skills actually ship) must be resolved to an absolute
+        git-subdir source before being stored. A raw relative path is
+        meaningless once persisted in isolation: the reconciler never has
+        the marketplace archive to resolve it against, and would fail
+        every single install (found live against a real marketplace)."""
+        document_store.save_document(
+            BACKEND_STATE_PREFIX,
+            "marketplaces",
+            {
+                "sources": [
+                    {
+                        "name": "acme",
+                        "source": "acme/plugins@main",
+                        "added_at": "2026-07-29T10:00:00Z",
+                    }
+                ]
+            },
+        )
+
+        fake_catalog = type(
+            "MarketplaceCatalog",
+            (),
+            {
+                "name": "acme",
+                "owner": {"name": "Acme Corp"},
+                "plugins": [
+                    {"name": "everything", "source": "./", "version": None},
+                ],
+                "description": None,
+                "version": None,
+                "metadata": {},
+            },
+        )()
+
+        monkeypatch.setattr(
+            "app.backend.plugin_routes.fetch_marketplace",
+            AsyncMock(return_value=fake_catalog),
+        )
+
+        response = client.post(
+            "/api/ui/plugins",
+            json={"marketplace": "acme", "plugin": "everything"},
+        )
+
+        assert_acknowledged(response, ["plugins.snapshot"])
+        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "plugins")
+        source = stored.payload["plugins"]["acme/everything"]["source"]
+        assert source == {"source": "git-subdir", "url": "acme/plugins", "path": "", "ref": "main"}
+
     def test_post_rejects_invalid_plugin_document(self, client, document_store, monkeypatch):
         # Seed a marketplace.
         document_store.save_document(
