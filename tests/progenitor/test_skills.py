@@ -190,6 +190,50 @@ class TestSkillsWiring:
                 assert call_kwargs.get("skills") == ["/skills/progenitor"]
 
     @pytest.mark.asyncio
+    async def test_factory_discovers_multiple_skill_sources_progenitor_first(self):
+        """Auto-discovery emits one source per top-level segment, progenitor first."""
+        fake_config = SimpleNamespace(
+            llm=SimpleNamespace(model_default="test-model"),
+            storage=SimpleNamespace(
+                state_dir=Path("data/state"),
+                prompts_dir=Path("data/prompts"),
+            ),
+        )
+        with (
+            patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
+            patch("app.progenitor.agent.agent.create_progenitor_backend") as mock_backend,
+        ):
+            mock_create.return_value = MagicMock()
+            mock_backend.return_value = MagicMock()
+            with patch("app.progenitor.agent.agent.create_langchain_model") as mock_model:
+                mock_model.return_value = MagicMock()
+                from app.progenitor.agent.agent import create_progenitor_agent
+
+                state_manager = FakeContentStateManager()
+                state_manager._docs["skill"]["progenitor/example/SKILL.md"] = (
+                    "---\nname: example\n---\n"
+                )
+                state_manager._docs["skill"]["zebra-marketplace__formatter/lint/SKILL.md"] = (
+                    "---\nname: lint\n---\n"
+                )
+                state_manager._docs["skill"]["acme-marketplace__formatter/quality/SKILL.md"] = (
+                    "---\nname: quality\n---\n"
+                )
+                await create_progenitor_agent(
+                    config=fake_config,
+                    checkpointer=MagicMock(),
+                    state_manager=state_manager,
+                    project_root=".",
+                )
+
+                call_kwargs = mock_create.call_args.kwargs
+                assert call_kwargs.get("skills") == [
+                    "/skills/progenitor",
+                    "/skills/acme-marketplace__formatter",
+                    "/skills/zebra-marketplace__formatter",
+                ]
+
+    @pytest.mark.asyncio
     async def test_factory_skips_skills_when_no_progenitor_skill_docs(self, tmp_path):
         """Auto-discovery leaves skills_dirs unset when no skill documents exist."""
         fake_config = SimpleNamespace(
