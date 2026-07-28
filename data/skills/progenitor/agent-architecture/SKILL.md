@@ -42,6 +42,7 @@ views backed by those documents:
 - `/config/knowledge.json` — knowledge-base settings.
 - `/config/schedule.json` — scheduled tasks keyed by ID.
 - `/config/agents.json` — A2A registry agents and runtime tools.
+- `/config/preferences.json` — user profile and UI settings (display name, timezone, theme, nav/panel layout).
 - `/config/health.json` — read-only heartbeat status.
 - `/config/tasks/board.json` and `/config/tasks/<id>.md` — kanban structure and cards.
 - `/workflows/<id>.json` — workflow definitions.

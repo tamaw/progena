@@ -26,8 +26,9 @@ import * as runtime from './uiData/runtime';
 import * as inbox from './uiData/inbox';
 import * as workflows from './uiData/workflows';
 import * as logs from './uiData/logs';
+import * as preferences from './uiData/preferences';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs, preferences];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -229,6 +230,7 @@ export {
   selectUiAlerts,
   selectUiWidgets,
   selectSchedules,
+  selectLastReceivedAlert,
 } from './uiData/runtime';
 export {
   selectLogsPage,
@@ -261,5 +263,12 @@ export {
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
 } from './uiData/workflows';
+
+export {
+  fetchPreferences,
+  savePreferences,
+  selectPreferences,
+  selectPreferencesSaveRequest,
+} from './uiData/preferences';
 
 export default uiDataSlice.reducer;
