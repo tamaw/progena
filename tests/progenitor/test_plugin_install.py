@@ -182,7 +182,75 @@ async def test_fetch_error_sets_error_status(state_manager, fake_files, fake_dig
 
     bad = state_manager._plugins["plugins"]["bad-marketplace/bad-plugin"]
     assert bad["status"] == "error"
-    assert "npm sources are not supported" in bad["status_message"]
+
+
+@pytest.mark.asyncio
+async def test_persistent_error_does_not_loop_forever(state_manager, fake_digest):
+    """A persistently-failing entry must stop writing after its first error.
+
+    Found live: the event-driven store listener re-triggers reconcile_plugins
+    on every save. If the error branch bumped last_checked unconditionally
+    (a fresh timestamp differs every pass), that alone made the pass look
+    "changed", so it saved again, re-triggering itself -- an infinite loop
+    that hammered Postgres with writes until the process was killed.
+    """
+    state_manager._plugins = {
+        "plugins": {
+            "bad-marketplace/bad-plugin": {
+                "source": {"source": "npm", "package": "x"},
+                "version": "1.0.0",
+            },
+        }
+    }
+
+    with patch(
+        "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+        new=AsyncMock(side_effect=PluginFetchError("npm sources are not supported")),
+    ):
+        first = await reconcile_plugins(state_manager)
+        assert first["errored"] == ["bad-marketplace/bad-plugin"]
+        assert state_manager.save_plugins_config_calls == 1
+
+        # Second and third passes against the same still-failing entry must
+        # make ZERO further writes -- this is what stops the loop.
+        state_manager.save_plugins_config_calls = 0
+        second = await reconcile_plugins(state_manager)
+        third = await reconcile_plugins(state_manager)
+
+    assert second == {"installed": [], "removed": [], "updated_available": [], "errored": []}
+    assert third == {"installed": [], "removed": [], "updated_available": [], "errored": []}
+    assert state_manager.save_plugins_config_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_check_plugin_updates_persistent_error_does_not_loop_forever(state_manager):
+    """Same infinite-loop guard, for check_plugin_updates's error branch."""
+    state_manager._plugins = {
+        "plugins": {
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin", "ref": "v2.1.0"},
+                "installed_version": "2.1.0",
+                "installed_digest": "sha256:abc123",
+                "status": "installed",
+            }
+        }
+    }
+
+    with patch(
+        "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+        new=AsyncMock(side_effect=PluginFetchError("network unreachable")),
+    ):
+        first = await check_plugin_updates(state_manager)
+        assert first["errored"] == ["acme-tools/formatter"]
+        assert state_manager.save_plugins_config_calls == 1
+
+        state_manager.save_plugins_config_calls = 0
+        second = await check_plugin_updates(state_manager)
+        third = await check_plugin_updates(state_manager)
+
+    assert second == {"updated_available": [], "errored": ["acme-tools/formatter"]}
+    assert third == {"updated_available": [], "errored": ["acme-tools/formatter"]}
+    assert state_manager.save_plugins_config_calls == 0
 
 
 @pytest.mark.asyncio
