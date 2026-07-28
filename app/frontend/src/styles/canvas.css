@@ -1,5 +1,5 @@
 /* ============================================================================
-   Progenitor Visual Workspace - Workspace Styles
+   Progenitor Visual Canvas - Canvas Styles
    ============================================================================ */
 
 @import '@xyflow/react/dist/style.css';
@@ -131,7 +131,7 @@
 }
 
 /* ---- Canvas ---- */
-.workspace-canvas {
+.canvas-surface {
   flex: 1;
   height: 100%;
   position: relative;
@@ -363,7 +363,7 @@
   background: color-mix(in oklab, var(--workflow-node-color) 18%, transparent);
 }
 
-.workflow-graph-node .workspace-handle {
+.workflow-graph-node .canvas-handle {
   background: var(--workflow-node-color);
 }
 
@@ -480,29 +480,29 @@
   }
 }
 
-.workspace-canvas .react-flow {
+.canvas-surface .react-flow {
   padding-bottom: 76px;
 }
 
 /* React Flow overrides for theme */
-.workspace-canvas .react-flow__background {
+.canvas-surface .react-flow__background {
   background: var(--color-bg-primary);
 }
 
-.workspace-canvas .react-flow__minimap {
+.canvas-surface .react-flow__minimap {
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius-md);
 }
 
-.workspace-canvas .react-flow__controls {
+.canvas-surface .react-flow__controls {
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius-md);
   overflow: hidden;
   box-shadow: var(--shadow-md);
 }
 
-.workspace-canvas .react-flow__controls button {
+.canvas-surface .react-flow__controls button {
   background: var(--color-bg-secondary);
   border-bottom: 1px solid var(--color-border);
   color: var(--color-text-primary);
@@ -510,31 +510,31 @@
   height: 32px;
 }
 
-.workspace-canvas .react-flow__controls button:hover {
+.canvas-surface .react-flow__controls button:hover {
   background: var(--color-bg-hover);
 }
 
-.workspace-canvas .react-flow__controls button svg {
+.canvas-surface .react-flow__controls button svg {
   fill: var(--color-text-primary);
 }
 
-.workspace-canvas .react-flow__selection {
+.canvas-surface .react-flow__selection {
   background: rgba(88, 166, 255, 0.08);
   border: 1px solid rgba(88, 166, 255, 0.4);
 }
 
 /* Drop indicator */
-.workspace-canvas.drag-over {
+.canvas-surface.drag-over {
   outline: 2px dashed var(--color-accent);
   outline-offset: -2px;
 }
 
-.workspace-canvas.locked .react-flow {
+.canvas-surface.locked .react-flow {
   pointer-events: none;
   filter: saturate(0.7);
 }
 
-.workspace-loading {
+.canvas-loading {
   position: absolute;
   inset: 0;
   z-index: 20;
@@ -549,11 +549,11 @@
   backdrop-filter: blur(4px);
 }
 
-.workspace-error {
+.canvas-error {
   flex-direction: column;
 }
 
-.workspace-dock {
+.canvas-dock {
   position: absolute;
   left: 50%;
   bottom: 8px;
@@ -562,11 +562,11 @@
   pointer-events: none;
 }
 
-.workspace-dock.disabled {
+.canvas-dock.disabled {
   opacity: 0.5;
 }
 
-.workspace-dock-shell {
+.canvas-dock-shell {
   pointer-events: auto;
   display: flex;
   align-items: flex-end;
@@ -579,7 +579,7 @@
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.26);
 }
 
-.workspace-dock-item {
+.canvas-dock-item {
   position: relative;
   width: 44px;
   display: flex;
@@ -592,21 +592,21 @@
   transition: transform var(--transition-fast), background var(--transition-fast);
 }
 
-.workspace-dock-item:hover {
+.canvas-dock-item:hover {
   transform: translateY(-5px) scale(1.04);
   background: rgba(255, 255, 255, 0.05);
 }
 
-.workspace-dock-item:active {
+.canvas-dock-item:active {
   cursor: grabbing;
   transform: translateY(-2px) scale(1.02);
 }
 
-.workspace-dock-item.disabled {
+.canvas-dock-item.disabled {
   cursor: not-allowed;
 }
 
-.workspace-dock-icon {
+.canvas-dock-icon {
   width: 36px;
   height: 36px;
   border-radius: 12px;
@@ -620,20 +620,20 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.workspace-dock-icon.prompt { background: rgba(88, 166, 255, 0.18); color: #58a6ff; }
-.workspace-dock-icon.code { background: rgba(63, 185, 80, 0.18); color: #3fb950; }
-.workspace-dock-icon.user { background: rgba(57, 197, 207, 0.18); color: #39c5cf; }
-.workspace-dock-icon.webframe { background: rgba(210, 153, 34, 0.18); color: #d29922; }
-.workspace-dock-icon.label { background: rgba(139, 148, 158, 0.18); color: #8b949e; }
-.workspace-dock-icon.schedule { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
-.workspace-dock-icon.event { background: rgba(255, 166, 87, 0.18); color: #ffa657; }
-.workspace-dock-icon.group { background: rgba(110, 118, 129, 0.18); color: #6e7681; }
-.workspace-dock-icon.agent { background: rgba(248, 81, 73, 0.18); color: #f85149; }
-.workspace-dock-icon.condition { background: rgba(210, 153, 34, 0.18); color: #d29922; }
-.workspace-dock-icon.approval { background: rgba(248, 81, 73, 0.18); color: #f85149; }
-.workspace-dock-icon.inbox { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
+.canvas-dock-icon.prompt { background: rgba(88, 166, 255, 0.18); color: #58a6ff; }
+.canvas-dock-icon.code { background: rgba(63, 185, 80, 0.18); color: #3fb950; }
+.canvas-dock-icon.user { background: rgba(57, 197, 207, 0.18); color: #39c5cf; }
+.canvas-dock-icon.webframe { background: rgba(210, 153, 34, 0.18); color: #d29922; }
+.canvas-dock-icon.label { background: rgba(139, 148, 158, 0.18); color: #8b949e; }
+.canvas-dock-icon.schedule { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
+.canvas-dock-icon.event { background: rgba(255, 166, 87, 0.18); color: #ffa657; }
+.canvas-dock-icon.group { background: rgba(110, 118, 129, 0.18); color: #6e7681; }
+.canvas-dock-icon.agent { background: rgba(248, 81, 73, 0.18); color: #f85149; }
+.canvas-dock-icon.condition { background: rgba(210, 153, 34, 0.18); color: #d29922; }
+.canvas-dock-icon.approval { background: rgba(248, 81, 73, 0.18); color: #f85149; }
+.canvas-dock-icon.inbox { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
 
-.workspace-dock-tooltip {
+.canvas-dock-tooltip {
   position: absolute;
   left: 50%;
   bottom: calc(100% + 10px);
@@ -652,7 +652,7 @@
   transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
-.workspace-dock-item:hover .workspace-dock-tooltip {
+.canvas-dock-item:hover .canvas-dock-tooltip {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
@@ -858,17 +858,17 @@
 }
 
 /* ---- Workflow "JSON" side panel ------------------------------------------ */
-/* Overlay on the canvas's right edge: a collapsed tab (.workspace-json-dock)
-   that expands into a full-height JSON editor (.workspace-json-editor). Mirrors
+/* Overlay on the canvas's right edge: a collapsed tab (.canvas-json-dock)
+   that expands into a full-height JSON editor (.canvas-json-editor). Mirrors
    the Sequences page editor on the Agents canvas. */
-.workspace-json-dock {
+.canvas-json-dock {
   position: absolute;
   top: 12px;
   right: 0;
   z-index: 5;
 }
 
-.workspace-json-dock__item {
+.canvas-json-dock__item {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -883,12 +883,12 @@
   transition: color 120ms ease, background 120ms ease;
 }
 
-.workspace-json-dock__item:hover {
+.canvas-json-dock__item:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
 
-.workspace-json-dock__label {
+.canvas-json-dock__label {
   writing-mode: vertical-rl;
   text-orientation: mixed;
   font-size: 12px;
@@ -897,7 +897,7 @@
   white-space: nowrap;
 }
 
-.workspace-json-editor {
+.canvas-json-editor {
   position: absolute;
   top: 0;
   right: 0;
@@ -913,7 +913,7 @@
 }
 
 /* Collapse seam on the panel's left edge (chevron points away to collapse). */
-.workspace-json-editor__collapse {
+.canvas-json-editor__collapse {
   position: absolute;
   top: 50%;
   left: 0;
@@ -934,18 +934,18 @@
   transition: color 120ms ease, background 120ms ease;
 }
 
-.workspace-json-editor__collapse:hover {
+.canvas-json-editor__collapse:hover {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
 
-.workspace-json-editor__head {
+.canvas-json-editor__head {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-.workspace-json-editor__head h2 {
+.canvas-json-editor__head h2 {
   margin: 0;
   font-size: 13px;
   font-weight: 600;
@@ -955,15 +955,15 @@
 /* JSON editor: a transparent <textarea> stacked over a highlight.js <pre> so the
    syntax-highlighted layer shows through while the user types. Both layers must
    share identical box metrics for the caret to line up. */
-.workspace-json__code {
+.canvas-json__code {
   position: relative;
   flex: 1;
   min-height: 0;
   display: flex;
 }
 
-.workspace-json__highlight,
-.workspace-json__code .workspace-json__textarea {
+.canvas-json__highlight,
+.canvas-json__code .canvas-json__textarea {
   margin: 0;
   padding: 10px 12px;
   border: 1px solid var(--color-border);
@@ -977,20 +977,20 @@
   overflow: auto;
 }
 
-.workspace-json__highlight {
+.canvas-json__highlight {
   position: absolute;
   inset: 0;
   background: var(--color-bg-primary);
   pointer-events: none;
 }
 
-.workspace-json__highlight code.hljs {
+.canvas-json__highlight code.hljs {
   padding: 0;
   background: transparent;
   font: inherit;
 }
 
-.workspace-json__code .workspace-json__textarea {
+.canvas-json__code .canvas-json__textarea {
   position: relative;
   flex: 1;
   resize: none;
@@ -999,29 +999,29 @@
   caret-color: var(--color-text-primary);
 }
 
-.workspace-json__code .workspace-json__textarea::selection {
+.canvas-json__code .canvas-json__textarea::selection {
   background: var(--color-accent-soft);
 }
 
-.workspace-json__textarea:focus {
+.canvas-json__textarea:focus {
   outline: none;
   border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
-.workspace-json-editor__error {
+.canvas-json-editor__error {
   margin: 0;
   color: var(--color-error, #ef4444);
   font-size: 11.5px;
 }
 
-.workspace-json-editor__saved {
+.canvas-json-editor__saved {
   margin: 0;
   color: var(--color-success, #22c55e);
   font-size: 11.5px;
 }
 
-.workspace-json-editor__actions {
+.canvas-json-editor__actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
