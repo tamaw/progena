@@ -15,6 +15,7 @@ import {
 import { selectRealtime } from '../store/realtimeSlice';
 import { requestAcknowledged } from '../store/http';
 import PageShell from '../components/layout/PageShell';
+import Select from '../components/common/Select';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
   DeleteActionIcon,
@@ -63,6 +64,9 @@ const EMBED_METRICS = [
   { value: 'l2', label: 'euclidean' },
 ];
 const EMBED_INDEXES = ['Flat', 'IVFFlat', 'HNSW'];
+const EMBED_MODEL_OPTIONS = EMBED_MODELS.map((m) => ({ value: m.value, label: m.value }));
+const EMBED_METRIC_OPTIONS = EMBED_METRICS.map((m) => ({ value: m.value, label: m.label }));
+const EMBED_INDEX_OPTIONS = EMBED_INDEXES.map((m) => ({ value: m, label: m }));
 
 // Generate a client-side source id so the folder can be registered (PUT) and then
 // indexed (POST) in one user action. The validator keeps provided source ids.
@@ -988,20 +992,19 @@ export default function KnowledgePage() {
                               Model
                               <span className="kb-config__hint">Embedding model</span>
                             </span>
-                            <select
-                              className="app-select"
+                            <Select
                               value={embedDraft.embeddingModel}
-                              onChange={(event) => {
-                                const picked = EMBED_MODELS.find((m) => m.value === event.target.value);
+                              onChange={(next) => {
+                                const picked = EMBED_MODELS.find((m) => m.value === next);
                                 setEmbedDraft((draft) => ({
                                   ...draft,
-                                  embeddingModel: event.target.value,
+                                  embeddingModel: next,
                                   dimensions: picked ? picked.dimensions : draft.dimensions,
                                 }));
                               }}
-                            >
-                              {EMBED_MODELS.map((m) => <option key={m.value} value={m.value}>{m.value}</option>)}
-                            </select>
+                              options={EMBED_MODEL_OPTIONS}
+                              ariaLabel="Embedding model"
+                            />
                           </div>
                           <div className="kb-config__row">
                             <span className="kb-config__label">
@@ -1022,26 +1025,24 @@ export default function KnowledgePage() {
                               Metric
                               <span className="kb-config__hint">Similarity</span>
                             </span>
-                            <select
-                              className="app-select"
+                            <Select
                               value={embedDraft.metric}
-                              onChange={(event) => setEmbedDraft((draft) => ({ ...draft, metric: event.target.value }))}
-                            >
-                              {EMBED_METRICS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-                            </select>
+                              onChange={(next) => setEmbedDraft((draft) => ({ ...draft, metric: next }))}
+                              options={EMBED_METRIC_OPTIONS}
+                              ariaLabel="Metric"
+                            />
                           </div>
                           <div className="kb-config__row">
                             <span className="kb-config__label">
                               Index
                               <span className="kb-config__hint">Index type</span>
                             </span>
-                            <select
-                              className="app-select"
+                            <Select
                               value={embedDraft.indexType}
-                              onChange={(event) => setEmbedDraft((draft) => ({ ...draft, indexType: event.target.value }))}
-                            >
-                              {EMBED_INDEXES.map((m) => <option key={m} value={m}>{m}</option>)}
-                            </select>
+                              onChange={(next) => setEmbedDraft((draft) => ({ ...draft, indexType: next }))}
+                              options={EMBED_INDEX_OPTIONS}
+                              ariaLabel="Index type"
+                            />
                           </div>
                         </div>
                       ) : (
