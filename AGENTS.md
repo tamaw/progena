@@ -12,7 +12,7 @@ This is the main Progenitor agent system - a perpetual, conversational personal 
 - API design (FastAPI, OpenAI-compatible endpoints)
 - Testing with pytest and async patterns
 - State management and persistence
-- IPC and async queue patterns
+- SSE streaming and async queue patterns
 
 ### Project Structure
 ```
