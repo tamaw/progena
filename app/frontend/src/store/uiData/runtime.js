@@ -12,6 +12,10 @@ export const initialState = {
   // Schedule list, kept live by `schedule.snapshot` events on /api/ui/stream
   // and seeded once via REST when the Schedules page mounts.
   schedule: [],
+  // Bumped (with a monotonic `seq`) on every single-new-`alert` event, for a
+  // global toast+sound side effect (see AppRuntimeShell) - distinct from
+  // `alerts`/`alerts.updated`, which is the durable list, not "just arrived".
+  lastReceivedAlert: null,
 };
 function arrayPayload(payload, keys = []) {
   if (Array.isArray(payload)) {
@@ -99,6 +103,7 @@ export const eventHandlers = {
   alert: (state, payload) => {
     const alert = payload.alert || payload;
     state.alerts = upsertAlert([...(state.alerts || [])], alert);
+    state.lastReceivedAlert = { ...alert, seq: (state.lastReceivedAlert?.seq || 0) + 1 };
   },
   'widgets.updated': (state, payload) => {
     state.widgets = widgetsFrom(payload) || [];
@@ -112,3 +117,4 @@ export const selectUiStatus = (state) => state.uiData.status;
 export const selectUiAlerts = (state) => state.uiData.alerts;
 export const selectUiWidgets = (state) => state.uiData.widgets;
 export const selectSchedules = (state) => state.uiData.schedule;
+export const selectLastReceivedAlert = (state) => state.uiData.lastReceivedAlert;

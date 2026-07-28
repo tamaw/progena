@@ -29,6 +29,7 @@ from .models import (
     ScheduleEntry,
     ScheduleRunRecord,
 )
+from .preferences import default_preferences_payload
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +137,7 @@ class StateManager:
             "registry": {},
             "mcp": default_mcp_config_payload(),
             "knowledge": {"bases": []},
+            "preferences": default_preferences_payload(),
             "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
             "health": {},
@@ -313,6 +315,24 @@ class StateManager:
     async def save_knowledge_config(self, payload: dict[str, Any]) -> None:
         """Persist the knowledge document to the shared runtime store."""
         await self._save_runtime_document("knowledge", payload)
+
+    # ==========================================================================
+    # User preferences (profile)
+    # ==========================================================================
+    async def get_preferences_config(self) -> dict[str, Any]:
+        """Return the preferences document from the shared runtime store.
+
+        The backend edits this same Postgres document (Settings page), so read
+        directly from the store rather than the in-memory cache to preserve
+        cross-process changes.
+        """
+        default = default_preferences_payload()
+        payload = await self._runtime_store.get_document("preferences", default)
+        return payload if isinstance(payload, dict) else dict(default)
+
+    async def save_preferences_config(self, payload: dict[str, Any]) -> None:
+        """Persist the preferences document to the shared runtime store."""
+        await self._save_runtime_document("preferences", payload)
 
     # ==========================================================================
     # Kanban board
