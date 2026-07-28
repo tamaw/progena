@@ -31,7 +31,7 @@ EXPLORABLE_DIRS = [
     "tools",
     "llm",
     "runtime",
-    "ipc",
+    "sse",
 ]
 
 # File extensions to include

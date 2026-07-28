@@ -1,7 +1,7 @@
 """
 User Communication Tools for Progenitor.
 
-Provides tools for the agent to communicate with the user through IPC:
+Provides tools for the agent to communicate with the user through SSE:
 - say_to_user: Send a message to the user
 - ask_user: Ask the user a question and await response
 """
@@ -53,7 +53,7 @@ class NotifyUserArgs(BaseModel):
 
 
 class SayToUserTool(BaseSystemTool):
-    """Send a one-way agent_message event via IPC."""
+    """Send a one-way agent_message event via SSE."""
 
     @property
     def args_model(self) -> type[BaseModel]:
@@ -65,7 +65,7 @@ class SayToUserTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Send a one-way message to the user via IPC (agent_message event)"
+        return "Send a one-way message to the user via SSE (agent_message event)"
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -75,7 +75,7 @@ class SayToUserTool(BaseSystemTool):
 
         push = getattr(context.llm_client, "_push_event", None)
         if not callable(push):
-            return ToolResult.fail("LLM client has no IPC event pusher configured")
+            return ToolResult.fail("LLM client has no SSE event pusher configured")
 
         await cast(EventPusher, push)(
             "agent_message",
@@ -86,7 +86,7 @@ class SayToUserTool(BaseSystemTool):
 
 
 class AskUserTool(BaseSystemTool):
-    """Send a one-way agent_question event via IPC."""
+    """Send a one-way agent_question event via SSE."""
 
     @property
     def args_model(self) -> type[BaseModel]:
@@ -98,7 +98,7 @@ class AskUserTool(BaseSystemTool):
 
     @property
     def description(self) -> str:
-        return "Ask the user a question via IPC (agent_question event; one-way notification)"
+        return "Ask the user a question via SSE (agent_question event; one-way notification)"
 
     async def execute(self, context: ToolContext) -> ToolResult:
         args = context.tool_args if isinstance(context.tool_args, dict) else {}
@@ -111,7 +111,7 @@ class AskUserTool(BaseSystemTool):
 
         push = getattr(context.llm_client, "_push_event", None)
         if not callable(push):
-            return ToolResult.fail("LLM client has no IPC event pusher configured")
+            return ToolResult.fail("LLM client has no SSE event pusher configured")
 
         await cast(EventPusher, push)(
             "agent_question",
@@ -126,7 +126,7 @@ class AskUserTool(BaseSystemTool):
 
 
 class NotifyUserTool(BaseSystemTool):
-    """Request a backend-managed alert via IPC."""
+    """Request a backend-managed alert via SSE."""
 
     @property
     def args_model(self) -> type[BaseModel]:
@@ -153,7 +153,7 @@ class NotifyUserTool(BaseSystemTool):
 
         push = getattr(context.llm_client, "_push_event", None)
         if not callable(push):
-            return ToolResult.fail("LLM client has no IPC event pusher configured")
+            return ToolResult.fail("LLM client has no SSE event pusher configured")
 
         await cast(EventPusher, push)(
             "alert_request",

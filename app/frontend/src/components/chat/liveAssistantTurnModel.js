@@ -4,7 +4,7 @@
  * A live assistant turn holds everything the frontend knows about an ongoing
  * assistant response before it is finalised and pushed into the committed
  * `messages` array.  State transitions are driven by stream events arriving
- * from the backend IPC stream:
+ * from the backend SSE stream:
  *
  *   1. `assistant_metadata` → updates display metadata only.
  *   2. First visible stream event (`tool_start`, `tool_result`, `node_update`,

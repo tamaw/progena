@@ -8,16 +8,16 @@ the main application path.
 
 `app/progenitor` is now centered on a DeepAgent graph. The old node-oriented
 outer-loop code has been removed; production startup creates a DeepAgent via
-`runtime/deep_agent_adapter.py` and runs it through the long-running IPC
-service path in `app.progenitor.main`.
+`runtime/deep_agent_adapter.py` and runs it through the long-running HTTP +
+SSE service path in `app.progenitor.main`.
 
 The strongly used code is concentrated in:
 
 - `main.py`
-- `runtime/loop.py`
+- `runtime/heartbeat.py`
 - `runtime/deep_agent_adapter.py`
 - `agent/*.py`
-- `ipc/*.py`
+- `sse/*.py`
 - `state/manager.py`
 - `state/models.py`
 - `config.py`
@@ -56,9 +56,9 @@ main.py::main()
           -> llm_client.set_event_pusher()
           -> create_deep_agent_for_loop()
           -> ProgenitorLoop(...)
-      -> ProgenitorLoop.run_forever()
-      -> IPCServer.start()
-      -> IPCServer.serve_forever()
+      -> create_task(loop_runner.run_forever())  # background
+      -> ProgenitorHTTPServer(loop_runner=...).start()
+          -> mounts RuntimeChatService's /v1/chat, /v1/chat/{id}/cancel, /v1/events
 ```
 
 Strength: strongly used when `python -m app.progenitor.main` runs.
@@ -216,7 +216,17 @@ Status: active for code-review and research helper delegation.
 
 ## Runtime loop path
 
-Source: `app/progenitor/runtime/loop.py`.
+Source: `app/progenitor/runtime/heartbeat.py` (`ProgenitorLoop` moved here from
+the now-deleted `runtime/loop.py`).
+
+> **Staleness note:** this section (through "Graph cycle path" below) was not
+> re-verified as part of the IPC->SSE rename. `runtime/http_chat.py`'s own
+> docstring says it "replaces the TCP IPC server's direct-DeepAgent request
+> path" and that the old IPC server's separate queue-drain path (which this
+> section's `_input_handler_loop()`/`_run_graph_cycle()` describes) "was dead
+> code" even before removal -- so the diagrams below may now describe a path
+> that chat requests no longer take at all (see "HTTP + SSE chat/event path"
+> instead for the live request path). Needs a dedicated verification pass.
 
 ```text
 ProgenitorLoop.run_forever()
@@ -230,12 +240,12 @@ ProgenitorLoop.run_forever()
   -> create_task(A2ATaskTracker.run())
 ```
 
-Strength: strongly used in the long-running IPC process.
+Strength: unverified -- see staleness note above.
 
 ### User input path
 
 ```text
-IPCServer or scheduled work
+Scheduled work (see "HTTP + SSE chat/event path" for live chat requests)
   -> ProgenitorLoop.enqueue_input(...)
   -> _input_handler_loop()
       -> _get_input()
@@ -272,8 +282,7 @@ _run_graph_cycle()
   -> _update_health_file()
 ```
 
-Strength: strongly used for every IPC user message processed by the long-running
-loop.
+Strength: unverified -- see staleness note above.
 
 ### Conditional runtime branches
 
@@ -282,102 +291,67 @@ loop.
 | Scheduler loop | Conditional | `config.scheduler.enabled`. |
 | Scheduled input handling | Conditional | Scheduler enqueues messages prefixed with `[Scheduled Task]\n`. |
 | Isolated graph cycle | Conditional | Request metadata has a `thread_id` different from current state thread. |
-| Streaming response | Strongly used for streaming clients, conditional per request | IPC message has `stream=True` or service streaming API is used. |
+| Streaming response | Unverified, see staleness note above | Request has `stream=True` or service streaming API is used. |
 | A2A polling | Always running in long-running loop, work is conditional | Existing tracked A2A tasks in state. |
 | Health updates | Strongly used | Startup, idle checkpoint interval, graph cycle completion, shutdown. |
 
-## IPC path
+## HTTP + SSE chat/event path
 
-Source: `app/progenitor/ipc`.
+Source: `app/progenitor/runtime/http_chat.py` (`RuntimeChatService`), mounted
+onto `app/progenitor/runtime/http.py`'s `ProgenitorHTTPServer` (the same HTTP
+server that also answers `/health`, the A2A agent card, and A2A callbacks).
+This replaces a former TCP socket IPC server/client pair (`IPCServer`,
+`IPCClient`) that has been fully removed from the codebase; only the
+transport-agnostic stream-envelope helpers it used survive, now in
+`app/progenitor/sse/`.
 
 ### Server
 
 ```text
 main.py::Progenitor.run()
-  -> IPCServer(loop_runner=...)
-  -> IPCServer.start()
-      -> asyncio.start_server(_handle_client, ...)
-      -> create_task(_event_broadcast_loop())
-  -> IPCServer.serve_forever()
+  -> ProgenitorHTTPServer(loop_runner=..., ...)
+  -> ProgenitorHTTPServer.start()
+      -> web.Application() with RuntimeChatService.routes():
+           POST /v1/chat
+           POST /v1/chat/{request_id}/cancel
+           GET  /v1/events
+      -> RuntimeChatService.start() -> create_task(_drain_loop())
 ```
 
 Request processing:
 
 ```text
-IPCServer._handle_client()
-  -> read_message()
-  -> _process_message()
-      -> HEARTBEAT: heartbeat_ack()
-      -> SHUTDOWN: set shutdown event
-      -> USER_MESSAGE:
-          -> _handle_request() if not msg.stream
-          -> _handle_streaming_request() if msg.stream
+RuntimeChatService.handle_chat()  # POST /v1/chat
+  -> parse JSON body, require "message"
+  -> open a StreamResponse (Content-Type: text/event-stream) immediately
+  -> serialize concurrent requests per thread_id (_inflight_by_thread)
+  -> _stream_chat()
+      -> _create_direct_stream_bridge() -> DeepAgentSSEStream
+      -> background _produce() task drains bridge.stream() into a queue
+      -> foreground loop writes SSE frames as items arrive, or an SSE
+         keepalive comment every EVENTS_KEEPALIVE_SECONDS if the bridge
+         goes quiet (long tool call/subagent with no interim output)
+      -> stream_event / stream_chunk / error frames written via
+         _write_frame(); a POST /v1/chat/{request_id}/cancel request or a
+         dropped client connection sets the per-request cancel_event
 ```
 
-Non-streaming request:
+Event broadcasting (out-of-band events: alerts, schedule, async-subagent
+callbacks -- distinct from one request's own chat stream above):
 
 ```text
-_handle_request()
-  -> _notify_queued_request()
-  -> _request_lock
-  -> _drain_response_queues()
-  -> _enqueue_loop_input()
-  -> _wait_for_response()
-      -> loop_runner.get_stream_item()
-      -> ignore stream_event
-      -> accumulate stream_chunk
-  -> write assistant_message()
-  -> loop_runner.wait_cycle_complete()
-```
-
-Streaming request:
-
-```text
-_handle_streaming_request()
-  -> _notify_queued_request()
-  -> _request_lock
-  -> _drain_response_queues()
-  -> _enqueue_loop_input()
-  -> loop_runner.get_stream_item()
-      -> STREAM_EVENT: write stream_event()
-      -> STREAM_CHUNK: write stream_chunk()
-      -> STREAM_END: write stream_end()
-  -> loop_runner.wait_cycle_complete()
-```
-
-Event broadcasting:
-
-```text
-ProgenitorLoop._push_event(...)
+RuntimeQueues.push_event(...)  # e.g. via Progenitor's deferred_push_event
   -> loop event queue
-  -> IPCServer._event_broadcast_loop()
-  -> write agent_event messages to connected clients
-  -> app/backend/sse_client.py forwards to SSE callback
+  -> RuntimeChatService._drain_loop()
+  -> fan out to every open GET /v1/events subscriber queue
+  -> RuntimeChatService.handle_events() writes SSE frames to each subscriber
+  -> app/backend/sse_client.py's SSEProgenitorClient consumes /v1/events
+     and /v1/chat, forwarding to the backend's own broadcast callback
 ```
 
-Strength: strongly used when backend talks to a separately running Progenitor
-process.
-
-### Client
-
-Source: `app/progenitor/ipc/client.py`.
-
-```text
-IPCClient.connect()
-  -> open socket
-  -> read READY message
-  -> start _heartbeat_loop()
-
-IPCClient.send_message()
-  -> user_message(stream=False)
-  -> read until ASSISTANT_MESSAGE
-  -> handle interleaved AGENT_EVENT messages
-
-IPCClient.send_message_stream_events()
-  -> user_message(stream=True)
-  -> yield STREAM_CHUNK and STREAM_EVENT messages
-  -> handle interleaved AGENT_EVENT messages
-```
+Strength: strongly used whenever the backend talks to the Progenitor runtime
+process -- this is the only chat/event transport; there is no non-SSE
+fallback.
 
 ## State and persistence path
 
@@ -668,8 +642,8 @@ Evidence:
 | DeepAgent backend | `agent/backends.py` |
 | DeepAgent tools | `agent/tools_adapter.py`, `tools/system_registry.py` |
 | DeepAgent middleware | `agent/middleware.py` |
-| Runtime loop | `runtime/loop.py` |
-| IPC | `ipc/server.py`, `ipc/client.py`, `ipc/protocol.py` |
+| Runtime loop | `runtime/heartbeat.py` |
+| HTTP + SSE chat/event path | `runtime/http_chat.py`, `runtime/http.py`, `sse/*.py` |
 | State persistence | `state/manager.py`, `state/persistence.py`, active parts of `state/models.py` |
 | Config/logging | `config.py`, `utils.py` |
 | Streaming/reasoning events | `streaming_utils.py`, `stream_events.py` |
@@ -699,7 +673,7 @@ Evidence:
 | ~~Process-based agent runner~~ | ~~`runtime/agent_runner.py`~~ | Removed. |
 | ~~HTTP agent manager~~ | ~~`runtime/http_agent_manager.py`~~ | Removed. |
 | ~~Circuit breaker~~ | ~~`llm/circuit_breaker.py`~~ | Removed. |
-| ~~Direct in-process service path~~ | ~~`service.py`, `app/backend/service_client.py`, `tests/progenitor/test_service.py`~~ | Removed; IPC is the supported backend integration path. |
+| ~~Direct in-process service path~~ | ~~`service.py`, `app/backend/service_client.py`, `tests/progenitor/test_service.py`~~ | Removed; HTTP + SSE is the supported backend integration path. |
 
 ## Cleanup applied
 

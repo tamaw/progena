@@ -121,12 +121,12 @@ for line in sys.stdin:
         await client.stop()
 
 
-class TestIPCEventForwardingStartup:
-    """Tests for background IPC event-forwarding startup."""
+class TestSSEEventForwardingStartup:
+    """Tests for background SSE event-forwarding startup."""
 
     @pytest.mark.asyncio
     async def test_start_sse_client_with_retry_retries_until_started(self):
-        """Background startup should retry until the IPC client connects."""
+        """Background startup should retry until the SSE client connects."""
         client = AsyncMock()
         client.start = AsyncMock(side_effect=[RuntimeError("offline"), None])
 

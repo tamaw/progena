@@ -1,8 +1,8 @@
 """Shared envelope + allowlist for custom Deep Agents stream events.
 
 These helpers are used by middleware (via ``langgraph.config.get_stream_writer``)
-to publish tool lifecycle events, and by the IPC stream bridge to validate and
-forward custom events through the IPC ``stream_event`` channel to the UI.
+to publish tool lifecycle events, and by the SSE stream bridge to validate and
+forward custom events through the SSE ``stream_event`` channel to the UI.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import Any
 from langgraph.config import get_stream_writer
 from langgraph.types import Command
 
-from app.progenitor.ipc.stream_payloads import (
+from app.progenitor.sse.stream_payloads import (
     DEFAULT_STREAM_ARGS_BYTES,
     DEFAULT_STREAM_PREVIEW_BYTES,
     TRUNCATION_SUFFIX,

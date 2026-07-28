@@ -1,1 +1,1 @@
-"""Integration tests for Progenitor agent via IPC."""
+"""Integration tests for Progenitor agent via HTTP + SSE."""

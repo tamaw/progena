@@ -42,7 +42,7 @@ class _Raise:
 
 
 class ScriptedBridge:
-    """Fake DeepAgentIPCStream bridge that replays a scripted item list."""
+    """Fake DeepAgentSSEStream bridge that replays a scripted item list."""
 
     def __init__(
         self,

@@ -112,11 +112,11 @@ def _coerce_int(value: Any, default: int = 0) -> int:
 
 
 def _live_progenitor_reachable() -> bool | None:
-    """Live liveness check via the backend's IPC heartbeat, or None if unavailable.
+    """Live liveness check via the backend's SSE heartbeat, or None if unavailable.
 
     Lazy import (mirrors ui_routes.py's ``_process_metrics()`` reaching into
     ``main`` the same way) to avoid a circular import: main -> ui_routes ->
-    state_reader. Returns None (not a definite bool) whenever there's no IPC
+    state_reader. Returns None (not a definite bool) whenever there's no SSE
     client actually configured yet - not just "unreachable" - which is the
     case in most tests and before backend startup wires one up. Only once a
     client exists do we report a definite True/False, so callers correctly
@@ -265,7 +265,7 @@ class HealthInfo:
     thread_id: str | None
     cycle_count: int
     pid: int | None
-    # Set only by get_health(), from a live IPC heartbeat check - not part of
+    # Set only by get_health(), from a live SSE heartbeat check - not part of
     # the stored document. None means "no live signal available" (e.g. built
     # directly in a test), in which case is_running() falls back to the
     # timestamp-staleness heuristic below.
@@ -492,7 +492,7 @@ class StateSnapshot:
     kanban_fingerprint: str = ""
     # Content fingerprint of the "health" Postgres document (status,
     # cycle_count, thread_id, idle_cycles, queue_stats, pid - NOT liveness,
-    # which is a live IPC check pushed separately via _process_metrics()).
+    # which is a live SSE check pushed separately via _process_metrics()).
     health_fingerprint: str = ""
     # Content fingerprint of all inbox message documents. Like kanban, no other
     # snapshot field changes when the agent writes /inbox/<id>.md, so this is
@@ -1020,7 +1020,7 @@ class StateReader:
         """Stable hash of the ``health`` Postgres document's status fields.
 
         Deliberately excludes liveness (``HealthInfo.live_reachable``) - that
-        signal is a live IPC check, not stored in Postgres, so a pure liveness
+        signal is a live SSE check, not stored in Postgres, so a pure liveness
         flip with nothing else changing would never trigger this fingerprint.
         See ``_process_metrics()`` in ui_routes.py for how liveness reaches the
         frontend instead (pushed on its own independent ~3s tick).
