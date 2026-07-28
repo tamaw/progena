@@ -168,15 +168,15 @@
   color: #58a6ff;
 }
 
-.skills-tree-leaf {
+.plugins-tree-leaf {
   gap: 4px;
 }
 
-.skills-editor-title {
+.plugins-editor-title {
   min-width: 0;
 }
 
-.skills-create-form {
+.plugins-create-form {
   display: flex;
   align-items: end;
   flex-wrap: wrap;
@@ -184,7 +184,7 @@
   margin-top: 8px;
 }
 
-.skills-create-form label {
+.plugins-create-form label {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -194,7 +194,7 @@
   letter-spacing: 0.08em;
 }
 
-.skills-create-form input {
+.plugins-create-form input {
   width: 150px;
   border: 1px solid var(--color-border);
   border-radius: 8px;
@@ -206,37 +206,37 @@
   outline: none;
 }
 
-.skills-create-form input:focus {
+.plugins-create-form input:focus {
   border-color: color-mix(in oklab, var(--color-accent) 55%, var(--color-border));
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 16%, transparent);
 }
 
-/* Skills preview uses the same padded, scrollable markdown surface as Inbox. */
-.skills-detail__body {
+/* Plugin skill preview uses the same padded, scrollable markdown surface as Inbox. */
+.plugins-detail__body {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
-.skills-detail__body--preview {
+.plugins-detail__body--preview {
   overflow-y: auto;
   padding: 20px 28px 34px;
   color: var(--color-text-primary);
   background: var(--color-bg-secondary);
 }
 
-.skills-detail__body--preview .markdown-content {
+.plugins-detail__body--preview .markdown-content {
   font-size: var(--font-size-md);
   line-height: 1.6;
 }
 
-.skills-detail__body .skills-create-form {
+.plugins-detail__body .plugins-create-form {
   margin: 0;
   padding: var(--spacing-md);
 }
 
-.skills-meta-grid {
+.plugins-meta-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
@@ -244,13 +244,13 @@
   background: var(--color-border);
 }
 
-.skills-meta-grid > div {
+.plugins-meta-grid > div {
   min-width: 0;
   padding: 10px 12px;
   background: var(--color-bg-secondary);
 }
 
-.skills-meta-grid span {
+.plugins-meta-grid span {
   display: block;
   color: var(--color-text-muted);
   font-size: 10px;
@@ -259,7 +259,7 @@
   margin-bottom: 4px;
 }
 
-.skills-meta-grid strong {
+.plugins-meta-grid strong {
   display: block;
   overflow: hidden;
   color: var(--color-text-primary);
@@ -327,7 +327,7 @@
 }
 
 @media (max-width: 860px) {
-  .skills-meta-grid {
+  .plugins-meta-grid {
     grid-template-columns: 1fr;
   }
 }
