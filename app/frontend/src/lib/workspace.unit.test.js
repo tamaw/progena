@@ -14,7 +14,7 @@ import {
 // Node test environment has no `window` -- stub just enough for the one
 // function that touches it (currentPageHost).
 beforeEach(() => {
-  globalThis.window = { location: { host: 'app.internal:5173', href: '' } };
+  globalThis.window = { location: { host: 'app.internal:5173', protocol: 'http:', href: '' } };
 });
 
 describe('parseWorkspacePath', () => {
@@ -55,11 +55,26 @@ describe('currentPageHost', () => {
 });
 
 describe('resolveWorkspaceOrigin', () => {
-  it('always uses https, even for loopback/private/bare hosts -- no insecure fallback', () => {
+  it('reuses the page scheme for the frontend\'s own host -- no cross-origin boundary crossed', () => {
+    expect(resolveWorkspaceOrigin('app.internal:5173')).toBe('http://app.internal:5173');
+  });
+
+  it('reuses the page scheme for loopback hosts -- local multi-backend testing needs plain http', () => {
+    expect(resolveWorkspaceOrigin('localhost:8000')).toBe('http://localhost:8000');
+    expect(resolveWorkspaceOrigin('127.0.0.1:9501')).toBe('http://127.0.0.1:9501');
+    expect(resolveWorkspaceOrigin('::1')).toBe('http://::1');
+  });
+
+  it('reuses the page scheme for RFC 1918 private-network hosts', () => {
+    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('http://192.168.0.2');
+    expect(resolveWorkspaceOrigin('10.0.4.12:8080')).toBe('http://10.0.4.12:8080');
+    expect(resolveWorkspaceOrigin('172.20.0.5')).toBe('http://172.20.0.5');
+  });
+
+  it('always uses https for a public-looking host -- no insecure fallback for a switched backend', () => {
     expect(resolveWorkspaceOrigin('team-a.example.com')).toBe('https://team-a.example.com');
-    expect(resolveWorkspaceOrigin('localhost:8000')).toBe('https://localhost:8000');
-    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('https://192.168.0.2');
     expect(resolveWorkspaceOrigin('cronix')).toBe('https://cronix');
+    expect(resolveWorkspaceOrigin('172.32.0.5')).toBe('https://172.32.0.5');
   });
 });
 

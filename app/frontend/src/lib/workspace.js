@@ -11,6 +11,13 @@ const WORKSPACE_PATH_RE = /^\/w\/([^/]+)(\/.*)?$/;
 // those get stripped by normalizeWorkspaceHost before this ever runs.
 const HOST_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:[0-9]{1,5})?$/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
+// Loopback and RFC 1918 private-network hosts: switching between these during
+// local testing (a second local backend on another port, a machine on the
+// LAN) never crosses onto the open internet, so there is nothing for TLS to
+// protect there -- forcing https just breaks plain-http local servers.
+const LOOPBACK_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;
+const PRIVATE_IPV4_RE =
+  /^(10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})(:\d{1,5})?$/;
 const REGISTRY_KEY = 'progenitor_workspaces';
 
 /** Parse a pathname into `{ host, rest }`, or `null` if it isn't workspace-scoped. */
@@ -27,8 +34,19 @@ export function currentPageHost() {
   return window.location.host;
 }
 
-/** The backend origin a workspace host resolves to, e.g. `https://team-a.example.com`. */
+/**
+ * The backend origin a workspace host resolves to. The frontend's own host
+ * (the default workspace -- see `currentPageHost`) and any loopback/private
+ * host reuse the scheme the page itself was served over: neither crosses a
+ * real trust boundary, so there is no plaintext-credential risk to guard
+ * against. Any other (public-looking) host is an explicit cross-origin
+ * workspace switch and always resolves to `https://` -- no insecure
+ * fallback for a backend the user typed in.
+ */
 export function resolveWorkspaceOrigin(host) {
+  if (host === currentPageHost() || LOOPBACK_RE.test(host) || PRIVATE_IPV4_RE.test(host)) {
+    return `${window.location.protocol}//${host}`;
+  }
   return `https://${host}`;
 }
 
