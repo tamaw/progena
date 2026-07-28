@@ -121,7 +121,7 @@ async def measure_direct() -> dict[str, Any]:
     from app.progenitor.agent.agent import create_progenitor_agent
     from app.progenitor.config import get_config
     from app.progenitor.database import open_langgraph_persistence
-    from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
+    from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
     from app.progenitor.state.langgraph_store import LangGraphRuntimeStore
     from app.progenitor.state.manager import StateManager
 
@@ -144,7 +144,7 @@ async def measure_direct() -> dict[str, Any]:
             project_root=str(PROJECT_ROOT),
         )
         graph_ready_ns = now_ns()
-        bridge = DeepAgentIPCStream(graph, config=config, state={})
+        bridge = DeepAgentSSEStream(graph, config=config, state={})
         thread_id = f"measure-direct-{uuid.uuid4().hex[:12]}"
         first_token_ns: int | None = None
         chunk_count = 0
