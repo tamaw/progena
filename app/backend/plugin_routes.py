@@ -13,7 +13,7 @@ from app.progenitor.agent.state_backend import validate_plugins_document
 from app.progenitor.config import default_plugins_config_payload
 
 # Imported at module level so tests can monkeypatch the fetch callable.
-from app.progenitor.plugins.sources import fetch_marketplace
+from app.progenitor.plugins.sources import fetch_marketplace, resolve_relative_plugin_source
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
@@ -43,19 +43,22 @@ def _save_plugins_document(payload: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _marketplace_source_url(marketplace_name: str) -> str | None:
+    """Look up a registered marketplace's own source string by name."""
+    snapshot = load_marketplaces()
+    for src in snapshot.get("sources", []):
+        if isinstance(src, dict) and src.get("name") == marketplace_name:
+            return str(src.get("source") or "").strip() or None
+    return None
+
+
 async def _resolve_catalog(marketplace_name: str) -> Any:
     """Return a cached or freshly-fetched marketplace catalog."""
     cached = get_cached_catalog(marketplace_name)
     if cached is not None:
         return cached
 
-    snapshot = load_marketplaces()
-    source_url: str | None = None
-    for src in snapshot.get("sources", []):
-        if isinstance(src, dict) and src.get("name") == marketplace_name:
-            source_url = str(src.get("source") or "").strip()
-            break
-
+    source_url = _marketplace_source_url(marketplace_name)
     if not source_url:
         from app.progenitor.plugins.sources import PluginFetchError
 
@@ -113,8 +116,28 @@ async def install_plugin(
             detail=f"plugin '{plugin_name}' not found in marketplace '{marketplace_name}'",
         )
 
+    resolved_source = plugin_entry.get("source")
+    if isinstance(resolved_source, str) and resolved_source.startswith("./"):
+        # A relative-path source is only meaningful together with the
+        # marketplace archive it was resolved against; plugins.json entries
+        # are self-sufficient and carry no reference back to their
+        # marketplace, so store an absolute git-subdir source instead of the
+        # raw relative path -- otherwise the reconciler can never re-fetch it.
+        marketplace_source_url = _marketplace_source_url(marketplace_name)
+        if not marketplace_source_url:
+            raise HTTPException(
+                status_code=400, detail=f"marketplace '{marketplace_name}' not found"
+            )
+        plugin_root = str(getattr(catalog, "metadata", {}).get("pluginRoot", "") or "")
+        try:
+            resolved_source = resolve_relative_plugin_source(
+                marketplace_source_url, resolved_source, plugin_root
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     new_entry: dict[str, Any] = {
-        "source": plugin_entry.get("source"),
+        "source": resolved_source,
         "version": plugin_entry.get("version"),
         "status": "pending",
     }
