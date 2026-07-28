@@ -27,8 +27,18 @@ export function currentPageHost() {
   return window.location.host;
 }
 
-/** The backend origin a workspace host resolves to, e.g. `https://team-a.example.com`. */
+/**
+ * The backend origin a workspace host resolves to. The frontend's own host
+ * (the default workspace -- see `currentPageHost`) reuses the scheme the
+ * page itself was served over, since no trust boundary is crossed. Any
+ * other host is an explicit cross-origin workspace switch, so it always
+ * resolves to `https://` -- no insecure fallback for a backend the user
+ * typed in.
+ */
 export function resolveWorkspaceOrigin(host) {
+  if (host === currentPageHost()) {
+    return `${window.location.protocol}//${host}`;
+  }
   return `https://${host}`;
 }
 
