@@ -98,6 +98,11 @@ tmp/
 .env.local
 *.key
 *.pem
+# Self-signed dev certs, intentionally committed -- see docker/backend/certs
+# and app/frontend/certs. Not real secrets: generated for local/LAN TLS
+# enforcement, not a production CA-issued cert.
+!app/frontend/certs/*.pem
+!docker/backend/certs/*.pem
 
 *-cwd
 .ruff_cache

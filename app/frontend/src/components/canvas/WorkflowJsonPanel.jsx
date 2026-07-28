@@ -43,15 +43,15 @@ export function JsonCodeEditor({ value, onChange }) {
   }
 
   return (
-    <div className="workspace-json__code">
-      <pre ref={highlightRef} className="workspace-json__highlight" aria-hidden="true">
+    <div className="canvas-json__code">
+      <pre ref={highlightRef} className="canvas-json__highlight" aria-hidden="true">
         <code
           className="hljs language-json"
           dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }}
         />
       </pre>
       <textarea
-        className="workspace-json__textarea"
+        className="canvas-json__textarea"
         spellCheck={false}
         value={value}
         onChange={onChange}
@@ -65,16 +65,16 @@ export function JsonCodeEditor({ value, onChange }) {
 // canvas tools dock but overlays the workflow canvas's right edge.
 export function WorkflowJsonDock({ onOpen }) {
   return (
-    <aside className="workspace-json-dock" aria-label="Workflow tools">
+    <aside className="canvas-json-dock" aria-label="Workflow tools">
       <button
         type="button"
-        className="workspace-json-dock__item"
+        className="canvas-json-dock__item"
         title="Edit as JSON"
         aria-label="Edit workflow as JSON"
         onClick={onOpen}
       >
         <ChevronLeftSmall />
-        <span className="workspace-json-dock__label">JSON</span>
+        <span className="canvas-json-dock__label">JSON</span>
       </button>
     </aside>
   );
@@ -105,26 +105,26 @@ export function WorkflowJsonEditor({ value, onApply, onClose }) {
   }
 
   return (
-    <aside className="workspace-json-editor">
+    <aside className="canvas-json-editor">
       <button
         type="button"
-        className="workspace-json-editor__collapse"
+        className="canvas-json-editor__collapse"
         onClick={onClose}
         title="Collapse"
         aria-label="Collapse JSON editor"
       >
         <ChevronRightSmall />
       </button>
-      <header className="workspace-json-editor__head">
+      <header className="canvas-json-editor__head">
         <h2>Edit workflow as JSON</h2>
       </header>
       <JsonCodeEditor
         value={draft}
         onChange={(event) => { setDraft(event.target.value); setSaved(false); }}
       />
-      {error ? <p className="workspace-json-editor__error">{error}</p> : null}
-      {saved ? <p className="workspace-json-editor__saved">Workflow applied.</p> : null}
-      <div className="workspace-json-editor__actions">
+      {error ? <p className="canvas-json-editor__error">{error}</p> : null}
+      {saved ? <p className="canvas-json-editor__saved">Workflow applied.</p> : null}
+      <div className="canvas-json-editor__actions">
         <button
           type="button"
           className="node-action-btn"
