@@ -188,7 +188,7 @@ grep -c INFO logs/progenitor.log
 - Memory usage
 - CPU usage
 - Active connections
-- IPC connection and request health
+- HTTP/SSE connection and request health
 
 ## Backup & Recovery
 
