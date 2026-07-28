@@ -14,7 +14,7 @@ import {
 // Node test environment has no `window` -- stub just enough for the one
 // function that touches it (currentPageHost).
 beforeEach(() => {
-  globalThis.window = { location: { host: 'app.internal:5173', href: '' } };
+  globalThis.window = { location: { host: 'app.internal:5173', protocol: 'http:', href: '' } };
 });
 
 describe('parseWorkspacePath', () => {
@@ -55,7 +55,11 @@ describe('currentPageHost', () => {
 });
 
 describe('resolveWorkspaceOrigin', () => {
-  it('always uses https, even for loopback/private/bare hosts -- no insecure fallback', () => {
+  it('reuses the page scheme for the frontend\'s own host -- no cross-origin boundary crossed', () => {
+    expect(resolveWorkspaceOrigin('app.internal:5173')).toBe('http://app.internal:5173');
+  });
+
+  it('always uses https for any other host -- no insecure fallback for a switched backend', () => {
     expect(resolveWorkspaceOrigin('team-a.example.com')).toBe('https://team-a.example.com');
     expect(resolveWorkspaceOrigin('localhost:8000')).toBe('https://localhost:8000');
     expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('https://192.168.0.2');
