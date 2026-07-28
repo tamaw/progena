@@ -1,7 +1,7 @@
 """Contract tests for the HTTP + SSE chat endpoints (RuntimeChatService).
 
-These port the behaviors of the old TCP IPC server's direct-DeepAgent path
-(``app/progenitor/ipc/server.py``) onto the new HTTP transport.
+These port the direct-DeepAgent request path from the retired TCP server onto
+the new HTTP transport.
 """
 
 from __future__ import annotations

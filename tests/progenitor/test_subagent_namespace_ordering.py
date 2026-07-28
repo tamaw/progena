@@ -1,7 +1,7 @@
 """Real-graph regression test for subagent stream correlation under genuine
 LangGraph/deepagents concurrency.
 
-Every other subagent-correlation test in test_deepagent_ipc_stream.py drives
+Every other subagent-correlation test in test_deepagent_sse_stream.py drives
 DeepAgentSSEStream against a hand-scripted fake graph that replays a fixed
 list of stream items -- excellent for exact control over ordering, but it
 can't catch a regression in what astream(subgraphs=True) + stream_mode="tasks"

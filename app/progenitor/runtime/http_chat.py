@@ -1,7 +1,7 @@
 """HTTP + SSE chat endpoints served from the runtime's persistent HTTP server.
 
-Replaces the TCP IPC server's direct-DeepAgent request path. Only that path is
-ported here (the legacy queue-drain path in the old IPC server was dead code).
+Replaces the direct-DeepAgent request path from the retired TCP server. Only
+that path is ported here; the legacy server's queue-drain path was dead code.
 """
 
 from __future__ import annotations
@@ -383,7 +383,7 @@ class RuntimeChatService:
                         "Event subscriber queue full, dropping event: %s", event.get("event_type")
                     )
 
-    # -- shared helpers, ported from the direct DeepAgent path in ipc/server.py --
+    # -- shared helpers, ported from the retired direct DeepAgent path --
 
     def _can_run_deepagent_direct(self) -> bool:
         graph = getattr(self.loop_runner, "graph", None)

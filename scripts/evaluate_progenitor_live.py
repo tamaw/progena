@@ -119,7 +119,7 @@ async def eval_chat_streaming(client: httpx.AsyncClient, timeout: float) -> Eval
             name,
             expectation,
             f"streaming chat turn failed: {exc}",
-            root_cause_area="runtime/http_chat.py or ipc/deepagent_stream.py",
+            root_cause_area="runtime/http_chat.py or sse/deepagent_stream.py",
         )
 
     combined = "".join(chunks)
@@ -135,7 +135,7 @@ async def eval_chat_streaming(client: httpx.AsyncClient, timeout: float) -> Eval
         name,
         expectation,
         f"stream did not contain marker: content={combined[:300]!r}",
-        root_cause_area="ipc/deepagent_stream.py or live LLM configuration",
+        root_cause_area="sse/deepagent_stream.py or live LLM configuration",
         chunk_count=len(chunks),
         stream_events=event_types,
     )
@@ -213,7 +213,7 @@ async def eval_reasoning_stream(client: httpx.AsyncClient, timeout: float) -> Ev
         name,
         expectation,
         "no reasoning_delta events observed across the reasoning prompt corpus",
-        root_cause_area="ipc/deepagent_stream.py or live model/provider reasoning behavior",
+        root_cause_area="sse/deepagent_stream.py or live model/provider reasoning behavior",
         attempts=attempts,
     )
 
@@ -312,7 +312,7 @@ async def eval_microsoft_learn_mcp(client: httpx.AsyncClient, timeout: float) ->
             name,
             expectation,
             f"Microsoft Learn MCP tool call failed: {exc}",
-            root_cause_area="MCP runtime wiring, ipc/deepagent_stream.py, or Microsoft Learn MCP availability",
+            root_cause_area="MCP runtime wiring, sse/deepagent_stream.py, or Microsoft Learn MCP availability",
         )
 
     tool_events = [
@@ -345,7 +345,7 @@ async def eval_microsoft_learn_mcp(client: httpx.AsyncClient, timeout: float) ->
             "Microsoft Learn MCP discovery succeeded but the live tool call did not produce the expected "
             f"tool events/output: response={combined[:300]!r}"
         ),
-        root_cause_area="MCP runtime wiring, ipc/deepagent_stream.py, or Microsoft Learn MCP behavior",
+        root_cause_area="MCP runtime wiring, sse/deepagent_stream.py, or Microsoft Learn MCP behavior",
         catalog_response=check_response,
         tool_events=tool_events,
         response=combined,
@@ -374,7 +374,7 @@ async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) ->
             name,
             expectation,
             f"subagent delegation request failed: {exc}",
-            root_cause_area="agent/agent.py, agent/subagents.py, or ipc/deepagent_stream.py",
+            root_cause_area="agent/agent.py, agent/subagents.py, or sse/deepagent_stream.py",
         )
 
     event_types = [
@@ -399,7 +399,7 @@ async def eval_subagent_delegation(client: httpx.AsyncClient, timeout: float) ->
         name,
         expectation,
         "subagent delegation did not surface the expected events and final answer",
-        root_cause_area="agent/subagents.py, agent/agent.py, or ipc/stream_events.py",
+        root_cause_area="agent/subagents.py, agent/agent.py, or sse/stream_events.py",
         stream_events=event_types,
         final_text=final_text[:500],
     )
