@@ -89,6 +89,8 @@ class TestSkillFiles:
         """All planned skills should be present."""
         expected = {
             "build-agent",
+            "managing-mcp",
+            "managing-plugins",
             "managing-schedules",
             "git-workflow",
             "self-improvement",
