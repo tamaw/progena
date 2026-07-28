@@ -93,10 +93,17 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
                 plugins[key] = current
         except Exception as exc:
             current = dict(entry)
+            message = str(exc)
+            # See reconcile_plugins's matching guard: only persist when the
+            # error itself changed, never merely for a fresh last_checked
+            # timestamp -- that would loop forever via the store listener.
+            status_changed = (
+                current.get("status") != "error" or current.get("status_message") != message
+            )
             current["status"] = "error"
-            current["status_message"] = str(exc)
-            current["last_checked"] = now
-            if current != entry:
+            current["status_message"] = message
+            if status_changed:
+                current["last_checked"] = now
                 plugins[key] = current
                 changed = True
             summary["errored"].append(key)
@@ -199,10 +206,20 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
                 plugins[key] = current
         except Exception as exc:
             current = dict(entry)
+            message = str(exc)
+            # A last_checked timestamp always differs run-to-run; only treat
+            # the error as a *change* (and persist) when the status or its
+            # message actually differs from what's already stored. Otherwise
+            # a permanently-failing entry would save on every pass, which
+            # re-triggers this same reconcile via the store listener --
+            # an infinite loop. See check_plugin_updates for the same guard.
+            status_changed = (
+                current.get("status") != "error" or current.get("status_message") != message
+            )
             current["status"] = "error"
-            current["status_message"] = str(exc)
-            current["last_checked"] = now
-            if current != entry:
+            current["status_message"] = message
+            if status_changed:
+                current["last_checked"] = now
                 plugins[key] = current
                 changed = True
             summary["errored"].append(key)
