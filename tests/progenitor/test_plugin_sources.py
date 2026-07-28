@@ -508,6 +508,27 @@ async def test_fetch_plugin_files_relative_path() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_plugin_files_relative_path_at_archive_root() -> None:
+    """A plugin whose source is exactly "./" (no pluginRoot) covers the whole
+    marketplace archive -- the empty-relative-path edge case. Found via a live
+    fetch against the real anthropics/skills marketplace, whose plugin entries
+    use `"source": "./"` for a whole-repo plugin."""
+    catalog = MarketplaceCatalog(
+        name="Acme",
+        owner={"name": "x"},
+        plugins=[{"name": "everything", "source": "./"}],
+        _archive_files={
+            "skills/xlsx/SKILL.md": b"# Xlsx",
+            "skills/docx/SKILL.md": b"# Docx",
+        },
+    )
+    files, skipped = await fetch_plugin_files_with_report(catalog, "everything")
+    assert "xlsx/SKILL.md" in files
+    assert "docx/SKILL.md" in files
+    assert skipped == 0
+
+
+@pytest.mark.asyncio
 async def test_fetch_plugin_files_github_source() -> None:
     plugin_archive = _make_tar_bytes(
         {
