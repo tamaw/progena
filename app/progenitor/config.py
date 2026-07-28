@@ -70,6 +70,11 @@ def default_mcp_config_payload() -> dict[str, Any]:
     return {"mcpServers": {}}
 
 
+def default_plugins_config_payload() -> dict[str, Any]:
+    """Return the default plugins configuration stored in the shared state document."""
+    return {"plugins": {}}
+
+
 def default_schedule_config_payload() -> dict[str, Any]:
     """Return the default (empty) schedule document persisted in Postgres."""
     return {}

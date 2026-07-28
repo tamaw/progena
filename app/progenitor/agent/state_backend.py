@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -96,6 +97,43 @@ def validate_mcp_document(content: str) -> JsonDoc:
             raise ValueError(
                 f"server '{name}' transport '{transport}' is unsupported (remote HTTP only)"
             )
+    return data
+
+
+def validate_plugins_document(content: str) -> JsonDoc:
+    """Parse + validate a ``plugins.json`` payload (the ``plugins`` document).
+
+    Shape: ``{"plugins": {"<marketplace>/<plugin>": {...}}}``, no other top-level keys.
+    Each plugin entry's shape mirrors ``data/schemas/plugin_entry.schema.v1.json``.
+    Runtime-owned fields (installed_version, installed_digest, available_version,
+    status, status_message, skills, installed_at, last_checked) are accepted but
+    never required; the reconciler manages them.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("top level must be a JSON object")
+    extra_keys = set(data) - {"plugins"}
+    if extra_keys:
+        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+
+    plugins = data.get("plugins")
+    if not isinstance(plugins, dict):
+        raise ValueError("missing 'plugins' object")
+
+    _PLUGIN_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
+    for key, entry in plugins.items():
+        if not _PLUGIN_KEY_RE.match(key):
+            raise ValueError(f"plugin key '{key}' must look like <marketplace>/<plugin>")
+        if not isinstance(entry, dict):
+            raise ValueError(f"plugin '{key}' must be an object")
+        source = entry.get("source")
+        if not source:
+            raise ValueError(f"plugin '{key}' is missing 'source'")
+        _check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
+
     return data
 
 
@@ -452,6 +490,22 @@ def create_mcp_state_file(
         save=state_manager.save_mcp_config,
         validate=validate_mcp_document,
         default={"mcpServers": {}},
+        on_change=on_change,
+    )
+
+
+def create_plugins_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``plugins.json`` state file backed by the StateManager."""
+    return _simple_state_file(
+        "plugins.json",
+        get=state_manager.get_plugins_config,
+        save=state_manager.save_plugins_config,
+        validate=validate_plugins_document,
+        default={"plugins": {}},
         on_change=on_change,
     )
 
