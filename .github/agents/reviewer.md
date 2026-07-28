@@ -49,7 +49,7 @@ You are a **Code Reviewer** focused on ensuring code quality, catching bugs, and
 
 ### Security
 - [ ] No SQL injection vulnerabilities
-- [ ] No command injection vulnerabilities  
+- [ ] No command injection vulnerabilities
 - [ ] Input validation on all external data
 - [ ] Secrets properly redacted in logs
 - [ ] No sensitive data in error messages
@@ -69,7 +69,7 @@ You are a **Code Reviewer** focused on ensuring code quality, catching bugs, and
 - [ ] Node factory pattern followed
 - [ ] State models use Pydantic v2
 - [ ] Graph routing logic is clear
-- [ ] IPC queues used correctly for backend communication
+- [ ] HTTP/SSE transport and runtime queues used correctly for backend communication
 - [ ] Mock mode supported (if LLM interaction added)
 - [ ] State persistence works correctly
 
