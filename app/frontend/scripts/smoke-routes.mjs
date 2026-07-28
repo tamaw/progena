@@ -7,7 +7,7 @@ const routes = [
   '/repositories',
   '/knowledge',
   '/schedules',
-  '/skills',
+  '/plugins',
   '/sessions',
   '/tasks',
   '/projects',

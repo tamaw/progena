@@ -21,7 +21,7 @@ const ROUTES = [
   ['Tasks', '/tasks'],
   ['Kanban', '/kanban'],
   ['Logs', '/logs'],
-  ['Skills', '/skills'],
+  ['Plugins', '/plugins'],
   ['Prompts', '/prompts'],
   ['Sessions', '/sessions'],
   ['Schedules', '/schedules'],

@@ -15,7 +15,7 @@ function getPageStatusContext(pathname, runtime, counts) {
     repositories: ['Repository map', '6 sources', 'Branches and commits'],
     schedules: ['Schedules', '6 mocked jobs', 'Next runs sorted'],
     sessions: ['Session history', '637 indexed', 'Pinned context ready'],
-    skills: ['Skills library', '14 reusable skills', 'Agents can share them'],
+    plugins: ['Plugins library', 'Installed plugin packages', 'Skills activate in new sessions'],
     tasks: ['Task board', `${runningCount} active`, 'Backlog visible'],
     tools: ['MCP tools', '9 servers', 'Capabilities enabled'],
     workspace: ['Workspace canvas', 'Nodes editable', 'Dock ready'],

@@ -18,6 +18,9 @@ import {
   selectUiWidgets,
   selectUiAlerts,
   setActiveNavRoute,
+  selectMarketplaces,
+  fetchMarketplaces,
+  saveMarketplaces,
 } from '../../store/uiDataSlice';
 import { selectRealtime, selectUiEventQueue } from '../../store/realtimeSlice';
 import { consumeUiEventQueue } from '../../store/uiData/eventQueue';
@@ -70,8 +73,9 @@ import {
   SettingsGeneralIcon,
   SettingsIntegrationsIcon,
   SettingsKeyboardIcon,
+  SettingsMarketplacesIcon,
   SettingsTeamIcon,
-  SkillsNavIcon,
+  PluginsNavIcon,
   SunIcon,
   TasksNavIcon,
   ToolsNavIcon,
@@ -134,7 +138,7 @@ const navGroups = [
     id: 'facilitate',
     label: 'Facilitate',
     items: [
-      { to: '/skills', icon: <SkillsNavIcon />, label: 'Skills', trackActivity: true },
+      { to: '/plugins', icon: <PluginsNavIcon />, label: 'Plugins', trackActivity: true },
       { to: '/tools', icon: <ToolsNavIcon />, label: 'Tools', trackActivity: true },
       { to: '/knowledge', icon: <KnowledgeNavIcon />, label: 'Knowledge', trackActivity: true },
       { to: '/schedules', icon: <SchedulesNavIcon />, label: 'Schedules', trackActivity: true },
@@ -173,6 +177,7 @@ const PINNED_PANEL_STORAGE_KEY = 'progenitor_pinned_panel';
 const settingsSections = [
   { id: 'general', label: 'General', icon: <SettingsGeneralIcon /> },
   { id: 'appearance', label: 'Appearance', icon: <SettingsAppearanceIcon /> },
+  { id: 'marketplaces', label: 'Marketplaces', icon: <SettingsMarketplacesIcon /> },
   { id: 'agents', label: 'Agents & Models', icon: <SettingsAgentsIcon /> },
   { id: 'keyboard', label: 'Keyboard', icon: <SettingsKeyboardIcon /> },
   { id: 'integrations', label: 'Integrations', icon: <SettingsIntegrationsIcon /> },
@@ -1272,6 +1277,106 @@ function WorkspacesSettingsRow() {
   );
 }
 
+function MarketplacesSettingsRow() {
+  const { getApiUrl } = useConfig();
+  const dispatch = useDispatch();
+  const marketplacesUrl = getApiUrl('marketplaces');
+  const marketplaces = useSelector(selectMarketplaces);
+  const [newName, setNewName] = useState('');
+  const [newSource, setNewSource] = useState('');
+  const [error, setError] = useState('');
+
+  const handleRefresh = useCallback(async () => {
+    setError('');
+    try {
+      await dispatch(fetchMarketplaces({ marketplacesUrl })).unwrap();
+    } catch (err) {
+      setError(err?.message || 'Failed to refresh marketplaces');
+    }
+  }, [dispatch, marketplacesUrl]);
+
+  const handleSave = useCallback(async (nextSources) => {
+    setError('');
+    try {
+      await dispatch(saveMarketplaces({ marketplacesUrl, sources: nextSources })).unwrap();
+    } catch (err) {
+      setError(err?.message || 'Failed to save marketplaces');
+    }
+  }, [dispatch, marketplacesUrl]);
+
+  const handleRemove = (name) => {
+    const next = marketplaces.filter((m) => m.name !== name);
+    void handleSave(next);
+  };
+
+  const handleAdd = () => {
+    const name = newName.trim();
+    const source = newSource.trim();
+    if (!name || !source) {
+      setError('Name and source URL are required');
+      return;
+    }
+    if (marketplaces.some((m) => m.name === name)) {
+      setError(`Marketplace "${name}" already exists`);
+      return;
+    }
+    const next = [...marketplaces, { name, source, added_at: new Date().toISOString() }];
+    void handleSave(next);
+    setNewName('');
+    setNewSource('');
+    setError('');
+  };
+
+  return (
+    <section className="set-section is-active">
+      <header className="set-section__head">
+        <h3>Marketplaces</h3>
+        <p>Registered plugin marketplace sources.</p>
+      </header>
+
+      <div className="set-row">
+        <ul className="set-workspace-list">
+          {marketplaces.map((m) => (
+            <li key={m.name} className="set-workspace-list__item">
+              <span className="set-workspace-list__host">{m.name}</span>
+              <span className="set-workspace-list__current">{m.source}</span>
+              <button type="button" className="set-btn set-btn--danger" onClick={() => handleRemove(m.name)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+        <span className="set-inline-control">
+          <input
+            className="set-text-input"
+            value={newName}
+            placeholder="my-marketplace"
+            onChange={(event) => { setNewName(event.target.value); if (error) setError(''); }}
+            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
+          />
+          <input
+            className="set-text-input"
+            value={newSource}
+            placeholder="https://github.com/owner/repo"
+            onChange={(event) => { setNewSource(event.target.value); if (error) setError(''); }}
+            onKeyDown={(event) => { if (event.key === 'Enter') handleAdd(); }}
+          />
+          <button type="button" className="set-btn" onClick={handleAdd}>
+            Add
+          </button>
+        </span>
+        {error ? <p className="set-workspace-list__error">{error}</p> : null}
+      </div>
+
+      <div className="set-row">
+        <button type="button" className="set-btn" onClick={handleRefresh}>
+          Refresh
+        </button>
+      </div>
+    </section>
+  );
+}
+
 function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiState }) {
   const { getApiUrl, resetSettings } = useConfig();
   const dispatch = useDispatch();
@@ -1372,7 +1477,11 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
               </section>
             ) : null}
 
-            {!['general', 'appearance'].includes(section) ? (
+            {section === 'marketplaces' ? (
+              <MarketplacesSettingsRow />
+            ) : null}
+
+            {!['general', 'appearance', 'marketplaces'].includes(section) ? (
               <section className="set-section is-active">
                 <div className="set-stub">
                   <div className="set-stub__glyph">{settingsSections.find((item) => item.id === section)?.icon}</div>

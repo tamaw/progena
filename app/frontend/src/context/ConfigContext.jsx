@@ -20,6 +20,8 @@ const defaultConfig = {
       kanban: '/api/ui/kanban',
       prompts: '/api/ui/prompts',
       skills: '/api/ui/skills',
+      marketplaces: '/api/ui/marketplaces',
+      plugins: '/api/ui/plugins',
       schedules: '/api/ui/schedules',
       logs: '/api/ui/logs',
       actionRun: '/api/ui/actions/run',

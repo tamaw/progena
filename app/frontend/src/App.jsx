@@ -27,7 +27,7 @@ const TasksPage = lazy(() => import('./pages/TasksPage'));
 const KanbanPage = lazy(() => import('./pages/KanbanPage'));
 const LogsPage = lazy(() => import('./pages/LogsPage'));
 const PromptsPage = lazy(() => import('./pages/PromptsPage'));
-const SkillsPage = lazy(() => import('./pages/SkillsPage'));
+const PluginsPage = lazy(() => import('./pages/PluginsPage'));
 const SessionsPage = lazy(() => import('./pages/SessionsPage'));
 const RepositoriesPage = lazy(() => import('./pages/RepositoriesPage'));
 const KnowledgePage = lazy(() => import('./pages/KnowledgePage'));
@@ -106,7 +106,7 @@ function WorkspaceScopedApp() {
                     <Route path="/kanban" element={<DeferredRoute Page={KanbanPage} fallback="Loading kanban..." />} />
                     <Route path="/solutions/:solutionId/projects/:projectId" element={<DeferredRoute Page={ProjectPage} fallback="Loading project..." />} />
                     <Route path="/logs" element={<DeferredRoute Page={LogsPage} fallback="Loading logs..." />} />
-                    <Route path="/skills" element={<DeferredRoute Page={SkillsPage} fallback="Loading skills..." />} />
+                    <Route path="/plugins" element={<DeferredRoute Page={PluginsPage} fallback="Loading plugins..." />} />
                     <Route path="/prompts" element={<DeferredRoute Page={PromptsPage} fallback="Loading prompts..." />} />
                     <Route path="/sessions" element={<DeferredRoute Page={SessionsPage} fallback="Loading sessions..." />} />
                     <Route path="/schedules/:scheduleId?/:titleSlug?" element={<DeferredRoute Page={SchedulesPage} fallback="Loading schedules..." />} />
