@@ -185,6 +185,47 @@ async def test_fetch_error_sets_error_status(state_manager, fake_files, fake_dig
 
 
 @pytest.mark.asyncio
+async def test_malformed_key_does_not_abort_other_entries(state_manager, fake_files, fake_digest):
+    """A key without a '/' must fail only itself, never abort the pass.
+
+    Found live via a manually-corrupted store row (bypassing
+    validate_plugins_document, which normally rejects this key shape on
+    every write path): `key.split("/", 1)` used to run *before* the
+    per-entry try/except, so an unpack ValueError on one malformed key
+    crashed the whole reconcile pass -- every other, valid entry silently
+    never got reconciled that round. The store-write path always validates
+    keys before persisting, so this should be unreachable in practice, but
+    the reconciler must stay defensive against it regardless.
+    """
+    state_manager._plugins = {
+        "plugins": {
+            "malformed-key-no-slash": {"source": "x"},
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin", "ref": "v2.1.0"},
+                "version": "2.1.0",
+            },
+        }
+    }
+
+    with (
+        patch(
+            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+            new=AsyncMock(return_value=(fake_files, 0)),
+        ),
+        patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
+    ):
+        summary = await reconcile_plugins(state_manager)
+
+    assert summary["installed"] == ["acme-tools/formatter"]
+    assert summary["errored"] == ["malformed-key-no-slash"]
+
+    good = state_manager._plugins["plugins"]["acme-tools/formatter"]
+    assert good["status"] == "installed"
+    bad = state_manager._plugins["plugins"]["malformed-key-no-slash"]
+    assert bad["status"] == "error"
+
+
+@pytest.mark.asyncio
 async def test_persistent_error_does_not_loop_forever(state_manager, fake_digest):
     """A persistently-failing entry must stop writing after its first error.
 

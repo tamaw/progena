@@ -162,18 +162,20 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
 
     # --- 2. Process each desired plugin entry ---
     for key, entry in list(plugins.items()):
-        marketplace_name, plugin_name = key.split("/", 1)
-        seg = _plugin_segment(key)
-
         current = dict(entry)
-        installed_version = current.get("installed_version")
-        desired_version = current.get("version")
-
-        needs_install = installed_version is None or (
-            desired_version is not None and desired_version != installed_version
-        )
-
         try:
+            # A malformed key (no "/") must fail only this entry, never abort
+            # the pass for the others -- everything below, including the
+            # split, lives inside the try.
+            marketplace_name, plugin_name = key.split("/", 1)
+            seg = _plugin_segment(key)
+
+            installed_version = current.get("installed_version")
+            desired_version = current.get("version")
+
+            needs_install = installed_version is None or (
+                desired_version is not None and desired_version != installed_version
+            )
             files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
             resolved_version = resolve_plugin_version(current, None)
 
