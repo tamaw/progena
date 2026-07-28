@@ -30,11 +30,6 @@
       "enum": [null, "quickChat", "alerts", "insights"],
       "default": null
     },
-    "notifications_enabled": {
-      "type": "boolean",
-      "description": "Whether backend alerts (status stream, background tasks) show as in-app toasts.",
-      "default": true
-    },
     "notification_sounds": {
       "type": "boolean",
       "description": "Whether a chime plays alongside the toast when an alert arrives.",

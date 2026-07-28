@@ -17,6 +17,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { useConfig } from '../context/ConfigContext';
+import Select from '../components/common/Select';
 import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
@@ -68,6 +69,7 @@ const WORKFLOW_EVENT_TYPES = [
   'kanban.card.deleted',
   'kanban.card.status_changed',
 ];
+const WORKFLOW_EVENT_TYPE_OPTIONS = WORKFLOW_EVENT_TYPES.map((eventType) => ({ value: eventType, label: eventType }));
 // Mirrors the fixed kanban pipeline from _kanban_default_columns() in
 // app/backend/ui_routes.py. Only meaningful for the kanban.card.moved trigger.
 const WORKFLOW_KANBAN_COLUMNS = [
@@ -134,9 +136,15 @@ const USER_MESSAGE_TYPES = [
   { value: 'ask_user', label: 'ask_user' },
 ];
 const USER_NOTIFICATION_LEVELS = ['info', 'warning', 'error', 'success'];
+const USER_NOTIFICATION_LEVEL_OPTIONS = USER_NOTIFICATION_LEVELS.map((level) => ({ value: level, label: level }));
 const CODE_LANGUAGES = [
   'javascript', 'python', 'html', 'css', 'bash',
   'json', 'yaml', 'markdown', 'typescript', 'sql',
+];
+const CODE_LANGUAGE_OPTIONS = CODE_LANGUAGES.map((lang) => ({ value: lang, label: lang }));
+const AGENT_NODE_TRANSPORT_OPTIONS = [
+  { value: 'a2a', label: 'A2A' },
+  { value: 'acp', label: 'ACP' },
 ];
 // Default editable-field values for a freshly dock-added node, keyed by kind.
 const DOCK_NODE_DEFAULTS = {
@@ -546,38 +554,38 @@ function EventNode({ id, data, selected }) {
             <div className="node-body-expanded workflow-graph-node__body">
               <label className="workflow-graph-node__field">
                 <span>Trigger</span>
-                <select
+                <Select
+                  className="nodrag"
                   value={data.eventType}
-                  onChange={(event) => data.onChange(id, { eventType: event.target.value })}
-                >
-                  {WORKFLOW_EVENT_TYPES.map((eventType) => (
-                    <option key={eventType} value={eventType}>{eventType}</option>
-                  ))}
-                </select>
+                  onChange={(next) => data.onChange(id, { eventType: next })}
+                  options={WORKFLOW_EVENT_TYPE_OPTIONS}
+                  ariaLabel="Trigger"
+                  portal
+                />
               </label>
               {data.eventType === 'kanban.card.moved' ? (
                 <>
                   <label className="workflow-graph-node__field">
                     <span>From column</span>
-                    <select
+                    <Select
+                      className="nodrag"
                       value={data.fromColumn}
-                      onChange={(event) => data.onChange(id, { fromColumn: event.target.value })}
-                    >
-                      {WORKFLOW_KANBAN_COLUMNS.map((column) => (
-                        <option key={column.value} value={column.value}>{column.label}</option>
-                      ))}
-                    </select>
+                      onChange={(next) => data.onChange(id, { fromColumn: next })}
+                      options={WORKFLOW_KANBAN_COLUMNS}
+                      ariaLabel="From column"
+                      portal
+                    />
                   </label>
                   <label className="workflow-graph-node__field">
                     <span>To column</span>
-                    <select
+                    <Select
+                      className="nodrag"
                       value={data.toColumn}
-                      onChange={(event) => data.onChange(id, { toColumn: event.target.value })}
-                    >
-                      {WORKFLOW_KANBAN_COLUMNS.map((column) => (
-                        <option key={column.value} value={column.value}>{column.label}</option>
-                      ))}
-                    </select>
+                      onChange={(next) => data.onChange(id, { toColumn: next })}
+                      options={WORKFLOW_KANBAN_COLUMNS}
+                      ariaLabel="To column"
+                      portal
+                    />
                   </label>
                 </>
               ) : null}
@@ -738,14 +746,14 @@ function UserNode({ id, data, selected }) {
             <div className="node-body-expanded workflow-graph-node__body">
               <label className="workflow-graph-node__field">
                 <span>Delivery</span>
-                <select
+                <Select
+                  className="nodrag"
                   value={data.messageType}
-                  onChange={(event) => data.onChange(id, { messageType: event.target.value })}
-                >
-                  {USER_MESSAGE_TYPES.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
+                  onChange={(next) => data.onChange(id, { messageType: next })}
+                  options={USER_MESSAGE_TYPES}
+                  ariaLabel="Delivery"
+                  portal
+                />
               </label>
               {data.messageType === 'notify_user' ? (
                 <>
@@ -759,14 +767,14 @@ function UserNode({ id, data, selected }) {
                   </label>
                   <label className="workflow-graph-node__field">
                     <span>Level</span>
-                    <select
+                    <Select
+                      className="nodrag"
                       value={data.level}
-                      onChange={(event) => data.onChange(id, { level: event.target.value })}
-                    >
-                      {USER_NOTIFICATION_LEVELS.map((level) => (
-                        <option key={level} value={level}>{level}</option>
-                      ))}
-                    </select>
+                      onChange={(next) => data.onChange(id, { level: next })}
+                      options={USER_NOTIFICATION_LEVEL_OPTIONS}
+                      ariaLabel="Level"
+                      portal
+                    />
                   </label>
                 </>
               ) : null}
@@ -843,14 +851,14 @@ function CodeNode({ id, data, selected }) {
             <div className="node-body-expanded workflow-graph-node__body">
               <label className="workflow-graph-node__field">
                 <span>Language</span>
-                <select
+                <Select
+                  className="nodrag"
                   value={data.language}
-                  onChange={(event) => data.onChange(id, { language: event.target.value })}
-                >
-                  {CODE_LANGUAGES.map((lang) => (
-                    <option key={lang} value={lang}>{lang}</option>
-                  ))}
-                </select>
+                  onChange={(next) => data.onChange(id, { language: next })}
+                  options={CODE_LANGUAGE_OPTIONS}
+                  ariaLabel="Language"
+                  portal
+                />
               </label>
               <label className="workflow-graph-node__field">
                 <span>Code</span>
@@ -900,9 +908,14 @@ function WorkflowControlNode({ id, data, selected }) {
         <div className="node-body">
           {data.kind === 'inbox' && <input className="node-field-input" value={data.messageTitle} onChange={(event) => data.onChange(id, { messageTitle: event.target.value })} placeholder="Inbox title" />}
           {data.kind === 'agent' && (
-            <select className="node-field-input" value={data.transport} onChange={(event) => data.onChange(id, { transport: event.target.value })}>
-              <option value="a2a">A2A</option><option value="acp">ACP</option>
-            </select>
+            <Select
+              className="nodrag node-field-input"
+              value={data.transport}
+              onChange={(next) => data.onChange(id, { transport: next })}
+              options={AGENT_NODE_TRANSPORT_OPTIONS}
+              ariaLabel="Transport"
+              portal
+            />
           )}
           {data.kind === 'agent' && <input className="node-field-input" value={data.agentName} onChange={(event) => data.onChange(id, { agentName: event.target.value })} placeholder="Agent name" />}
           <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
@@ -1909,10 +1922,9 @@ function WorkflowsInner() {
                         </label>
                         <label>
                           <span>Event type</span>
-                          <select
+                          <Select
                             value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
-                            onChange={(event) => {
-                              const nextEventType = event.target.value;
+                            onChange={(nextEventType) => {
                               handleFieldChange('trigger', {
                                 ...draftWorkflow.trigger,
                                 type: 'event',
@@ -1928,11 +1940,9 @@ function WorkflowsInner() {
                                 return nextNodes;
                               });
                             }}
-                          >
-                            {WORKFLOW_EVENT_TYPES.map((eventType) => (
-                              <option key={eventType} value={eventType}>{eventType}</option>
-                            ))}
-                          </select>
+                            options={WORKFLOW_EVENT_TYPE_OPTIONS}
+                            ariaLabel="Event type"
+                          />
                         </label>
                         <label className="workflow-form__toggle">
                           <span>Enabled</span>

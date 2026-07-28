@@ -16,7 +16,6 @@ export const initialState = {
     theme: 'system',
     navCollapsed: false,
     pinnedPanel: null,
-    notificationsEnabled: true,
     notificationSounds: false,
     loaded: false,
     loading: false,
@@ -31,7 +30,6 @@ function applyPreferences(state, payload) {
   state.preferences.theme = ['system', 'dark', 'light'].includes(payload.theme) ? payload.theme : 'system';
   state.preferences.navCollapsed = payload.nav_collapsed === true;
   state.preferences.pinnedPanel = VALID_PINNED_PANELS.has(payload.pinned_panel) ? payload.pinned_panel : null;
-  state.preferences.notificationsEnabled = payload.notifications_enabled !== false;
   state.preferences.notificationSounds = payload.notification_sounds === true;
   state.preferences.loaded = true;
   if (!state.preferences.loading || payload.request_id === state.preferences.requestId) {
@@ -63,7 +61,6 @@ export const savePreferences = createAcknowledgedThunk(
       theme,
       navCollapsed,
       pinnedPanel,
-      notificationsEnabled,
       notificationSounds,
     },
     { requestId },
@@ -76,7 +73,6 @@ export const savePreferences = createAcknowledgedThunk(
         theme,
         nav_collapsed: navCollapsed,
         pinned_panel: pinnedPanel,
-        notifications_enabled: notificationsEnabled,
         notification_sounds: notificationSounds,
       },
       requestId,
@@ -113,6 +109,5 @@ export const selectPreferencesSaveRequest = createSelector([selectPreferences], 
   theme: preferences.theme,
   navCollapsed: preferences.navCollapsed,
   pinnedPanel: preferences.pinnedPanel,
-  notificationsEnabled: preferences.notificationsEnabled,
   notificationSounds: preferences.notificationSounds,
 }));
