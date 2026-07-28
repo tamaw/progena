@@ -22,7 +22,7 @@ class EnqueueBackgroundTaskArgs(BaseModel):
     )
     completion_event_type: str = Field(
         default="agent_message",
-        description="IPC event type to emit when the queued work completes.",
+        description="SSE event type to emit when the queued work completes.",
     )
 
 

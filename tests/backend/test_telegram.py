@@ -857,7 +857,7 @@ class TestTelegramConnectedMessage:
 
         progenitor = AsyncMock()
         progenitor.is_running = True
-        progenitor.send_message.side_effect = RuntimeError("IPC down")
+        progenitor.send_message.side_effect = RuntimeError("SSE down")
 
         await backend_main._send_telegram_connected_message(telegram, progenitor)
 

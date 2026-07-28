@@ -92,7 +92,7 @@ Key submodules:
 - `runtime/progenitor.py` — lifecycle (startup, Postgres init, HTTP server, loop)
 - `runtime/heartbeat.py` — background loop execution
 - `runtime/http.py` — persistent HTTP server (health, agent card, A2A callbacks); mounts `runtime/http_chat.py`'s `RuntimeChatService` (`POST /v1/chat`, `POST /v1/chat/{request_id}/cancel`, `GET /v1/events`)
-- `ipc/` — transport-agnostic stream envelope helpers shared by the chat endpoint (`deepagent_stream.py`, `stream_events.py`, `stream_payloads.py`); despite the name, no longer a transport
+- `sse/` — transport-agnostic stream envelope helpers shared by the chat endpoint (`deepagent_stream.py`, `stream_events.py`, `stream_payloads.py`); not itself a transport
 - `tools/` — 23+ LangGraph tools: `call_agent`, `schedule_task`, `mcp`, `shell`, `new_conversation`, etc.
 - `agent/` — DeepAgent integration layer (`agent.py`, `middleware.py`, `subagents.py`)
 

@@ -1,4 +1,4 @@
-"""Convert native DeepAgent/LangGraph streams into IPC stream items."""
+"""Convert native DeepAgent/LangGraph streams into SSE stream items."""
 
 from __future__ import annotations
 
@@ -111,8 +111,8 @@ def _extract_tool_call_id_from_task_input(payload: Any) -> str | None:
     return None
 
 
-class DeepAgentIPCStream:
-    """Run a DeepAgent graph stream and expose IPC-friendly items."""
+class DeepAgentSSEStream:
+    """Run a DeepAgent graph stream and expose SSE-friendly items."""
 
     def __init__(
         self,
@@ -141,7 +141,7 @@ class DeepAgentIPCStream:
         # tool calls via asyncio.gather.
         self._pending_dispatch_task_ids: dict[str, str] = {}
         # namespace -> (tool_call_id, subagent_name) bindings resolved from the
-        # join above. Scoped to one DeepAgentIPCStream instance, i.e. one chat
+        # join above. Scoped to one DeepAgentSSEStream instance, i.e. one chat
         # turn -- no cross-turn leakage, so no eviction is needed.
         self._subagent_namespace_bindings: dict[tuple[Any, ...], tuple[str, str]] = {}
         self._last_emitted_assistant_metadata: dict[str, Any] | None = None
@@ -171,7 +171,7 @@ class DeepAgentIPCStream:
         received_at: float | None = None,
         attachments: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield IPC stream items from ``graph.astream``."""
+        """Yield SSE stream items from ``graph.astream``."""
 
         additional_kwargs: dict[str, Any] = {
             "created_at": received_at if received_at is not None else time.time()

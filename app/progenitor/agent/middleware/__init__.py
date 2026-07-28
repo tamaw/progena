@@ -1,6 +1,6 @@
 """Custom middleware exports for the Progenitor DeepAgent."""
 
-from app.progenitor.ipc.stream_events import emit_stream_event
+from app.progenitor.sse.stream_events import emit_stream_event
 
 from .async_subagent_tracking import AsyncSubagentTrackingMiddleware
 from .audit_logging import AuditLoggingMiddleware

@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
+from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 
 
 class _Graph:
@@ -11,9 +11,9 @@ class _Graph:
         yield  # pragma: no cover
 
 
-def _bridge() -> DeepAgentIPCStream:
+def _bridge() -> DeepAgentSSEStream:
     config = SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=False))
-    return DeepAgentIPCStream(_Graph(), config=config, state={})
+    return DeepAgentSSEStream(_Graph(), config=config, state={})
 
 
 def _task_event(event_type: str, metadata: dict) -> dict:

@@ -1036,7 +1036,7 @@ class TelegramClient:
     async def send_agent_response(self, content: str) -> bool:
         """Send an agent response to Telegram.
 
-        This is the main method called when forwarding IPC stream content.
+        This is the main method called when forwarding SSE stream content.
         Formats the message appropriately for Telegram.
 
         Args:

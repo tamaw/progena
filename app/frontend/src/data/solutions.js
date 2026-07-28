@@ -9,7 +9,7 @@ export const DEFAULT_SOLUTIONS = [
       {
         id: 'backend-runtime',
         name: 'Backend runtime',
-        summary: 'FastAPI, IPC, scheduling, state persistence, and agent runtime work.',
+        summary: 'FastAPI, SSE, scheduling, state persistence, and agent runtime work.',
         status: 'active',
         accent: '#58a6ff',
       },

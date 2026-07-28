@@ -113,7 +113,7 @@ class TestUIRoutes:
     def test_process_metrics_excludes_db_fields(self):
         """The periodic tick carries only process metrics, never DB-derived state.
 
-        progenitor_running belongs here too: it's a live IPC heartbeat check,
+        progenitor_running belongs here too: it's a live SSE heartbeat check,
         not a Postgres read (see main.get_progenitor_liveness()).
         """
         from app.backend import ui_routes

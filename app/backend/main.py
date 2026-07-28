@@ -3,7 +3,7 @@ Backend Main - FastAPI application with OpenAI-compatible interface.
 
 This provides a standardized chat API that proxies to the Progenitor agent.
 
-Communication: IPC (socket-based) for reliability and streaming.
+Communication: SSE (HTTP streaming) for reliability and real-time events.
 
 Features (from text-generation-webui patterns):
 - Streaming callbacks for real-time token streaming
@@ -84,7 +84,7 @@ logger = logging.getLogger(__name__)
 
 # Global config and client
 config = ChatServerConfig.from_env()
-# Client can be either IPC-based or subprocess-based
+# Client is SSE-based (used) or subprocess-based (legacy, unused)
 client: ProgenitorClient | SSEProgenitorClient | None = None
 _active_response_streams: dict[str, asyncio.Event] = {}
 _response_request_ids: dict[str, str] = {}
@@ -517,7 +517,7 @@ async def _send_telegram_connected_message(
 ) -> None:
     """Trigger an agent-generated greeting after Telegram is initialized.
 
-    This routes through the same backend -> Progenitor IPC request/response
+    This routes through the same backend -> Progenitor SSE request/response
     path as a normal user message, but is auto-invoked on connection.
     """
     prompt = (
@@ -671,7 +671,7 @@ async def _handle_telegram_agent_message(
             )
 
             if not progenitor.is_running:
-                logger.info("IPC client not running, starting...")
+                logger.info("SSE client not running, starting...")
                 await progenitor.start()
 
             request_id = f"telegram-{chat_id}-{uuid.uuid4().hex[:8]}"
@@ -951,7 +951,7 @@ async def lifespan(app: FastAPI):
         await telegram_client.start_polling()
         logger.info("Telegram polling started with message handler")
 
-        # Send a one-time agent-generated greeting now that Telegram + IPC are wired.
+        # Send a one-time agent-generated greeting now that Telegram + SSE are wired.
         _spawn_background_task(_send_telegram_connected_message(telegram_client, client))
 
     # Don't auto-start Progenitor - let it start on first request

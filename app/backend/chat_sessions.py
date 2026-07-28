@@ -653,7 +653,7 @@ def _raw_message_created_at(raw: Any) -> str | None:
         created_at = metadata.get("created_at")
     # HumanMessages carry no response_metadata (that's LLM-response-only) --
     # the runtime stamps their receipt time onto additional_kwargs instead
-    # (see DeepAgentIPCStream.stream / chat_node).
+    # (see DeepAgentSSEStream.stream / chat_node).
     if created_at is None and isinstance(extra_kwargs, dict):
         created_at = extra_kwargs.get("created_at")
     if isinstance(created_at, int | float):

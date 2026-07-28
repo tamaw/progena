@@ -1,11 +1,11 @@
-"""IPC payload helpers for native DeepAgent/LangGraph stream items."""
+"""SSE payload helpers for native DeepAgent/LangGraph stream items."""
 
 from __future__ import annotations
 
 import json
 from typing import Any
 
-# Hard caps to keep stream events well under the IPC 10MB envelope.
+# Hard caps to keep stream events well under the SSE 10MB envelope.
 DEFAULT_STREAM_PREVIEW_BYTES = 1024  # tool result/error preview
 DEFAULT_STREAM_ARGS_BYTES = 2048  # tool args preview
 TRUNCATION_SUFFIX = "…[truncated]"

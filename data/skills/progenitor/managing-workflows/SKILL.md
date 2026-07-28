@@ -54,9 +54,9 @@ Minimal valid v1 workflow shape:
 
 Node kinds (each also has its own `node_<kind>.workflow.schema.v1.json` for focused edits; shapes are identical to the inline `oneOf` branch in `definition.workflow.schema.v1.json`):
 - `event` (`node_event.workflow.schema.v1.json`) — the fixed trigger/start node. Fields: `kind`, `title`.
-- `prompt` (`node_prompt.workflow.schema.v1.json`) — runs a prompt through the backend IPC path. Fields: `kind`, `title`, `prompt`, `agent_name`, `role` (nullable).
+- `prompt` (`node_prompt.workflow.schema.v1.json`) — runs a prompt through the backend SSE path. Fields: `kind`, `title`, `prompt`, `agent_name`, `role` (nullable).
 - `user` (`node_user.workflow.schema.v1.json`) — delivers a message to the user via an agent tool. Fields: `kind`, `title`, `message_type` (`say_to_user` | `notify_user` | `ask_user`), `message`, `notification_title` (required, non-null, only when `message_type` is `notify_user`), `level` (`info` | `warning` | `error` | `success`).
-- `code` (`node_code.workflow.schema.v1.json`) — asks the agent to run a code snippet through the same IPC path (no sandboxed executor). Fields: `kind`, `title`, `language`, `content`.
+- `code` (`node_code.workflow.schema.v1.json`) — asks the agent to run a code snippet through the same SSE path (no sandboxed executor). Fields: `kind`, `title`, `language`, `content`.
 
 Validation reminders:
 - exactly one `event` node

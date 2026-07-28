@@ -62,7 +62,7 @@ class WorkflowNodeEvent(BaseModel):
 
 
 class WorkflowNodePrompt(BaseModel):
-    """Prompt node that runs through the backend IPC path."""
+    """Prompt node that runs through the backend SSE path."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -91,7 +91,7 @@ class WorkflowNodeUser(BaseModel):
 
 
 class WorkflowNodeCode(BaseModel):
-    """Code node that asks the agent to run a code snippet through the IPC path."""
+    """Code node that asks the agent to run a code snippet through the SSE path."""
 
     model_config = ConfigDict(extra="forbid")
 

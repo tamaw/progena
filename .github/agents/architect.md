@@ -53,7 +53,7 @@ When proposing architectural changes:
 - **State Management**: Pydantic models for validation
 - **Configuration**: Environment variables > JSON config
 - **Routing**: Conditional edges in LangGraph
-- **IPC**: Async queue-based communication
+- **Runtime queues**: Bounded in-process async queues; HTTP and SSE provide backend-to-runtime transport
 
 ## Constraints
 - Must maintain compatibility with LangGraph framework

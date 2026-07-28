@@ -110,7 +110,7 @@ async def notify_completed_tasks_node(
     state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Emit IPC callbacks for completed async-subagent tasks."""
+    """Emit SSE callbacks for completed async-subagent tasks."""
     records = _completed_records(state)
     if not records:
         return {"async_subagent_completed_tasks": []}
