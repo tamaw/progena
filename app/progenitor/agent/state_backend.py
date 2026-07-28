@@ -1171,8 +1171,20 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         prefix = self._name(path)
         if prefix and not prefix.endswith("/"):
             prefix = f"{prefix}/"
-        entries = sorted(rel for rel, _content in rows if rel.startswith(prefix))
-        return LsResult(entries=[FileInfo(path=f"/{entry}", is_dir=False) for entry in entries])
+        files: list[str] = []
+        dirs: set[str] = set()
+        for rel, _content in rows:
+            if not rel.startswith(prefix):
+                continue
+            remainder = rel[len(prefix) :]
+            head, sep, _tail = remainder.partition("/")
+            if sep:
+                dirs.add(head)
+            else:
+                files.append(rel)
+        entries = [FileInfo(path=f"/{prefix}{d}", is_dir=True) for d in sorted(dirs)]
+        entries += [FileInfo(path=f"/{f}", is_dir=False) for f in sorted(files)]
+        return LsResult(entries=entries)
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:
         return GlobResult(matches=[])
