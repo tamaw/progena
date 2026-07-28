@@ -25,9 +25,9 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-// Reuse the Workspace canvas chrome (dock, minimap, controls, node card) so both
+// Reuse the shared canvas chrome (dock, minimap, controls, node card) so both
 // canvases share one source of truth. Agent-domain deltas live in chrome-frame.css.
-import '../../styles/workspace.css';
+import '../../styles/canvas.css';
 import '../../styles/nodes.css';
 import hljs from 'highlight.js/lib/common';
 
@@ -77,10 +77,10 @@ function EditableGraphNode({ id, data, selected }) {
   const hasBody = data.kind === 'ask' || data.kind === 'decision' || data.kind === 'tool';
   return (
     <div
-      className={`workspace-node agents-graph-node agents-graph-node--${data.kind} ${selected ? 'selected' : ''}`}
+      className={`canvas-node agents-graph-node agents-graph-node--${data.kind} ${selected ? 'selected' : ''}`}
       style={{ '--node-color': GRAPH_KIND_COLORS[data.kind] || data.color }}
     >
-      {hasTarget ? <Handle type="target" position={Position.Left} className="workspace-handle" /> : null}
+      {hasTarget ? <Handle type="target" position={Position.Left} className="canvas-handle" /> : null}
       <div className="node-title-bar drag-handle">
         <span className="node-type-icon">{GRAPH_KIND_ICONS[data.kind] || '•'}</span>
         <input
@@ -110,7 +110,7 @@ function EditableGraphNode({ id, data, selected }) {
           )}
         </div>
       ) : null}
-      {hasSource ? <Handle type="source" position={Position.Right} className="workspace-handle" /> : null}
+      {hasSource ? <Handle type="source" position={Position.Right} className="canvas-handle" /> : null}
     </div>
   );
 }
@@ -366,7 +366,7 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
       <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
         <div className="agents-graph-shell">
           <div
-            className="workspace-canvas agents-graph-canvas"
+            className="canvas-surface agents-graph-canvas"
             ref={wrapperRef}
             onDrop={onDrop}
             onDragOver={onDragOver}
@@ -486,19 +486,19 @@ function GraphDock({ onAdd }) {
     event.dataTransfer.effectAllowed = 'move';
   };
   return (
-    <div className="workspace-dock agents-graph-dock">
-      <div className="workspace-dock-shell">
+    <div className="canvas-dock agents-graph-dock">
+      <div className="canvas-dock-shell">
         {GRAPH_NODE_KINDS.map((item) => (
           <button
             key={item.kind}
             type="button"
-            className={`workspace-dock-item agents-graph-dock__item--${item.kind}`}
+            className={`canvas-dock-item agents-graph-dock__item--${item.kind}`}
             draggable
             onDragStart={(event) => onDragStart(event, item.kind)}
             onClick={() => onAdd(item.kind)}
           >
-            <span className={`workspace-dock-icon ${item.kind}`}>{item.icon}</span>
-            <span className="workspace-dock-tooltip">{item.label}</span>
+            <span className={`canvas-dock-icon ${item.kind}`}>{item.icon}</span>
+            <span className="canvas-dock-tooltip">{item.label}</span>
           </button>
         ))}
       </div>

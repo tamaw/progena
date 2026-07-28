@@ -57,9 +57,9 @@ import {
   PlayActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
-import { JsonCodeEditor } from '../components/workspace/WorkflowJsonPanel';
+import { JsonCodeEditor } from '../components/canvas/WorkflowJsonPanel';
 import PopupModal from '../components/common/PopupModal';
-import '../styles/workspace.css';
+import '../styles/canvas.css';
 import '../styles/nodes.css';
 
 const WORKFLOW_EVENT_TYPES = [
@@ -528,8 +528,8 @@ function EventNode({ id, data, selected }) {
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`workspace-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
-        <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
+        <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon event">E</span>
           <input
@@ -623,9 +623,9 @@ function PromptNode({ id, data, selected }) {
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`workspace-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="workspace-handle" />
-        <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="canvas-handle" />
+        <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon prompt">P</span>
           <input
@@ -709,9 +709,9 @@ function UserNode({ id, data, selected }) {
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`workspace-node workflow-graph-node workflow-graph-node--user ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="workspace-handle" />
-        <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--user ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="canvas-handle" />
+        <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon user">U</span>
           <input
@@ -813,9 +813,9 @@ function CodeNode({ id, data, selected }) {
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`workspace-node workflow-graph-node workflow-graph-node--code ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="workspace-handle" />
-        <Handle type="source" position={Position.Right} className="workspace-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--code ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="canvas-handle" />
+        <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon code">{'<>'}</span>
           <input
@@ -898,8 +898,8 @@ function WorkflowControlNode({ id, data, selected }) {
   return (
     <>
       <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
-      <div className={`workspace-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="workspace-handle" />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
+        <Handle type="target" position={Position.Left} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className={`node-type-icon ${data.kind}`}>{data.kind === 'agent' ? 'A' : data.kind[0].toUpperCase()}</span>
           <input className="node-title-input" value={data.title} onChange={(event) => data.onChange(id, { title: event.target.value })} />
@@ -922,15 +922,15 @@ function WorkflowControlNode({ id, data, selected }) {
         </div>
         {data.kind === 'condition' ? (
           <>
-            <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} className="workspace-handle" />
-            <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} className="workspace-handle" />
+            <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} className="canvas-handle" />
+            <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} className="canvas-handle" />
           </>
         ) : data.kind === 'approval' ? (
           <>
-            <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="workspace-handle" />
-            <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="workspace-handle" />
+            <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="canvas-handle" />
+            <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="canvas-handle" />
           </>
-        ) : <Handle type="source" position={Position.Right} className="workspace-handle" />}
+        ) : <Handle type="source" position={Position.Right} className="canvas-handle" />}
       </div>
     </>
   );
@@ -986,20 +986,20 @@ function WorkflowDock({ onAdd }) {
     event.dataTransfer.effectAllowed = 'move';
   };
   return (
-    <div className="workspace-dock">
-      <div className="workspace-dock-shell">
+    <div className="canvas-dock">
+      <div className="canvas-dock-shell">
         {DOCK_NODE_KINDS.map((kind) => (
           <button
             key={kind}
             type="button"
-            className="workspace-dock-item"
+            className="canvas-dock-item"
             draggable
             onDragStart={onDragStart(kind)}
             onClick={() => onAdd(kind)}
             title={DOCK_ITEM_META[kind].title}
           >
-            <span className={`workspace-dock-icon ${kind}`}>{DOCK_ITEM_META[kind].icon}</span>
-            <span className="workspace-dock-tooltip">{DOCK_ITEM_META[kind].label}</span>
+            <span className={`canvas-dock-icon ${kind}`}>{DOCK_ITEM_META[kind].icon}</span>
+            <span className="canvas-dock-tooltip">{DOCK_ITEM_META[kind].label}</span>
           </button>
         ))}
       </div>
@@ -1821,7 +1821,7 @@ function WorkflowsInner() {
               <section className="agents-graph-panel">
                 <div className="agents-graph-shell">
                   <div
-                    className="workspace-canvas workflow-canvas"
+                    className="canvas-surface workflow-canvas"
                     onDrop={onCanvasDrop}
                     onDragOver={onCanvasDragOver}
                   >
