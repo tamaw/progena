@@ -357,7 +357,8 @@ async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dic
         rel = src[2:]  # strip "./"
         plugin_root = catalog.metadata.get("pluginRoot", "")
         prefix = f"{plugin_root.rstrip('/')}/{rel}" if plugin_root else rel
-        prefix = prefix.rstrip("/") + "/"
+        prefix = prefix.strip("/")
+        prefix = f"{prefix}/" if prefix else ""
         files: dict[str, bytes] = {}
         for path, content in catalog._archive_files.items():
             if path.startswith(prefix):
