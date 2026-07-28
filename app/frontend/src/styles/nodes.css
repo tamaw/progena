@@ -1,9 +1,9 @@
 /* ============================================================================
-   Progenitor Visual Workspace - Node Styles
+   Progenitor Visual Canvas - Node Styles
    ============================================================================ */
 
 /* ---- Base Node ---- */
-.workspace-node {
+.canvas-node {
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
   border-radius: var(--border-radius-md);
@@ -21,11 +21,11 @@
   transition: box-shadow var(--transition-fast), border-color var(--transition-fast);
 }
 
-.workspace-node:hover {
+.canvas-node:hover {
   box-shadow: var(--shadow-md);
 }
 
-.workspace-node.selected {
+.canvas-node.selected {
   border-color: var(--color-accent);
   box-shadow: 0 0 0 1px var(--color-accent), var(--shadow-md);
 }
@@ -191,7 +191,7 @@
   background: rgba(248, 81, 73, 0.15);
 }
 
-.workspace-handle {
+.canvas-handle {
   width: 10px;
   height: 10px;
   border: 2px solid var(--color-bg-secondary);
@@ -414,7 +414,7 @@
 }
 
 /* A disabled node dims its body while keeping the footer controls usable. */
-.workspace-node.is-disabled .node-body {
+.canvas-node.is-disabled .node-body {
   opacity: 0.5;
 }
 

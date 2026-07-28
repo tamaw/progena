@@ -53,12 +53,11 @@ components/
   common/               # DetailCards (MetricCard/CardFact/CapabilityChip), NumberStepper,
                         #   NotificationContainer (+ co-located .module.css)
   chat/                 # chat input/messages + pure models (conversationModel, etc.)
-  workspace/            # React Flow nodes + panels for the Workflows canvas
+  canvas/                # React Flow nodes + panels for the Workflows canvas
   agents/               # AgentGraph (React Flow), AgentDetailBodies, agentFormat
   dashboard/
 context/                # React context providers
-  WorkspaceContext.jsx  #   workflow graph state/effects (the provider only)
-  workspaceGraph.js     #   pure, React-free graph helpers extracted from the context
+  WorkspaceContext.jsx  #   active multi-backend workspace host + in-place switching
   ConfigContext, HealthContext, AlertCenterContext, ChromeRuntimeContext, NotificationContext
 hooks/
   api/                  # API layer (see "API hooks" below)
@@ -67,7 +66,7 @@ hooks/
 pages/                  # one component per route; pure logic lives in *PageModel.js siblings
 store/                  # Redux Toolkit (see "State & realtime" below)
 lib/                    # markdown, indexedDb, low-level utils
-styles/                 # global stylesheets imported by App.jsx (+ workspace/nodes by components)
+styles/                 # global stylesheets imported by App.jsx (+ canvas/nodes by components)
 ```
 
 ## Core conventions (follow these)
@@ -99,7 +98,7 @@ component stays focused on rendering/state:
 - Page logic → `pages/<name>PageModel.js` (+ `.test.js`), e.g. `tasksPageModel.js`,
   `knowledgePageModel.js`.
 - Chat parsing/formatting → `components/chat/*Model.js`.
-- Workflow graph helpers → `context/workspaceGraph.js` (the provider imports them).
+- Workflow graph helpers → co-located in `pages/WorkflowsPage.jsx` (`workflowToFlow` is exported for its unit test).
 - Presentational icon sets / static config → dedicated modules
   (`components/layout/navIcons.jsx`, `quickChatConfig.js`).
 When you delete a component's last caller of an imported helper, drop the import
