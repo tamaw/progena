@@ -4,7 +4,7 @@ This document captures the repeatable live-evaluation model for Progenitor. The 
 
 **Rule for this evaluation pass:** drive the system through the Progenitor HTTP chat surface (`POST /v1/chat`, `GET /v1/events`) like a live user. Scenario outcomes should be judged from chat requests, chat responses, streaming events, and chat-visible behavior rather than direct filesystem inspection or ad hoc HTTP probes.
 
-Note: earlier evaluation passes (see "Observed result" sections below) ran against the old TCP socket IPC transport (`:9500`). Progenitor now serves chat and background events over HTTP + SSE from the persistent runtime HTTP server (`:9501`); the scenario table and historical results below still describe those runs faithfully, but the transport-level rows/tools are superseded by `runtime/http_chat.py`.
+Note: earlier evaluation passes (see "Observed result" sections below) ran against the old TCP socket IPC transport (`:9500`). Progenitor now serves chat and background events over HTTP + SSE from the persistent runtime HTTP server (`:9501`); the historical outcomes below describe those old runs faithfully.
 
 ## Functional model inferred from tests
 
@@ -12,12 +12,12 @@ Progenitor is expected to behave as a graph-driven conversational orchestrator w
 
 | Capability | Expected behavior from tests | Key test sources |
 | --- | --- | --- |
-| IPC protocol | Uses a 4-byte length-prefixed JSON protocol; sends `ready` on connect; supports `heartbeat`/`heartbeat_ack`, non-streaming `assistant_message`, streaming chunks/events, errors, and shutdown. | `tests/progenitor/test_ipc_protocol.py`, `tests/progenitor/test_ipc_integration.py` |
-| Native DeepAgent streaming | Converts native LangGraph/DeepAgent `messages`, `updates`, and `custom` stream items into IPC `stream_chunk` and `stream_event` messages; emits a final marker and avoids duplicate final text. | `tests/progenitor/test_deepagent_ipc_stream.py` |
+| HTTP + SSE transport | Sends chat requests over HTTP and exposes background events over SSE; the stream adapter converts native LangGraph/DeepAgent `messages`, `updates`, and `custom` items into `stream_chunk` and `stream_event` payloads, emits a final marker, and avoids duplicate final text. | `tests/progenitor/test_http_chat.py`, `tests/progenitor/test_deepagent_sse_stream.py` |
+| Native DeepAgent streaming | Converts native LangGraph/DeepAgent `messages`, `updates`, and `custom` stream items into UI stream payloads; emits a final marker and avoids duplicate final text. | `tests/progenitor/test_deepagent_sse_stream.py` |
 | Chat + tool use | The conversational graph can use live tools such as `list_tools`, `self_reflect`, `schedule_task`, `list_schedule`, `new_conversation`, `get_a2a_task`, and dynamically refreshed MCP tools. | `tests/progenitor/test_system_tools.py`, `tests/progenitor/test_self_reflect.py`, `tests/progenitor/test_new_conversation_tool.py`, `tests/progenitor/test_middleware.py` |
 | Conversation continuity | The current thread remembers prior user turns until explicitly reset, and `new_conversation` starts a fresh thread/context. | `tests/progenitor/test_new_conversation_tool.py`, `tests/progenitor/test_state_manager.py` |
 | Memory backend | Runtime memory files are mounted into the DeepAgent environment, and the writable `/memories/` backend can be used from the live agent tool layer. | `tests/progenitor/test_memory.py`, `app/progenitor/agent/backends.py`, `app/progenitor/agent/agent.py` |
-| Skill-backed behavior | The live agent should exhibit the capabilities enabled by its loaded skill pack, but the tests mostly specify skill-pack presence/wiring rather than a strict chat-visible output contract. In IPC-only evaluation, skills are covered indirectly through scheduling, self-reflection, and related tool-driven behaviors. | `tests/progenitor/test_skills.py`, `app/progenitor/agent/agent.py` |
+| Skill-backed behavior | The live agent should exhibit the capabilities enabled by its loaded skill pack, but the tests mostly specify skill-pack presence/wiring rather than a strict chat-visible output contract. Skills are covered indirectly through scheduling, self-reflection, and related tool-driven behaviors. | `tests/progenitor/test_skills.py`, `app/progenitor/agent/agent.py` |
 | Runtime queues/events | Input/output/stream/event queues are bounded, expose stats, track wait and pending counts, reject or drop overflow according to queue type, and signal cycle completion. The user-visible part of this evaluation is that chat/event delivery remains responsive and consistent. | `tests/progenitor/test_bounded_queues.py`, `tests/progenitor/test_runtime_components.py` |
 
 ## Live evaluation scenarios
@@ -26,18 +26,18 @@ The repeatable script is `scripts/evaluate_progenitor_live.py`.
 
 | Scenario | Live check | Expected outcome | Failure likely area |
 | --- | --- | --- | --- |
-| IPC ready/heartbeat | TCP connect to IPC, read `ready`, send `heartbeat` | `heartbeat_ack` response | `runtime/http_chat.py` |
+| HTTP health and SSE events | Call the HTTP health endpoint and subscribe to SSE events | The runtime remains reachable and emits background events | `runtime/http.py`, `runtime/http_chat.py` |
 | Tool catalog | Ask the agent via chat to use `list_tools` and report tool names | Response lists key tools like `schedule_task`, `self_reflect`, `new_conversation`, `get_a2a_task`, `call_agent` | `tools/list_tools.py`, DeepAgent tool wiring |
 | Microsoft Learn MCP | Ask the agent via chat to use `mcp_refresh`, confirm Microsoft Learn MCP tools via `list_tools`, then use `microsoft_learn_microsoft_docs_search` on a documentation query | Chat exposes `microsoft_learn_microsoft_docs_search`, `microsoft_learn_microsoft_code_sample_search`, `microsoft_learn_microsoft_docs_fetch`, and a streamed tool call returns a `learn.microsoft.com` result | `tools/mcp_refresh.py`, `mcp/context.py`, `agent/adapters.py`, shared `mcp` state document |
-| Subagent delegation | Send a streaming chat request that explicitly tells the agent to use the `hello-world` subagent | The stream emits `subagent_start` and `subagent_result`, and the final answer is exactly `HELLO_FROM_SUBAGENT` | `agent/subagents.py`, `agent/agent.py`, `ipc/stream_events.py`, `ipc/deepagent_stream.py` |
-| Async subagent callback | Send a streaming chat request that explicitly tells the agent to use `start_async_task` with `hello-world-async`, then keep the IPC session open | The stream emits `async_subagent_start`, the kickoff answer returns `TASK_ID=<id>`, and Heartbeat later emits an `agent_message` callback with `HELLO_FROM_ASYNC_SUBAGENT` | `agent/subagents.py`, `agent/middleware.py`, `async_subagents/`, `runtime/http.py`, `nodes/async_subagents.py`, `graph/heartbeat_graph.py` |
+| Subagent delegation | Send a streaming chat request that explicitly tells the agent to use the `hello-world` subagent | The stream emits `subagent_start` and `subagent_result`, and the final answer is exactly `HELLO_FROM_SUBAGENT` | `agent/subagents.py`, `agent/agent.py`, `sse/stream_events.py`, `sse/deepagent_stream.py` |
+| Async subagent callback | Send a streaming chat request that explicitly tells the agent to use `start_async_task` with `hello-world-async`, then keep the SSE event subscription open | The stream emits `async_subagent_start`, the kickoff answer returns `TASK_ID=<id>`, and Heartbeat later emits an `agent_message` callback with `HELLO_FROM_ASYNC_SUBAGENT` | `agent/subagents.py`, `agent/middleware.py`, `async_subagents/`, `runtime/http.py`, `nodes/async_subagents.py`, `graph/heartbeat_graph.py` |
 | Conversation history | Tell the agent `For this conversation only, the code word is marzipan`, then ask `What is the conversation-only code word?` | Same-thread chat answers `marzipan` | conversation graph/checkpointer/state persistence |
 | New conversation reset | Send `new conversation`, then ask again for the conversation-only code word | Post-reset chat returns `UNKNOWN`/equivalent because the prior turn was conversation-scoped, not durable memory. The tool is not required to emit a human-readable reset confirmation string first. | `tools/new_conversation.py`, state reset handling |
-| IPC non-streaming LLM turn | Send `user_message` asking the model to echo a unique token | `assistant_message` contains the token | `runtime/http_chat.py`, `nodes/cycle.py`, `agent/adapters.py`, live Azure/model config |
-| IPC streaming LLM turn | Send streaming `user_message` asking the model to echo a unique token | `stream_chunk` sequence contains token and final signal | `runtime/http_chat.py`, `ipc/deepagent_stream.py`, live Azure/model config |
-| Reasoning streaming | Send a small corpus of reasoning-heavy streaming prompts, retrying because `summary=auto` is not guaranteed per request | At least one prompt emits `reasoning_delta` before the final answer | `ipc/deepagent_stream.py`, live model/provider reasoning behavior |
+| HTTP non-streaming LLM turn | Send a chat request asking the model to echo a unique token | The HTTP response contains the token | `runtime/http_chat.py`, `nodes/cycle.py`, `agent/adapters.py`, live Azure/model config |
+| SSE streaming LLM turn | Send a streaming chat request asking the model to echo a unique token | The `stream_chunk` sequence contains the token and final signal | `runtime/http_chat.py`, `sse/deepagent_stream.py`, live Azure/model config |
+| Reasoning streaming | Send a small corpus of reasoning-heavy streaming prompts, retrying because `summary=auto` is not guaranteed per request | At least one prompt emits `reasoning_delta` before the final answer | `sse/deepagent_stream.py`, live model/provider reasoning behavior |
 | Schedule creation | Ask the agent via chat to use `schedule_task` for a near-future one-off job, then confirm with `list_schedule` | Chat confirms the schedule exists | `tools/schedule_task.py`, `tools/list_schedule.py` |
-| Schedule trigger | Keep the IPC session open after schedule creation and watch for schedule-related runtime events | `scheduled_response` and `work_completed` arrive for the created task | `schedule/dispatch.py`, heartbeat scheduler path |
+| Schedule trigger | Keep the SSE event subscription open after schedule creation and watch for schedule-related runtime events | `scheduled_response` and `work_completed` arrive for the created task | `schedule/dispatch.py`, heartbeat scheduler path |
 | Memory write/read | Ask the agent via chat to write to `/memories/` and read it back | Chat returns the exact memory token | `agent/backends.py`, backend file tools |
 
 ## Runtime setup
@@ -112,7 +112,7 @@ Separate environment failures from application failures:
 - Schedule-trigger failures should be separated into creation failure, listing failure, and event-delivery failure; those point at different code areas.
 - Microsoft Learn MCP failures should be separated into config/discovery (shared `mcp` state document, `mcp_refresh`, `list_tools`) versus live tool execution (`mcp/context.py`, middleware injection, upstream Learn MCP availability).
 - DeepAgent in this environment also exposes remote `AsyncSubAgent` support via LangGraph SDK, but this live evaluator currently covers the inline `task`/subagent path only.
-- `self_reflect` remains unit-tested and visible in the live tool catalog, but the default IPC suite does not force a conversational self-introspection turn because the live assistant may decline internal source-inspection requests at the chat layer.
+- `self_reflect` remains unit-tested and visible in the live tool catalog, but the default HTTP + SSE suite does not force a conversational self-introspection turn because the live assistant may decline internal source-inspection requests at the chat layer.
 
 ## Latest live run
 

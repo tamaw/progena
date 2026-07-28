@@ -9,7 +9,7 @@ from collections.abc import Iterable
 from typing import Any, NamedTuple, cast
 
 from ..config import RuntimeConfig
-from ..ipc.stream_payloads import make_json_safe
+from ..sse.stream_payloads import make_json_safe
 from ..state.models import A2ATaskRecord
 from ..utils import utcnow_isoformat
 

@@ -26,7 +26,7 @@ This overview is intentionally selective and centered on the runtime, backend, a
 app/
 ├── progenitor/   # Long-running runtime service
 │   ├── agent/    # DeepAgent setup and runtime integration
-│   ├── ipc/      # IPC protocol and server/client pieces
+│   ├── sse/      # Stream-envelope helpers for the HTTP+SSE chat/event path
 │   ├── llm/      # Model and prompt-loading helpers
 │   ├── runtime/  # Loop runner, scheduler, and runtime managers
 │   ├── state/    # State models and persistence helpers

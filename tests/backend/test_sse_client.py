@@ -107,7 +107,7 @@ async def _start_runtime_server(*, bridge_factory: Any = None) -> _RuntimeServer
         loop_runner=loop_runner,
         port=0,
     )
-    # Test seam: inject a scripted bridge factory instead of the real DeepAgentIPCStream.
+    # Test seam: inject a scripted bridge factory instead of the real DeepAgentSSEStream.
     assert server._chat_service is not None
     if bridge_factory is not None:
         server._chat_service._bridge_factory = bridge_factory

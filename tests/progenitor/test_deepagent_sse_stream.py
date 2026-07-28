@@ -1,12 +1,12 @@
-"""Tests for converting native DeepAgent/LangGraph streams to IPC items."""
+"""Tests for converting native DeepAgent/LangGraph streams to SSE items."""
 
 from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk
 
-from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
 from app.progenitor.runtime.messages import extract_reasoning_trace
+from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 
 
 class _FakeGraph:
@@ -26,7 +26,7 @@ def _make_config(*, reasoning_enabled: bool = False):
     return SimpleNamespace(llm=SimpleNamespace(reasoning_enabled=reasoning_enabled))
 
 
-async def _collect_items(bridge: DeepAgentIPCStream, message: str = "hello") -> list[dict]:
+async def _collect_items(bridge: DeepAgentSSEStream, message: str = "hello") -> list[dict]:
     return [item async for item in bridge.stream(message, thread_id="thread-1")]
 
 
@@ -47,7 +47,7 @@ async def test_graph_message_events_stream_incrementally_without_duplicate_final
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -71,7 +71,7 @@ async def test_attachments_are_stamped_onto_the_human_message():
     text for the LLM's benefit.
     """
     graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
     attachments = [
         {"id": "att_1", "name": "report.pdf", "mime_type": "application/pdf", "size_bytes": 1024}
     ]
@@ -86,7 +86,7 @@ async def test_attachments_are_stamped_onto_the_human_message():
 @pytest.mark.asyncio
 async def test_no_attachments_key_when_none_provided():
     graph = _FakeGraph([("updates", {"respond": {"pending_response": "ok"}})])
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     async for _ in bridge.stream("hi", thread_id="thread-1"):
         pass
@@ -110,7 +110,7 @@ async def test_pending_response_still_streams_when_no_message_events_exist():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -152,7 +152,7 @@ async def test_stream_items_include_reasoning_and_custom_events():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -196,7 +196,7 @@ async def test_todos_in_node_output_stream_as_todos_update_event():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -224,7 +224,7 @@ async def test_node_output_without_todos_emits_no_todos_update_event():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -265,7 +265,7 @@ async def test_task_tool_events_emit_outer_rows_and_subagent_events():
             ("updates", {"respond": {"pending_response": "HELLO_FROM_SUBAGENT"}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -370,7 +370,7 @@ async def test_task_tool_start_uses_fallback_summary_when_args_preview_is_trunca
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -417,7 +417,7 @@ async def test_task_tool_result_images_survive_subagent_result_translation():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -457,7 +457,7 @@ async def test_task_tool_start_without_subagent_type_is_dropped_without_raw_even
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -487,7 +487,7 @@ async def test_task_tool_start_without_tool_call_id_is_dropped_without_raw_event
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -568,7 +568,7 @@ async def test_call_agent_tool_events_pass_through_unmodified_alongside_task_exp
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -604,7 +604,7 @@ async def test_call_agent_tool_events_pass_through_unmodified_alongside_task_exp
 @pytest.mark.asyncio
 async def test_astream_kwargs_include_subgraphs_when_graph_supports_it():
     graph = _FakeGraph([("updates", {"respond": {"pending_response": "hi"}})])
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     await _collect_items(bridge)
 
@@ -695,7 +695,7 @@ async def test_nested_subagent_stream_events_expand_into_subagent_tool_events():
             ("updates", {"respond": {"pending_response": "HELLO_FROM_SUBAGENT"}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -766,7 +766,7 @@ async def test_namespaced_event_with_no_pending_dispatch_is_dropped_safely():
             ("updates", {"respond": {"pending_response": "done"}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -918,7 +918,7 @@ async def test_parallel_subagent_dispatch_correlates_by_task_id_not_arrival_orde
             ("updates", {"respond": {"pending_response": "All done."}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -1008,7 +1008,7 @@ async def test_parallel_dispatch_of_same_subagent_type_does_not_cross_contaminat
             (ns_second, "messages", (AIMessageChunk(content=" more-Y"), {})),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
     items = await _collect_items(bridge)
 
@@ -1063,7 +1063,7 @@ async def test_native_reasoning_deltas_stream_without_synthetic_preview():
             ("updates", {"respond": {"pending_response": "Hi"}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 
@@ -1135,7 +1135,7 @@ async def test_final_reasoning_summary_only_updates_tokens_after_streamed_deltas
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 
@@ -1212,7 +1212,7 @@ async def test_streamed_reasoning_survives_when_final_message_drops_it():
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 
@@ -1285,7 +1285,7 @@ async def test_reasoning_summary_sums_reasoning_tokens_across_model_calls_in_one
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 
@@ -1323,7 +1323,7 @@ async def test_duplicate_update_delivery_of_same_message_id_counts_reasoning_onc
             ("updates", {"respond": {"pending_response": "Done", "messages": [_message()]}}),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 
@@ -1377,7 +1377,7 @@ async def test_late_reasoning_usage_update_for_same_message_id_contributes_only_
             ),
         ]
     )
-    bridge = DeepAgentIPCStream(graph, config=_make_config(reasoning_enabled=True), state={})
+    bridge = DeepAgentSSEStream(graph, config=_make_config(reasoning_enabled=True), state={})
 
     items = await _collect_items(bridge)
 

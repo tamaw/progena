@@ -10,7 +10,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from app.progenitor.async_subagents import build_tracked_task_record
-from app.progenitor.ipc.stream_events import emit_stream_event
+from app.progenitor.sse.stream_events import emit_stream_event
 from app.progenitor.state.models import AsyncSubagentTaskRecord
 from app.progenitor.utils import utcnow
 

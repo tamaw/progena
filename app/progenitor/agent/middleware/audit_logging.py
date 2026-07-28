@@ -9,7 +9,7 @@ from langchain.agents.middleware.types import AgentMiddleware, ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from app.progenitor.ipc.stream_events import (
+from app.progenitor.sse.stream_events import (
     build_tool_error_event,
     build_tool_result_event,
     build_tool_start_event,

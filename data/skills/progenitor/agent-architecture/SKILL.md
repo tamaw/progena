@@ -66,7 +66,7 @@ Agents communicate via HTTP:
 - `app/progenitor/state/`: State models and persistence
 - `app/progenitor/tools/`: System tools (23+)
 - `app/progenitor/runtime/`: Loop execution
-- `app/progenitor/ipc/`: Inter-process communication
+- `app/progenitor/sse/`: HTTP+SSE stream envelope helpers
 - `app/agents/`: A2A agent implementations
 - `app/mcp/`: MCP tool implementations
 

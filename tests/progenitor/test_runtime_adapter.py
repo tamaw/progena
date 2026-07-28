@@ -83,7 +83,7 @@ class TestCreateDeepAgentForLoop:
 
 
 class TestDeepAgentAstreamCompatibility:
-    """Verify that DeepAgent graph exposes native LangGraph streaming for IPC."""
+    """Verify that DeepAgent graph exposes native LangGraph streaming for SSE."""
 
     @pytest.mark.asyncio
     async def test_deep_agent_graph_has_astream(self):

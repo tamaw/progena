@@ -8,7 +8,7 @@ OpenAI-compatible API server providing responses and streaming endpoints.
 - FastAPI application development
 - OpenAI-compatible API implementation
 - SSE (Server-Sent Events) streaming
-- IPC via socket-based client/server
+- SSE (HTTP streaming) client/server
 - CORS configuration
 - Health checks and monitoring
 
@@ -45,7 +45,7 @@ pytest tests/backend/ -v
 ```
 
 ### Integration Points
-- **Progenitor Loop**: Communicates via IPC socket protocol
+- **Progenitor Loop**: Communicates via SSE (HTTP streaming)
 - **Frontend**: CORS enabled for `http://localhost:5173`
 - **LLM**: Proxies to configured LLM provider (Azure OpenAI, OpenAI, etc.)
 
@@ -86,7 +86,7 @@ Chat session loading follows a request-then-stream pattern. Finite browser route
 - Always runs on port 8000
 - Frontend proxies API calls in dev mode
 - Supports both streaming and non-streaming responses
-- IPC client is initialized at startup
+- SSE client is initialized at startup
 
 ### References
 - API Spec: `openapi_spec.json`
