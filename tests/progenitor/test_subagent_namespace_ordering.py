@@ -2,14 +2,14 @@
 LangGraph/deepagents concurrency.
 
 Every other subagent-correlation test in test_deepagent_ipc_stream.py drives
-DeepAgentIPCStream against a hand-scripted fake graph that replays a fixed
+DeepAgentSSEStream against a hand-scripted fake graph that replays a fixed
 list of stream items -- excellent for exact control over ordering, but it
 can't catch a regression in what astream(subgraphs=True) + stream_mode="tasks"
 *actually* produce from real deepagents/LangGraph scheduling.
 
 This builds a real deepagents.create_deep_agent() graph with two subagents
 dispatched in parallel via the `task` tool, and drives the production
-DeepAgentIPCStream against it end-to-end, repeated several times. The
+DeepAgentSSEStream against it end-to-end, repeated several times. The
 underlying scheduling (ToolNode races parallel tool calls via asyncio.gather)
 is an internal implementation detail, not a documented contract, so a flake
 here is a real signal worth investigating, not noise to suppress.
@@ -29,7 +29,7 @@ from langchain_core.language_models.fake_chat_models import (
 from langchain_core.messages import AIMessage
 
 from app.progenitor.agent.middleware import AuditLoggingMiddleware
-from app.progenitor.ipc.deepagent_stream import DeepAgentIPCStream
+from app.progenitor.sse.deepagent_stream import DeepAgentSSEStream
 
 REPEAT_COUNT = 10
 
@@ -120,7 +120,7 @@ def _build_parallel_subagent_graph():
 async def test_real_graph_parallel_subagent_dispatch_correlates_correctly():
     for run_idx in range(REPEAT_COUNT):
         graph = _build_parallel_subagent_graph()
-        bridge = DeepAgentIPCStream(graph, config=_make_config(), state={})
+        bridge = DeepAgentSSEStream(graph, config=_make_config(), state={})
 
         items = [
             item

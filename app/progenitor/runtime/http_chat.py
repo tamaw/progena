@@ -17,10 +17,10 @@ from typing import Any, cast
 from aiohttp import web
 from langgraph.runtime import Runtime
 
-from ..ipc.deepagent_stream import DeepAgentIPCStream
-from ..ipc.stream_payloads import make_json_safe
 from ..nodes.checkpoint import checkpoint_node
 from ..runtime.thread_context import reset_current_thread_id, set_current_thread_id
+from ..sse.deepagent_stream import DeepAgentSSEStream
+from ..sse.stream_payloads import make_json_safe
 from ..state.models import ProgenitorState
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _extract_attachments(metadata: dict[str, Any] | None) -> list[dict[str, Any]
     ``app.backend.main._resolve_message_attachments``) back out of the chat
     request's metadata, so it can ride onto the HumanMessage's
     ``additional_kwargs`` for chat-history display (see
-    ``DeepAgentIPCStream.stream``)."""
+    ``DeepAgentSSEStream.stream``)."""
     if not isinstance(metadata, dict):
         return None
     attachments = metadata.get("attachments")
@@ -59,7 +59,7 @@ class RuntimeChatService:
 
     def __init__(self, loop_runner: Any, *, bridge_factory: Any = None) -> None:
         self.loop_runner = loop_runner
-        self._bridge_factory = bridge_factory or DeepAgentIPCStream
+        self._bridge_factory = bridge_factory or DeepAgentSSEStream
         self._inflight_by_thread: dict[str, asyncio.Task[None]] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any] | None]] = set()
@@ -394,8 +394,8 @@ class RuntimeChatService:
         requested_thread_id = str((metadata or {}).get("thread_id") or "").strip()
         return requested_thread_id or str(system_state.get("thread_id") or "progenitor_main")
 
-    def _create_direct_stream_bridge(self) -> DeepAgentIPCStream:
-        # Fresh empty dict per request — DeepAgentIPCStream uses this only for
+    def _create_direct_stream_bridge(self) -> DeepAgentSSEStream:
+        # Fresh empty dict per request — DeepAgentSSEStream uses this only for
         # transient per-turn fields (current_input, cycle_count, etc.) and
         # never reads it back across turns.
         return self._bridge_factory(
@@ -405,7 +405,7 @@ class RuntimeChatService:
         )
 
     async def _complete_direct_graph_cycle(
-        self, bridge: DeepAgentIPCStream, thread_id: str
+        self, bridge: DeepAgentSSEStream, thread_id: str
     ) -> None:
         context = getattr(self.loop_runner, "heartbeat_context", None)
         if context is not None:

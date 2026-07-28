@@ -471,7 +471,7 @@ class TaskActivityCreateRequest(BaseModel):
 
 
 class ActionRunRequest(BaseModel):
-    """Run an action using the existing IPC message flow."""
+    """Run an action using the existing SSE message flow."""
 
     widget_id: str | None = None
     prompt: str | None = None
@@ -487,7 +487,7 @@ class ActionRunRequest(BaseModel):
 
 
 class ActionGenerateRequest(BaseModel):
-    """Generate content using the existing IPC message flow."""
+    """Generate content using the existing SSE message flow."""
 
     widget_id: str | None = None
     prompt: str
@@ -619,7 +619,7 @@ async def _workflow_prompt_runner(
     if isinstance(node, WorkflowNodeCode):
         # Code nodes have no dedicated sandboxed executor (same as the old
         # Workspace canvas): the agent is asked to run the snippet itself
-        # through the normal IPC prompt path.
+        # through the normal SSE prompt path.
         request = ActionRunRequest(
             widget_id=widget_id,
             code=node.content,
@@ -3508,7 +3508,7 @@ async def action_run(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Run a prompt/code action through the existing IPC message flow."""
+    """Run a prompt/code action through the existing SSE message flow."""
     request_id = _request_correlation_id(request, x_request_id)
     try:
         thread_id, response_obj, response_text = await _execute_action_run(body)
@@ -3539,7 +3539,7 @@ async def action_generate(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ):
-    """Generate output through the existing IPC message flow."""
+    """Generate output through the existing SSE message flow."""
     request_id = _request_correlation_id(request, x_request_id)
     from . import main as chat_main
 
@@ -4218,7 +4218,7 @@ def _process_metrics() -> dict:
     merged into it by the periodic tick so we never re-read the DB just to
     refresh metrics.
 
-    Also includes ``progenitor_running``: a live IPC-heartbeat liveness check,
+    Also includes ``progenitor_running``: a live SSE-heartbeat liveness check,
     deliberately NOT stored in Postgres (see HealthInfo.live_reachable), so a
     pure liveness flip - the runtime dying with no other document changing -
     still reaches the frontend within this tick's cadence instead of only
@@ -4648,7 +4648,7 @@ def broadcast_schedule_snapshot(*, request_id: str | None = None) -> UiEventEnve
     """Broadcast the current schedule list to canonical /api/ui/stream subscribers.
 
     Emitted after backend-side schedule mutations and whenever the runtime
-    reports a schedule change (fire / chat-driven CRUD) via the IPC event
+    reports a schedule change (fire / chat-driven CRUD) via the SSE event
     bridge, so the Schedules page reflects changes live.
     """
     state_reader = get_state_reader()

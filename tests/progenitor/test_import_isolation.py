@@ -7,7 +7,7 @@ _MODULE_NAMES = [
     "app.progenitor.agent.agent",
     "app.progenitor.runtime.heartbeat",
     "app.progenitor.agent.adapters",
-    "app.progenitor.ipc.stream_events",
+    "app.progenitor.sse.stream_events",
 ]
 
 
@@ -29,7 +29,7 @@ def _isolated_imports() -> Iterator[None]:
 
 def test_stream_events_import_does_not_pull_in_agent_package():
     with _isolated_imports():
-        importlib.import_module("app.progenitor.ipc.stream_events")
+        importlib.import_module("app.progenitor.sse.stream_events")
 
         assert "app.progenitor.agent.agent" not in sys.modules
 

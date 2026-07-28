@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from ..a2a import build_task_response, dispatch_tracked_a2a_task, extract_message_text
 from ..acp import build_acp_task_response, dispatch_tracked_acp_task
-from ..ipc.stream_events import build_a2a_call_progress_event, emit_stream_event
+from ..sse.stream_events import build_a2a_call_progress_event, emit_stream_event
 from .protocol import BaseSystemTool, ToolContext, ToolResult
 
 logger = logging.getLogger(__name__)

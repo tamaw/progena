@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Prompt Node",
-  "description": "A sequential prompt node executed through the backend IPC path in a v1 workflow graph.",
+  "description": "A sequential prompt node executed through the backend SSE path in a v1 workflow graph.",
   "type": "object",
   "additionalProperties": false,
   "required": ["kind", "title", "prompt", "agent_name"],

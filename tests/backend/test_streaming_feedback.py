@@ -5,7 +5,7 @@ Critical tests for ensuring the aliens see real-time feedback:
 - Streaming response chunks
 - Agent activity updates
 - Sub-agent delegation feedback
-- IPC message integrity
+- SSE message integrity
 """
 
 import asyncio
@@ -460,7 +460,7 @@ class TestChatAPIStreaming:
 
         from app.backend.main import app
 
-        # Mock the client to avoid IPC connection issues
+        # Mock the client to avoid SSE connection issues
         mock_client = AsyncMock()
         mock_client.send_message.return_value = AgentResponse(
             response="mocked", reasoning=None, reasoning_tokens=None

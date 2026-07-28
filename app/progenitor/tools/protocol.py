@@ -39,8 +39,8 @@ class ToolResult:
     state_updates: dict[str, Any] | None = None
     should_retry_slow_path: bool = False
     artifact: dict[str, Any] | None = None
-    """Small, bounded projection surfaced on the SSE/IPC activity stream
-    (see ``app.progenitor.ipc.stream_events._extract_artifact``). Allowed
+    """Small, bounded projection surfaced on the SSE activity stream
+    (see ``app.progenitor.sse.stream_events._extract_artifact``). Allowed
     keys: ``summary``, ``count``, ``kind``, ``status`` -- anything else is
     dropped before it reaches the frontend. Distinct from ``data``, which is
     the full result returned to the LLM."""

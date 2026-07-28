@@ -272,7 +272,7 @@ class ProgenitorLoop:
 
     @property
     def queues(self) -> RuntimeQueues:
-        """Runtime queue service used by IPC and heartbeat nodes."""
+        """Runtime queue service used by SSE and heartbeat nodes."""
         return self._queues
 
     @property

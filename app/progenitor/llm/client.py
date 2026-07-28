@@ -166,7 +166,7 @@ class LLMClient:
         # MCP runtime is initialized externally (startup)
         self._mcp_runtime: MCPRuntime | None = None
 
-        # Optional event pusher for realtime progress updates via IPC
+        # Optional event pusher for realtime progress updates via SSE
         self._event_pusher: EventPusher | None = None
 
         logger.info("LLM client configured (endpoint=%s, model=%s)", self.endpoint_url, self.model)

@@ -23,7 +23,7 @@ function baseTurn() {
 }
 
 /**
- * Build a minimal stream_event payload shaped like what the IPC layer emits
+ * Build a minimal stream_event payload shaped like what the SSE layer emits
  * (snake_case).  `createStreamEvent()` in streamEventsModel normalises this
  * into the internal camelCase `{ id, eventType, content, metadata }` shape.
  */

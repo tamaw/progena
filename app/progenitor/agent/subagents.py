@@ -27,7 +27,7 @@ def _subagent_middleware(log_sink: Any | None) -> list[Any]:
     Subagents get zero middleware unless a spec sets its own ``middleware``
     key (deepagents wires per-subagent and top-level middleware separately),
     so audit logging must be attached explicitly here to make nested tool
-    calls visible on the IPC stream.
+    calls visible on the SSE stream.
     """
     return [AuditLoggingMiddleware(log_sink=log_sink)]
 
