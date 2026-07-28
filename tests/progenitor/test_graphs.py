@@ -385,8 +385,9 @@ def test_runtime_heartbeat_graph_idle_chain_excludes_prompt_cache_refresh() -> N
     assert "prompt_cache_refresh" not in node_names
 
     edges = {(edge.source, edge.target) for edge in graph.edges}
-    # Idle maintenance chain now runs mcp_refresh directly into a2a_poll.
-    assert ("mcp_refresh", "a2a_poll") in edges
+    # Idle maintenance chain now runs mcp_refresh -> plugin_refresh -> a2a_poll.
+    assert ("mcp_refresh", "plugin_refresh") in edges
+    assert ("plugin_refresh", "a2a_poll") in edges
 
 
 def _heartbeat_context(**overrides):
@@ -405,6 +406,7 @@ def _heartbeat_context(**overrides):
         "a2a_poll_seconds": 5.0,
         "async_subagent_poll_seconds": 5.0,
         "mcp_refresh_seconds": 60.0,
+        "plugin_update_check_seconds": 86400.0,
         "registry_refresh_seconds": 60.0,
         "heartbeat_health_seconds": 30.0,
         "timezone": "UTC",

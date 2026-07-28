@@ -23,6 +23,7 @@ class HeartbeatContext:
     a2a_poll_seconds: float
     async_subagent_poll_seconds: float
     mcp_refresh_seconds: float
+    plugin_update_check_seconds: float
     registry_refresh_seconds: float
     heartbeat_health_seconds: float
     timezone: str

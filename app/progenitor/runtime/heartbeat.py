@@ -32,6 +32,7 @@ QueuedInput = _QueuedInput
 
 _SCHEDULE_TICK = "schedule_tick"
 _MCP_REFRESH = "mcp_refresh"
+_PLUGIN_UPDATE_CHECK = "plugin_update_check"
 _A2A_POLL = "a2a_poll"
 _ASYNC_SUBAGENT_POLL = "async_subagent_poll"
 _REGISTRY_DISCOVER = "registry_discover"
@@ -41,6 +42,7 @@ _IDLE_HEALTH = "idle_health"
 _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
     (_SCHEDULE_TICK, "last_schedule_poll_at", "scheduler_poll_seconds"),
     (_MCP_REFRESH, "last_mcp_refresh_at", "mcp_refresh_seconds"),
+    (_PLUGIN_UPDATE_CHECK, "last_plugin_update_check_at", "plugin_update_check_seconds"),
     (_A2A_POLL, "last_a2a_poll_at", "a2a_poll_seconds"),
     (_ASYNC_SUBAGENT_POLL, "last_async_subagent_poll_at", "async_subagent_poll_seconds"),
     (_REGISTRY_DISCOVER, "last_registry_discovery_at", "registry_refresh_seconds"),
@@ -122,6 +124,7 @@ class ProgenitorLoop:
             a2a_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
             async_subagent_poll_seconds=DEFAULT_A2A_POLL_SECONDS,
             mcp_refresh_seconds=float(config.runtime.mcp_refresh_seconds),
+            plugin_update_check_seconds=float(config.runtime.plugin_update_check_seconds),
             registry_refresh_seconds=float(config.runtime.registry_refresh_seconds),
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)

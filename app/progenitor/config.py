@@ -121,6 +121,9 @@ class RuntimeConfig:
     timezone: str = DEFAULT_TIMEZONE
     idle_backoff_seconds: int = 30
     mcp_refresh_seconds: int = 900
+    # Plugin update check performs network fetches per installed plugin, so it
+    # must be far coarser than the MCP refresh.
+    plugin_update_check_seconds: int = 86400
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
@@ -144,6 +147,7 @@ class RuntimeConfig:
             timezone=os.getenv("PROGENITOR_TIMEZONE", DEFAULT_TIMEZONE),
             idle_backoff_seconds=env_int("PROGENITOR_IDLE_BACKOFF_SECONDS", 30),
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
+            plugin_update_check_seconds=env_int("PROGENITOR_PLUGIN_UPDATE_CHECK_SECONDS", 86400),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
@@ -390,6 +394,11 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
         (
             "mcp_refresh_seconds",
             config.runtime.mcp_refresh_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 86400,
+        ),
+        (
+            "plugin_update_check_seconds",
+            config.runtime.plugin_update_check_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 86400,
         ),
         (
