@@ -124,6 +124,7 @@ from ..nodes.cycle import cycle_node, isolated_cycle_node
 from ..nodes.health import idle_health_tick_node, runtime_health_node
 from ..nodes.intake import cycle_setup_node, dequeue_input_node
 from ..nodes.mcp import refresh_mcp_runtime_node, startup_mcp_refresh_node
+from ..nodes.plugins import refresh_plugins_runtime_node
 from ..nodes.registry import (
     discover_agents_node,
     refresh_registry_node,
@@ -183,6 +184,7 @@ def validate_heartbeat_context(context: HeartbeatContext) -> None:
         ("a2a_poll_seconds", context.a2a_poll_seconds),
         ("async_subagent_poll_seconds", context.async_subagent_poll_seconds),
         ("mcp_refresh_seconds", context.mcp_refresh_seconds),
+        ("plugin_update_check_seconds", context.plugin_update_check_seconds),
         ("registry_refresh_seconds", context.registry_refresh_seconds),
         ("heartbeat_health_seconds", context.heartbeat_health_seconds),
         ("input_timeout", context.input_timeout),
@@ -211,6 +213,10 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_node("idle", idle_state_node)
     graph.add_node("schedule_tick", _guard_maintenance_node("schedule_tick", scheduler_tick_node))
     graph.add_node("mcp_refresh", _guard_maintenance_node("mcp_refresh", refresh_mcp_runtime_node))
+    graph.add_node(
+        "plugin_refresh",
+        _guard_maintenance_node("plugin_refresh", refresh_plugins_runtime_node),
+    )
     graph.add_node("a2a_poll", _guard_maintenance_node("a2a_poll", poll_tracked_tasks_node))
     graph.add_node("a2a_apply", _guard_maintenance_node("a2a_apply", apply_completed_tasks_node))
     graph.add_node("a2a_notify", _guard_maintenance_node("a2a_notify", notify_completed_tasks_node))
@@ -279,7 +285,8 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     )
     graph.add_edge("idle", "schedule_tick")
     graph.add_edge("schedule_tick", "mcp_refresh")
-    graph.add_edge("mcp_refresh", "a2a_poll")
+    graph.add_edge("mcp_refresh", "plugin_refresh")
+    graph.add_edge("plugin_refresh", "a2a_poll")
     graph.add_edge("a2a_poll", "a2a_apply")
     graph.add_edge("a2a_apply", "a2a_notify")
     graph.add_edge("a2a_notify", "async_subagent_poll")

@@ -19,6 +19,7 @@ the native `write`/`edit` file tools.
 | --- | --- | --- | --- |
 | `schedule_entry.schema.v1.json` | One entry's value in `schedule` (keyed by id) | object | `managing-schedules` |
 | `mcp_server_entry.schema.v1.json` | One server under `mcpServers` (keyed by name) | object | `managing-mcp` |
+| `plugin_entry.schema.v1.json` | One plugin under `plugins` (keyed by `<marketplace>/<plugin>`) | object | `managing-plugins` |
 | `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | `managing-agents` |
 | `knowledge_base_entry.schema.v1.json` | One object in `knowledge`'s `bases` array | object | `managing-knowledge` |
 | `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | not currently wired to a skill |

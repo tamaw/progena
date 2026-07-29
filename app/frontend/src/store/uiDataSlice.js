@@ -27,8 +27,9 @@ import * as inbox from './uiData/inbox';
 import * as workflows from './uiData/workflows';
 import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
+import * as marketplaces from './uiData/marketplaces';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs, preferences];
+const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -60,7 +61,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'task.activity.updated': '/tasks',
   'agents.snapshot': '/agents',
   'agent.upserted': '/agents',
-  'skills.snapshot': '/skills',
+  'skills.snapshot': '/plugins',
   'mcp.snapshot': '/tools',
   'knowledge.snapshot': '/knowledge',
   'schedule.snapshot': '/schedules',
@@ -270,5 +271,20 @@ export {
   selectPreferences,
   selectPreferencesSaveRequest,
 } from './uiData/preferences';
+
+export {
+  fetchMarketplaces,
+  saveMarketplaces,
+  fetchPlugins,
+  fetchMarketplaceCatalog,
+  installPlugin,
+  uninstallPlugin,
+  selectMarketplaces,
+  selectMarketplacesState,
+  selectPlugins,
+  selectPluginsState,
+  selectCatalogByMarketplace,
+  selectMarketplaceCatalog,
+} from './uiData/marketplaces';
 
 export default uiDataSlice.reducer;

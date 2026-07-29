@@ -1,6 +1,7 @@
 """High-level state manager facade for Progenitor persistence (runtime-store-only)."""
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -113,7 +114,11 @@ class StateManager:
 
     async def _ensure_runtime_store_initial_state(self) -> None:
         """Ensure all state documents exist in the native runtime store."""
-        from ..config import default_mcp_config_payload, default_schedule_config_payload
+        from ..config import (
+            default_mcp_config_payload,
+            default_plugins_config_payload,
+            default_schedule_config_payload,
+        )
 
         conversation_thread_id = utcnow_isoformat()
         defaults = {
@@ -136,6 +141,7 @@ class StateManager:
             "schedule_runs": [],
             "registry": {},
             "mcp": default_mcp_config_payload(),
+            "plugins": default_plugins_config_payload(),
             "knowledge": {"bases": []},
             "preferences": default_preferences_payload(),
             "mcp_tools": {"tools": []},
@@ -298,6 +304,37 @@ class StateManager:
 
         normalized = normalize_mcp_config_payload(payload)
         await self._save_runtime_document("mcp", normalized)
+
+    # ==========================================================================
+    # Plugins configuration
+    # ==========================================================================
+    async def get_plugins_config(self) -> dict[str, Any]:
+        """Return the plugins configuration document.
+
+        Read straight from the shared store rather than the in-memory
+        cache: the plugins config document is also created/edited by the
+        reconciler and the backend, so a cached copy would hide those
+        cross-process changes.
+        """
+        from ..config import default_plugins_config_payload
+
+        payload = await self._runtime_store.get_document(
+            "plugins", default_plugins_config_payload()
+        )
+        self._state_cache["plugins"] = payload
+        return payload if isinstance(payload, dict) else default_plugins_config_payload()
+
+    async def save_plugins_config(self, payload: dict[str, Any]) -> None:
+        """Persist the plugins configuration document.
+
+        Validates the payload against the plugin entry schema before saving,
+        raising ValueError on invalid input so a violating edit is rejected
+        and nothing changes.
+        """
+        from ..agent.state_backend import validate_plugins_document
+
+        validate_plugins_document(json.dumps(payload))
+        await self._save_runtime_document("plugins", payload)
 
     # ==========================================================================
     # Knowledge configuration
