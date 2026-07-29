@@ -148,7 +148,7 @@ export default function PluginsPage() {
   const [editorMode, setEditorMode] = useState('preview');
   const [newAgent, setNewAgent] = useState('progenitor');
   const [newSkillName, setNewSkillName] = useState('new-skill');
-  const [browseMode, setBrowseMode] = useState(false);
+  const [browseMode, setBrowseMode] = useState(true);
   const [selectedMarketplace, setSelectedMarketplace] = useState('');
   const [selectedPlugin, setSelectedPlugin] = useState(null);
   const skillContentEntry = useSelector((state) => selectSkillContentEntry(state, selectedPath));
@@ -203,6 +203,23 @@ export default function PluginsPage() {
       active = false;
     };
   }, [dispatch, realtime.connected, marketplacesUrl, pluginsUrl]);
+
+  // Default the marketplace picker to the first registered source once
+  // marketplaces load, so the browse view has plugins to show immediately.
+  useEffect(() => {
+    if (selectedMarketplace || marketplaces.length === 0) {
+      return undefined;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active) {
+        setSelectedMarketplace(marketplaces[0].name);
+      }
+    });
+    return () => {
+      active = false;
+    };
+  }, [marketplaces, selectedMarketplace]);
 
   useEffect(() => {
     if (!realtime.connected) {
@@ -542,7 +559,7 @@ export default function PluginsPage() {
     await loadSkills();
   };
 
-  const handleEnterBrowse = () => {
+  const handleShowMarketplace = () => {
     if (saving) {
       return;
     }
@@ -554,13 +571,12 @@ export default function PluginsPage() {
     setError(null);
     setStatusMessage('');
     const defaultMarketplace = marketplaces[0]?.name || '';
-    setSelectedMarketplace(defaultMarketplace);
+    setSelectedMarketplace((current) => current || defaultMarketplace);
   };
 
-  const handleExitBrowse = () => {
+  const handleShowSkills = () => {
     setBrowseMode(false);
     setSelectedPlugin(null);
-    setSelectedMarketplace('');
     setError(null);
     setStatusMessage('');
   };
@@ -687,11 +703,11 @@ export default function PluginsPage() {
             filters={['All']}
             activeFilter="All"
             onFilterChange={() => {}}
-            actionLabel="Back"
-            onAction={handleExitBrowse}
+            actionLabel="My skills"
+            onAction={handleShowSkills}
           />
         )}
-        <PaneListToolbar actionLabel={browseMode ? undefined : 'Browse'} onAction={browseMode ? undefined : handleEnterBrowse}>
+        <PaneListToolbar actionLabel={browseMode ? undefined : 'Marketplace'} onAction={browseMode ? undefined : handleShowMarketplace}>
           <PaneListSearch value={query} placeholder="Search plugins" onChange={setQuery} />
           {browseMode && marketplaceOptions.length > 0 && (
             <div className="logs-source-select">
