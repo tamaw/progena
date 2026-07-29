@@ -50,9 +50,18 @@ export function resolveWorkspaceOrigin(host) {
   return `https://${host}`;
 }
 
-/** Build a `/w/<host><rest>` path. `rest` defaults to the app root. */
+/**
+ * Build the path for `host`. When `host` is the page's own host (the
+ * default workspace), the /w/ prefix is redundant -- it's the host every
+ * unprefixed URL already resolves to -- so this returns the plain `rest`
+ * path instead. Any other host needs the explicit /w/<host> prefix to
+ * disambiguate which backend the URL targets.
+ */
 export function buildWorkspacePath(host, rest = '/') {
   const suffix = rest.startsWith('/') ? rest : `/${rest}`;
+  if (host === currentPageHost()) {
+    return suffix;
+  }
   return `/w/${host}${suffix}`;
 }
 
