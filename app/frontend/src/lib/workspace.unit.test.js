@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   parseWorkspacePath,
   currentPageHost,
@@ -59,16 +59,22 @@ describe('resolveWorkspaceOrigin', () => {
     expect(resolveWorkspaceOrigin('app.internal:5173')).toBe('http://app.internal:5173');
   });
 
-  it('reuses the page scheme for loopback hosts -- local multi-backend testing needs plain http', () => {
+  it('reuses the page scheme for loopback hosts in dev -- local multi-backend testing needs plain http', () => {
     expect(resolveWorkspaceOrigin('localhost:8000')).toBe('http://localhost:8000');
     expect(resolveWorkspaceOrigin('127.0.0.1:9501')).toBe('http://127.0.0.1:9501');
     expect(resolveWorkspaceOrigin('::1')).toBe('http://::1');
   });
 
-  it('reuses the page scheme for RFC 1918 private-network hosts', () => {
-    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('http://192.168.0.2');
-    expect(resolveWorkspaceOrigin('10.0.4.12:8080')).toBe('http://10.0.4.12:8080');
-    expect(resolveWorkspaceOrigin('172.20.0.5')).toBe('http://172.20.0.5');
+  it('does not allow plain http for loopback hosts outside a dev build', () => {
+    vi.stubEnv('DEV', false);
+    expect(resolveWorkspaceOrigin('localhost:8000')).toBe('https://localhost:8000');
+    vi.unstubAllEnvs();
+  });
+
+  it('always uses https for RFC 1918 private-network hosts -- a private IP is not inherently a dev backend', () => {
+    expect(resolveWorkspaceOrigin('192.168.0.2')).toBe('https://192.168.0.2');
+    expect(resolveWorkspaceOrigin('10.0.4.12:8080')).toBe('https://10.0.4.12:8080');
+    expect(resolveWorkspaceOrigin('172.20.0.5')).toBe('https://172.20.0.5');
   });
 
   it('always uses https for a public-looking host -- no insecure fallback for a switched backend', () => {

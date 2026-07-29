@@ -11,13 +11,17 @@ const WORKSPACE_PATH_RE = /^\/w\/([^/]+)(\/.*)?$/;
 // those get stripped by normalizeWorkspaceHost before this ever runs.
 const HOST_RE = /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*(:[0-9]{1,5})?$/;
 const SCHEME_RE = /^[a-z][a-z0-9+.-]*:\/\//i;
-// Loopback and RFC 1918 private-network hosts: switching between these during
-// local testing (a second local backend on another port, a machine on the
-// LAN) never crosses onto the open internet, so there is nothing for TLS to
-// protect there -- forcing https just breaks plain-http local servers.
-const LOOPBACK_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;
-const PRIVATE_IPV4_RE =
-  /^(10(\.\d{1,3}){3}|192\.168(\.\d{1,3}){2}|172\.(1[6-9]|2\d|3[01])(\.\d{1,3}){2})(:\d{1,5})?$/;
+// Loopback hosts: switching between these during local dev testing (a
+// second local backend on another port) never crosses onto the open
+// internet, so there is nothing for TLS to protect there -- forcing https
+// just breaks a plain-http local dev server. Gated to `import.meta.env.DEV`
+// (a real Vite build flag, not a runtime guess) so a production build never
+// carries this allowance. RFC 1918 private/LAN hosts get NO such exemption:
+// a private IP is not inherently a dev backend -- e.g. cronix is a
+// TLS-enforced LAN deployment -- and the host string alone can't say
+// whether it actually speaks plain http, so those always resolve to https
+// like any other switched-to host.
+const LOCALHOST_RE = /^(localhost|127(\.\d{1,3}){3}|\[?::1\]?)(:\d{1,5})?$/i;
 const REGISTRY_KEY = 'progenitor_workspaces';
 
 /** Parse a pathname into `{ host, rest }`, or `null` if it isn't workspace-scoped. */
@@ -36,15 +40,20 @@ export function currentPageHost() {
 
 /**
  * The backend origin a workspace host resolves to. The frontend's own host
- * (the default workspace -- see `currentPageHost`) and any loopback/private
- * host reuse the scheme the page itself was served over: neither crosses a
- * real trust boundary, so there is no plaintext-credential risk to guard
- * against. Any other (public-looking) host is an explicit cross-origin
+ * (the default workspace -- see `currentPageHost`) reuses whatever scheme
+ * the page itself was served over: it's the same origin, so there's no
+ * trust boundary being crossed. A bare `localhost`/loopback host does the
+ * same, but ONLY in a Vite dev build (`import.meta.env.DEV`) -- that's
+ * exclusively the "second local backend on another port" dev workflow.
+ * Every other host, including private/LAN IPs, is an explicit cross-origin
  * workspace switch and always resolves to `https://` -- no insecure
- * fallback for a backend the user typed in.
+ * fallback for a backend the user typed in or switched to.
  */
 export function resolveWorkspaceOrigin(host) {
-  if (host === currentPageHost() || LOOPBACK_RE.test(host) || PRIVATE_IPV4_RE.test(host)) {
+  if (host === currentPageHost()) {
+    return `${window.location.protocol}//${host}`;
+  }
+  if (import.meta.env.DEV && LOCALHOST_RE.test(host)) {
     return `${window.location.protocol}//${host}`;
   }
   return `https://${host}`;
