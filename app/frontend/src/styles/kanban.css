@@ -983,8 +983,9 @@
 }
 
 /* Task tab: the former right-rail meta content, now a responsive grid of
-   sections styled like the Agents/Schedules detail pages. Each section is a
-   bordered panel matching the .agents-prompt / card treatment on those pages. */
+   sections styled like the Agents/Schedules detail pages. .agents-section's
+   base card treatment (border/background/padding) applies as-is here; only
+   the grid-driven margin reset is Tasks-specific. */
 .task-overview {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -994,10 +995,6 @@
 
 .task-overview .agents-section {
   margin-bottom: 0;
-  padding: 14px 16px;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
 }
 
 /* Add control lives top-right in the header (like the Agents page actions); its

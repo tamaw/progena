@@ -136,13 +136,12 @@ export function SessionsNavIcon() {
 export function SchedulesNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="3" y="4" width="18" height="18" rx="2" />
-      <path d="M8 2v4" />
-      <path d="M16 2v4" />
-      <path d="M3 10h18" />
-      <path d="M8 15h.01" />
-      <path d="M12 15h.01" />
-      <path d="M16 15h.01" />
+      <path d="M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z" />
+      <path d="M12 9v4l2.5 1.5" />
+      <path d="M5 3 2 6" />
+      <path d="M22 6l-3-3" />
+      <path d="M6.5 3.5l-1 1" />
+      <path d="M18.5 4.5l-1-1" />
     </svg>
   );
 }
@@ -185,11 +184,7 @@ export function KnowledgeNavIcon() {
 export function PluginsNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
-      <path d="M14 2v4a2 2 0 0 0 2 2h4" />
-      <path d="M16 13H8" />
-      <path d="M16 17H8" />
-      <path d="M10 9H8" />
+      <path d="M12 22v-4.5M8 8.5V2M16 8.5V2M19 8.5v4a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 5 12.5v-4Z" />
     </svg>
   );
 }
