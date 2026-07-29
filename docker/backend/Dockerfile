@@ -12,13 +12,18 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY app/ ./app/
 COPY scripts/ ./scripts/
+# data/schemas/ is a static, git-checked-in contract (JSON Schemas for
+# preferences, workflow nodes, MCP entries, ...) baked into the image --
+# unlike prompts/skills (Postgres-backed, seeded once), schemas are read
+# from disk on every load_schema() call, so this directory must exist.
+COPY data/schemas/ ./data/schemas/
 RUN pip install --no-cache-dir .
 
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
 # Create directories for the (now Postgres-backed) data root and ephemeral scratch space.
-RUN mkdir -p /app/data /app/logs /app/tmp
+RUN mkdir -p /app/logs /app/tmp
 
 COPY docker/backend/certs/ /app/certs/
 

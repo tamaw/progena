@@ -70,6 +70,11 @@ WORKDIR /app
 COPY pyproject.toml README.md /app/
 COPY app/ /app/app/
 COPY scripts/ /app/scripts/
+# data/schemas/ is a static, git-checked-in contract (JSON Schemas for
+# preferences, workflow nodes, MCP entries, ...) read from disk on every
+# load_schema() call (see app/progenitor/schemas.py) -- required by any
+# agent using the structured_output tool or workflow validation.
+COPY data/schemas/ /app/data/schemas/
 
 RUN test -d "/app/app/agents/${AGENT_NAME}" && \
     test -f "/app/app/agents/${AGENT_NAME}/requirements.txt" && \
