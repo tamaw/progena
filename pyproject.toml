@@ -26,6 +26,11 @@ dependencies = [
     "deepagents>=0.6.12,<0.7.0",
     "langchain-openai>=0.3.0",
     "langchain-mcp-adapters>=0.2.2",
+    # mcp 2.0 split internals into a separate `mcp-types` package and moved
+    # `RequestContext`; langchain-mcp-adapters (as of 0.3.1) still imports it
+    # from the old location, so a fresh unpinned resolve breaks at import
+    # time. Pin below the breaking major until adapters catches up.
+    "mcp>=1.9.2,<2.0.0",
     "pydantic>=2.0.0",
     "croniter>=2.0.5",
     "aiohttp>=3.9.0",
