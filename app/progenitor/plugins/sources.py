@@ -399,6 +399,7 @@ async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dic
         return files
 
     owner, repo, ref = _resolve_plugin_source(entry, catalog)
+    assert ref is not None  # only the "./" sentinel yields None, filtered out above
     archive_url = _build_codeload_url(owner, repo, ref)
     try:
         archive_bytes = await _fetch_url(archive_url)

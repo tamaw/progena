@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -314,8 +313,6 @@ async def test_idempotent_second_pass(state_manager, fake_files, fake_digest):
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
         await reconcile_plugins(state_manager)
-        first_save_calls = state_manager.save_plugins_config_calls
-        first_content_calls = state_manager.save_content_document_calls
 
         # Second pass with identical state
         state_manager.save_plugins_config_calls = 0

@@ -15,7 +15,6 @@ from app.progenitor.agent.state_backend import (
 from app.progenitor.state.manager import StateManager
 from tests.progenitor.conftest import _FakeRuntimeStore
 
-
 # ---- validation ------------------------------------------------------------
 
 
