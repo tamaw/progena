@@ -370,9 +370,7 @@ export default function ToolsPage() {
         </PaneListToolbar>
 
         {servers.length === 0 ? (
-          <PaneEmptyState>
-            No MCP servers configured. Use “+ New” to ask Progenitor to connect one.
-          </PaneEmptyState>
+          <PaneEmptyState>No MCP servers configured.</PaneEmptyState>
         ) : visibleServers.length === 0 ? (
           <PaneEmptyState>No MCP servers match this view.</PaneEmptyState>
         ) : (
@@ -416,9 +414,7 @@ export default function ToolsPage() {
       <DetailPane className="detail-pane--dense tools-detail" label="MCP server detail">
         {!selectedServer ? (
           <div className="detail-pane__body">
-            <PaneEmptyState>
-              Select a server, or use “+ New” to ask Progenitor to connect one.
-            </PaneEmptyState>
+            <PaneEmptyState>Select a server to view its details.</PaneEmptyState>
           </div>
         ) : (
           <>

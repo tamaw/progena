@@ -579,7 +579,7 @@ export default function KnowledgePage() {
 
             {knowledgeState.error ? <div className="task-alert">{knowledgeState.error}</div> : null}
             {!visibleBases.length && loaded ? (
-              <PaneEmptyState>{bases.length ? 'No matching knowledge bases.' : 'No knowledge bases yet — create one with “+ New”.'}</PaneEmptyState>
+              <PaneEmptyState>{bases.length ? 'No matching knowledge bases.' : 'No knowledge bases.'}</PaneEmptyState>
             ) : null}
             {groups.length ? (
               <PaneListVirtualized
@@ -738,7 +738,7 @@ export default function KnowledgePage() {
                           <InfoRow key={agent} title={agent} sub="Retrieval source via knowledge_search" chip="connected" />
                         ))}
                       </div>
-                    ) : <PaneEmptyState>Not attached to any agent yet.</PaneEmptyState>}
+                    ) : <PaneEmptyState>Not attached to any agent.</PaneEmptyState>}
                   </section>
 
                   <section className="agents-section">
@@ -785,7 +785,7 @@ export default function KnowledgePage() {
                           </span>
                         ))}
                       </div>
-                    ) : <div className="task-meta-sub">No tags yet.</div>}
+                    ) : <div className="task-meta-sub">No tags.</div>}
                   </section>
                 </>
               ) : null}
@@ -850,7 +850,7 @@ export default function KnowledgePage() {
                         );
                       })}
                     </div>
-                  ) : <PaneEmptyState>No folder sources yet — use “+ Add folder” to index one.</PaneEmptyState>}
+                  ) : <PaneEmptyState>No folder sources.</PaneEmptyState>}
                   <p className="task-meta-sub">
                     Folders on the server whose text files are read, embedded, and indexed into this store.
                     Re-index to pick up changes; files land in a collection named after the folder.
@@ -873,7 +873,7 @@ export default function KnowledgePage() {
                         </div>
                       ))}
                     </div>
-                  ) : <PaneEmptyState>No collections yet — add a folder source to populate this store.</PaneEmptyState>}
+                  ) : <PaneEmptyState>No collections.</PaneEmptyState>}
                   <p className="task-meta-sub">Named groupings of the documents embedded into this store (from folder sources).</p>
                 </section>
                 </>
