@@ -24,6 +24,7 @@ import {
   PaneCollapseSeam,
   PaneEmptyState,
   PaneExpandRail,
+  PaneListFilters,
   PaneListSearch,
   PaneListToolbar,
   PaneListVirtualized,
@@ -58,6 +59,7 @@ export default function PluginsPage() {
   const [selectedMarketplace, setSelectedMarketplace] = useState('');
   const [selectedPlugin, setSelectedPlugin] = useState(null);
   const [query, setQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState('All');
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
 
@@ -120,9 +122,25 @@ export default function PluginsPage() {
     const all = Array.isArray(catalog.plugins) ? catalog.plugins : [];
     return all.filter((plugin) => {
       const searchable = `${plugin.displayName || ''} ${plugin.name || ''} ${plugin.description || ''}`.toLowerCase();
-      return !normalizedQuery || searchable.includes(normalizedQuery);
+      if (normalizedQuery && !searchable.includes(normalizedQuery)) {
+        return false;
+      }
+      if (activeFilter === 'All') {
+        return true;
+      }
+      const entry = installedPlugins[`${selectedMarketplace}/${plugin.name}`];
+      if (activeFilter === 'New') {
+        return !entry;
+      }
+      if (activeFilter === 'Installed') {
+        return Boolean(entry);
+      }
+      if (activeFilter === 'Available') {
+        return Boolean(entry?.available_version);
+      }
+      return true;
     });
-  }, [catalog, query]);
+  }, [catalog, query, activeFilter, installedPlugins, selectedMarketplace]);
 
   const pluginGroups = useMemo(() => {
     if (!visiblePlugins.length) {
@@ -223,6 +241,11 @@ export default function PluginsPage() {
         ) : (
         <>
         <PaneCollapseSeam label="Plugins" onCollapse={() => setCollapsed(true)} />
+        <PaneListFilters
+          filters={['All', 'New', 'Installed', 'Available']}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+        />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search plugins" onChange={setQuery} />
           {marketplaceOptions.length > 0 && (
@@ -241,7 +264,7 @@ export default function PluginsPage() {
         </PaneListToolbar>
 
         {!marketplaces.length && (
-          <PaneEmptyState>No marketplaces registered. Add one in Settings → Marketplaces.</PaneEmptyState>
+          <PaneEmptyState>No marketplaces registered.</PaneEmptyState>
         )}
         {marketplaces.length > 0 && !selectedMarketplace && (
           <PaneEmptyState>Select a marketplace to browse.</PaneEmptyState>
@@ -253,7 +276,7 @@ export default function PluginsPage() {
           <PaneEmptyState>{error.message}</PaneEmptyState>
         )}
         {catalog && visiblePlugins.length === 0 && (
-          <PaneEmptyState>No plugins match the current search.</PaneEmptyState>
+          <PaneEmptyState>No plugins match the current filters.</PaneEmptyState>
         )}
         {pluginGroups.length ? (
           <PaneListVirtualized
