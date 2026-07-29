@@ -60,10 +60,12 @@ const defaultConfig = {
   }
 };
 
-// `workspaceHost` is the host[:port] segment of the active /w/<host>/... route
-// (see lib/workspace.js). It is the single source of truth for which backend
-// this session talks to -- there is no separate user-editable base URL anymore;
-// switching backends means navigating to a different workspace URL.
+// `workspaceHost` is the active workspace's host[:port] -- either the plain
+// default workspace (the host that served this page, no URL prefix) or an
+// explicit /w/<host>/... route for a different backend (see lib/workspace.js).
+// It is the single source of truth for which backend this session talks to
+// -- there is no separate user-editable base URL anymore; switching backends
+// means navigating to a different workspace URL.
 export function ConfigProvider({ children, workspaceHost }) {
   const [config, setConfig] = useState(() => {
     const savedTheme = localStorage.getItem('progenitor_theme');

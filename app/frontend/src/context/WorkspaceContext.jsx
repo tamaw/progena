@@ -1,13 +1,15 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { store, workspaceSwitched } from '../store/store';
-import { parseWorkspacePath, buildWorkspacePath, ensureWorkspaceRegistered, setDefaultWorkspaceHost } from '../lib/workspace';
+import { parseWorkspacePath, buildWorkspacePath, currentPageHost, ensureWorkspaceRegistered, setDefaultWorkspaceHost } from '../lib/workspace';
 import { clearWorkspaceScopedCaches } from '../lib/workspaceCache';
 
 const WorkspaceContext = createContext(null);
 
+// A plain path (no /w/<host> prefix) means the default workspace: the host
+// that served this page (see lib/workspace.js's buildWorkspacePath/main.jsx).
 function hostFromLocation() {
-  return parseWorkspacePath(window.location.pathname)?.host ?? null;
+  return parseWorkspacePath(window.location.pathname)?.host ?? currentPageHost();
 }
 
 function resetForNewWorkspace() {
