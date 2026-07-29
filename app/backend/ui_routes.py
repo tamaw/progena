@@ -35,6 +35,7 @@ from fastapi.responses import Response
 from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
+from app.progenitor.config import default_plugins_config_payload
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -79,6 +80,7 @@ from .inbox_routes import (
     create_inbox_router,
 )
 from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
+from .marketplace_service import load_marketplaces
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .request_utils import request_correlation_id as _request_correlation_id
@@ -4315,6 +4317,10 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_knowledge_snapshot()
         if changed_key in (None, "preferences"):
             broadcast_preferences_snapshot()
+        if changed_key in (None, "marketplaces"):
+            broadcast_marketplaces_snapshot()
+        if changed_key in (None, "plugins"):
+            broadcast_plugins_snapshot()
         if changed_key in (None, "registry"):
             profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
             _active_agent_profile_broadcast_tasks.add(profile_task)
@@ -4741,6 +4747,62 @@ def broadcast_preferences_snapshot(
     """
     payload = load_preferences() if preferences is None else preferences
     return broadcast_ui_event("preferences.snapshot", payload, request_id=request_id)
+
+
+def broadcast_marketplaces_snapshot(
+    marketplaces: dict[str, Any] | None = None,
+    *,
+    request_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current marketplace source list to /api/ui/stream subscribers.
+
+    Emitted after backend-side marketplace mutations and whenever the
+    ``marketplaces`` state document changes (surfaced via the Postgres NOTIFY
+    watcher), so the Settings page reflects changes live without refetching.
+    Callers that already built the payload can pass it in to avoid a second
+    document read and keep the event consistent with the HTTP response.
+    """
+    payload = load_marketplaces() if marketplaces is None else marketplaces
+    return broadcast_ui_event("marketplaces.snapshot", payload, request_id=request_id)
+
+
+def broadcast_plugins_snapshot(
+    plugins: dict[str, Any] | None = None,
+    *,
+    request_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the current installed-plugins document to /api/ui/stream subscribers.
+
+    Emitted after backend-side plugin mutations and whenever the ``plugins`` state
+    document changes (surfaced via the Postgres NOTIFY watcher), so the Plugins
+    page reflects changes live without refetching.
+    """
+    if plugins is None:
+        default = default_plugins_config_payload()
+        document = get_default_document_store().get_document(
+            PROGENITOR_STATE_PREFIX, "plugins", default
+        )
+        raw = document.payload if document is not None else default
+        plugins = raw if isinstance(raw, dict) else default
+    return broadcast_ui_event("plugins.snapshot", plugins, request_id=request_id)
+
+
+def broadcast_plugin_catalog_snapshot(
+    name: str,
+    catalog: dict[str, Any],
+    *,
+    request_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast one marketplace's fetched catalog to /api/ui/stream subscribers.
+
+    Emitted only by the browse route; there is no store-change reaction that
+    drives this event.
+    """
+    return broadcast_ui_event(
+        "plugin.catalog.snapshot",
+        {"name": name, "catalog": catalog},
+        request_id=request_id,
+    )
 
 
 def broadcast_skills_snapshot(

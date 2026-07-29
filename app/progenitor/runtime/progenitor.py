@@ -20,6 +20,7 @@ from ..state.store_listener import RuntimeStoreListener
 from .heartbeat import ProgenitorLoop
 from .http import ProgenitorHTTPServer
 from .mcp_sync import MCPSyncScheduler
+from .plugin_sync import PluginSyncScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ class Progenitor:
         self._persistence_stack = contextlib.AsyncExitStack()
         self._store_listener: RuntimeStoreListener | None = None
         self._mcp_scheduler: MCPSyncScheduler | None = None
+        self._plugin_scheduler: PluginSyncScheduler | None = None
 
     def _on_store_change(self, payload: str) -> None:
         """Handle a ``store`` NOTIFY by re-syncing the live MCP runtime.
@@ -66,25 +68,30 @@ class Progenitor:
         Runs in the listener task; routes by key onto the coalescing scheduler:
         ``mcp`` (server config: add/remove/enable/disable/url) needs a full
         re-discovery; ``mcp_tools`` (a per-tool enable toggle) only needs the
-        disabled set re-applied. This is the single path for both UI-driven and
-        agent-driven config changes — there is no separate write-hook.
+        disabled set re-applied. ``plugins`` triggers the plugin reconciler.
+        This is the single path for both UI-driven and agent-driven config
+        changes — there is no separate write-hook.
         """
-        if self._mcp_scheduler is None:
+        if self._mcp_scheduler is None and self._plugin_scheduler is None:
             return
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
-        if key == "mcp":
+        if key == "mcp" and self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=True)
-        elif key == "mcp_tools":
+        elif key == "mcp_tools" and self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=False)
+        elif key == "plugins" and self._plugin_scheduler is not None:
+            self._plugin_scheduler.request()
 
     def _on_store_resync(self) -> None:
-        """On (re)connect, recover any MCP config change missed while disconnected."""
+        """On (re)connect, recover any MCP or plugin config change missed while disconnected."""
         if self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=True)
+        if self._plugin_scheduler is not None:
+            self._plugin_scheduler.request()
 
     async def _do_mcp_full_resync(self) -> None:
         from ..nodes.mcp import sync_mcp_runtime_context
@@ -105,6 +112,14 @@ class Progenitor:
 
         count, _changed = await reapply_mcp_disabled_tools(self.llm_client, self.state_manager)
         logger.info("Re-applied MCP tool flags from store change (%d disabled)", count)
+
+    async def _do_plugin_reconcile(self) -> None:
+        from ..plugins.install import reconcile_plugins
+
+        if self.state_manager is None:
+            return
+        summary = await reconcile_plugins(self.state_manager, log_sink=self.log_store)
+        logger.info("Reconciled plugins from config change: %s", summary)
 
     async def initialize(self) -> None:
         """Initialize all components."""
@@ -186,6 +201,9 @@ class Progenitor:
             full_resync=self._do_mcp_full_resync,
             reapply=self._do_mcp_reapply,
         )
+        self._plugin_scheduler = PluginSyncScheduler(
+            reconcile=self._do_plugin_reconcile,
+        )
         self._store_listener = RuntimeStoreListener(
             self.config.database.url,
             on_change=self._on_store_change,
@@ -253,6 +271,10 @@ class Progenitor:
         if self._mcp_scheduler is not None:
             await self._mcp_scheduler.aclose()
             self._mcp_scheduler = None
+
+        if self._plugin_scheduler is not None:
+            await self._plugin_scheduler.aclose()
+            self._plugin_scheduler = None
 
         if self._http_server is not None:
             await self._http_server.stop()

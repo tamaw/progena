@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Plugin entry",
+  "description": "One plugin object under 'plugins' in the 'plugins' state document.",
+  "type": "object",
+  "properties": {
+    "source": {
+      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object.",
+      "oneOf": [
+        {
+          "type": "string",
+          "description": "Relative path to the plugin source (e.g., './my-plugin')."
+        },
+        {
+          "type": "object",
+          "description": "Structured plugin source (e.g., GitHub or git-subdir).",
+          "properties": {
+            "source": { "type": "string" },
+            "repo": { "type": "string" },
+            "ref": { "type": "string" },
+            "sha": { "type": "string" },
+            "url": { "type": "string" },
+            "path": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "version": {
+      "type": "string",
+      "description": "Desired version pin (optional)."
+    },
+    "installed_version": {
+      "type": ["string", "null"],
+      "description": "Version currently installed by the reconciler."
+    },
+    "installed_digest": {
+      "type": ["string", "null"],
+      "description": "SHA-256 digest of the installed plugin files."
+    },
+    "available_version": {
+      "type": ["string", "null"],
+      "description": "Upstream version detected by the periodic update check."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["pending", "installed", "error"],
+      "description": "Current installation status."
+    },
+    "status_message": {
+      "type": "string",
+      "description": "Human-readable status or error message."
+    },
+    "skills": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Skill names provided by this plugin."
+    },
+    "installed_at": {
+      "type": ["string", "null"],
+      "description": "ISO 8601 timestamp of installation."
+    },
+    "last_checked": {
+      "type": ["string", "null"],
+      "description": "ISO 8601 timestamp of last update check."
+    }
+  },
+  "required": ["source"],
+  "additionalProperties": false
+}

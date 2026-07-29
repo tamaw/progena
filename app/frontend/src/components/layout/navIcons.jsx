@@ -182,7 +182,7 @@ export function KnowledgeNavIcon() {
 }
 
 
-export function SkillsNavIcon() {
+export function PluginsNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" />
@@ -287,6 +287,16 @@ export function SettingsAboutIcon() {
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
       <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.3" />
       <path d="M8 7v4M8 5v.01" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function SettingsMarketplacesIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <circle cx="8" cy="8" r="1.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M1.5 8h3M11.5 8h3M8 1.5v3M8 11.5v3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }

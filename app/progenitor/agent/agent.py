@@ -232,11 +232,21 @@ async def create_progenitor_agent(
     await ensure_content_documents_seeded(state_manager, "prompt", prompts_seed_dir)
     await ensure_content_documents_seeded(state_manager, "skill", skills_seed_dir)
 
-    # Auto-discover skills through the DeepAgent backend mount.
+    # Auto-discover skills through the DeepAgent backend mount: one source
+    # per distinct top-level segment under the "skill" content-document kind,
+    # "progenitor" first (so the agent's own management skills are never
+    # shadowed by a third-party plugin) and every other segment sorted after.
+    # Name conflicts across sources are allowed, not rejected -- SkillsMiddleware
+    # dedupes by frontmatter `name` with silent last-source-wins, matching
+    # every other Agent Skills host; source order only controls which source
+    # wins a collision, deterministically.
     if skills_dirs is None:
         skill_rows = await state_manager.list_content_documents("skill")
-        if any(relative_path.startswith("progenitor/") for relative_path, _content in skill_rows):
-            skills_dirs = ["/skills/progenitor"]
+        segments = {rel.split("/", 1)[0] for rel, _content in skill_rows if "/" in rel}
+        ordered = (["progenitor"] if "progenitor" in segments else []) + sorted(
+            segments - {"progenitor"}
+        )
+        skills_dirs = [f"/skills/{segment}" for segment in ordered] or None
 
     if memory_paths is None:
         await _ensure_default_runtime_memory(state_manager)
