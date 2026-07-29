@@ -25,7 +25,6 @@ import reducer, {
   selectChatSessions,
   selectKanbanBoard,
   selectPromptContentEntry,
-  selectSkillContentEntry,
   selectTaskActivityEntry,
   selectTaskContentEntry,
   selectUnreadChatIds,
@@ -385,17 +384,12 @@ describe('applyUiEvent reducer', () => {
     expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
   });
 
-  it('prompt.content.updated and skill.content.updated cache full bodies by path', () => {
-    let s = reducer(undefined, applyUiEvent({
+  it('prompt.content.updated caches full bodies by path', () => {
+    const s = reducer(undefined, applyUiEvent({
       type: 'prompt.content.updated',
       payload: { path: 'builder_agent/think.md', content: '# Think prompt' },
     }));
-    s = reducer(s, applyUiEvent({
-      type: 'skill.content.updated',
-      payload: { path: 'progenitor/runtime-inspection/SKILL.md', content: '# Runtime inspection' },
-    }));
     expect(selectPromptContentEntry({ uiData: s }, 'builder_agent/think.md')?.content).toBe('# Think prompt');
-    expect(selectSkillContentEntry({ uiData: s }, 'progenitor/runtime-inspection/SKILL.md')?.content).toBe('# Runtime inspection');
     expect(selectPromptContentEntry({ uiData: s }, 'unknown.md')).toBeNull();
   });
 
