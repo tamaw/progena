@@ -90,6 +90,18 @@ describe('buildWorkspacePath', () => {
   it('defaults rest to the app root', () => {
     expect(buildWorkspacePath('team-a.example.com')).toBe('/w/team-a.example.com/');
   });
+
+  it('drops the /w/ prefix when host matches the current page host (the default workspace)', () => {
+    expect(buildWorkspacePath('app.internal:5173', '/chat')).toBe('/chat');
+  });
+
+  it('defaults the current-page host to the plain root, not /w/', () => {
+    expect(buildWorkspacePath('app.internal:5173')).toBe('/');
+  });
+
+  it('adds a leading slash for the current-page host when rest is missing one', () => {
+    expect(buildWorkspacePath('app.internal:5173', 'chat')).toBe('/chat');
+  });
 });
 
 describe('normalizeWorkspaceHost', () => {
