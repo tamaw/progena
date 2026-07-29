@@ -26,9 +26,13 @@ COPY app/ ./app/
 # not a runtime read path once the store has rows.
 COPY data/prompts/ ./data/prompts/
 COPY data/skills/ ./data/skills/
+# data/schemas/ is a static, git-checked-in contract (JSON Schemas for
+# preferences, workflow nodes, MCP entries, ...), unlike prompts/skills --
+# it's read from disk on every load_schema() call, not seeded once.
+COPY data/schemas/ ./data/schemas/
 COPY scripts/ ./scripts/
 RUN pip install --no-cache-dir . \
-    && mkdir -p /app/data /app/logs /app/tmp
+    && mkdir -p /app/logs /app/tmp
 
 # Set environment variables
 ENV PYTHONPATH=/app
