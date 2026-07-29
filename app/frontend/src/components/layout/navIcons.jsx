@@ -185,7 +185,7 @@ export function KnowledgeNavIcon() {
 export function PluginsNavIcon() {
   return (
     <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z" />
+      <path d="M12 22v-4.5M8 8.5V2M16 8.5V2M19 8.5v4a4.5 4.5 0 0 1-4.5 4.5h-5A4.5 4.5 0 0 1 5 12.5v-4Z" />
     </svg>
   );
 }
