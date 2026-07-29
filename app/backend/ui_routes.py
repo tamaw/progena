@@ -84,7 +84,6 @@ from .marketplace_service import load_marketplaces
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .request_utils import request_correlation_id as _request_correlation_id
-from .skill_service import SkillService
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
@@ -220,63 +219,10 @@ class PromptsResponse(BaseModel):
     total: int
 
 
-class SkillFileResponse(BaseModel):
-    """Workspace skill metadata."""
-
-    path: str
-    filename: str
-    directory: str
-    agent: str
-    name: str
-    title: str
-    description: str
-    size_bytes: int
-    updated_at: float
-    preview: str
-    content: str
-
-
-class SkillSummaryResponse(BaseModel):
-    """Workspace skill metadata without the file body (list payload)."""
-
-    path: str
-    filename: str
-    directory: str
-    agent: str
-    name: str
-    title: str
-    description: str
-    size_bytes: int
-    updated_at: float
-    preview: str
-
-
-class SkillsResponse(BaseModel):
-    """Response containing discovered skills."""
-
-    skills: list[SkillSummaryResponse]
-    total: int
-
-
 class PromptUpdateRequest(BaseModel):
     """Prompt update payload."""
 
     path: str
-    content: str
-
-
-class SkillUpdateRequest(BaseModel):
-    """Skill update payload."""
-
-    path: str
-    content: str
-
-
-class SkillCreateRequest(BaseModel):
-    """Skill creation payload."""
-
-    agent: str
-    name: str
     content: str
 
 
@@ -3740,96 +3686,6 @@ async def update_prompt_content(
     return acknowledgement_response(request_id, ["prompt.content.updated", "prompts.snapshot"])
 
 
-@router.get("/skills", status_code=202, response_model=UiRequestAcknowledgement)
-async def get_skills(
-    request: Request,
-    agent: str | None = None,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Publish the complete skill catalogue; consumers filter locally."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        # A catalogue snapshot is global canonical state. Never publish a
-        # request-specific subset as a snapshot for all connected clients.
-        skills = [
-            SkillSummaryResponse.model_validate(skill, from_attributes=True)
-            for skill in SkillService().list_skills()
-        ]
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_skills_snapshot(skills, request_id=request_id)
-    return acknowledgement_response(request_id, ["skills.snapshot"])
-
-
-@router.get("/skills/content", status_code=202, response_model=UiRequestAcknowledgement)
-async def get_skill_content(
-    request: Request,
-    path: str = Query(...),
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Acknowledge a skill-content request and publish its canonical body."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        record = SkillService().get_skill(path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Skill '{path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    payload = SkillFileResponse.model_validate(record, from_attributes=True)
-    broadcast_ui_event(
-        "skill.content.updated", payload.model_dump(mode="json"), request_id=request_id
-    )
-    return acknowledgement_response(request_id, ["skill.content.updated"])
-
-
-@router.put("/skills/content", status_code=202, response_model=UiRequestAcknowledgement)
-async def update_skill_content(
-    body: SkillUpdateRequest,
-    request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Persist edits to an existing skill file."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        saved = SkillFileResponse.model_validate(
-            SkillService().save_skill(body.path, body.content),
-            from_attributes=True,
-        )
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"Skill '{body.path}' not found") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_ui_event(
-        "skill.content.updated", saved.model_dump(mode="json"), request_id=request_id
-    )
-    broadcast_skills_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["skill.content.updated", "skills.snapshot"])
-
-
-@router.post("/skills", response_model=UiRequestAcknowledgement, status_code=202)
-async def create_skill(
-    body: SkillCreateRequest,
-    request: Request,
-    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
-):
-    """Create a new DeepAgent skill file."""
-    request_id = _request_correlation_id(request, x_request_id)
-    try:
-        created = SkillFileResponse.model_validate(
-            SkillService().create_skill(body.agent, body.name, body.content),
-            from_attributes=True,
-        )
-    except FileExistsError as exc:
-        raise HTTPException(status_code=409, detail=f"Skill '{exc}' already exists") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    broadcast_ui_event(
-        "skill.content.updated", created.model_dump(mode="json"), request_id=request_id
-    )
-    broadcast_skills_snapshot(request_id=request_id)
-    return acknowledgement_response(request_id, ["skill.content.updated", "skills.snapshot"])
-
-
 @router.get("/logs", status_code=202, response_model=UiRequestAcknowledgement)
 async def get_logs(
     request: Request,
@@ -4803,25 +4659,6 @@ def broadcast_plugin_catalog_snapshot(
         {"name": name, "catalog": catalog},
         request_id=request_id,
     )
-
-
-def broadcast_skills_snapshot(
-    skills: list[SkillSummaryResponse] | None = None, *, request_id: str | None = None
-) -> UiEventEnvelope:
-    """Broadcast the current skill list to /api/ui/stream subscribers.
-
-    Emitted after the Skills page requests the list and after UI-driven skill
-    edits/creates, so the Skills page (and other open tabs) reflect changes live.
-    Callers that already built the list can pass it in to avoid a second
-    filesystem scan and keep the event consistent with the HTTP response.
-    """
-    if skills is None:
-        skills = [
-            SkillSummaryResponse.model_validate(skill, from_attributes=True)
-            for skill in SkillService().list_skills()
-        ]
-    payload = [item.model_dump(mode="json") for item in skills]
-    return broadcast_ui_event("skills.snapshot", {"skills": payload}, request_id=request_id)
 
 
 def broadcast_prompts_snapshot(

@@ -19,7 +19,6 @@ const defaultConfig = {
       mcp: '/api/ui/mcp',
       kanban: '/api/ui/kanban',
       prompts: '/api/ui/prompts',
-      skills: '/api/ui/skills',
       marketplaces: '/api/ui/marketplaces',
       plugins: '/api/ui/plugins',
       schedules: '/api/ui/schedules',
