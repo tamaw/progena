@@ -6735,6 +6735,10 @@ body,
 
 .agents-section {
   margin-bottom: 22px;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
 }
 
 .agents-section__head {
