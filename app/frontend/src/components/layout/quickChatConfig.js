@@ -143,9 +143,10 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
     return [
       'Create a new task on the kanban board from the following user request.',
       'Follow the managing-tasks skill: write /config/tasks/<id>.md (a unique',
-      'card_<short-hex> slug) with a concise title and any column, status, owner,',
-      'or labels the request implies. Saving the file persists the task and the',
-      'Tasks board updates live.',
+      'card_<short-hex> slug) with a concise title, a real one-sentence summary,',
+      'and any column_id, status, owner, or labels the request implies. Use the',
+      'exact frontmatter field names from the skill (column_id, not column).',
+      'Saving the file persists the task and the Tasks board updates live.',
       ...(projectLine ? [projectLine] : []),
       'Only ask a follow-up question if the task title is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created task title and column.',
