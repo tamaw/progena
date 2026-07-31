@@ -10,7 +10,7 @@ from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
 from app.backend.document_store import (
-    BACKEND_STATE_PREFIX,
+    PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
 )
@@ -65,16 +65,15 @@ class _StreamCapture:
 class TestMarketplaceRoutes:
     def test_get_returns_ack_and_broadcasts_snapshot(self, client, document_store):
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "https://github.com/acme/plugins",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
         with _StreamCapture() as capture:
@@ -83,7 +82,7 @@ class TestMarketplaceRoutes:
         assert_acknowledged(response, ["marketplaces.snapshot"])
         envelopes = capture.event_types()
         assert [e.type for e in envelopes] == ["marketplaces.snapshot"]
-        assert envelopes[0].payload["sources"][0]["name"] == "acme"
+        assert envelopes[0].payload["marketplaces"]["acme"]["source"] == "https://github.com/acme/plugins"
 
     def test_get_empty_defaults(self, client, document_store):
         with _StreamCapture() as capture:
@@ -91,64 +90,49 @@ class TestMarketplaceRoutes:
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
         envelopes = capture.event_types()
-        assert envelopes[0].payload["sources"] == []
+        assert envelopes[0].payload["marketplaces"] == {}
 
     def test_put_validates_persists_and_broadcasts(self, client, document_store):
         payload = {
-            "sources": [
-                {"name": "acme", "source": "https://github.com/acme/plugins"},
-                {"name": "beta", "source": "https://github.com/beta/plugins"},
-            ]
+            "marketplaces": {
+                "acme": {"source": "https://github.com/acme/plugins"},
+                "beta": {"source": "https://github.com/beta/plugins"},
+            }
         }
         with _StreamCapture() as capture:
             response = client.put("/api/ui/marketplaces", json=payload)
 
         assert_acknowledged(response, ["marketplaces.snapshot"])
-        stored = document_store.get_document(BACKEND_STATE_PREFIX, "marketplaces")
-        assert len(stored.payload["sources"]) == 2
-        assert stored.payload["sources"][0]["name"] == "acme"
-        assert "added_at" in stored.payload["sources"][0]
+        stored = document_store.get_document(PROGENITOR_STATE_PREFIX, "marketplaces")
+        assert len(stored.payload["marketplaces"]) == 2
+        assert stored.payload["marketplaces"]["acme"]["source"] == "https://github.com/acme/plugins"
 
         envelopes = capture.event_types()
         assert [e.type for e in envelopes] == ["marketplaces.snapshot"]
 
-    def test_put_rejects_missing_name(self, client, document_store):
-        payload = {"sources": [{"source": "https://github.com/acme/plugins"}]}
+    def test_put_rejects_bad_name(self, client, document_store):
+        payload = {"marketplaces": {"Bad Name": {"source": "https://github.com/acme/plugins"}}}
         response = client.put("/api/ui/marketplaces", json=payload)
         assert response.status_code == 400
-        assert "name" in response.json()["detail"].lower()
+        assert "kebab-case" in response.json()["detail"].lower()
 
     def test_put_rejects_missing_source(self, client, document_store):
-        payload = {"sources": [{"name": "acme"}]}
+        payload = {"marketplaces": {"acme": {}}}
         response = client.put("/api/ui/marketplaces", json=payload)
         assert response.status_code == 400
         assert "source" in response.json()["detail"].lower()
 
-    def test_put_dedupes_by_name_last_wins(self, client, document_store):
-        payload = {
-            "sources": [
-                {"name": "acme", "source": "https://first"},
-                {"name": "acme", "source": "https://second"},
-            ]
-        }
-        response = client.put("/api/ui/marketplaces", json=payload)
-        assert response.status_code == 202
-        stored = document_store.get_document(BACKEND_STATE_PREFIX, "marketplaces")
-        assert len(stored.payload["sources"]) == 1
-        assert stored.payload["sources"][0]["source"] == "https://second"
-
     def test_browse_returns_ack_and_broadcasts_catalog(self, client, document_store, monkeypatch):
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "https://github.com/acme/plugins",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
 
@@ -187,16 +171,15 @@ class TestMarketplaceRoutes:
         from app.progenitor.plugins.sources import PluginFetchError
 
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "bad",
+                "marketplaces": {
+                    "bad": {
                         "source": "https://bad.example",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
         monkeypatch.setattr(

@@ -6,7 +6,7 @@ import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } fro
 
 export const initialState = {
   marketplaces: {
-    items: [],
+    items: {},
     loaded: false,
     loading: false,
     error: null,
@@ -25,8 +25,8 @@ export const initialState = {
 };
 
 function applyMarketplaces(state, payload, requestId = null) {
-  const sources = payload?.sources || [];
-  state.marketplaces.items = Array.isArray(sources) ? sources : [];
+  const marketplaces = payload?.marketplaces || {};
+  state.marketplaces.items = marketplaces && typeof marketplaces === 'object' ? marketplaces : {};
   state.marketplaces.loaded = true;
   state.marketplaces.snapshotRequestId = requestId;
   if (!state.marketplaces.loading || requestId === state.marketplaces.requestId) {
@@ -53,11 +53,11 @@ export const fetchMarketplaces = createAcknowledgedThunk('uiData/fetchMarketplac
   return requestAcknowledged(marketplacesUrl, { requestId });
 });
 
-// Persist the full marketplace source list.
-export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces', async ({ marketplacesUrl, sources }, { requestId }) => {
+// Persist the full marketplaces document.
+export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces', async ({ marketplacesUrl, marketplaces }, { requestId }) => {
   return requestAcknowledged(marketplacesUrl, {
     method: 'PUT',
-    body: { sources },
+    body: { marketplaces },
     requestId,
   });
 });

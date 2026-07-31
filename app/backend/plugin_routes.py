@@ -46,10 +46,10 @@ def _save_plugins_document(payload: dict[str, Any]) -> dict[str, Any]:
 def _marketplace_source_url(marketplace_name: str) -> str | None:
     """Look up a registered marketplace's own source string by name."""
     snapshot = load_marketplaces()
-    for src in snapshot.get("sources", []):
-        if isinstance(src, dict) and src.get("name") == marketplace_name:
-            return str(src.get("source") or "").strip() or None
-    return None
+    entry = snapshot.get("marketplaces", {}).get(marketplace_name)
+    if not isinstance(entry, dict):
+        return None
+    return str(entry.get("source") or "").strip() or None
 
 
 async def _resolve_catalog(marketplace_name: str) -> Any:

@@ -10,7 +10,6 @@ from ack_helpers import assert_acknowledged
 from fastapi.testclient import TestClient
 
 from app.backend.document_store import (
-    BACKEND_STATE_PREFIX,
     PROGENITOR_STATE_PREFIX,
     InMemoryDocumentStore,
     set_default_document_store,
@@ -97,16 +96,15 @@ class TestPluginRoutes:
     def test_post_installs_and_broadcasts(self, client, document_store, monkeypatch):
         # Seed marketplace source so the backend can resolve the catalog.
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "https://github.com/acme/plugins",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
 
@@ -158,16 +156,15 @@ class TestPluginRoutes:
         the marketplace archive to resolve it against, and would fail
         every single install (found live against a real marketplace)."""
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "acme/plugins@main",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
 
@@ -204,16 +201,15 @@ class TestPluginRoutes:
     def test_post_rejects_invalid_plugin_document(self, client, document_store, monkeypatch):
         # Seed a marketplace.
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "https://github.com/acme/plugins",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
 
@@ -262,16 +258,15 @@ class TestPluginRoutes:
 
     def test_post_rejects_unknown_plugin(self, client, document_store, monkeypatch):
         document_store.save_document(
-            BACKEND_STATE_PREFIX,
+            PROGENITOR_STATE_PREFIX,
             "marketplaces",
             {
-                "sources": [
-                    {
-                        "name": "acme",
+                "marketplaces": {
+                    "acme": {
                         "source": "https://github.com/acme/plugins",
                         "added_at": "2026-07-29T10:00:00Z",
                     }
-                ]
+                }
             },
         )
 

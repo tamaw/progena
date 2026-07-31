@@ -553,7 +553,7 @@ export default function PluginsPage() {
     setDraftContent('');
     setError(null);
     setStatusMessage('');
-    const defaultMarketplace = marketplaces[0]?.name || '';
+    const defaultMarketplace = Object.keys(marketplaces)[0] || '';
     setSelectedMarketplace(defaultMarketplace);
   };
 
@@ -631,7 +631,7 @@ export default function PluginsPage() {
   };
 
   const marketplaceOptions = useMemo(
-    () => marketplaces.map((m) => ({ value: m.name, label: m.name })),
+    () => Object.keys(marketplaces).map((name) => ({ value: name, label: name })),
     [marketplaces],
   );
 

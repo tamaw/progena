@@ -1,4 +1,4 @@
-"""Marketplace sources API routes — backend-owned registry of marketplace URLs."""
+"""Marketplace sources API routes — the agent-editable ``marketplaces`` document."""
 
 from __future__ import annotations
 
@@ -56,14 +56,14 @@ async def replace_marketplaces(
     request: Request,
     x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
 ) -> UiRequestAcknowledgement:
-    """Validate and persist the full marketplaces source list."""
+    """Validate and persist the full marketplaces document."""
     request_id = _request_correlation_id(request, x_request_id)
     try:
         normalized = validate_marketplaces_payload(payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    saved = await asyncio.to_thread(save_marketplaces, normalized["sources"])
+    saved = await asyncio.to_thread(save_marketplaces, normalized["marketplaces"])
     broadcast_marketplaces_snapshot(saved, request_id=request_id)
     return acknowledgement_response(request_id, ["marketplaces.snapshot"])
 
@@ -79,11 +79,8 @@ async def browse_marketplace_plugins(
 
     # Resolve the registered source URL.
     snapshot = await asyncio.to_thread(load_marketplaces)
-    source_url: str | None = None
-    for src in snapshot.get("sources", []):
-        if isinstance(src, dict) and src.get("name") == name:
-            source_url = str(src.get("source") or "").strip()
-            break
+    entry = snapshot.get("marketplaces", {}).get(name)
+    source_url = str(entry.get("source") or "").strip() if isinstance(entry, dict) else None
 
     if not source_url:
         raise HTTPException(status_code=404, detail=f"marketplace '{name}' not found")
