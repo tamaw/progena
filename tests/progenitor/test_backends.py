@@ -59,8 +59,11 @@ class TestBackendFactory:
         assert isinstance(backend.default, runtime_free_cls)
         assert "/memories/" not in backend.routes
         assert "/prompts/" not in backend.routes
-        assert "/skills/" not in backend.routes
         assert "/config/" not in backend.routes
+        # /skills/ is a plain disk mount (like /schemas/), so it's present even
+        # without a state_manager -- as long as data/skills/ exists on disk,
+        # which it does for this real project_root=".".
+        assert "/skills/" in backend.routes
 
     def test_factory_uses_project_root(self, monkeypatch):
         """project_root is accepted for scoped filesystem mounts."""
@@ -71,7 +74,7 @@ class TestBackendFactory:
         with tempfile.TemporaryDirectory() as tmpdir:
             runtime_free_cls = self._patch_runtime_free_state_backend(monkeypatch)
             root = Path(tmpdir)
-            for rel in ("app", "data/schemas", "logs", "repos"):
+            for rel in ("app", "data/schemas", "data/skills", "logs", "repos"):
                 (root / rel).mkdir(parents=True, exist_ok=True)
 
             state_manager = FakeContentStateManager()
@@ -93,7 +96,9 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/schemas/"], ReadOnlyBackend)
             assert isinstance(backend.routes["/schemas/"]._backend, FilesystemBackend)
             assert isinstance(backend.routes["/prompts/"], ReadOnlyBackend)
+            # /skills/ is disk-backed now (like /schemas/), not Postgres-backed.
             assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
+            assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
 
     def test_state_manager_mounts_config_and_inbox_routes(self, monkeypatch):
         """A state_manager adds the /config/, /config/tasks/, /workflows/, and /inbox/ mounts."""
@@ -153,20 +158,40 @@ class TestBackendFactory:
             assert schema_read.error is None
             assert json.loads(schema_read.file_data["content"]) == schema
 
-    async def test_prompts_and_skills_are_read_only(self, monkeypatch):
-        """/prompts/ and /skills/ read Postgres content and are wrapped read-only."""
+    async def test_prompts_are_read_only(self, monkeypatch):
+        """/prompts/ reads Postgres content and is wrapped read-only."""
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["prompt"]["progenitor/genesis.md"] = "# Genesis\n"
-        state_manager._docs["skill"]["example/SKILL.md"] = "---\nname: example\n---\n"
 
         backend = create_progenitor_backend(project_root=".", state_manager=state_manager)
 
         prompt_read = await backend.aread("/prompts/progenitor/genesis.md")
-        skill_read = await backend.aread("/skills/example/SKILL.md")
         assert prompt_read.error is None
         assert prompt_read.file_data["content"] == "# Genesis\n"
-        assert skill_read.error is None
 
         assert isinstance(backend.routes["/prompts/"], ReadOnlyBackend)
-        assert isinstance(backend.routes["/skills/"], ReadOnlyBackend)
+
+    async def test_plugin_skill_segment_is_read_only_and_scoped(self, monkeypatch):
+        """/skills/<segment>/ reads only that plugin's own Postgres skill rows."""
+        self._patch_runtime_free_state_backend(monkeypatch)
+        state_manager = FakeContentStateManager()
+        state_manager._docs["skill"]["acme__formatter/lint/SKILL.md"] = "---\nname: lint\n---\n"
+        state_manager._docs["skill"]["other__plugin/quality/SKILL.md"] = (
+            "---\nname: quality\n---\n"
+        )
+
+        backend = create_progenitor_backend(
+            project_root=".",
+            state_manager=state_manager,
+            plugin_skill_segments=["acme__formatter", "other__plugin"],
+        )
+
+        assert isinstance(backend.routes["/skills/acme__formatter/"], ReadOnlyBackend)
+        read = await backend.aread("/skills/acme__formatter/lint/SKILL.md")
+        assert read.error is None
+        assert read.file_data["content"] == "---\nname: lint\n---\n"
+
+        # Scoped to its own segment: the other plugin's file isn't visible here.
+        cross_read = await backend.aread("/skills/acme__formatter/quality/SKILL.md")
+        assert cross_read.error is not None

@@ -74,16 +74,10 @@ class PromptTemplates:
         return template.replace("{item_type}", item_type)
 
     def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
-        """Load repo-level builder skills for prompt grounding.
-
-        Builder-specific skills must exist under data/skills/builder_agent/.
-        """
+        """Load builder skills for prompt grounding from Progenitor's shared
+        Postgres store (the installed ``builder-agent`` marketplace plugin)."""
         selected = skill_names or ["build-agent", "git-workflow"]
-        return load_repo_skill_context(
-            selected,
-            agent_name="builder_agent",
-            prompts_dir=self.prompts_dir,
-        )
+        return load_repo_skill_context(selected, agent_name="builder_agent")
 
     def get_copilot_task_prompt(self, spec: dict) -> str:
         """Generate a task prompt for Copilot CLI.

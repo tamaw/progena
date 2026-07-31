@@ -234,7 +234,8 @@ class TestSkillsWiring:
 
     @pytest.mark.asyncio
     async def test_factory_skips_skills_when_no_progenitor_skill_docs(self, tmp_path):
-        """Auto-discovery leaves skills_dirs unset when no skill documents exist."""
+        """Auto-discovery leaves skills_dirs unset when there's no native skills
+        dir on disk and no installed marketplace-plugin skill documents."""
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -252,8 +253,8 @@ class TestSkillsWiring:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.agent import create_progenitor_agent
 
-                # Empty project root: the seed source directory doesn't exist,
-                # so seeding is a no-op and no skill documents ever land.
+                # Empty project root: data/skills/ doesn't exist on disk (no
+                # native skills) and no marketplace-plugin skill documents exist.
                 await create_progenitor_agent(
                     config=fake_config,
                     checkpointer=MagicMock(),

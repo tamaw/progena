@@ -4,6 +4,9 @@ import pytest
 
 from app.agents.builder_progenitor.prompts import load_prompt, load_skill_context
 
+# fake_skill_store (autouse) comes from conftest.py -- every test here reads
+# through a fake Postgres store instead of a real database connection.
+
 
 def test_execution_prompt_template_exists():
     prompt = load_prompt(

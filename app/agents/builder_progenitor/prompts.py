@@ -26,15 +26,12 @@ def load_prompt(filename: str, **replacements: str) -> str:
 
 
 def load_skill_context(skill_names: list[str] | None = None) -> str:
-    """Load repo-level prompt skills as plain text context."""
+    """Load builder skills as plain text context from Progenitor's shared
+    Postgres store (the installed ``builder-progenitor`` marketplace plugin)."""
     selected = skill_names or [
         "build-agent",
         "git-workflow",
         "task-setup",
         "task-teardown",
     ]
-    return load_repo_skill_context(
-        selected,
-        agent_name="builder_progenitor",
-        prompts_dir=resolve_prompts_dir(),
-    )
+    return load_repo_skill_context(selected, agent_name="builder_progenitor")

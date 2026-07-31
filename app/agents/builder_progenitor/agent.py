@@ -42,7 +42,7 @@ from pydantic import SecretStr
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
 from .hooks import HookContext, HookManager, create_default_hook_manager
-from .prompt_support import resolve_prompts_dir, resolve_skills_dir
+from .postgres_skills import close_skill_store
 from .prompts import load_prompt, load_skill_context
 from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
@@ -257,15 +257,17 @@ def _create_graph(
 def _resolve_builder_skill_dirs() -> list[str]:
     """Return DeepAgent skill directories for the builder harness.
 
-    The builder keeps its local workflow skills plus the checked-in
-    builder_progenitor skill pack. It intentionally does not inherit the main
-    Progenitor skill pack.
+    Only the local, checked-in ``skills/`` pack next to this package -- the
+    marketplace-installed builder skill pack (build-agent, git-workflow) that
+    used to also live on disk under ``data/skills/builder_progenitor/`` moved
+    to the ``tamaw/marketplace`` repo and is Postgres-backed now (see
+    ``postgres_skills.py``); DeepAgents' ``skills=`` progressive-disclosure
+    list only supports real disk directories via this agent's
+    ``LocalShellBackend``, so it isn't a source here -- ``load_skill_context``
+    is the only consumer of those marketplace skills. It intentionally does
+    not inherit the main Progenitor skill pack either.
     """
-    prompts_dir = resolve_prompts_dir()
-    candidates = [
-        Path(__file__).resolve().parent / "skills",
-        resolve_skills_dir("builder_progenitor", prompts_dir=prompts_dir),
-    ]
+    candidates = [Path(__file__).resolve().parent / "skills"]
 
     skill_dirs: list[str] = []
     for path in candidates:
@@ -790,6 +792,7 @@ async def _lifespan(_app: Any):
             await _task_queue.stop()
             _task_queue = None
         await service.shutdown()
+        close_skill_store()
 
 
 app.router.lifespan_context = _lifespan

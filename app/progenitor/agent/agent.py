@@ -136,18 +136,19 @@ async def create_progenitor_agent(
                       If None, uses in-memory checkpointer (dev mode).
         tool_registry: Progenitor's tool/agent registry (for tool context).
         llm_client: Progenitor's LLM client (for tools that need AI).
-        state_manager: Progenitor's StateManager. Required: prompts, skills,
-                       and runtime memories are Postgres-backed content
-                       documents (see ``content_documents.py``), and the
-                       genesis system prompt is loaded from there.
+        state_manager: Progenitor's StateManager. Required: prompts and runtime
+                       memories are Postgres-backed content documents (see
+                       ``content_documents.py``), installed marketplace-plugin
+                       skills are Postgres-backed too, and the genesis system
+                       prompt is loaded from there.
         store: Optional LangGraph BaseStore for DeepAgent features that need one.
                If None, no store is configured by default.
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_sink: Optional async sink for Postgres audit logs.
         skills_dirs: Paths to skill directories for progressive disclosure.
-                     If None, auto-discovers from the Postgres-backed skill
-                     documents: ``/skills`` for progenitor's own (flat,
-                     unsegmented) skills, plus one ``/skills/<marketplace>__<plugin>``
+                     If None, auto-discovers: ``/skills`` (disk-backed) for
+                     progenitor's own native skills when present, plus one
+                     ``/skills/<marketplace>__<plugin>`` (Postgres-backed)
                      source per installed marketplace plugin.
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
                       via Deep Agents' `memory=` middleware. If None, Progenitor
@@ -161,9 +162,9 @@ async def create_progenitor_agent(
     """
     if state_manager is None:
         raise ValueError(
-            "create_progenitor_agent requires state_manager: prompts, skills, and "
-            "runtime memories are Postgres-backed content documents with no "
-            "filesystem fallback."
+            "create_progenitor_agent requires state_manager: prompts and runtime "
+            "memories are Postgres-backed content documents with no filesystem "
+            "fallback, and installed marketplace-plugin skills are Postgres-backed too."
         )
 
     if config is None:
@@ -181,13 +182,15 @@ async def create_progenitor_agent(
     state_dir = (
         Path(getattr(config.storage, "state_dir", data_dir / "state")).expanduser().resolve()
     )
-    # Not a runtime mount anymore -- only the one-time Postgres seed source
-    # (see content_documents.ensure_content_documents_seeded), baked into the
-    # container image via `COPY data/prompts/`` / `COPY data/skills/``.
+    # Not a runtime mount -- only the one-time Postgres seed source (see
+    # content_documents.ensure_content_documents_seeded), baked into the
+    # container image via `COPY data/prompts/``.
     prompts_seed_dir = (
         Path(getattr(config.storage, "prompts_dir", data_dir / "prompts")).expanduser().resolve()
     )
-    skills_seed_dir = data_dir / "skills"
+    # A real runtime mount (/skills/, see backends.py) -- progenitor's own
+    # skills are static, baked into the image, and never seeded into Postgres.
+    skills_dir = data_dir / "skills"
     worktree_dir = (
         Path(getattr(config.storage, "worktree_dir", resolved_project_root / "worktrees"))
         .expanduser()
@@ -202,6 +205,19 @@ async def create_progenitor_agent(
         db_path = state_dir / "conversations.db"
         checkpointer = _build_checkpointer(db_path)
 
+    # Discover installed marketplace-plugin skill segments (see
+    # plugins/install.py) up front so the backend can mount one Postgres-backed
+    # /skills/<segment>/ route per plugin. The skills_dirs auto-discovery below
+    # reuses these same rows -- only one query.
+    skill_rows = await state_manager.list_content_documents("skill")
+    plugin_segments = sorted(
+        {
+            rel.split("/", 1)[0]
+            for rel, _content in skill_rows
+            if "/" in rel and "__" in rel.split("/", 1)[0]
+        }
+    )
+
     # Writes to /config/mcp.json persist via the StateManager; the runtime's store
     # listener re-discovers MCP tools when the mcp document changes (the same path
     # used for UI-driven server/tool toggles), so no per-backend write-hook is
@@ -211,6 +227,7 @@ async def create_progenitor_agent(
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=getattr(getattr(config, "database", None), "url", None) or None,
+        plugin_skill_segments=plugin_segments,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
@@ -229,16 +246,18 @@ async def create_progenitor_agent(
         AuditLoggingMiddleware(log_sink=log_sink),
     ]
 
-    # One-time bootstrap: populate Postgres from the image's baked-in prompt/
-    # skill files if the store is empty (fresh database). No-op afterward.
+    # One-time bootstrap: populate Postgres from the image's baked-in prompt
+    # files if the store is empty (fresh database). No-op afterward. Skills
+    # are never seeded -- progenitor's own are a disk mount (see backends.py)
+    # and marketplace-plugin skills are written directly by plugins/install.py.
     await ensure_content_documents_seeded(state_manager, "prompt", prompts_seed_dir)
-    await ensure_content_documents_seeded(state_manager, "skill", skills_seed_dir)
 
     # Auto-discover skills through the DeepAgent backend mount. Progenitor's
-    # own skills are flat under /skills/<skill-name>/SKILL.md (no segment
-    # prefix), so /skills itself is a source. Installed marketplace plugins
-    # are namespaced /skills/<marketplace>__<plugin>/<skill-name>/SKILL.md
-    # (see plugins/install.py) and each becomes its own additional source.
+    # own skills are flat under /skills/<skill-name>/SKILL.md (disk-backed, no
+    # segment prefix), so /skills itself is a source whenever that directory
+    # has any skills. Installed marketplace plugins are namespaced
+    # /skills/<marketplace>__<plugin>/<skill-name>/SKILL.md (Postgres-backed,
+    # see plugins/install.py) and each becomes its own additional source.
     # /skills is always first (the agent's own management skills are never
     # shadowed by a third-party plugin); plugin sources are sorted after.
     # Name conflicts across sources are allowed, not rejected -- SkillsMiddleware
@@ -246,17 +265,7 @@ async def create_progenitor_agent(
     # every other Agent Skills host; source order only controls which source
     # wins a collision, deterministically.
     if skills_dirs is None:
-        skill_rows = await state_manager.list_content_documents("skill")
-        has_native_skills = any(
-            "/" in rel and "__" not in rel.split("/", 1)[0] for rel, _content in skill_rows
-        )
-        plugin_segments = sorted(
-            {
-                rel.split("/", 1)[0]
-                for rel, _content in skill_rows
-                if "/" in rel and "__" in rel.split("/", 1)[0]
-            }
-        )
+        has_native_skills = skills_dir.is_dir() and any(skills_dir.glob("*/SKILL.md"))
         ordered = (["/skills"] if has_native_skills else []) + [
             f"/skills/{segment}" for segment in plugin_segments
         ]
