@@ -1,11 +1,47 @@
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 os.environ.setdefault("PROGENITOR_DATA_DIR", str(Path(__file__).resolve().parents[3] / "data"))
 
 from app.agents.builder_agent.llm.prompts import PromptTemplates
+from app.agents.builder_agent.postgres_skills import SKILL_KEY_PREFIX, resolve_skill_segment
+
+_SEGMENT = resolve_skill_segment("builder_agent")
+
+_SKILLS = {
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/build-agent/SKILL.md": (
+        "---\nname: build-agent\n---\n\n# Build Agent Skill\n"
+    ),
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/git-workflow/SKILL.md": (
+        "---\nname: git-workflow\n---\n\n# Git Workflow Skill\n"
+    ),
+}
+
+
+class FakeSkillStore:
+    """Minimal stand-in for PostgresStore.get(namespace, key)."""
+
+    def __init__(self, skills: dict[str, str]) -> None:
+        self._skills = skills
+
+    def get(self, _namespace: tuple[str, ...], key: str) -> SimpleNamespace | None:
+        content = self._skills.get(key)
+        if content is None:
+            return None
+        return SimpleNamespace(value={"payload": {"content": content}})
+
+
+@pytest.fixture(autouse=True)
+def fake_skill_store():
+    with patch(
+        "app.agents.builder_agent.postgres_skills.ensure_skill_store",
+        return_value=FakeSkillStore(_SKILLS),
+    ):
+        yield
 
 
 def test_builder_skill_context_loads_repo_skills():
