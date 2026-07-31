@@ -21,9 +21,6 @@ from .sources import (
 
 logger = logging.getLogger(__name__)
 
-# Built-in segments that must never be deleted by the reconciler.
-_BUILTIN_SEGMENTS = frozenset({"progenitor", "builder_agent", "builder_progenitor"})
-
 
 def _plugin_segment(key: str) -> str:
     """Convert ``<marketplace>/<plugin>`` → ``<marketplace>__<plugin>``."""
@@ -150,9 +147,10 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     # --- 1. Remove skill documents for plugins no longer in desired state ---
     desired_segments = {_plugin_segment(k) for k in plugins}
     for seg, rels in list(actual_by_segment.items()):
-        if seg in desired_segments or seg in _BUILTIN_SEGMENTS:
+        if seg in desired_segments:
             continue
-        # Only remove marketplace__plugin segments, not built-ins
+        # Only remove marketplace__plugin segments -- native (progenitor's own,
+        # unsegmented) skills never contain "__" and are never touched here.
         if "__" not in seg:
             continue
         for rel in rels:
