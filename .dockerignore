@@ -18,6 +18,8 @@ data/*
 !data/prompts/**
 !data/skills/
 !data/skills/**
+!data/schemas/
+!data/schemas/**
 
 # Frontend build artifacts / deps (not needed in Python images)
 app/frontend/node_modules
