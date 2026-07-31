@@ -1,7 +1,7 @@
 ---
 name: managing-tasks
 description: Create, edit, move, or delete kanban task cards by writing one markdown file per card under /config/tasks/. Use when a user asks to add a task, create a backlog item, move a card to a different column, change a task's status/title/labels, or remove a task from the board.
-allowed-tools: read_file write_file edit_file delete_file ls generate_id
+allowed-tools: read_file write_file edit_file delete_file ls generate_id structured_output json_to_yaml
 ---
 
 # Managing Kanban Tasks
@@ -69,7 +69,24 @@ Columns and their typical responsible agent: `backlog` (user), `plan`
 
 ## Common Operations
 
-### Create a task
+### Create a task (recommended — schema-validated)
+Hand-written YAML is where field names and the `summary` requirement above tend
+to slip. Building the card through the schema instead makes both mistakes
+impossible rather than just documented:
+1. `generate_id prefix=card`
+2. `structured_output schema_file=task.schema.v1.json instruction="<what the
+   card should contain, from the user's request>"` — the schema requires
+   `title`, `summary`, `column_id`, and `status`, so the call fails validation
+   (and you retry) rather than silently omitting one.
+3. Drop `id` from the returned object — it was only required to satisfy the
+   schema; the filename is what's actually authoritative.
+4. `json_to_yaml data=<object from step 3> body_field=description` — renders
+   valid YAML frontmatter + the description as the trailing body.
+5. `write_file /config/tasks/<id>.md` with the returned `content`.
+
+### Create a task (manual)
+For a trivial one-liner, hand-writing the frontmatter directly (matching the
+File Schema above exactly) is fine:
 1. `generate_id prefix=card`
 2. `write_file /config/tasks/<id>.md` with frontmatter (including a real `summary`)
    plus the description body.
