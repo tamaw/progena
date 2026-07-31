@@ -29,7 +29,7 @@ never `state`; `labels`, never `tags`). Writing an unrecognized key silently
 creates a stray field instead of setting the real one, and the card falls back
 to defaults for whatever you missed.
 
-```markdown
+```
 ---
 title: Short task title          # required — the only hard requirement
 summary: One-sentence synopsis of what this task is and why it exists.  # ALWAYS write a real one
