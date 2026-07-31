@@ -190,8 +190,6 @@ export default function InboxPage() {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
       detail: {
         mode: 'inbox-edit',
-        messageId: selectedMessageId,
-        messageTitle: selectedMessageTitle,
         subtitle: selectedMessageTitle,
       },
     }));
