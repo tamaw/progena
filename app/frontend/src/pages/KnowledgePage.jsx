@@ -269,7 +269,7 @@ export default function KnowledgePage() {
   );
 
   // Open the quick chat prefilled to create a knowledge base — Progenitor edits
-  // /state/knowledge.json (managing-knowledge skill) and the new base appears
+  // /config/knowledge.json (managing-knowledge skill) and the new base appears
   // here live via the knowledge.snapshot event.
   const openCreateChat = () => {
     window.dispatchEvent(

@@ -35,9 +35,9 @@ const mcpQuickChatConfig = {
   prompts: mcpQuickPrompts,
 };
 const taskQuickPrompts = [
-  'Add a task to wire the Tasks page to the live event stream, owner me, high priority.',
-  'Create a backlog task: investigate the slow /health check, label backend.',
-  'New task in build: ship the kanban tool, assign builder_progenitor.',
+  'Add a task to fix the slow /health check.',
+  'Create a backlog item to write onboarding docs.',
+  'New task: investigate the flaky test.',
 ];
 const taskQuickChatConfig = {
   ...defaultQuickChatConfig,
@@ -127,7 +127,7 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
   if (mode === 'mcp-create') {
     return [
       'Connect a new MCP server from the following user request.',
-      'Follow the managing-mcp skill: read /state/mcp.json, then add an entry under',
+      'Follow the managing-mcp skill: read /config/mcp.json, then add an entry under',
       'mcpServers with the server name, url (HTTP only), any auth headers, and',
       'enabled: true. Saving the file persists it and discovers its tools immediately.',
       'Only ask a follow-up question if the endpoint URL is missing; otherwise add it.',
@@ -137,21 +137,15 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
     ].join('\n');
   }
   if (mode === 'task-create') {
-    const taskPath = config.projectId
-      ? `/state/tasks/${config.projectId}/<id>.md`
-      : '/state/tasks/<id>.md';
     const projectLine = config.projectId
-      ? `This task belongs to the "${config.projectName || config.projectId}" project, so its directory IS the project: write it to exactly that path (not the top-level /state/tasks/<id>.md).`
+      ? `This task belongs to the "${config.projectName || config.projectId}" project, so its directory IS the project: write it to /config/tasks/${config.projectId}/<id>.md (not the top-level /config/tasks/<id>.md).`
       : null;
     return [
       'Create a new task on the kanban board from the following user request.',
-      `Write a new file ${taskPath} where <id> is a unique slug`,
-      '(e.g. card_<short-hex>). The file is YAML frontmatter + a markdown body:',
-      'frontmatter keys: title (concise), column_id (default "backlog"),',
-      'status (default "draft"), owner (default "user"), and any agent_name plus',
-      'free-form labels (tags) the request implies; the markdown body is the task',
-      'description. Writing the file persists the task and the Tasks board updates',
-      'live (board.json tracks the card order automatically).',
+      'Follow the managing-tasks skill: write /config/tasks/<id>.md (a unique',
+      'card_<short-hex> slug) with a concise title and any column, status, owner,',
+      'or labels the request implies. Saving the file persists the task and the',
+      'Tasks board updates live.',
       ...(projectLine ? [projectLine] : []),
       'Only ask a follow-up question if the task title is unclear; otherwise create it.',
       'Reply with one short sentence confirming the created task title and column.',
@@ -162,7 +156,7 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
   if (mode === 'knowledge-create') {
     return [
       'Create a new knowledge base from the following user request.',
-      'Follow the managing-knowledge skill: read /state/knowledge.json, then append',
+      'Follow the managing-knowledge skill: read /config/knowledge.json, then append',
       'an object to the bases array with at least a name (omit id — it is generated),',
       'plus any description, tags, or folder source paths the request implies.',
       'Saving the file persists it and the Knowledge page updates live; folder',
@@ -232,7 +226,7 @@ export function buildQuickChatOutboundMessage(mode, text, config = {}) {
     'Create a new schedule from the following user request.',
     'Follow the managing-schedules skill: generate an id (prefix=cron for a',
     'one-off, prefix=sched for recurring), use current_time to resolve the',
-    'timing, then add an entry to /state/schedule.json keyed by that id with a',
+    'timing, then add an entry to /config/schedule.json keyed by that id with a',
     'message and exactly one of cron_expression (recurring) or scheduled_at',
     '(one-off). Saving the file persists it and the Schedules page updates live.',
     'Only ask a follow-up question if critical schedule details are missing; otherwise create it.',
