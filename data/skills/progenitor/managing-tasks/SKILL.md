@@ -24,11 +24,16 @@ the Tasks page updates live — no separate "create task" tool, no index to main
 - User asks to delete / remove a task
 
 ## File Schema
+Use these exact YAML keys — not synonyms (`column_id`, never `column`; `status`,
+never `state`; `labels`, never `tags`). Writing an unrecognized key silently
+creates a stray field instead of setting the real one, and the card falls back
+to defaults for whatever you missed.
+
 ```yaml
 ---
 title: Short task title          # required — the only hard requirement
-summary: One-sentence synopsis of what this task is and why it exists.
-column_id: backlog               # backlog | plan | build | validate | done (default: backlog)
+summary: One-sentence synopsis of what this task is and why it exists.  # ALWAYS write a real one
+column_id: backlog               # exact key is column_id -- backlog | plan | build | validate | done (default: backlog)
 status: draft                    # free-form; draft is the default for a new card
 owner: user                      # who owns the card (default: user)
 agent_name: user                 # agent responsible for the column's stage
@@ -40,18 +45,23 @@ Everything after the closing `---` is the full task description — as much deta
 as the request warrants.
 ```
 
-Do not include `id` in the frontmatter — the filename is authoritative for a card's
-id (e.g. `card_<short-hex>.md`), same convention as inbox messages. Validation is
-light: a non-empty `title` is the only thing enforced; everything else is optional
-and defaults sensibly. `/schemas/task.schema.v1.json` documents the full assembled
-card shape (useful as a reference; not required reading to create one).
+Required for every write, no exceptions, regardless of how sparse the request is:
+- `title` — non-empty, the only field the backend actually enforces.
+- `summary` — one real sentence (what the task is and why it exists), never an
+  empty string and never omitted. This is true even for a two-word request like
+  "add a task for X" — write the sentence yourself from context.
 
-Every field except `description` lives in the frontmatter, not just `title` — so
-always write a real `summary` (one sentence, what the task is and why), not an
-empty string. The frontmatter is what `ls`/a quick `read_file` of just the header
-shows; the point of `summary` is that the task is inferable from it alone, without
-needing the full body. Save the body's markdown description for detail that
-genuinely doesn't fit in one sentence — background, acceptance criteria, links.
+Do not include `id` in the frontmatter — the filename is authoritative for a card's
+id (e.g. `card_<short-hex>.md`), same convention as inbox messages. Beyond
+title/summary, everything else is optional and defaults sensibly.
+`/schemas/task.schema.v1.json` documents the full assembled card shape (useful as
+a reference; not required reading to create one).
+
+Every field except `description` lives in the frontmatter, not just `title`/`summary`.
+The frontmatter is what `ls`/a quick `read_file` of just the header shows; the
+point of `summary` is that the task is inferable from it alone, without needing
+the full body. Save the body's markdown description for detail that genuinely
+doesn't fit in one sentence — background, acceptance criteria, links.
 
 Columns and their typical responsible agent: `backlog` (user), `plan`
 (planner_agent), `build` (builder_progenitor), `validate` (validate_agent), `done`
