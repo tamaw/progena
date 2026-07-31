@@ -145,8 +145,10 @@ async def create_progenitor_agent(
         project_root: Root directory for filesystem backend. Defaults to cwd.
         log_sink: Optional async sink for Postgres audit logs.
         skills_dirs: Paths to skill directories for progressive disclosure.
-                     If None, auto-discovers ``/skills/progenitor`` from the
-                     Postgres-backed skill documents.
+                     If None, auto-discovers from the Postgres-backed skill
+                     documents: ``/skills`` for progenitor's own (flat,
+                     unsegmented) skills, plus one ``/skills/<marketplace>__<plugin>``
+                     source per installed marketplace plugin.
         memory_paths: Backend-visible AGENTS.md-style prompt-context files loaded
                       via Deep Agents' `memory=` middleware. If None, Progenitor
                       loads runtime memory from the Postgres-backed `/memories/*`
@@ -232,21 +234,33 @@ async def create_progenitor_agent(
     await ensure_content_documents_seeded(state_manager, "prompt", prompts_seed_dir)
     await ensure_content_documents_seeded(state_manager, "skill", skills_seed_dir)
 
-    # Auto-discover skills through the DeepAgent backend mount: one source
-    # per distinct top-level segment under the "skill" content-document kind,
-    # "progenitor" first (so the agent's own management skills are never
-    # shadowed by a third-party plugin) and every other segment sorted after.
+    # Auto-discover skills through the DeepAgent backend mount. Progenitor's
+    # own skills are flat under /skills/<skill-name>/SKILL.md (no segment
+    # prefix), so /skills itself is a source. Installed marketplace plugins
+    # are namespaced /skills/<marketplace>__<plugin>/<skill-name>/SKILL.md
+    # (see plugins/install.py) and each becomes its own additional source.
+    # /skills is always first (the agent's own management skills are never
+    # shadowed by a third-party plugin); plugin sources are sorted after.
     # Name conflicts across sources are allowed, not rejected -- SkillsMiddleware
     # dedupes by frontmatter `name` with silent last-source-wins, matching
     # every other Agent Skills host; source order only controls which source
     # wins a collision, deterministically.
     if skills_dirs is None:
         skill_rows = await state_manager.list_content_documents("skill")
-        segments = {rel.split("/", 1)[0] for rel, _content in skill_rows if "/" in rel}
-        ordered = (["progenitor"] if "progenitor" in segments else []) + sorted(
-            segments - {"progenitor"}
+        has_native_skills = any(
+            "/" in rel and "__" not in rel.split("/", 1)[0] for rel, _content in skill_rows
         )
-        skills_dirs = [f"/skills/{segment}" for segment in ordered] or None
+        plugin_segments = sorted(
+            {
+                rel.split("/", 1)[0]
+                for rel, _content in skill_rows
+                if "/" in rel and "__" in rel.split("/", 1)[0]
+            }
+        )
+        ordered = (["/skills"] if has_native_skills else []) + [
+            f"/skills/{segment}" for segment in plugin_segments
+        ]
+        skills_dirs = ordered or None
 
     if memory_paths is None:
         await _ensure_default_runtime_memory(state_manager)

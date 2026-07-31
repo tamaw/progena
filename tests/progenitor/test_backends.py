@@ -158,12 +158,12 @@ class TestBackendFactory:
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["prompt"]["progenitor/genesis.md"] = "# Genesis\n"
-        state_manager._docs["skill"]["progenitor/example/SKILL.md"] = "---\nname: example\n---\n"
+        state_manager._docs["skill"]["example/SKILL.md"] = "---\nname: example\n---\n"
 
         backend = create_progenitor_backend(project_root=".", state_manager=state_manager)
 
         prompt_read = await backend.aread("/prompts/progenitor/genesis.md")
-        skill_read = await backend.aread("/skills/progenitor/example/SKILL.md")
+        skill_read = await backend.aread("/skills/example/SKILL.md")
         assert prompt_read.error is None
         assert prompt_read.file_data["content"] == "# Genesis\n"
         assert skill_read.error is None
