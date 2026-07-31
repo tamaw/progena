@@ -1317,7 +1317,7 @@ function MarketplacesSettingsRow() {
       setError('Name and source URL are required');
       return;
     }
-    if (marketplaces[name]) {
+    if (Object.prototype.hasOwnProperty.call(marketplaces, name)) {
       setError(`Marketplace "${name}" already exists`);
       return;
     }

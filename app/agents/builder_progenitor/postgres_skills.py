@@ -13,7 +13,14 @@ runtime reads and writes (see ``app/progenitor/content_documents.py``,
 This module opens its own read-only connection to that same database
 (``PROGENITOR_DATABASE_URL``) and never calls ``.setup()``: Progenitor's own
 runtime owns schema migration for this table, this agent is a read-only
-guest of it, not a co-owner.
+guest of it, not a co-owner. All Postgres access is async (``AsyncPostgresStore``
+over an ``AsyncConnection``) so a skill lookup never blocks the event loop.
+
+The marketplace a plugin was installed from is never hardcoded: the ``plugins``
+state document (the same one ``/config/plugins.json`` exposes) is read on every
+lookup to find which ``<marketplace>/<plugin>`` key actually provides this
+agent's skills, so this module tracks wherever the plugin is really installed
+rather than assuming a fixed marketplace name.
 
 Postgres-only, hard failure, no disk fallback: disk-sync from the
 marketplace repo was explicitly rejected, so a missing skill or an
@@ -24,17 +31,19 @@ a missing skill means the marketplace plugin providing it needs to be
 
 from __future__ import annotations
 
+import asyncio
 import os
 from typing import Any
 
-from langgraph.store.postgres import PostgresStore
+from langgraph.store.postgres.aio import AsyncPostgresStore
 
 STATE_NAMESPACE = ("progenitor", "state")
 SKILL_KEY_PREFIX = "skill:"
-DEFAULT_MARKETPLACE = os.getenv("BUILDER_SKILLS_MARKETPLACE", "tamaw-marketplace")
+PLUGINS_DOC_KEY = "plugins"
 
-_store: PostgresStore | None = None
+_store: AsyncPostgresStore | None = None
 _conn: Any | None = None
+_store_lock = asyncio.Lock()
 
 
 def _database_url() -> str:
@@ -47,39 +56,64 @@ def _database_url() -> str:
     return url
 
 
-def ensure_skill_store() -> PostgresStore:
-    """Lazily open (idempotent) the module-level PostgresStore singleton.
+async def ensure_skill_store() -> AsyncPostgresStore:
+    """Lazily open (idempotent) the module-level AsyncPostgresStore singleton.
 
     A single plain connection, not a pool: this agent is a low-throughput
-    reader of skill content, not a concurrent writer.
+    reader of skill content, not a concurrent writer. Guarded by a lock so
+    two concurrent callers racing on first use open exactly one connection.
     """
     global _store, _conn
     if _store is not None:
         return _store
-    from psycopg import Connection
-    from psycopg.rows import dict_row
+    async with _store_lock:
+        if _store is not None:
+            return _store
+        from psycopg import AsyncConnection
+        from psycopg.rows import dict_row
 
-    conn = Connection.connect(
-        _database_url(), autocommit=True, prepare_threshold=0, row_factory=dict_row
-    )
-    _store = PostgresStore(conn=conn)
-    _conn = conn
-    return _store
+        conn = await AsyncConnection.connect(
+            _database_url(), autocommit=True, prepare_threshold=0, row_factory=dict_row
+        )
+        _store = AsyncPostgresStore(conn=conn)
+        _conn = conn
+        return _store
 
 
-def close_skill_store() -> None:
-    """Close the module-level PostgresStore singleton, if one was ever opened."""
+async def close_skill_store() -> None:
+    """Close the module-level AsyncPostgresStore singleton, if one was ever opened."""
     global _store, _conn
     if _conn is not None:
-        _conn.close()
+        await _conn.close()
     _store = None
     _conn = None
 
 
-def resolve_skill_segment(agent_name: str) -> str:
+async def resolve_skill_segment(agent_name: str) -> str:
     """Map a package name (e.g. ``builder_progenitor``) to its installed
-    marketplace-plugin skill segment (e.g. ``tamaw-marketplace__builder-progenitor``)."""
-    return f"{DEFAULT_MARKETPLACE}__{agent_name.replace('_', '-')}"
+    marketplace-plugin skill segment (e.g. ``acme-marketplace__builder-progenitor``).
+
+    Looks up the shared ``plugins`` state document to find whichever
+    ``<marketplace>/<plugin>`` key actually provides this plugin, rather than
+    assuming a fixed marketplace name.
+    """
+    plugin_name = agent_name.replace("_", "-")
+    store = await ensure_skill_store()
+    item = await store.aget(STATE_NAMESPACE, PLUGINS_DOC_KEY)
+    plugins: dict[str, Any] = {}
+    if item is not None and isinstance(item.value, dict):
+        payload = item.value.get("payload")
+        if isinstance(payload, dict):
+            candidate = payload.get("plugins")
+            if isinstance(candidate, dict):
+                plugins = candidate
+    for key in plugins:
+        if isinstance(key, str) and key.endswith(f"/{plugin_name}"):
+            return key.replace("/", "__", 1)
+    raise FileNotFoundError(
+        f"No installed plugin provides '{plugin_name}'. Install the marketplace "
+        "plugin providing it (see the managing-plugins skill)."
+    )
 
 
 def strip_skill_frontmatter(content: str) -> str:
@@ -92,9 +126,9 @@ def strip_skill_frontmatter(content: str) -> str:
     return parts[2].strip()
 
 
-def _get_skill_content(store: PostgresStore, segment: str, skill_name: str) -> str | None:
+async def _get_skill_content(store: AsyncPostgresStore, segment: str, skill_name: str) -> str | None:
     key = f"{SKILL_KEY_PREFIX}{segment}/{skill_name}/SKILL.md"
-    item = store.get(STATE_NAMESPACE, key)
+    item = await store.aget(STATE_NAMESPACE, key)
     if item is None:
         return None
     value = item.value if isinstance(item.value, dict) else {}
@@ -106,7 +140,7 @@ def _get_skill_content(store: PostgresStore, segment: str, skill_name: str) -> s
     return None
 
 
-def load_skill_context(
+async def load_skill_context(
     skill_names: list[str],
     *,
     agent_name: str,
@@ -114,23 +148,34 @@ def load_skill_context(
 ) -> str:
     """Load and concatenate skill bodies from Progenitor's shared Postgres store.
 
-    Searches ``agent_name``'s marketplace segment first, then each of
+    Searches ``agent_name``'s installed marketplace segment first, then each of
     ``fallback_agents`` in order, matching the old disk-based lookup order.
     """
     search_agents: list[str] = []
     for candidate in (agent_name, *fallback_agents):
         if candidate not in search_agents:
             search_agents.append(candidate)
-    segments = [resolve_skill_segment(candidate) for candidate in search_agents]
 
-    store = ensure_skill_store()
+    store = await ensure_skill_store()
+    segments: list[str] = []
+    for candidate in search_agents:
+        try:
+            segments.append(await resolve_skill_segment(candidate))
+        except FileNotFoundError:
+            continue
+    if not segments:
+        raise FileNotFoundError(
+            f"No installed plugin provides skills for any of: {', '.join(search_agents)}. "
+            "Install the marketplace plugin providing it (see the managing-plugins skill)."
+        )
+
     sections: list[str] = []
     for skill_name in skill_names:
         content: str | None = None
         searched_keys: list[str] = []
         for segment in segments:
             searched_keys.append(f"{SKILL_KEY_PREFIX}{segment}/{skill_name}/SKILL.md")
-            content = _get_skill_content(store, segment, skill_name)
+            content = await _get_skill_content(store, segment, skill_name)
             if content is not None:
                 break
         if content is None:

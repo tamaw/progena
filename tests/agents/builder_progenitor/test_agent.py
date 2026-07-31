@@ -30,22 +30,22 @@ def _planned_build() -> PlannedBuild:
     )
 
 
-def test_execution_prompt_contains_explicit_pr_requirements():
-    prompt = _build_execution_prompt("request", {}, _planned_build())
+async def test_execution_prompt_contains_explicit_pr_requirements():
+    prompt = await _build_execution_prompt("request", {}, _planned_build())
     assert "render_copilot_prompt" in prompt
     assert "task setup phase already ran" in prompt.lower()
     assert "Before finishing, check your own work" in prompt
 
 
-def test_setup_prompt_requires_workspace_creation():
-    prompt = _build_setup_prompt("request", {}, _planned_build())
+async def test_setup_prompt_requires_workspace_creation():
+    prompt = await _build_setup_prompt("request", {}, _planned_build())
     assert "create_worktree" in prompt
     assert "origin/main" in prompt
     assert "Do not call `copilot_build`" in prompt
 
 
-def test_teardown_prompt_requires_cleanup_and_pr():
-    prompt = _build_teardown_prompt("request", {}, _planned_build())
+async def test_teardown_prompt_requires_cleanup_and_pr():
+    prompt = await _build_teardown_prompt("request", {}, _planned_build())
     assert "create_pull_request" in prompt
     assert "remove_worktree" in prompt
 

@@ -1,53 +1,58 @@
 """Shared fixtures for builder_progenitor tests.
 
 Skills are Postgres-backed now (see ``postgres_skills.py``): every test in
-this package gets a fake store instead of a real database connection, pre
-populated with the same skill set the installed ``builder-progenitor``
-marketplace plugin provides.
+this package gets a fake async store instead of a real database connection,
+pre-populated with an installed ``builder-progenitor`` marketplace plugin and
+the same skill set it provides.
 """
 
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.agents.builder_progenitor.postgres_skills import SKILL_KEY_PREFIX, resolve_skill_segment
+from app.agents.builder_progenitor.postgres_skills import PLUGINS_DOC_KEY, SKILL_KEY_PREFIX
 
-_SEGMENT = resolve_skill_segment("builder_progenitor")
+_MARKETPLACE = "acme-marketplace"
+_SEGMENT = f"{_MARKETPLACE}__builder-progenitor"
 
-BUILDER_PROGENITOR_SKILLS = {
-    f"{SKILL_KEY_PREFIX}{_SEGMENT}/build-agent/SKILL.md": (
-        "---\nname: build-agent\n---\n\n# Build Agent Skill\n"
-    ),
-    f"{SKILL_KEY_PREFIX}{_SEGMENT}/git-workflow/SKILL.md": (
-        "---\nname: git-workflow\n---\n\n# Git Workflow Skill\n"
-    ),
-    f"{SKILL_KEY_PREFIX}{_SEGMENT}/task-setup/SKILL.md": (
-        "---\nname: task-setup\n---\n\n# Task Setup Skill\n"
-    ),
-    f"{SKILL_KEY_PREFIX}{_SEGMENT}/task-teardown/SKILL.md": (
-        "---\nname: task-teardown\n---\n\n# Task Teardown Skill\n"
-    ),
+BUILDER_PROGENITOR_DOCS = {
+    PLUGINS_DOC_KEY: {
+        "payload": {"plugins": {f"{_MARKETPLACE}/builder-progenitor": {"source": "acme/builder-progenitor"}}}
+    },
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/build-agent/SKILL.md": {
+        "payload": {"content": "---\nname: build-agent\n---\n\n# Build Agent Skill\n"}
+    },
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/git-workflow/SKILL.md": {
+        "payload": {"content": "---\nname: git-workflow\n---\n\n# Git Workflow Skill\n"}
+    },
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/task-setup/SKILL.md": {
+        "payload": {"content": "---\nname: task-setup\n---\n\n# Task Setup Skill\n"}
+    },
+    f"{SKILL_KEY_PREFIX}{_SEGMENT}/task-teardown/SKILL.md": {
+        "payload": {"content": "---\nname: task-teardown\n---\n\n# Task Teardown Skill\n"}
+    },
 }
 
 
 class FakeSkillStore:
-    """Minimal stand-in for PostgresStore.get(namespace, key)."""
+    """Minimal async stand-in for AsyncPostgresStore.aget(namespace, key)."""
 
-    def __init__(self, skills: dict[str, str]) -> None:
-        self._skills = skills
+    def __init__(self, docs: dict[str, dict]) -> None:
+        self._docs = docs
 
-    def get(self, _namespace: tuple[str, ...], key: str) -> SimpleNamespace | None:
-        content = self._skills.get(key)
-        if content is None:
+    async def aget(self, _namespace: tuple[str, ...], key: str) -> SimpleNamespace | None:
+        value = self._docs.get(key)
+        if value is None:
             return None
-        return SimpleNamespace(value={"payload": {"content": content}})
+        return SimpleNamespace(value=value)
 
 
 @pytest.fixture(autouse=True)
 def fake_skill_store():
+    store = FakeSkillStore(BUILDER_PROGENITOR_DOCS)
     with patch(
         "app.agents.builder_progenitor.postgres_skills.ensure_skill_store",
-        return_value=FakeSkillStore(BUILDER_PROGENITOR_SKILLS),
+        AsyncMock(return_value=store),
     ):
         yield

@@ -515,6 +515,7 @@ def create_builder_tools(
         validation_targets: str = "- pytest\n- pyright\n- ruff",
     ) -> dict[str, str]:
         """Render the Copilot ACP prompt from mounted prompt files."""
+        skill_context = await load_skill_context()
         prompt = load_prompt(
             "copilot_build.md",
             request_text=request_text.strip(),
@@ -527,7 +528,7 @@ def create_builder_tools(
             copilot_goal=copilot_goal.strip(),
             success_criteria=success_criteria.strip() or "- none provided",
             validation_targets=validation_targets.strip() or "- pytest\n- pyright\n- ruff",
-            skill_context=load_skill_context(),
+            skill_context=skill_context,
         )
         return {"prompt": prompt}
 

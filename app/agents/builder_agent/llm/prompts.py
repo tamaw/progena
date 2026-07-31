@@ -60,10 +60,10 @@ class PromptTemplates:
         template = self._load_prompt("progenitor/decide.md")
         return template.replace("{tool_context}", tool_context)
 
-    def get_planner_prompt(self) -> str:
+    async def get_planner_prompt(self) -> str:
         """Get the planning prompt for work item generation."""
         prompt = self._load_prompt("builder_agent/planner.md")
-        skill_context = self.get_builder_skill_context()
+        skill_context = await self.get_builder_skill_context()
         if not skill_context:
             return prompt
         return f"{prompt}\n\n## Repository Skills\n\n{skill_context}"
@@ -73,13 +73,13 @@ class PromptTemplates:
         template = self._load_prompt("builder_agent/build.md")
         return template.replace("{item_type}", item_type)
 
-    def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
+    async def get_builder_skill_context(self, skill_names: list[str] | None = None) -> str:
         """Load builder skills for prompt grounding from Progenitor's shared
         Postgres store (the installed ``builder-agent`` marketplace plugin)."""
         selected = skill_names or ["build-agent", "git-workflow"]
-        return load_repo_skill_context(selected, agent_name="builder_agent")
+        return await load_repo_skill_context(selected, agent_name="builder_agent")
 
-    def get_copilot_task_prompt(self, spec: dict) -> str:
+    async def get_copilot_task_prompt(self, spec: dict) -> str:
         """Generate a task prompt for Copilot CLI.
 
         If spec contains 'spec_doc_content', it will be included as
@@ -127,7 +127,7 @@ The following specification has evolved through planning iterations and should g
             .replace("{implementation_notes}", spec.get("implementation_notes", "None provided"))
             .replace("{structure_guidance}", structure_guidance)
         )
-        skill_context = self.get_builder_skill_context()
+        skill_context = await self.get_builder_skill_context()
         if not skill_context:
             return prompt
         return f"{prompt}\n\n## Repository Skills\n\n{skill_context}"

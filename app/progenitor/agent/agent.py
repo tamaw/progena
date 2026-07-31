@@ -224,6 +224,7 @@ async def create_progenitor_agent(
     # needed. The managing-mcp skill documents this edit flow for the agent.
     backend = create_progenitor_backend(
         project_root=project_root,
+        skills_dir=skills_dir,
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=getattr(getattr(config, "database", None), "url", None) or None,

@@ -19,7 +19,6 @@ import * as chats from './uiData/chats';
 import * as agents from './uiData/agents';
 import * as tasks from './uiData/tasks';
 import * as knowledge from './uiData/knowledge';
-import * as skills from './uiData/skills';
 import * as prompts from './uiData/prompts';
 import * as mcp from './uiData/mcp';
 import * as runtime from './uiData/runtime';
@@ -29,7 +28,7 @@ import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
 
-const domains = [runtime, mcp, knowledge, skills, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -61,7 +60,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'task.activity.updated': '/tasks',
   'agents.snapshot': '/agents',
   'agent.upserted': '/agents',
-  'skills.snapshot': '/plugins',
+  'plugins.snapshot': '/plugins',
   'mcp.snapshot': '/tools',
   'knowledge.snapshot': '/knowledge',
   'schedule.snapshot': '/schedules',
@@ -196,16 +195,6 @@ export {
   selectKnowledgeState,
   selectKnowledgeSearch,
 } from './uiData/knowledge';
-
-export {
-  fetchSkills,
-  saveSkill,
-  createSkill,
-  fetchSkillContent,
-  selectSkills,
-  selectSkillsState,
-  selectSkillContentEntry,
-} from './uiData/skills';
 
 export {
   fetchPrompts,
