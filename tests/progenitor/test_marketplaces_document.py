@@ -25,6 +25,14 @@ def test_validate_marketplaces_document_accepts_valid():
     assert doc["marketplaces"]["acme-tools"]["source"] == "https://github.com/acme/plugins"
 
 
+def test_validate_marketplaces_document_backfills_missing_added_at():
+    doc = validate_marketplaces_document(
+        '{"marketplaces": {"acme-tools": {"source": "https://github.com/acme/plugins"}}}'
+    )
+    added_at = doc["marketplaces"]["acme-tools"]["added_at"]
+    assert isinstance(added_at, str) and added_at
+
+
 def test_validate_marketplaces_document_accepts_added_at():
     doc = validate_marketplaces_document(
         json.dumps(
@@ -99,7 +107,9 @@ async def test_save_marketplaces_config_persists_valid_document():
 
     payload = {"marketplaces": {"acme-tools": {"source": "https://github.com/acme/plugins"}}}
     await manager.save_marketplaces_config(payload)
-    assert store._documents["marketplaces"] == payload
+    assert store._documents["marketplaces"]["marketplaces"]["acme-tools"]["source"] == (
+        "https://github.com/acme/plugins"
+    )
 
 
 @pytest.mark.asyncio
@@ -162,9 +172,9 @@ async def test_marketplaces_awrite_persists_valid_document():
     )
     written = await backend.awrite("/marketplaces.json", new_doc)
     assert written.error is None
-    assert sm.saved == [
-        {"marketplaces": {"acme-tools": {"source": "https://github.com/acme/plugins"}}}
-    ]
+    saved_entry = sm.saved[0]["marketplaces"]["acme-tools"]
+    assert saved_entry["source"] == "https://github.com/acme/plugins"
+    assert isinstance(saved_entry["added_at"], str) and saved_entry["added_at"]
 
 
 @pytest.mark.asyncio
@@ -187,7 +197,9 @@ async def test_marketplaces_aedit_updates_single_entry():
         new_string='"source": "acme/plugins@new"',
     )
     assert edited.error is None
-    assert sm.saved == [{"marketplaces": {"acme-tools": {"source": "acme/plugins@new"}}}]
+    saved_entry = sm.saved[0]["marketplaces"]["acme-tools"]
+    assert saved_entry["source"] == "acme/plugins@new"
+    assert isinstance(saved_entry["added_at"], str) and saved_entry["added_at"]
 
 
 @pytest.mark.asyncio

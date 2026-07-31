@@ -637,7 +637,7 @@ async def _shutdown() -> None:
     if _task_queue is not None:
         await _task_queue.shutdown()
         _task_queue = None
-    close_skill_store()
+    await close_skill_store()
 
 
 app.router.lifespan_context = _lifespan

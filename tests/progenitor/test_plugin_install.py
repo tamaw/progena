@@ -125,8 +125,9 @@ async def test_removes_plugin_when_entry_dropped(state_manager, fake_files, fake
 
 
 @pytest.mark.asyncio
-async def test_removes_only_marketplace_segments(state_manager, fake_files, fake_digest):
-    """The reconciler never deletes built-in segments like progenitor."""
+async def test_removes_stale_unsegmented_skill_rows(state_manager, fake_files, fake_digest):
+    """Native skills are disk-only now (never seeded into Postgres), so any
+    leftover unsegmented ("no __") row is stale and gets cleaned up too."""
     state_manager._docs["skill"]["progenitor/managing-mcp/SKILL.md"] = (
         "---\nname: managing-mcp\n---\n"
     )
@@ -135,12 +136,9 @@ async def test_removes_only_marketplace_segments(state_manager, fake_files, fake
 
     summary = await reconcile_plugins(state_manager)
 
-    assert summary["removed"] == []
-    assert state_manager.delete_content_document_calls == 0
-    assert (
-        state_manager._docs["skill"]["progenitor/managing-mcp/SKILL.md"]
-        == "---\nname: managing-mcp\n---\n"
-    )
+    assert set(summary["removed"]) == {"progenitor", "builder_agent"}
+    assert "progenitor/managing-mcp/SKILL.md" not in state_manager._docs["skill"]
+    assert "builder_agent/build/SKILL.md" not in state_manager._docs["skill"]
 
 
 @pytest.mark.asyncio

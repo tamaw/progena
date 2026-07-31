@@ -25,7 +25,7 @@ def load_prompt(filename: str, **replacements: str) -> str:
     )
 
 
-def load_skill_context(skill_names: list[str] | None = None) -> str:
+async def load_skill_context(skill_names: list[str] | None = None) -> str:
     """Load builder skills as plain text context from Progenitor's shared
     Postgres store (the installed ``builder-progenitor`` marketplace plugin)."""
     selected = skill_names or [
@@ -34,4 +34,4 @@ def load_skill_context(skill_names: list[str] | None = None) -> str:
         "task-setup",
         "task-teardown",
     ]
-    return load_repo_skill_context(selected, agent_name="builder_progenitor")
+    return await load_repo_skill_context(selected, agent_name="builder_progenitor")

@@ -168,6 +168,8 @@ def validate_marketplaces_document(content: str) -> JsonDoc:
         source = entry.get("source")
         if not isinstance(source, str) or not source.strip():
             raise ValueError(f"marketplace '{name}' is missing 'source'")
+        if "added_at" not in entry:
+            entry["added_at"] = utcnow_isoformat()
         _check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
 
     return data

@@ -145,13 +145,12 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     now = utcnow_isoformat()
 
     # --- 1. Remove skill documents for plugins no longer in desired state ---
+    # Progenitor's own native skills are disk-only now (never seeded into
+    # Postgres, see agent.py) -- any unsegmented ("no __") row still in the
+    # store is leftover from before that change and is safe to delete too.
     desired_segments = {_plugin_segment(k) for k in plugins}
     for seg, rels in list(actual_by_segment.items()):
         if seg in desired_segments:
-            continue
-        # Only remove marketplace__plugin segments -- native (progenitor's own,
-        # unsegmented) skills never contain "__" and are never touched here.
-        if "__" not in seg:
             continue
         for rel in rels:
             await state_manager.delete_content_document("skill", rel)
