@@ -1,0 +1,92 @@
+---
+name: managing-tasks
+description: Create, edit, move, or delete kanban task cards by writing one markdown file per card under /config/tasks/. Use when a user asks to add a task, create a backlog item, move a card to a different column, change a task's status/title/labels, or remove a task from the board.
+allowed-tools: read_file write_file edit_file delete_file ls generate_id
+---
+
+# Managing Kanban Tasks
+
+The kanban board lives as one virtual file per card, plus a read-only structure
+document:
+
+- `/config/tasks/board.json` — columns + card order, assembled automatically from
+  the cards below. Do not write this directly.
+- `/config/tasks/<id>.md` — one task card, YAML frontmatter + markdown body.
+  `/config/tasks/<project-id>/<id>.md` scopes a card to a project instead.
+
+Writing a card file persists it immediately (Postgres is the source of truth) and
+the Tasks page updates live — no separate "create task" tool, no index to maintain.
+
+## When to Use
+- User asks to add / create a task or backlog item
+- User asks to move a card to a different column, or change its status
+- User asks to edit a task's title, description, owner, or labels
+- User asks to delete / remove a task
+
+## File Schema
+```yaml
+---
+title: Short task title          # required — the only hard requirement
+summary: One-sentence synopsis of what this task is and why it exists.
+column_id: backlog               # backlog | plan | build | validate | done (default: backlog)
+status: draft                    # free-form; draft is the default for a new card
+owner: user                      # who owns the card (default: user)
+agent_name: user                 # agent responsible for the column's stage
+labels:
+  - tag-one
+  - tag-two
+---
+Everything after the closing `---` is the full task description — as much detail
+as the request warrants.
+```
+
+Do not include `id` in the frontmatter — the filename is authoritative for a card's
+id (e.g. `card_<short-hex>.md`), same convention as inbox messages. Validation is
+light: a non-empty `title` is the only thing enforced; everything else is optional
+and defaults sensibly. `/schemas/task.schema.v1.json` documents the full assembled
+card shape (useful as a reference; not required reading to create one).
+
+Every field except `description` lives in the frontmatter, not just `title` — so
+always write a real `summary` (one sentence, what the task is and why), not an
+empty string. The frontmatter is what `ls`/a quick `read_file` of just the header
+shows; the point of `summary` is that the task is inferable from it alone, without
+needing the full body. Save the body's markdown description for detail that
+genuinely doesn't fit in one sentence — background, acceptance criteria, links.
+
+Columns and their typical responsible agent: `backlog` (user), `plan`
+(planner_agent), `build` (builder_progenitor), `validate` (validate_agent), `done`
+(release_agent). A card can be written straight into any column, not just backlog.
+
+## Common Operations
+
+### Create a task
+1. `generate_id prefix=card`
+2. `write_file /config/tasks/<id>.md` with frontmatter (including a real `summary`)
+   plus the description body.
+
+### Move a card / change status
+1. `read_file /config/tasks/<id>.md`
+2. `edit_file` to change `column_id` and/or `status` in place.
+
+### Edit title, labels, owner, or description
+1. `read_file /config/tasks/<id>.md`
+2. `edit_file` the relevant frontmatter key or the body text.
+
+### Delete a task
+`delete_file /config/tasks/<id>.md` removes the card from the board.
+
+## After the Change
+Writing, editing, or deleting a card file triggers the Tasks page's live update
+automatically — no follow-up action needed.
+
+## Confirmation Pattern
+After a successful change, reply with one short sentence confirming the task title
+and column (or what changed, for an edit/move/delete). Only ask a follow-up
+question if the task title itself is unclear; otherwise make the change.
+
+## Troubleshooting
+- Card not appearing on the board: confirm the path is under `/config/tasks/`, not
+  `/state/tasks/` or anywhere else — only `/config/tasks/` is backed by the kanban
+  store and fires the live update.
+- `edit_file` old_string not found: re-read the file first — hand-authored YAML
+  frontmatter can vary in spacing/quoting, so match the on-disk content exactly.
