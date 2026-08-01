@@ -384,7 +384,7 @@ describe('applyUiEvent reducer', () => {
     expect(selectTaskActivityEntry({ uiData: s }, 'card_1')?.total).toBe(1);
   });
 
-  it('prompt.content.updated caches full bodies by path', () => {
+  it('prompt.content.updated caches the full body by path', () => {
     const s = reducer(undefined, applyUiEvent({
       type: 'prompt.content.updated',
       payload: { path: 'builder_agent/think.md', content: '# Think prompt' },

@@ -172,6 +172,129 @@
   gap: 4px;
 }
 
+.plugins-tree-leaf .pane-row-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Same hollow-ring override Inbox uses for its "read" status dot
+   (.inbox-detail__status--read in detail-header.css) -- only "not installed"
+   gets a hollow dot; "installed, up to date" gets a solid muted dot instead
+   (tone="muted" already gives that by default, no override needed). Green
+   stays reserved for "update available", matching the row dots. */
+.plugins-detail__status--ring .detail-status__dot {
+  background: transparent;
+  border: 1.5px solid var(--color-text-muted);
+  box-sizing: border-box;
+}
+
+/* The available-update version sits right next to the status dot in full
+   primary text (not the muted secondary tone every other meta chip uses)
+   so it reads as the one actionable, eye-catching piece of information. */
+.plugins-update-chip {
+  color: var(--color-text-primary);
+  font-weight: 650;
+}
+
+/* Solid green = "something new for you" (an update is available), matching
+   Inbox's unread dot (chat-panel.css). Hollow ring is reserved for "not
+   installed" only; an installed, up-to-date plugin gets a solid muted dot
+   instead -- still always-present like every other row, just neutral. */
+.plugins-status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+
+.plugins-status-dot--ring {
+  border: 1.5px solid var(--color-text-muted);
+}
+
+.plugins-status-dot--installed {
+  background: var(--color-text-muted);
+}
+
+.plugins-status-dot--pending {
+  background: var(--color-warning);
+}
+
+.plugins-status-dot--update {
+  background: var(--color-success);
+}
+
+.plugins-status-dot--error {
+  background: var(--color-error);
+}
+
+.plugins-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+}
+
+.plugins-page__row {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.plugins-page__banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 20px;
+  color: var(--color-text-primary);
+  font-size: 12.5px;
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--color-bg-secondary));
+  border-bottom: 1px solid var(--color-border);
+}
+
+.plugins-page__banner button {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  color: var(--color-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.plugins-page__banner button:hover {
+  color: var(--color-text-primary);
+}
+
+.plugins-skill-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plugins-skill-row.is-active {
+  border-color: var(--color-accent);
+}
+
+.plugins-skill-preview {
+  margin-top: 10px;
+  padding: 14px 16px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.plugins-skill-preview__body {
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+}
+
 .plugins-editor-title {
   min-width: 0;
 }
@@ -192,6 +315,13 @@
 }
 
 .plugins-detail__body--preview .markdown-content {
+  font-size: var(--font-size-md);
+  line-height: 1.6;
+}
+
+.plugins-detail__description {
+  margin: 0 0 22px;
+  color: var(--color-text-primary);
   font-size: var(--font-size-md);
   line-height: 1.6;
 }

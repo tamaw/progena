@@ -42,7 +42,7 @@ from pydantic import SecretStr
 from .client import BuilderClient, PlannedBuild
 from .config import BuilderConfig, get_config, setup_logging
 from .hooks import HookContext, HookManager, create_default_hook_manager
-from .prompt_support import resolve_prompts_dir, resolve_skills_dir
+from .postgres_skills import close_skill_store
 from .prompts import load_prompt, load_skill_context
 from .queue_worker import BuilderTaskQueue, _QueuedTask
 from .tools import create_builder_tools, shutdown_builder_tool_runtimes
@@ -257,15 +257,17 @@ def _create_graph(
 def _resolve_builder_skill_dirs() -> list[str]:
     """Return DeepAgent skill directories for the builder harness.
 
-    The builder keeps its local workflow skills plus the checked-in
-    builder_progenitor skill pack. It intentionally does not inherit the main
-    Progenitor skill pack.
+    Only the local, checked-in ``skills/`` pack next to this package -- the
+    marketplace-installed builder skill pack (build-agent, git-workflow) that
+    used to also live on disk under ``data/skills/builder_progenitor/`` moved
+    to the ``tamaw/marketplace`` repo and is Postgres-backed now (see
+    ``postgres_skills.py``); DeepAgents' ``skills=`` progressive-disclosure
+    list only supports real disk directories via this agent's
+    ``LocalShellBackend``, so it isn't a source here -- ``load_skill_context``
+    is the only consumer of those marketplace skills. It intentionally does
+    not inherit the main Progenitor skill pack either.
     """
-    prompts_dir = resolve_prompts_dir()
-    candidates = [
-        Path(__file__).resolve().parent / "skills",
-        resolve_skills_dir("builder_progenitor", prompts_dir=prompts_dir),
-    ]
+    candidates = [Path(__file__).resolve().parent / "skills"]
 
     skill_dirs: list[str] = []
     for path in candidates:
@@ -354,21 +356,21 @@ class BuilderService:
         assert self._graph is not None
 
         thread_id = f"builder_{uuid.uuid4().hex[:12]}"
-        setup_prompt = _build_setup_prompt(request_text, context, planned_build)
+        setup_prompt = await _build_setup_prompt(request_text, context, planned_build)
         logger.info("Builder: invoking setup phase (thread=%s)", thread_id)
         await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": setup_prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
 
-        prompt = _build_execution_prompt(request_text, context, planned_build)
+        prompt = await _build_execution_prompt(request_text, context, planned_build)
         logger.info("Builder: invoking execution phase (thread=%s)", thread_id)
         await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": prompt}]},
             {"configurable": {"thread_id": thread_id}},
         )
 
-        teardown_prompt = _build_teardown_prompt(request_text, context, planned_build)
+        teardown_prompt = await _build_teardown_prompt(request_text, context, planned_build)
         logger.info("Builder: invoking teardown phase (thread=%s)", thread_id)
         teardown_result = await self._graph.ainvoke(
             {"messages": [{"role": "user", "content": teardown_prompt}]},
@@ -529,7 +531,7 @@ def _as_bullets(items: list[str], fallback: str) -> str:
     return "\n".join(f"- {item}" for item in items)
 
 
-def _build_execution_prompt(
+async def _build_execution_prompt(
     request_text: str,
     context: dict[str, Any],
     planned_build: PlannedBuild,
@@ -537,6 +539,7 @@ def _build_execution_prompt(
     """Build the execution prompt from prompt files and structured metadata."""
     ctx = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
     plan = planned_build.plan
+    skill_context = await load_skill_context()
     return load_prompt(
         "execution_template.md",
         request_text=request_text.strip(),
@@ -550,11 +553,11 @@ def _build_execution_prompt(
         validation_targets=_as_bullets(plan.validation_targets, "- pytest\n- pyright\n- ruff"),
         reasoning=planned_build.reasoning or "No reasoning returned.",
         planned_at_utc=planned_build.planned_at_utc,
-        skill_context=load_skill_context(),
+        skill_context=skill_context,
     ).strip()
 
 
-def _build_setup_prompt(
+async def _build_setup_prompt(
     request_text: str,
     context: dict[str, Any],
     planned_build: PlannedBuild,
@@ -562,6 +565,7 @@ def _build_setup_prompt(
     """Build the setup prompt from prompt files and structured metadata."""
     ctx = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
     plan = planned_build.plan
+    skill_context = await load_skill_context(["git-workflow", "task-setup"])
     return load_prompt(
         "task_setup.md",
         request_text=request_text.strip(),
@@ -572,11 +576,11 @@ def _build_setup_prompt(
         description=plan.description,
         planned_at_utc=planned_build.planned_at_utc,
         reasoning=planned_build.reasoning or "No reasoning returned.",
-        skill_context=load_skill_context(["git-workflow", "task-setup"]),
+        skill_context=skill_context,
     ).strip()
 
 
-def _build_teardown_prompt(
+async def _build_teardown_prompt(
     request_text: str,
     context: dict[str, Any],
     planned_build: PlannedBuild,
@@ -584,6 +588,7 @@ def _build_teardown_prompt(
     """Build the teardown prompt from prompt files and structured metadata."""
     ctx = json.dumps(context, indent=2, sort_keys=True) if context else "{}"
     plan = planned_build.plan
+    skill_context = await load_skill_context(["git-workflow", "task-teardown"])
     return load_prompt(
         "task_teardown.md",
         request_text=request_text.strip(),
@@ -594,7 +599,7 @@ def _build_teardown_prompt(
         description=plan.description,
         planned_at_utc=planned_build.planned_at_utc,
         reasoning=planned_build.reasoning or "No reasoning returned.",
-        skill_context=load_skill_context(["git-workflow", "task-teardown"]),
+        skill_context=skill_context,
     ).strip()
 
 
@@ -790,6 +795,7 @@ async def _lifespan(_app: Any):
             await _task_queue.stop()
             _task_queue = None
         await service.shutdown()
+        await close_skill_store()
 
 
 app.router.lifespan_context = _lifespan

@@ -33,10 +33,9 @@ def test_graph_factory_creates_agent_without_middleware():
         assert call_kwargs["middleware"] == []
         assert call_kwargs["system_prompt"] == load_prompt("system.md").strip()
         assert str(project_root / "AGENTS.md") in call_kwargs["memory"]
-        assert any(
-            path.endswith("app/agents/builder_progenitor/skills") for path in call_kwargs["skills"]
-        )
-        assert any(
-            path.endswith("data/skills/builder_progenitor") for path in call_kwargs["skills"]
-        )
-        assert not any(path.endswith("data/skills/progenitor") for path in call_kwargs["skills"])
+        # Only the local, checked-in skill pack -- the marketplace-installed
+        # pack (build-agent, git-workflow) moved to Postgres (see
+        # postgres_skills.py) and is no longer a disk `skills=` source.
+        assert [Path(p) for p in call_kwargs["skills"]] == [
+            Path(__file__).resolve().parents[3] / "app/agents/builder_progenitor/skills"
+        ]

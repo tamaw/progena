@@ -115,6 +115,7 @@ class StateManager:
     async def _ensure_runtime_store_initial_state(self) -> None:
         """Ensure all state documents exist in the native runtime store."""
         from ..config import (
+            default_marketplaces_config_payload,
             default_mcp_config_payload,
             default_plugins_config_payload,
             default_schedule_config_payload,
@@ -142,6 +143,7 @@ class StateManager:
             "registry": {},
             "mcp": default_mcp_config_payload(),
             "plugins": default_plugins_config_payload(),
+            "marketplaces": default_marketplaces_config_payload(),
             "knowledge": {"bases": []},
             "preferences": default_preferences_payload(),
             "mcp_tools": {"tools": []},
@@ -335,6 +337,36 @@ class StateManager:
 
         validate_plugins_document(json.dumps(payload))
         await self._save_runtime_document("plugins", payload)
+
+    # ==========================================================================
+    # Marketplaces configuration
+    # ==========================================================================
+    async def get_marketplaces_config(self) -> dict[str, Any]:
+        """Return the marketplaces configuration document.
+
+        Read straight from the shared store rather than the in-memory
+        cache: the backend also reads/writes this same Postgres document
+        directly, so a cached copy would hide those cross-process changes.
+        """
+        from ..config import default_marketplaces_config_payload
+
+        payload = await self._runtime_store.get_document(
+            "marketplaces", default_marketplaces_config_payload()
+        )
+        self._state_cache["marketplaces"] = payload
+        return payload if isinstance(payload, dict) else default_marketplaces_config_payload()
+
+    async def save_marketplaces_config(self, payload: dict[str, Any]) -> None:
+        """Persist the marketplaces configuration document.
+
+        Validates the payload against the marketplace entry schema before
+        saving, raising ValueError on invalid input so a violating edit is
+        rejected and nothing changes.
+        """
+        from ..agent.state_backend import validate_marketplaces_document
+
+        validate_marketplaces_document(json.dumps(payload))
+        await self._save_runtime_document("marketplaces", payload)
 
     # ==========================================================================
     # Knowledge configuration

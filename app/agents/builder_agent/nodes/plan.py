@@ -75,7 +75,7 @@ async def _request_plan_work_items(
             return [item for item in fallback_result if isinstance(item, dict)]
         return []
 
-    system_prompt = _prompts.get_planner_prompt()
+    system_prompt = await _prompts.get_planner_prompt()
     context = f"""
 User Request: {user_input}
 
@@ -920,7 +920,7 @@ This is iteration {iteration} of the build. Focus on addressing these gaps:
         iteration_context=iteration_context,
         action_details=action_details,
     )
-    skill_context = _prompts.get_builder_skill_context()
+    skill_context = await _prompts.get_builder_skill_context()
     if skill_context:
         base_prompt = f"{base_prompt}\n\n## Repository Skills\n\n{skill_context}"
 

@@ -14,6 +14,9 @@ but the newly installed skills only become active in a **new** conversation, bec
 the skills inventory is loaded once per session. The agent does not need to do anything
 else after writing the file; the reconcile runs automatically and promptly.
 
+Installing a plugin requires its marketplace to already be registered — see the
+`managing-marketplaces` skill (`/config/marketplaces.json`) if it isn't yet.
+
 ## When to Use
 - User asks to install / add / connect a plugin from a marketplace
 - User asks to update / pin a plugin to a specific version

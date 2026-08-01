@@ -1,95 +1,61 @@
 """Backend access to the ``marketplaces`` state document.
 
-Marketplace sources live in one document (``backend.state`` / ``marketplaces``)
-in the shared store. This document is backend-owned and not agent-visible.
+Registered marketplace sources live in the ``marketplaces`` document under the
+``progenitor.state`` namespace -- the same shared Postgres ``store`` table
+Progenitor's own runtime reads and writes, and the same document the agent can
+edit directly at ``/config/marketplaces.json`` (see
+``app/progenitor/agent/state_backend.py``). The backend reads/writes it with
+straight SQL through ``PostgresDocumentStore``, no RPC to the runtime process
+needed; the existing LISTEN/NOTIFY trigger on the ``store`` table (scoped to
+``progenitor.state``/``backend.state`` prefixes) pushes the change back to the
+UI stream the same way it already does for ``plugins``/``mcp``.
 """
 
 from __future__ import annotations
 
+import json
 import time
-from datetime import UTC, datetime
 from typing import Any
 
-from pydantic import BaseModel, ValidationError
+from app.progenitor.agent.state_backend import validate_marketplaces_document
+from app.progenitor.config import default_marketplaces_config_payload
 
-from .document_store import BACKEND_STATE_PREFIX, get_default_document_store
+from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 
 MARKETPLACES_DOC_KEY = "marketplaces"
-_DEFAULT_PAYLOAD: dict[str, Any] = {"sources": []}
 _CATALOG_CACHE: dict[str, tuple[float, Any]] = {}
 _CATALOG_TTL_SECONDS = 300
 
 
-class MarketplaceSource(BaseModel):
-    name: str
-    source: str
-    added_at: str | None = None
-
-
-class MarketplacesPayload(BaseModel):
-    sources: list[MarketplaceSource]
-
-
-def _format_validation_error(exc: ValidationError) -> str:
-    """Render the first Pydantic error as a short, single-line message."""
-    first = exc.errors()[0]
-    location = ".".join(str(part) for part in first.get("loc", ()))
-    message = first.get("msg", "invalid value")
-    return f"{location}: {message}" if location else message
-
-
 def validate_marketplaces_payload(data: Any) -> dict[str, Any]:
-    """Validate and normalize a marketplaces payload (``{"sources": [...]}``).
+    """Validate a marketplaces payload (``{"marketplaces": {"<name>": {...}}}``).
 
-    Fills missing ``added_at`` timestamps and dedupes entries by ``name``
-    (last one wins). Raises ``ValueError`` (with a concise message) on any
-    schema violation.
+    Thin wrapper around the same validator the agent's ``/config/marketplaces.json``
+    writes go through, so both paths enforce one schema. Raises ``ValueError``
+    (with a concise message) on any schema violation.
     """
-    if not isinstance(data, dict):
+    validated = validate_marketplaces_document(json.dumps(data))
+    if not isinstance(validated, dict):
         raise ValueError("top level must be a JSON object")
-    try:
-        payload = MarketplacesPayload.model_validate(data)
-    except ValidationError as exc:
-        raise ValueError(_format_validation_error(exc)) from exc
-
-    timestamp = datetime.now(UTC).isoformat()
-    seen_names: set[str] = set()
-    sources: list[dict[str, Any]] = []
-
-    # Iterate in reverse so last-one-wins deduping is natural.
-    for source in reversed(payload.sources):
-        entry = source.model_dump(mode="json")
-        name = str(entry.get("name") or "").strip()
-        if not name:
-            raise ValueError("every source must have a non-empty 'name'")
-        source_url = str(entry.get("source") or "").strip()
-        if not source_url:
-            raise ValueError(f"source '{name}' is missing 'source'")
-        if name in seen_names:
-            continue
-        seen_names.add(name)
-        entry["name"] = name
-        entry["source"] = source_url
-        entry["added_at"] = entry.get("added_at") or timestamp
-        sources.append(entry)
-
-    return {"sources": list(reversed(sources))}
+    return validated
 
 
 def load_marketplaces() -> dict[str, Any]:
     """Return the marketplaces document from the document store."""
-    default = _DEFAULT_PAYLOAD
+    default = default_marketplaces_config_payload()
     document = get_default_document_store().get_document(
-        BACKEND_STATE_PREFIX, MARKETPLACES_DOC_KEY, default
+        PROGENITOR_STATE_PREFIX, MARKETPLACES_DOC_KEY, default
     )
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
 
 
-def save_marketplaces(sources: list[dict[str, Any]]) -> dict[str, Any]:
+def save_marketplaces(marketplaces: dict[str, Any]) -> dict[str, Any]:
     """Persist the marketplaces document and return it."""
-    payload = {"sources": sources}
-    get_default_document_store().save_document(BACKEND_STATE_PREFIX, MARKETPLACES_DOC_KEY, payload)
+    payload = {"marketplaces": marketplaces}
+    get_default_document_store().save_document(
+        PROGENITOR_STATE_PREFIX, MARKETPLACES_DOC_KEY, payload
+    )
     return payload
 
 

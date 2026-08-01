@@ -43,6 +43,7 @@ from a2a.types import (
 
 from .config import get_config, setup_logging
 from .llm.mock_client import create_llm_client
+from .postgres_skills import close_skill_store
 from .queue_worker import BuilderTaskQueue
 from .runtime.background_build import BackgroundBuildRunner, BuildResult, BuildStatus
 from .runtime.copilot_acp import CopilotACPManager
@@ -636,6 +637,7 @@ async def _shutdown() -> None:
     if _task_queue is not None:
         await _task_queue.shutdown()
         _task_queue = None
+    await close_skill_store()
 
 
 app.router.lifespan_context = _lifespan

@@ -87,6 +87,26 @@ export function SaveActionIcon() {
   );
 }
 
+export function InstallActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M8 2.75v6.5" />
+      <path d="M5.25 6.75 8 9.5l2.75-2.75" />
+      <path d="M3.25 10.75v1.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1v-1.5" />
+    </ActionSvg>
+  );
+}
+
+export function UninstallActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M8 9.5V3" />
+      <path d="M5.25 5.5 8 2.75l2.75 2.75" />
+      <path d="M3.25 10.75v1.5a1 1 0 0 0 1 1h7.5a1 1 0 0 0 1-1v-1.5" />
+    </ActionSvg>
+  );
+}
+
 export function ApproveActionIcon() {
   return (
     <ActionSvg>

@@ -6,7 +6,7 @@ import { createAcknowledgedThunk, requestAcknowledged, addRequestLifecycle } fro
 
 export const initialState = {
   marketplaces: {
-    items: [],
+    items: {},
     loaded: false,
     loading: false,
     error: null,
@@ -22,11 +22,12 @@ export const initialState = {
     requestId: null,
   },
   catalogByMarketplace: {},
+  skillContentByKey: {},
 };
 
 function applyMarketplaces(state, payload, requestId = null) {
-  const sources = payload?.sources || [];
-  state.marketplaces.items = Array.isArray(sources) ? sources : [];
+  const marketplaces = payload?.marketplaces || {};
+  state.marketplaces.items = marketplaces && typeof marketplaces === 'object' ? marketplaces : {};
   state.marketplaces.loaded = true;
   state.marketplaces.snapshotRequestId = requestId;
   if (!state.marketplaces.loading || requestId === state.marketplaces.requestId) {
@@ -53,11 +54,11 @@ export const fetchMarketplaces = createAcknowledgedThunk('uiData/fetchMarketplac
   return requestAcknowledged(marketplacesUrl, { requestId });
 });
 
-// Persist the full marketplace source list.
-export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces', async ({ marketplacesUrl, sources }, { requestId }) => {
+// Persist the full marketplaces document.
+export const saveMarketplaces = createAcknowledgedThunk('uiData/saveMarketplaces', async ({ marketplacesUrl, marketplaces }, { requestId }) => {
   return requestAcknowledged(marketplacesUrl, {
     method: 'PUT',
-    body: { sources },
+    body: { marketplaces },
     requestId,
   });
 });
@@ -89,6 +90,15 @@ export const uninstallPlugin = createAcknowledgedThunk('uiData/uninstallPlugin',
   });
 });
 
+// Fetch one installed plugin skill's SKILL.md body for preview.
+export const fetchPluginSkillContent = createAcknowledgedThunk('uiData/fetchPluginSkillContent', async ({ pluginsUrl, marketplace, plugin, skill }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${pluginsUrl}/${encodeURIComponent(marketplace)}/${encodeURIComponent(plugin)}/skills/${encodeURIComponent(skill)}`,
+    { requestId },
+  );
+  return { ...acknowledgement, marketplace, plugin, skill };
+});
+
 export const eventHandlers = {
   'marketplaces.snapshot': (state, payload) => {
     applyMarketplaces(state, payload, payload.request_id || null);
@@ -99,6 +109,11 @@ export const eventHandlers = {
   'plugin.catalog.snapshot': (state, payload) => {
     if (typeof payload?.name === 'string' && payload.name) {
       state.catalogByMarketplace[payload.name] = payload.catalog || {};
+    }
+  },
+  'plugin.skill.content.updated': (state, payload) => {
+    if (typeof payload?.marketplace === 'string' && typeof payload?.plugin === 'string' && typeof payload?.skill === 'string') {
+      state.skillContentByKey[`${payload.marketplace}/${payload.plugin}/${payload.skill}`] = payload;
     }
   },
 };
@@ -122,4 +137,9 @@ export const selectPluginsState = (state) => state.uiData.plugins;
 export const selectCatalogByMarketplace = (state) => state.uiData.catalogByMarketplace;
 export const selectMarketplaceCatalog = (state, name) => (
   name ? state.uiData.catalogByMarketplace[name] || null : null
+);
+export const selectPluginSkillContent = (state, marketplace, plugin, skill) => (
+  marketplace && plugin && skill
+    ? state.uiData.skillContentByKey[`${marketplace}/${plugin}/${skill}`] || null
+    : null
 );

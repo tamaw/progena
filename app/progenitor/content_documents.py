@@ -1,6 +1,7 @@
-"""Postgres-backed content documents: prompts, skills, and runtime memories.
+"""Postgres-backed content documents: prompts, runtime memories, and
+installed marketplace-plugin skills.
 
-These used to be plain files under ``data/{prompts,skills,memories}/``,
+Prompts and memories used to be plain files under ``data/{prompts,memories}/``,
 bind-mounted from the host into both the ``progenitor`` and ``backend``
 containers so edits made through the backend UI were visible to the agent
 without a rebuild. That required every deployment target to have those
@@ -9,11 +10,17 @@ directories seeded and kept in sync outside of git.
 They now persist as documents in the shared Postgres ``store`` table (the
 same one used for ``mcp.json``/``schedule.json``/etc, see
 ``state/manager.py``), keyed by kind + relative path. The only remaining
-disk dependency is the one-time seed: the git-tracked ``data/prompts/`` and
-``data/skills/`` directories are baked into the container image (see
-``docker/*/Dockerfile``) and used to populate Postgres on first boot, when no
-documents of that kind exist yet. After that, the database is authoritative
-and the container never reads those directories again.
+disk dependency is the one-time prompt seed: the git-tracked ``data/prompts/``
+directory is baked into the container image (see ``docker/*/Dockerfile``) and
+used to populate Postgres on first boot, when no prompt documents exist yet.
+After that, the database is authoritative and the container never reads that
+directory again.
+
+Progenitor's own skills (``data/skills/``) are never seeded here -- they're a
+plain read-only disk mount (see ``agent/backends.py``), the same pattern as
+``data/schemas/``, since that content is fully static. The ``"skill"`` kind is
+still used for installed *marketplace-plugin* skills, fetched at runtime and
+written directly by ``plugins/install.py``.
 """
 
 from __future__ import annotations
