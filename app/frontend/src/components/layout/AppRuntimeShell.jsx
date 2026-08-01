@@ -1293,17 +1293,18 @@ function MarketplacesSettingsRow() {
     }
   }, [dispatch, marketplacesUrl]);
 
-  const handleSave = useCallback(async (nextSources) => {
+  const handleSave = useCallback(async (nextMarketplaces) => {
     setError('');
     try {
-      await dispatch(saveMarketplaces({ marketplacesUrl, sources: nextSources })).unwrap();
+      await dispatch(saveMarketplaces({ marketplacesUrl, marketplaces: nextMarketplaces })).unwrap();
     } catch (err) {
       setError(err?.message || 'Failed to save marketplaces');
     }
   }, [dispatch, marketplacesUrl]);
 
   const handleRemove = (name) => {
-    const next = marketplaces.filter((m) => m.name !== name);
+    const next = { ...marketplaces };
+    delete next[name];
     void handleSave(next);
   };
 
@@ -1314,11 +1315,11 @@ function MarketplacesSettingsRow() {
       setError('Name and source URL are required');
       return;
     }
-    if (marketplaces.some((m) => m.name === name)) {
+    if (Object.prototype.hasOwnProperty.call(marketplaces, name)) {
       setError(`Marketplace "${name}" already exists`);
       return;
     }
-    const next = [...marketplaces, { name, source, added_at: new Date().toISOString() }];
+    const next = { ...marketplaces, [name]: { source, added_at: new Date().toISOString() } };
     void handleSave(next);
     setNewName('');
     setNewSource('');
@@ -1334,11 +1335,11 @@ function MarketplacesSettingsRow() {
 
       <div className="set-row">
         <ul className="set-workspace-list">
-          {marketplaces.map((m) => (
-            <li key={m.name} className="set-workspace-list__item">
-              <span className="set-workspace-list__host">{m.name}</span>
-              <span className="set-workspace-list__current">{m.source}</span>
-              <button type="button" className="set-btn set-btn--danger" onClick={() => handleRemove(m.name)}>
+          {Object.entries(marketplaces).map(([name, entry]) => (
+            <li key={name} className="set-workspace-list__item">
+              <span className="set-workspace-list__host">{name}</span>
+              <span className="set-workspace-list__current">{entry?.source}</span>
+              <button type="button" className="set-btn set-btn--danger" onClick={() => handleRemove(name)}>
                 Remove
               </button>
             </li>

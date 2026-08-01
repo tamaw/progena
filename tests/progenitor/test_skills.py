@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 import yaml
 
-SKILLS_DIR = Path("data/skills/progenitor")
+SKILLS_DIR = Path("data/skills")
 
 
 class TestSkillFiles:
@@ -18,11 +18,11 @@ class TestSkillFiles:
     def _get_skill_dirs(self):
         """Get all skill directories."""
         if not SKILLS_DIR.is_dir():
-            pytest.skip("data/skills/progenitor/ not found")
+            pytest.skip("data/skills/ not found")
         return [d for d in SKILLS_DIR.iterdir() if d.is_dir()]
 
     def test_skills_directory_exists(self):
-        assert SKILLS_DIR.is_dir(), "data/skills/progenitor/ directory should exist"
+        assert SKILLS_DIR.is_dir(), "data/skills/ directory should exist"
 
     def test_all_skills_have_skill_md(self):
         for skill_dir in self._get_skill_dirs():
@@ -150,12 +150,12 @@ class TestSkillsWiring:
                     config=fake_config,
                     checkpointer=MagicMock(),
                     state_manager=FakeContentStateManager(),
-                    skills_dirs=["data/skills/progenitor"],
+                    skills_dirs=["data/skills"],
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert "skills" in call_kwargs
-                assert call_kwargs["skills"] == ["data/skills/progenitor"]
+                assert call_kwargs["skills"] == ["data/skills"]
 
     @pytest.mark.asyncio
     async def test_factory_auto_discovers_skills_dir(self):
@@ -178,9 +178,7 @@ class TestSkillsWiring:
                 from app.progenitor.agent.agent import create_progenitor_agent
 
                 state_manager = FakeContentStateManager()
-                state_manager._docs["skill"]["progenitor/example/SKILL.md"] = (
-                    "---\nname: example\n---\n"
-                )
+                state_manager._docs["skill"]["example/SKILL.md"] = "---\nname: example\n---\n"
                 await create_progenitor_agent(
                     config=fake_config,
                     checkpointer=MagicMock(),
@@ -189,11 +187,12 @@ class TestSkillsWiring:
                 )
 
                 call_kwargs = mock_create.call_args.kwargs
-                assert call_kwargs.get("skills") == ["/skills/progenitor"]
+                assert call_kwargs.get("skills") == ["/skills"]
 
     @pytest.mark.asyncio
-    async def test_factory_discovers_multiple_skill_sources_progenitor_first(self):
-        """Auto-discovery emits one source per top-level segment, progenitor first."""
+    async def test_factory_discovers_native_and_plugin_skill_sources_native_first(self):
+        """Auto-discovery emits /skills (native) first, then one source per
+        installed marketplace plugin segment, sorted."""
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -212,9 +211,7 @@ class TestSkillsWiring:
                 from app.progenitor.agent.agent import create_progenitor_agent
 
                 state_manager = FakeContentStateManager()
-                state_manager._docs["skill"]["progenitor/example/SKILL.md"] = (
-                    "---\nname: example\n---\n"
-                )
+                state_manager._docs["skill"]["example/SKILL.md"] = "---\nname: example\n---\n"
                 state_manager._docs["skill"]["zebra-marketplace__formatter/lint/SKILL.md"] = (
                     "---\nname: lint\n---\n"
                 )
@@ -230,14 +227,15 @@ class TestSkillsWiring:
 
                 call_kwargs = mock_create.call_args.kwargs
                 assert call_kwargs.get("skills") == [
-                    "/skills/progenitor",
+                    "/skills",
                     "/skills/acme-marketplace__formatter",
                     "/skills/zebra-marketplace__formatter",
                 ]
 
     @pytest.mark.asyncio
     async def test_factory_skips_skills_when_no_progenitor_skill_docs(self, tmp_path):
-        """Auto-discovery leaves skills_dirs unset when no skill documents exist."""
+        """Auto-discovery leaves skills_dirs unset when there's no native skills
+        dir on disk and no installed marketplace-plugin skill documents."""
         fake_config = SimpleNamespace(
             llm=SimpleNamespace(model_default="test-model"),
             storage=SimpleNamespace(
@@ -255,8 +253,8 @@ class TestSkillsWiring:
                 mock_model.return_value = MagicMock()
                 from app.progenitor.agent.agent import create_progenitor_agent
 
-                # Empty project root: the seed source directory doesn't exist,
-                # so seeding is a no-op and no skill documents ever land.
+                # Empty project root: data/skills/ doesn't exist on disk (no
+                # native skills) and no marketplace-plugin skill documents exist.
                 await create_progenitor_agent(
                     config=fake_config,
                     checkpointer=MagicMock(),

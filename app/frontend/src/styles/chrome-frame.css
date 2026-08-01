@@ -1988,6 +1988,13 @@ body,
   min-height: 0;
 }
 
+/* The Plugins page wraps .prompts-page in a flex column with a dismissible
+   banner above it, so its row must flex to the remaining space instead of
+   claiming the full page height like every other .prompts-page consumer. */
+.app-shell .plugins-page__row {
+  height: auto;
+}
+
 .app-shell .canvas-surface {
   min-height: 0;
 }

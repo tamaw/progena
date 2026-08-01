@@ -138,6 +138,44 @@ def validate_plugins_document(content: str) -> JsonDoc:
     return data
 
 
+_MARKETPLACE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+
+
+def validate_marketplaces_document(content: str) -> JsonDoc:
+    """Parse + validate a ``marketplaces.json`` payload (the ``marketplaces`` document).
+
+    Shape: ``{"marketplaces": {"<name>": {...}}}``, no other top-level keys.
+    Each entry's shape mirrors ``data/schemas/marketplace_entry.schema.v1.json``.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("top level must be a JSON object")
+    extra_keys = set(data) - {"marketplaces"}
+    if extra_keys:
+        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+
+    marketplaces = data.get("marketplaces")
+    if not isinstance(marketplaces, dict):
+        raise ValueError("missing 'marketplaces' object")
+
+    for name, entry in marketplaces.items():
+        if not _MARKETPLACE_NAME_RE.match(name):
+            raise ValueError(f"marketplace name '{name}' must be kebab-case (lowercase, digits, hyphens)")
+        if not isinstance(entry, dict):
+            raise ValueError(f"marketplace '{name}' must be an object")
+        source = entry.get("source")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError(f"marketplace '{name}' is missing 'source'")
+        if "added_at" not in entry:
+            entry["added_at"] = utcnow_isoformat()
+        _check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
+
+    return data
+
+
 def validate_registry_document(content: str) -> JsonDoc:
     """Parse + validate an ``agents.json`` payload (the ``registry`` document).
 
@@ -516,6 +554,22 @@ def create_plugins_state_file(
         save=state_manager.save_plugins_config,
         validate=validate_plugins_document,
         default={"plugins": {}},
+        on_change=on_change,
+    )
+
+
+def create_marketplaces_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``marketplaces.json`` state file backed by the StateManager."""
+    return _simple_state_file(
+        "marketplaces.json",
+        get=state_manager.get_marketplaces_config,
+        save=state_manager.save_marketplaces_config,
+        validate=validate_marketplaces_document,
+        default={"marketplaces": {}},
         on_change=on_change,
     )
 
@@ -1164,23 +1218,24 @@ def create_schedule_state_file(
 class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
     """Async backend exposing Postgres-backed content documents as a directory.
 
-    Backs ``/prompts/``, ``/skills/``, and ``/memories/``: plain-text
-    documents keyed by relative path (e.g. ``progenitor/system.md``),
-    replacing the old ``FilesystemBackend`` mounts over
-    ``data_dir/{prompts,skills,memories}``. Read-only mounts (prompts,
-    skills) are wrapped by ``ReadOnlyBackend`` at the route level, same as
-    the old filesystem mounts were.
+    Backs ``/prompts/`` and ``/memories/`` (whole-kind) plus one
+    ``/skills/<marketplace>__<plugin>/`` mount per installed marketplace
+    plugin (``path_prefix`` scopes the backend to just that segment of the
+    ``"skill"`` kind, so the mount only ever sees that plugin's own rows).
+    Progenitor's own native skills are a plain disk mount now (see
+    ``backends.py``), not this backend.
     """
 
     _ASYNC_ONLY = "ContentDocumentDirectoryBackend is async-only; use the async file tools."
 
-    def __init__(self, state_manager: Any, kind: str) -> None:
+    def __init__(self, state_manager: Any, kind: str, *, path_prefix: str | None = None) -> None:
         self._sm = state_manager
         self._kind = kind
+        self._path_prefix = path_prefix
 
-    @staticmethod
-    def _name(file_path: str) -> str:
-        return file_path.lstrip("/")
+    def _name(self, file_path: str) -> str:
+        name = file_path.lstrip("/")
+        return f"{self._path_prefix}/{name}" if self._path_prefix else name
 
     async def aread(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
         name = self._name(file_path)
@@ -1235,6 +1290,7 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         prefix = self._name(path)
         if prefix and not prefix.endswith("/"):
             prefix = f"{prefix}/"
+        strip = f"{self._path_prefix}/" if self._path_prefix else ""
         files: list[str] = []
         dirs: set[str] = set()
         for rel, _content in rows:
@@ -1246,8 +1302,12 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
                 dirs.add(head)
             else:
                 files.append(rel)
-        entries = [FileInfo(path=f"/{prefix}{d}", is_dir=True) for d in sorted(dirs)]
-        entries += [FileInfo(path=f"/{f}", is_dir=False) for f in sorted(files)]
+        scoped_prefix = prefix[len(strip) :] if strip and prefix.startswith(strip) else prefix
+        entries = [FileInfo(path=f"/{scoped_prefix}{d}", is_dir=True) for d in sorted(dirs)]
+        entries += [
+            FileInfo(path=f"/{f[len(strip) :] if strip else f}", is_dir=False)
+            for f in sorted(files)
+        ]
         return LsResult(entries=entries)
 
     async def aglob(self, pattern: str, path: str = "/") -> GlobResult:

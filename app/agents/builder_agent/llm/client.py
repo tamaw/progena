@@ -1071,7 +1071,7 @@ class LLMClient:
         current_backlog: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """Generate work items for a task."""
-        system_prompt = self.prompts.get_planner_prompt()
+        system_prompt = await self.prompts.get_planner_prompt()
         context = self.prompts.get(
             "builder_agent/planner_user_message.md",
             user_input=user_input,

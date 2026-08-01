@@ -1,9 +1,15 @@
-"""Local prompt-file and skill-bundle loading helpers for builder_agent.
+"""Local prompt-file loading helpers for builder_agent.
 
-Self-contained copy of the prompt/skill loading semantics: builder_agent does
+Self-contained copy of the prompt loading semantics: builder_agent does
 not depend on app.progenitor. Behavior matches what app/progenitor/prompts/
 used to provide, but reuses this package's own path configuration
 (``config.DEFAULT_PROJECT_PROMPTS_DIR``) instead of a shared module.
+
+Skill *content* loading (``load_skill_context``) lives in
+``postgres_skills.py`` instead -- skills are Postgres-backed marketplace-plugin
+content now, not files under a prompts-relative directory. This module
+re-exports it so existing callers (``from .prompt_support import
+load_skill_context``) don't need to change their import path.
 """
 
 from __future__ import annotations
@@ -11,6 +17,16 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import config
+from .postgres_skills import load_skill_context, strip_skill_frontmatter
+
+__all__ = [
+    "DEFAULT_PROMPTS_DIR",
+    "load_skill_context",
+    "load_prompt",
+    "render_prompt_template",
+    "resolve_prompts_dir",
+    "strip_skill_frontmatter",
+]
 
 DEFAULT_PROMPTS_DIR = config.DEFAULT_PROJECT_PROMPTS_DIR
 
@@ -57,52 +73,3 @@ def load_prompt(
     return render_prompt_template(content, **replacements)
 
 
-def resolve_skills_dir(agent_name: str, prompts_dir: Path | str | None = None) -> Path:
-    """Return the agent-scoped skills directory under data/skills/."""
-    return resolve_prompts_dir(prompts_dir).parent / "skills" / agent_name
-
-
-def strip_skill_frontmatter(content: str) -> str:
-    """Remove optional markdown frontmatter from SKILL.md files."""
-    if not content.startswith("---"):
-        return content.strip()
-    parts = content.split("---", 2)
-    if len(parts) < 3:
-        return content.strip()
-    return parts[2].strip()
-
-
-def load_skill_context(
-    skill_names: list[str],
-    *,
-    agent_name: str,
-    prompts_dir: Path | str | None = None,
-    fallback_agents: tuple[str, ...] = (),
-) -> str:
-    """Load skill bundles from agent-scoped skills directories."""
-    search_agents: list[str] = []
-    for candidate in (agent_name, *fallback_agents):
-        if candidate not in search_agents:
-            search_agents.append(candidate)
-    search_dirs = [resolve_skills_dir(candidate, prompts_dir) for candidate in search_agents]
-    if not any(path.is_dir() for path in search_dirs):
-        searched = ", ".join(str(path) for path in search_dirs)
-        raise FileNotFoundError(
-            f"Skills directory not found. Searched: {searched}. "
-            "Ensure data/skills/<agent-name>/ is mounted and populated."
-        )
-
-    sections: list[str] = []
-    for skill_name in skill_names:
-        searched_files = [skills_dir / skill_name / "SKILL.md" for skills_dir in search_dirs]
-        skill_file = next((path for path in searched_files if path.is_file()), None)
-        if skill_file is None:
-            searched = ", ".join(str(path) for path in searched_files)
-            raise FileNotFoundError(
-                f"Skill file not found. Searched: {searched}. "
-                "Ensure data/skills/<agent-name>/<skill-name>/SKILL.md exists."
-            )
-        body = strip_skill_frontmatter(skill_file.read_text(encoding="utf-8"))
-        if body:
-            sections.append(body)
-    return "\n\n".join(sections)

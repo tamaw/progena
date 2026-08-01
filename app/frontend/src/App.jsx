@@ -106,7 +106,7 @@ function WorkspaceScopedApp() {
                     <Route path="/kanban" element={<DeferredRoute Page={KanbanPage} fallback="Loading kanban..." />} />
                     <Route path="/solutions/:solutionId/projects/:projectId" element={<DeferredRoute Page={ProjectPage} fallback="Loading project..." />} />
                     <Route path="/logs" element={<DeferredRoute Page={LogsPage} fallback="Loading logs..." />} />
-                    <Route path="/plugins" element={<DeferredRoute Page={PluginsPage} fallback="Loading plugins..." />} />
+                    <Route path="/plugins/:marketplace?/:plugin?" element={<DeferredRoute Page={PluginsPage} fallback="Loading plugins..." />} />
                     <Route path="/prompts" element={<DeferredRoute Page={PromptsPage} fallback="Loading prompts..." />} />
                     <Route path="/sessions" element={<DeferredRoute Page={SessionsPage} fallback="Loading sessions..." />} />
                     <Route path="/schedules/:scheduleId?/:titleSlug?" element={<DeferredRoute Page={SchedulesPage} fallback="Loading schedules..." />} />

@@ -9,20 +9,27 @@ Profile:
   - /repos/ -> configured repo/worktree directory (read-only)
   - /logs/ -> configured log dir (read-only)
   - /prompts/ -> Postgres content documents, kind="prompt" (read-only)
-  - /skills/ -> Postgres content documents, kind="skill" (read-only) - DeepAgent
-    skill discovery reads these
+  - /skills/ -> <project_root>/data/skills (read-only, disk-mounted): progenitor's
+    own native skills, static and baked into the image, same shape as /schemas/
+  - /skills/<marketplace>__<plugin>/ -> Postgres content documents, kind="skill",
+    scoped to that one installed marketplace plugin (read-only) - one such route
+    per plugin segment currently installed (see plugins/install.py)
   - /schemas/ -> configured schemas dir (read-only, still disk-mounted: static
     JSON Schema contracts checked into git, read by structured_output) - a
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
-    including mcp.json, schedule.json, agents.json, and preferences.json, plus the
-    /config/tasks/ task directory (board.json and per-task <id>.md files).
+    including mcp.json, plugins.json, marketplaces.json, schedule.json,
+    agents.json, and preferences.json, plus the /config/tasks/ task directory
+    (board.json and per-task <id>.md files).
     Writes persist via the StateManager; the runtime's store listener handles
     live MCP re-discovery, so no write-hook callback is needed here.
 
-Prompts, skills, and memories used to be plain files bind-mounted from the
-host (see ``content_documents.py`` for why); they're Postgres documents now,
-so only ``schemas/`` remains a real disk mount.
+Prompts and memories used to be plain files bind-mounted from the host (see
+``content_documents.py`` for why); they're Postgres documents now. Progenitor's
+own skills went the other way: they used to be seeded into Postgres too, but
+since that content is fully static and baked into every image, they're a plain
+disk mount again, same as ``schemas/``. Only *installed marketplace plugin*
+skills remain Postgres-backed, since those are fetched at runtime.
 """
 
 import logging
@@ -46,6 +53,7 @@ from .state_backend import (
     WorkflowDirectoryBackend,
     create_health_state_file,
     create_knowledge_state_file,
+    create_marketplaces_state_file,
     create_mcp_state_file,
     create_plugins_state_file,
     create_preferences_state_file,
@@ -77,9 +85,11 @@ def create_progenitor_backend(
     *,
     log_dir: str | Path | None = None,
     schemas_dir: str | Path | None = None,
+    skills_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
     database_url: str | None = None,
+    plugin_skill_segments: list[str] | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -87,18 +97,26 @@ def create_progenitor_backend(
         project_root: Root directory for filesystem access. Defaults to cwd.
         log_dir: Log directory. Defaults to ``<project_root>/logs``.
         schemas_dir: JSON Schema directory. Defaults to ``<project_root>/data/schemas``.
+        skills_dir: Progenitor's own skill directory. Defaults to
+            ``<project_root>/data/skills``. Disk-mounted read-only at ``/skills/``.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
-        state_manager: Required for prompts/skills/memories/config mounts (all
-            Postgres-backed); without it those routes are omitted entirely.
+        state_manager: Required for prompts/memories/config mounts and for
+            installed marketplace-plugin skill mounts (all Postgres-backed);
+            without it those routes are omitted entirely.
         database_url: Required for the ``/attachments/`` mount (raw SQL over the
             same Postgres ``attachments`` blob table the backend writes to);
             without it the mount is omitted entirely.
+        plugin_skill_segments: One ``<marketplace>__<plugin>`` segment per
+            currently-installed marketplace plugin; each gets its own
+            ``/skills/<segment>/`` route scoped to just that plugin's skill
+            documents. Requires ``state_manager``; ignored without one.
     Returns:
         Composite backend instance compatible with DeepAgents 0.5.3+.
     """
     root = Path(project_root) if project_root else Path.cwd()
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
+    resolved_skills_dir = Path(skills_dir) if skills_dir else root / "data" / "skills"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "worktrees"
 
     def _route_backend(
@@ -124,6 +142,7 @@ def create_progenitor_backend(
         ("/repos/", resolved_worktree_dir, True),
         ("/logs/", resolved_log_dir, True),
         ("/schemas/", resolved_schemas_dir, True),
+        ("/skills/", resolved_skills_dir, True),
     ]
     for route, mount_path, ro in mounts:
         backend = _route_backend(mount_path, read_only=ro)
@@ -135,9 +154,10 @@ def create_progenitor_backend(
         routes["/prompts/"] = ReadOnlyBackend(
             ContentDocumentDirectoryBackend(state_manager, "prompt")
         )
-        routes["/skills/"] = ReadOnlyBackend(
-            ContentDocumentDirectoryBackend(state_manager, "skill")
-        )
+        for segment in plugin_skill_segments or []:
+            routes[f"/skills/{segment}/"] = ReadOnlyBackend(
+                ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)
+            )
 
         # State documents surfaced as virtual files (e.g. /config/mcp.json,
         # /config/schedule.json, /config/agents.json), backed by the runtime
@@ -147,6 +167,7 @@ def create_progenitor_backend(
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
             create_plugins_state_file,
+            create_marketplaces_state_file,
             create_knowledge_state_file,
             create_schedule_state_file,
             create_registry_state_file,
