@@ -61,6 +61,10 @@ export const decideInboxMessage = createAcknowledgedThunk('uiData/decideInboxMes
   `${inboxUrl}/${encodeURIComponent(messageId)}/decision`,
   { method: 'POST', body: { decision }, requestId },
 ));
+export const archiveInboxMessage = createAcknowledgedThunk('uiData/archiveInboxMessage', ({ inboxUrl, messageId, archived = true }, { requestId }) => requestAcknowledged(
+  `${inboxUrl}/${encodeURIComponent(messageId)}/archive`,
+  { method: 'POST', body: { archived }, requestId },
+));
 
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {
@@ -111,5 +115,5 @@ export const selectInboxMessages = createSelector(
 export const selectInboxState = (state) => state.uiData.inbox;
 export const selectInboxUnreadCount = createSelector(
   [selectInboxMessages],
-  (messages) => messages.filter((message) => !message.read).length,
+  (messages) => messages.filter((message) => !message.read && !message.archived).length,
 );

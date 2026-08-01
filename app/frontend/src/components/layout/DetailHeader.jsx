@@ -115,6 +115,16 @@ export function DeleteActionIcon() {
   );
 }
 
+export function ArchiveActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M2.5 4h11v2.25h-11z" />
+      <path d="M3.5 7.25h9v5.25h-9z" />
+      <path d="M8 8.5v2.25M6.5 9.5 8 11l1.5-1.5" />
+    </ActionSvg>
+  );
+}
+
 export function LogsActionIcon() {
   return (
     <ActionSvg>
