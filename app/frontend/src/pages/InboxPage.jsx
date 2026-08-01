@@ -9,6 +9,7 @@ import DetailHeader, {
   DetailHeaderActions,
   DetailStatus,
   ApproveActionIcon,
+  ArchiveActionIcon,
   DeleteActionIcon,
   EditActionIcon,
   RejectActionIcon,
@@ -23,9 +24,11 @@ import {
   PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { useConfig } from '../context/ConfigContext';
+import { formatStartedTime } from '../components/chat/conversationModel';
 import { useMermaidRender } from '../hooks/useMermaidRender';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
+  archiveInboxMessage,
   decideInboxMessage,
   deleteInboxMessage,
   markInboxMessageRead,
@@ -33,11 +36,15 @@ import {
   selectInboxState,
 } from '../store/uiDataSlice';
 import { formatRelativeTime } from './tasksPageModel';
+import {
+  filterInboxMessages,
+  getInboxMessageStatus,
+  inboxMessageNeedsDecision,
+  INBOX_FILTERS,
+  INBOX_STATUS_META,
+  sortInboxMessages,
+} from './inboxPageModel';
 
-const INBOX_FILTERS = [
-  { value: 'all', label: 'All' },
-  { value: 'unread', label: 'Unread' },
-];
 const INBOX_SORT_MODES = ['Recent', 'Name'];
 
 function MarkUnreadActionIcon() {
@@ -49,11 +56,19 @@ function MarkUnreadActionIcon() {
   );
 }
 
-function formatTimestamp(isoText) {
-  if (!isoText) return '';
-  const timestamp = Date.parse(isoText);
-  if (Number.isNaN(timestamp)) return isoText;
-  return new Date(timestamp).toLocaleString();
+function DecisionIcon({ decision }) {
+  return (
+    <svg className="inbox-detail__decision-icon" viewBox="0 0 16 16" aria-hidden="true">
+      {decision === 'approved' ? (
+        <path d="M3.25 8.5 6.5 11.75 12.75 4.5" />
+      ) : (
+        <>
+          <path d="M4 4l8 8" />
+          <path d="M12 4l-8 8" />
+        </>
+      )}
+    </svg>
+  );
 }
 
 function previewText(body) {
@@ -96,20 +111,10 @@ export default function InboxPage() {
   // connect (same convention ConversationPage follows for chat sessions),
   // so the page only ever reads state instead of re-triggering its own GET.
 
-  const visibleMessages = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    const matching = messages.filter((message) => (
-      (filter !== 'unread' || !message.read)
-      && (!needle
-        || String(message.title || '').toLowerCase().includes(needle)
-        || String(message.body || '').toLowerCase().includes(needle))
-    ));
-    // Server order is already created_at desc ("Recent"); "Name" re-sorts A→Z.
-    if (sort === 'Name') {
-      return [...matching].sort((a, b) => String(a.title || '').localeCompare(String(b.title || '')));
-    }
-    return matching;
-  }, [messages, query, filter, sort]);
+  const visibleMessages = useMemo(
+    () => sortInboxMessages(filterInboxMessages(messages, filter, query), sort),
+    [messages, query, filter, sort],
+  );
 
   const selectedMessage = useMemo(
     () => messages.find((message) => message.id === (routedMessageId || fallbackSelectedId)) || null,
@@ -154,11 +159,20 @@ export default function InboxPage() {
   const selectedMessageId = selectedMessage?.id;
   const selectedMessageRead = selectedMessage?.read;
   const selectedMessageTitle = selectedMessage?.title;
+  const selectedMessageStatus = getInboxMessageStatus(selectedMessage);
 
   // Selecting a message (whether by route, auto-select, or a click above) marks
-  // it read optimistically; the snapshot that follows reconciles.
+  // it read optimistically; the snapshot that follows reconciles. Keyed by id
+  // (not read) so this only fires once per *selection*, not every time --
+  // otherwise a manual "mark unread" on the still-selected message would
+  // immediately be flipped back to read by this same effect.
+  const autoMarkedReadIdRef = useRef(null);
   useEffect(() => {
-    if (!selectedMessageId || selectedMessageRead) {
+    if (!selectedMessageId || autoMarkedReadIdRef.current === selectedMessageId) {
+      return;
+    }
+    autoMarkedReadIdRef.current = selectedMessageId;
+    if (selectedMessageRead) {
       return;
     }
     dispatch(markInboxMessageRead({ inboxUrl, messageId: selectedMessageId, read: true }));
@@ -181,6 +195,20 @@ export default function InboxPage() {
     if (!selectedMessageId) return;
     dispatch(decideInboxMessage({ inboxUrl, messageId: selectedMessageId, decision }));
   }, [dispatch, inboxUrl, selectedMessageId]);
+
+  const toggleArchive = useCallback(() => {
+    if (!selectedMessageId) return;
+    dispatch(archiveInboxMessage({
+      inboxUrl,
+      messageId: selectedMessageId,
+      archived: !selectedMessage?.archived,
+    }));
+    // Archiving (or unarchiving) the selected message can push it out of the
+    // current filter's visible list, same as delete -- clear the selection
+    // instead of leaving the detail pane stuck on a now-hidden message.
+    setFallbackSelectedId(null);
+    navigate('/inbox', { replace: true });
+  }, [dispatch, inboxUrl, navigate, selectedMessage?.archived, selectedMessageId]);
 
   const removeMessage = useCallback(() => {
     if (!selectedMessageId) return;
@@ -214,7 +242,11 @@ export default function InboxPage() {
       ? 'No messages match your search'
       : filter === 'unread'
         ? 'No unread messages'
-        : 'No messages yet';
+        : filter === 'pending'
+          ? 'No messages pending approval'
+          : filter === 'archived'
+            ? 'No archived messages'
+            : 'No messages yet';
 
   return (
     <PageShell className="inbox-page" label="Inbox">
@@ -242,33 +274,37 @@ export default function InboxPage() {
             items={visibleMessages}
             getItemKey={(message) => message.id}
             estimatedItemHeight={70}
-            renderItem={(message) => (
-              <article
-                className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${message.read ? '' : ' is-unread'}`}
-                role="button"
-                tabIndex={0}
-                aria-current={message.id === selectedMessageId ? 'true' : undefined}
-                onClick={() => selectMessage(message)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
-                    event.preventDefault();
-                    selectMessage(message);
-                  }
-                }}
-              >
-                <div className="chat-session-card__top">
-                  <span
-                    className={`chat-session-card__dot${message.read ? ' chat-session-card__dot--read' : ' chat-session-card__dot--unread'}`}
-                    aria-hidden="true"
-                  />
-                  <span className="chat-session-card__title">{message.title || message.id}</span>
-                  <span className="chat-session-card__age">{formatRelativeTime(message.created_at)}</span>
-                </div>
-                {previewText(message.body) ? (
-                  <div className="chat-session-card__preview">{previewText(message.body)}</div>
-                ) : null}
-              </article>
-            )}
+            renderItem={(message) => {
+              const status = getInboxMessageStatus(message);
+              const isUnread = status === 'unread';
+              return (
+                <article
+                  className={`chat-session-card${message.id === selectedMessageId ? ' is-selected' : ''}${isUnread ? ' is-unread' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  aria-current={message.id === selectedMessageId ? 'true' : undefined}
+                  onClick={() => selectMessage(message)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      selectMessage(message);
+                    }
+                  }}
+                >
+                  <div className="chat-session-card__top">
+                    <span
+                      className={`chat-session-card__dot ${INBOX_STATUS_META[status].dotClass}`}
+                      aria-hidden="true"
+                    />
+                    <span className="chat-session-card__title">{message.title || message.id}</span>
+                    <span className="chat-session-card__age">{formatRelativeTime(message.created_at)}</span>
+                  </div>
+                  {previewText(message.body) ? (
+                    <div className="chat-session-card__preview">{previewText(message.body)}</div>
+                  ) : null}
+                </article>
+              );
+            }}
           />
         )}
       </PaneList>
@@ -281,36 +317,43 @@ export default function InboxPage() {
           meta={selectedMessage ? [
             <DetailStatus
               key="status"
-              tone={selectedMessage.read ? 'muted' : 'ok'}
-              className={selectedMessage.read ? 'inbox-detail__status--read' : 'inbox-detail__status--unread'}
+              tone={INBOX_STATUS_META[selectedMessageStatus].tone}
+              className={`inbox-detail__status--${selectedMessageStatus}`}
             >
-              {selectedMessage.read ? 'Read' : 'Unread'}
+              {INBOX_STATUS_META[selectedMessageStatus].label}
             </DetailStatus>,
-            selectedMessage.requires_approval
+            selectedMessage.decision
               ? (
-                <DetailStatus
-                  key="decision"
-                  tone={selectedMessage.decision === 'approved'
-                    ? 'ok'
-                    : selectedMessage.decision === 'rejected' ? 'error' : 'warning'}
-                  className={`inbox-detail__status--decision-${selectedMessage.decision || 'pending'}`}
-                >
-                  {selectedMessage.decision === 'approved'
-                    ? 'Approved'
-                    : selectedMessage.decision === 'rejected' ? 'Rejected' : 'Approval required'}
-                </DetailStatus>
+                <span key="decision" className="muted inbox-detail__decision">
+                  <DecisionIcon decision={selectedMessage.decision} />
+                  {selectedMessage.decision === 'approved' ? 'Approved' : 'Rejected'}
+                </span>
               )
               : null,
             selectedMessage.created_at
-              ? <span key="created" className="taskid">Created {formatTimestamp(selectedMessage.created_at)}</span>
+              ? <span key="created" className="muted">Created {formatStartedTime(selectedMessage.created_at)}</span>
               : null,
             selectedMessage.read_at
-              ? <span key="read_at" className="taskid">Read {formatTimestamp(selectedMessage.read_at)}</span>
+              ? <span key="read_at" className="muted">Read {formatStartedTime(selectedMessage.read_at)}</span>
               : null,
             <span key="id" className="taskid">#{selectedMessage.id}</span>,
           ] : []}
           actions={(
             <DetailHeaderActions>
+              {inboxMessageNeedsDecision(selectedMessage) && (
+                <DetailHeaderAction
+                  icon={<ApproveActionIcon />}
+                  label="Approve"
+                  onClick={() => decide('approved')}
+                />
+              )}
+              {inboxMessageNeedsDecision(selectedMessage) && (
+                <DetailHeaderAction
+                  icon={<RejectActionIcon />}
+                  label="Reject"
+                  onClick={() => decide('rejected')}
+                />
+              )}
               <DetailHeaderAction
                 icon={<EditActionIcon />}
                 label="Edit in chat"
@@ -324,24 +367,13 @@ export default function InboxPage() {
                 onClick={toggleRead}
                 disabled={!selectedMessage}
               />
-              {selectedMessage?.requires_approval && !selectedMessage.decision && (
-                <DetailHeaderAction
-                  icon={<ApproveActionIcon />}
-                  label="Approve"
-                  variant="success"
-                  className="inbox-detail__approve"
-                  onClick={() => decide('approved')}
-                />
-              )}
-              {selectedMessage?.requires_approval && !selectedMessage.decision && (
-                <DetailHeaderAction
-                  icon={<RejectActionIcon />}
-                  label="Reject"
-                  variant="danger"
-                  className="inbox-detail__reject"
-                  onClick={() => decide('rejected')}
-                />
-              )}
+              <DetailHeaderAction
+                icon={<ArchiveActionIcon />}
+                label={selectedMessage?.archived ? 'Unarchive' : 'Archive'}
+                aria-pressed={selectedMessage ? Boolean(selectedMessage.archived) : undefined}
+                onClick={toggleArchive}
+                disabled={!selectedMessage}
+              />
               <DetailHeaderAction
                 icon={<DeleteActionIcon />}
                 label="Delete"

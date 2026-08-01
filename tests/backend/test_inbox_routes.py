@@ -143,6 +143,8 @@ class TestInboxRoutes:
 
         stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
         assert stored.payload["decision"] == "approved"
+        assert stored.payload["read"] is True
+        assert stored.payload["read_at"]
 
         types = [envelope.type for envelope in capture.event_types()]
         assert types == ["inbox.message.upserted", "inbox.snapshot"]
@@ -181,6 +183,30 @@ class TestInboxRoutes:
         assert message["requires_approval"] is True
         assert message["task_id"] == "card_1"
         assert message["decision"] is None
+
+    def test_archive_persists_and_broadcasts(self, client, seeded_store):
+        with _StreamCapture() as capture:
+            response = client.post("/api/ui/inbox/msg_new/archive")
+
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["archived"] is True
+
+        types = [envelope.type for envelope in capture.event_types()]
+        assert types == ["inbox.message.upserted", "inbox.snapshot"]
+
+    def test_unarchive_clears_flag(self, client, seeded_store):
+        client.post("/api/ui/inbox/msg_new/archive")
+        response = client.post("/api/ui/inbox/msg_new/archive", json={"archived": False})
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["archived"] is False
+
+    def test_archive_unknown_message_404s(self, client, document_store):
+        response = client.post("/api/ui/inbox/nope/archive")
+        assert response.status_code == 404
 
     def test_delete_removes_row_and_broadcasts(self, client, seeded_store):
         with _StreamCapture() as capture:

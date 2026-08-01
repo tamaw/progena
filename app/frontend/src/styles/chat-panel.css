@@ -1857,6 +1857,18 @@ pre.mermaid svg {
     background: var(--color-error, #ef4444);
 }
 
+/* Inbox message read/unread dots: distinct from the chat-session dot
+   semantics above (unread chat = green/needs attention). Plain two-state --
+   approve/reject is a separate, uncolored signal shown via the action
+   buttons and a plain-text label, not a dot color. */
+.chat-session-card__dot--inbox-unread {
+    background: var(--color-success);
+}
+.chat-session-card__dot--inbox-read {
+    border: 1.5px solid var(--color-text-muted);
+    box-sizing: border-box;
+}
+
 .chat-session-card__dot--generating {
     background: #f97316;
     animation: status-dot-pulse 1.2s ease-in-out infinite;
