@@ -270,12 +270,14 @@ export {
   fetchMarketplaceCatalog,
   installPlugin,
   uninstallPlugin,
+  fetchPluginSkillContent,
   selectMarketplaces,
   selectMarketplacesState,
   selectPlugins,
   selectPluginsState,
   selectCatalogByMarketplace,
   selectMarketplaceCatalog,
+  selectPluginSkillContent,
 } from './uiData/marketplaces';
 
 export default uiDataSlice.reducer;

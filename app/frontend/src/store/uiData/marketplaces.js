@@ -22,6 +22,7 @@ export const initialState = {
     requestId: null,
   },
   catalogByMarketplace: {},
+  skillContentByKey: {},
 };
 
 function applyMarketplaces(state, payload, requestId = null) {
@@ -89,6 +90,15 @@ export const uninstallPlugin = createAcknowledgedThunk('uiData/uninstallPlugin',
   });
 });
 
+// Fetch one installed plugin skill's SKILL.md body for preview.
+export const fetchPluginSkillContent = createAcknowledgedThunk('uiData/fetchPluginSkillContent', async ({ pluginsUrl, marketplace, plugin, skill }, { requestId }) => {
+  const acknowledgement = await requestAcknowledged(
+    `${pluginsUrl}/${encodeURIComponent(marketplace)}/${encodeURIComponent(plugin)}/skills/${encodeURIComponent(skill)}`,
+    { requestId },
+  );
+  return { ...acknowledgement, marketplace, plugin, skill };
+});
+
 export const eventHandlers = {
   'marketplaces.snapshot': (state, payload) => {
     applyMarketplaces(state, payload, payload.request_id || null);
@@ -99,6 +109,11 @@ export const eventHandlers = {
   'plugin.catalog.snapshot': (state, payload) => {
     if (typeof payload?.name === 'string' && payload.name) {
       state.catalogByMarketplace[payload.name] = payload.catalog || {};
+    }
+  },
+  'plugin.skill.content.updated': (state, payload) => {
+    if (typeof payload?.marketplace === 'string' && typeof payload?.plugin === 'string' && typeof payload?.skill === 'string') {
+      state.skillContentByKey[`${payload.marketplace}/${payload.plugin}/${payload.skill}`] = payload;
     }
   },
 };
@@ -122,4 +137,9 @@ export const selectPluginsState = (state) => state.uiData.plugins;
 export const selectCatalogByMarketplace = (state) => state.uiData.catalogByMarketplace;
 export const selectMarketplaceCatalog = (state, name) => (
   name ? state.uiData.catalogByMarketplace[name] || null : null
+);
+export const selectPluginSkillContent = (state, marketplace, plugin, skill) => (
+  marketplace && plugin && skill
+    ? state.uiData.skillContentByKey[`${marketplace}/${plugin}/${skill}`] || null
+    : null
 );

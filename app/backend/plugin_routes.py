@@ -11,6 +11,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from app.progenitor.agent.state_backend import validate_plugins_document
 from app.progenitor.config import default_plugins_config_payload
+from app.progenitor.content_documents import content_document_key
 
 # Imported at module level so tests can monkeypatch the fetch callable.
 from app.progenitor.plugins.sources import fetch_marketplace, resolve_relative_plugin_source
@@ -19,7 +20,7 @@ from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 from .marketplace_service import get_cached_catalog, load_marketplaces, set_cached_catalog
 from .request_utils import request_correlation_id as _request_correlation_id
-from .ui_routes import broadcast_plugins_snapshot
+from .ui_routes import broadcast_plugins_snapshot, broadcast_ui_event
 
 logger = logging.getLogger(__name__)
 
@@ -182,3 +183,46 @@ async def uninstall_plugin(
 
     broadcast_plugins_snapshot(saved, request_id=request_id)
     return acknowledgement_response(request_id, ["plugins.snapshot"])
+
+
+@router.get(
+    "/{marketplace}/{plugin}/skills/{skill_name}",
+    status_code=202,
+    response_model=UiRequestAcknowledgement,
+)
+async def get_plugin_skill_content(
+    marketplace: str,
+    plugin: str,
+    skill_name: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> UiRequestAcknowledgement:
+    """Publish one installed plugin skill's ``SKILL.md`` body for preview.
+
+    Reads the same ``skill:<marketplace>__<plugin>/<skill>/SKILL.md`` content
+    document the agent's ``/skills/<segment>/`` mount serves (see
+    ``plugins/install.py``), so the preview always matches what the agent
+    actually reads.
+    """
+    request_id = _request_correlation_id(request, x_request_id)
+    segment = f"{marketplace}__{plugin}"
+    key = content_document_key("skill", f"{segment}/{skill_name}/SKILL.md")
+    document = get_default_document_store().get_document(PROGENITOR_STATE_PREFIX, key, None)
+    if (
+        document is None
+        or not isinstance(document.payload, dict)
+        or not isinstance(document.payload.get("content"), str)
+    ):
+        raise HTTPException(
+            status_code=404,
+            detail=f"skill '{skill_name}' not found for plugin '{marketplace}/{plugin}'",
+        )
+
+    payload = {
+        "marketplace": marketplace,
+        "plugin": plugin,
+        "skill": skill_name,
+        "content": document.payload["content"],
+    }
+    broadcast_ui_event("plugin.skill.content.updated", payload, request_id=request_id)
+    return acknowledgement_response(request_id, ["plugin.skill.content.updated"])
