@@ -47,7 +47,6 @@ from .document_store import (
 )
 
 logger = logging.getLogger(__name__)
-DEFAULT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_LOGS_DIR = Path(__file__).resolve().parents[2] / "logs"
 PLAIN_LOG_LINE_RE = re.compile(
     r"^(?P<timestamp>\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:[.,]\d{1,6})?(?:Z|[+-]\d{2}:\d{2})?)"
