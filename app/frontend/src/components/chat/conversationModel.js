@@ -243,12 +243,17 @@ function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
-export function formatStartedTime(timestamp) {
-  if (!timestamp) {
+// Weekday + time reads fine for anything from this week, but goes ambiguous
+// past that ("Mon, 02:15 PM" -- which Monday?), so anything 7+ days old also
+// gets a short date.
+export function formatStartedTime(timestamp, now = Date.now()) {
+  const value = toValidTimestamp(timestamp);
+  if (!value) {
     return '';
   }
-  return new Date(timestamp).toLocaleString([], {
-    weekday: 'short',
+  const days = Math.floor(Math.max(0, now - value) / 86400000);
+  return new Date(value).toLocaleString([], {
+    ...(days >= 7 ? { month: 'short', day: 'numeric' } : { weekday: 'short' }),
     hour: '2-digit',
     minute: '2-digit',
   });

@@ -106,7 +106,7 @@ FastAPI app (`main.py`) that is API-only — it does not serve frontend assets.
 - `ui_routes.py` — `/api/ui/*` routes for frontend status, state views, SSE streams
 - `chat_routes.py` / `chat_sessions.py` — chat session management
 - `document_store.py` — Postgres-backed document store
-- `state_reader.py` — reads `data/state/`, `data/config/`, `logs/` for UI routes
+- `state_reader.py` — reads state/config from the Postgres document store and `logs/` from disk for UI routes
 
 **SSE / realtime pattern**: the browser always keeps one canonical `GET /api/ui/stream` connection for `UiEventEnvelope` frames (`event: ui.event`). Retained `/api/ui/*` finite routes still return `202` with `UiRequestAcknowledgement` (`request_id` + `event_types`) and never carry application data in the success body. For browser chat requests with `stream: true`, the client also opens a request-scoped `GET /api/ui/responses/{request_id}/stream` `EventSource` that carries only `chat.response.delta` and `chat.response.event` content frames plus heartbeat/resync transport events. Canonical `/api/ui/stream` still owns chat lifecycle (`started`, `completed`, `failed`, `cancelled`) and all non-chat UI events. Use `broadcast_ui_event()` for backend-owned canonical state changes; pass the caller's `request_id`. Pages should use selectors, not open their own app-lifetime streams. See `EVENT_STREAM_REFACTOR_PLAN.md` and `docs/BACKEND.md` for the full contract.
 

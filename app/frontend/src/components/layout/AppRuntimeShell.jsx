@@ -83,7 +83,6 @@ import {
   WorkspaceNavIcon,
 } from './navIcons';
 import {
-  buildQuickChatOutboundMessage,
   defaultQuickChatConfig,
   normalizeAiPrompt,
   normalizeQuickChatConfig,
@@ -971,7 +970,6 @@ function QuickChatPanel({
   const submit = useCallback(async (message, attachments = []) => {
     const text = message.trim();
     if ((!text && attachments.length === 0) || isSending) return;
-    const outboundMessage = buildQuickChatOutboundMessage(normalizedConfig.mode, text, normalizedConfig);
     const attachmentIds = attachments.map((attachment) => attachment.id).filter(Boolean);
 
     const now = Date.now();
@@ -1000,7 +998,7 @@ function QuickChatPanel({
       let assistantContent = '';
       const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
-        outboundMessage,
+        text,
         streamHistory,
         (chunk) => {
           if (isStale()) return;
@@ -1065,7 +1063,7 @@ function QuickChatPanel({
       }
       setIsSending(false);
     }
-  }, [ensureQuickThread, history, isSending, normalizedConfig, sendMessageStream]);
+  }, [ensureQuickThread, history, isSending, sendMessageStream]);
   useEffect(() => {
     if (!pendingSubmission?.message || isSending) {
       return;

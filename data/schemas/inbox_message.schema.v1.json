@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Inbox message",
+  "description": "A single inbox message, stored as the 'inbox_message:<id>' document and exposed as a virtual file at /inbox/<id>.md. Create a message by writing the native write/edit file tools against that path; the Inbox page updates automatically.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique message identifier (matches the document suffix)."
+    },
+    "title": {
+      "type": "string",
+      "description": "Short, specific message title -- what the user sees in their message list."
+    },
+    "body": {
+      "type": "string",
+      "description": "Full message body in markdown -- headings, lists, links, and code blocks all render in the Inbox UI."
+    },
+    "source": {
+      "type": "string",
+      "description": "Which agent or skill produced this message (e.g. 'managing-inbox', 'observe_agent'), for traceability once several agents report into the same inbox."
+    },
+    "read": {
+      "type": "boolean",
+      "description": "Whether the user has opened the message. User-owned -- never set true by the author.",
+      "default": false
+    },
+    "read_at": {
+      "type": ["string", "null"],
+      "description": "ISO8601 timestamp of when the user opened the message. User-owned -- leave unset.",
+      "default": null
+    },
+    "created_at": {
+      "type": "string",
+      "description": "ISO8601 creation timestamp. Stamped automatically on first write if omitted."
+    },
+    "thread_id": {
+      "type": "string",
+      "description": "The conversation thread this message was composed in. System-owned -- stamped automatically from the current request context on first write, never set by the author. Lets an attachment mentioned in the body be resolved later with the same thread scoping the attachments API already enforces (GET /api/attachments/{id}?thread_id=...)."
+    },
+    "requires_approval": {
+      "type": "boolean",
+      "description": "Whether this message is a decision request rather than a plain report. When true, the Inbox UI shows approve/reject controls instead of treating it as read-only.",
+      "default": false
+    },
+    "decision": {
+      "type": ["string", "null"],
+      "enum": ["approved", "rejected", null],
+      "description": "The user's decision on a message with requires_approval=true. User-owned -- never set by the author. Absent/null means still pending.",
+      "default": null
+    },
+    "task_id": {
+      "type": "string",
+      "description": "The kanban_card:<id> this message concerns, if any -- lets an approval request link back to the task it's about. A task may accumulate several approval messages over its lifecycle."
+    }
+  },
+  "required": ["id", "title", "body"],
+  "additionalProperties": true
+}

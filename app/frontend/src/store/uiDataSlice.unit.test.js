@@ -701,6 +701,14 @@ describe('inbox events', () => {
     expect(selectInboxUnreadCount({ uiData: s })).toBe(1);
   });
 
+  it('unread count excludes archived messages', () => {
+    const s = reducer(undefined, inboxSnapshot([
+      { id: 'msg_new', title: 'New', read: false, archived: false },
+      { id: 'msg_archived', title: 'Archived', read: false, archived: true },
+    ]));
+    expect(selectInboxUnreadCount({ uiData: s })).toBe(1);
+  });
+
   it('upserted merges an existing message and prepends a new one', () => {
     let s = reducer(undefined, inboxSnapshot([{ id: 'a', title: 'A', read: false }]));
     s = reducer(s, applyUiEvent({ type: 'inbox.message.upserted', payload: { message: { id: 'a', read: true } } }));

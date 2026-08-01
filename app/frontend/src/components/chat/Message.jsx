@@ -1,4 +1,5 @@
-import { Fragment, memo, useMemo } from 'react';
+import { Fragment, memo, useMemo, useRef } from 'react';
+import { useMermaidRender } from '../../hooks/useMermaidRender';
 import { collectMessageImages } from './conversationModel';
 import { formatDisplayToolCalls } from './messageDisplayModel';
 import { hasReasoningContent, isReasoningEvent, isRenderableStreamEvent } from './streamEventsModel';
@@ -170,6 +171,8 @@ function MessageView({
     const sanitized = renderSafeMarkdown(content);
     return isStreaming ? appendStreamingCursor(sanitized) : sanitized;
   }, [content, hasTimelineItems, isStreaming]);
+  const messageContentRef = useRef(null);
+  useMermaidRender(messageContentRef, formattedContent);
 
   const formattedTime = useMemo(() => {
     if (!timestamp) return '';
@@ -248,7 +251,13 @@ function MessageView({
           </span>
         </div>
         <div className={`message ${role} ${isStreaming ? 'streaming' : ''} ${error ? 'error' : ''} ${isScheduled ? 'scheduled' : ''}`}>
-          {formattedContent && <div className="message-content" dangerouslySetInnerHTML={{ __html: formattedContent }} />}
+          {formattedContent && (
+            <div
+              ref={messageContentRef}
+              className="message-content"
+              dangerouslySetInnerHTML={{ __html: formattedContent }}
+            />
+          )}
           {!hideContent && attachments.length > 0 && (
             <div className="message-attachments">
               {attachments.map((attachment, index) => {

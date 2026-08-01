@@ -603,13 +603,9 @@ export default function TasksPage({ context = null }) {
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
-      detail: {
-        mode: 'task-create',
-        projectId: context?.projectId,
-        projectName: context?.projectName,
-      },
+      detail: { mode: 'task-create' },
     }));
-  }, [context?.projectId, context?.projectName]);
+  }, []);
   const selectTaskCard = useCallback((cardId, title = cardId) => {
     if (!cardId) {
       return;

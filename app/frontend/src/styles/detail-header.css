@@ -152,6 +152,15 @@
     color: var(--color-error);
 }
 
+.detail-header-action--success {
+    color: var(--color-success);
+}
+
+.detail-header-action--success:hover,
+.detail-header-action--success:focus-visible {
+    color: var(--color-success);
+}
+
 .detail-header-action__icon {
     justify-content: center;
     width: 19px;
@@ -454,4 +463,21 @@
 .inbox-detail .detail-header-action--danger.inbox-detail__delete:hover,
 .inbox-detail .detail-header-action--danger.inbox-detail__delete:focus-visible {
     color: var(--color-text-primary);
+}
+
+.inbox-detail__decision {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.inbox-detail__decision-icon {
+    width: 11px;
+    height: 11px;
+    flex: none;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
 }

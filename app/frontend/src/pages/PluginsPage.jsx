@@ -24,6 +24,7 @@ import {
   PaneCollapseSeam,
   PaneEmptyState,
   PaneExpandRail,
+  PaneListFilters,
   PaneListSearch,
   PaneListToolbar,
   PaneListVirtualized,
@@ -58,6 +59,7 @@ export default function PluginsPage() {
   const [selectedMarketplace, setSelectedMarketplace] = useState('');
   const [selectedPlugin, setSelectedPlugin] = useState(null);
   const [query, setQuery] = useState('');
+  const [activeFilter, setActiveFilter] = useState('All');
   const [error, setError] = useState(null);
   const [statusMessage, setStatusMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,7 +69,7 @@ export default function PluginsPage() {
   // Load marketplaces and installed plugins on mount.
   useEffect(() => {
     if (!realtime.connected) {
-      return;
+      return undefined;
     }
     let active = true;
     queueMicrotask(() => {
@@ -114,9 +116,25 @@ export default function PluginsPage() {
     const all = Array.isArray(catalog.plugins) ? catalog.plugins : [];
     return all.filter((plugin) => {
       const searchable = `${plugin.displayName || ''} ${plugin.name || ''} ${plugin.description || ''}`.toLowerCase();
-      return !normalizedQuery || searchable.includes(normalizedQuery);
+      if (normalizedQuery && !searchable.includes(normalizedQuery)) {
+        return false;
+      }
+      if (activeFilter === 'All') {
+        return true;
+      }
+      const entry = installedPlugins[`${selectedMarketplace}/${plugin.name}`];
+      if (activeFilter === 'New') {
+        return !entry;
+      }
+      if (activeFilter === 'Installed') {
+        return Boolean(entry);
+      }
+      if (activeFilter === 'Available') {
+        return Boolean(entry?.available_version);
+      }
+      return true;
     });
-  }, [catalog, query]);
+  }, [catalog, query, activeFilter, installedPlugins, selectedMarketplace]);
 
   const isPluginInstalled = useMemo(() => {
     if (!selectedPlugin || !selectedMarketplace) {
@@ -229,6 +247,11 @@ export default function PluginsPage() {
         ) : (
         <>
         <PaneCollapseSeam label="Plugins" onCollapse={() => setCollapsed(true)} />
+        <PaneListFilters
+          filters={['All', 'New', 'Installed', 'Available']}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+        />
         <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search plugins" onChange={setQuery} />
           {marketplaceOptions.length > 0 && (
@@ -258,8 +281,11 @@ export default function PluginsPage() {
         {realtime.connected && selectedMarketplace && loading && !catalog && (
           <PaneEmptyState>Loading marketplace catalog…</PaneEmptyState>
         )}
+        {realtime.connected && selectedMarketplace && error && !catalog && (
+          <PaneEmptyState>{error.message}</PaneEmptyState>
+        )}
         {realtime.connected && selectedMarketplace && catalog && visiblePlugins.length === 0 && (
-          <PaneEmptyState>No plugins match the current search.</PaneEmptyState>
+          <PaneEmptyState>No plugins match the current filters.</PaneEmptyState>
         )}
         {pluginTree.length ? (
           <PaneListVirtualized
@@ -294,7 +320,7 @@ export default function PluginsPage() {
                   {isPluginInstalled ? 'Installed' : 'Not installed'}
                 </DetailStatus>,
                 selectedPlugin.version ? <span key="version" className="taskid">v{selectedPlugin.version}</span> : null,
-                selectedPlugin.author ? <span key="author" className="taskid">{selectedPlugin.author}</span> : null,
+                selectedPlugin.author ? <span key="author" className="taskid">{typeof selectedPlugin.author === 'string' ? selectedPlugin.author : selectedPlugin.author.name}</span> : null,
                 selectedPlugin.license ? <span key="license" className="taskid">{selectedPlugin.license}</span> : null,
               ]}
               actions={(

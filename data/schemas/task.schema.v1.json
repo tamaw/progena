@@ -58,6 +58,6 @@
       "description": "ISO8601 last-update timestamp."
     }
   },
-  "required": ["id", "title", "column_id", "status"],
+  "required": ["id", "title", "summary", "column_id", "status"],
   "additionalProperties": true
 }
