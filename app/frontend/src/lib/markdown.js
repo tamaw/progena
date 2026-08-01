@@ -446,9 +446,23 @@ function autolinkPlainUrls(text) {
 // but leave syntax coloring to reasonably sized snippets.
 const MAX_HIGHLIGHTED_CODE_CHARS = 12 * 1024;
 
+// Rendered client-side by lib/mermaid.js after this HTML is mounted --
+// mermaid.run() looks for `pre.mermaid` elements and replaces their text
+// content with the rendered SVG. Left as plain escaped text here so a
+// caller that never calls renderMermaidDiagrams() still shows the raw
+// diagram source (no worse than an unrecognized code-block language).
+function renderMermaidBlock(code) {
+  return `<pre class="mermaid">${escapeHtml(code)}</pre>`;
+}
+
 function renderCodeBlock(language, code) {
   const normalizedLanguage = typeof language === 'string' ? language.trim().toLowerCase() : '';
   const trimmedCode = code.replace(/\n$/, '');
+
+  if (normalizedLanguage === 'mermaid') {
+    return renderMermaidBlock(trimmedCode);
+  }
+
   const safeLanguage = normalizedLanguage ? escapeHtml(normalizedLanguage) : '';
 
   let highlightedValue = escapeHtml(trimmedCode);

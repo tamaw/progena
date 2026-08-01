@@ -232,6 +232,8 @@ export {
   fetchInbox,
   markInboxMessageRead,
   deleteInboxMessage,
+  decideInboxMessage,
+  archiveInboxMessage,
   selectInboxMessages,
   selectInboxState,
   selectInboxUnreadCount,

@@ -87,6 +87,23 @@ export function SaveActionIcon() {
   );
 }
 
+export function ApproveActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M3.25 8.5 6.5 11.75 12.75 4.5" />
+    </ActionSvg>
+  );
+}
+
+export function RejectActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M4 4l8 8" />
+      <path d="M12 4l-8 8" />
+    </ActionSvg>
+  );
+}
+
 export function DeleteActionIcon() {
   return (
     <ActionSvg>
@@ -94,6 +111,16 @@ export function DeleteActionIcon() {
       <path d="M6.25 4.5V3.25h3.5V4.5" />
       <path d="M5 6.25v5.25M8 6.25v5.25M11 6.25v5.25" />
       <path d="M4.5 4.5l.6 8A1.75 1.75 0 0 0 6.85 14h2.3a1.75 1.75 0 0 0 1.75-1.5l.6-8" />
+    </ActionSvg>
+  );
+}
+
+export function ArchiveActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M2.5 4h11v2.25h-11z" />
+      <path d="M3.5 7.25h9v5.25h-9z" />
+      <path d="M8 8.5v2.25M6.5 9.5 8 11l1.5-1.5" />
     </ActionSvg>
   );
 }
