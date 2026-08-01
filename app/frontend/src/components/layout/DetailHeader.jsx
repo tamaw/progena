@@ -87,6 +87,23 @@ export function SaveActionIcon() {
   );
 }
 
+export function ApproveActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M3.25 8.5 6.5 11.75 12.75 4.5" />
+    </ActionSvg>
+  );
+}
+
+export function RejectActionIcon() {
+  return (
+    <ActionSvg>
+      <path d="M4 4l8 8" />
+      <path d="M12 4l-8 8" />
+    </ActionSvg>
+  );
+}
+
 export function DeleteActionIcon() {
   return (
     <ActionSvg>

@@ -46,6 +46,24 @@ describe('renderMarkdownToHtml fenced-code highlighting budget', () => {
   });
 });
 
+describe('renderMarkdownToHtml mermaid fences', () => {
+  it('renders a ```mermaid``` fence as a pre.mermaid block with raw escaped source', () => {
+    const container = renderCodeFence([
+      '```mermaid',
+      'graph TD;',
+      '  A-->B;',
+      '```',
+    ].join('\n'));
+
+    const mermaidBlock = container.querySelector('pre.mermaid');
+    expect(mermaidBlock).not.toBeNull();
+    expect(mermaidBlock?.textContent).toBe('graph TD;\n  A-->B;');
+    expect(container.querySelector('.code-block')).toBeNull();
+    expect(highlighter.highlight).not.toHaveBeenCalled();
+    expect(highlighter.highlightAuto).not.toHaveBeenCalled();
+  });
+});
+
 describe('renderMarkdownToHtml fenced text blocks', () => {
   it('keeps heading and list syntax literal inside a fenced text block', () => {
     const container = renderCodeFence([

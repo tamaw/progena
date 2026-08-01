@@ -22,7 +22,8 @@ the native `write`/`edit` file tools.
 | `plugin_entry.schema.v1.json` | One plugin under `plugins` (keyed by `<marketplace>/<plugin>`) | object | `managing-plugins` |
 | `agent_entry.schema.v1.json` | One object in `registry`'s `agents` array | object | `managing-agents` |
 | `knowledge_base_entry.schema.v1.json` | One object in `knowledge`'s `bases` array | object | `managing-knowledge` |
-| `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | not currently wired to a skill |
+| `task.schema.v1.json` | A single kanban card (`kanban_card:<id>`) | object | `managing-tasks` |
+| `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
 | `trigger.workflow.schema.v1.json` | The `trigger` object within a workflow definition | object | `managing-workflows` |

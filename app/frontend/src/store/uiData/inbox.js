@@ -57,6 +57,10 @@ export const deleteInboxMessage = createAcknowledgedThunk('uiData/deleteInboxMes
   `${inboxUrl}/${encodeURIComponent(messageId)}`,
   { method: 'DELETE', requestId },
 ));
+export const decideInboxMessage = createAcknowledgedThunk('uiData/decideInboxMessage', ({ inboxUrl, messageId, decision }, { requestId }) => requestAcknowledged(
+  `${inboxUrl}/${encodeURIComponent(messageId)}/decision`,
+  { method: 'POST', body: { decision }, requestId },
+));
 
 export const eventHandlers = {
   'inbox.snapshot': (state, payload) => {

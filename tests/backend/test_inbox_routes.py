@@ -135,6 +135,53 @@ class TestInboxRoutes:
         response = client.post("/api/ui/inbox/nope/read")
         assert response.status_code == 404
 
+    def test_decide_approved_persists_and_broadcasts(self, client, seeded_store):
+        with _StreamCapture() as capture:
+            response = client.post("/api/ui/inbox/msg_new/decision", json={"decision": "approved"})
+
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_new")
+        assert stored.payload["decision"] == "approved"
+
+        types = [envelope.type for envelope in capture.event_types()]
+        assert types == ["inbox.message.upserted", "inbox.snapshot"]
+
+    def test_decide_rejected_persists(self, client, seeded_store):
+        response = client.post("/api/ui/inbox/msg_old/decision", json={"decision": "rejected"})
+        assert_acknowledged(response, ["inbox.snapshot"])
+
+        stored = seeded_store.get_document(PROGENITOR_STATE_PREFIX, "inbox_message:msg_old")
+        assert stored.payload["decision"] == "rejected"
+
+    def test_decide_rejects_invalid_value(self, client, seeded_store):
+        response = client.post("/api/ui/inbox/msg_new/decision", json={"decision": "maybe"})
+        assert response.status_code == 422
+
+    def test_decide_unknown_message_404s(self, client, document_store):
+        response = client.post("/api/ui/inbox/nope/decision", json={"decision": "approved"})
+        assert response.status_code == 404
+
+    def test_snapshot_reflects_requires_approval_and_task_id(self, client, document_store):
+        document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            "inbox_message:msg_plan",
+            {
+                **_message_payload("msg_plan", title="Plan", created_at="2026-07-06T00:00:00+00:00"),
+                "requires_approval": True,
+                "task_id": "card_1",
+            },
+        )
+        with _StreamCapture() as capture:
+            response = client.get("/api/ui/inbox")
+
+        assert_acknowledged(response, ["inbox.snapshot"])
+        snapshot = capture.event_types()[0]
+        message = snapshot.payload["messages"][0]
+        assert message["requires_approval"] is True
+        assert message["task_id"] == "card_1"
+        assert message["decision"] is None
+
     def test_delete_removes_row_and_broadcasts(self, client, seeded_store):
         with _StreamCapture() as capture:
             response = client.delete("/api/ui/inbox/msg_old")
