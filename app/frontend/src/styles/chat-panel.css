@@ -1254,6 +1254,25 @@
     text-transform: uppercase;
 }
 
+/* Mermaid diagrams: pre.mermaid starts as plain diagram source (see
+   lib/markdown.js) and is replaced in place with an inline SVG once
+   lib/mermaid.js's renderMermaidDiagrams() runs. Sized so the SVG scales
+   down for narrow panels but never blows out the container width. */
+pre.mermaid {
+    margin: var(--spacing-sm) 0;
+    padding: var(--spacing-sm);
+    overflow-x: auto;
+    text-align: center;
+    background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: var(--border-radius-md);
+}
+
+pre.mermaid svg {
+    max-width: 100%;
+    height: auto;
+}
+
 .inline-code {
     padding: 2px 6px;
     font-family: var(--font-family-mono);

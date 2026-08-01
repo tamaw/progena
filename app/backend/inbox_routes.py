@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -31,6 +31,9 @@ class InboxMessage(BaseModel):
     read: bool = False
     read_at: str | None = None
     body: str = ""
+    requires_approval: bool = False
+    decision: Literal["approved", "rejected"] | None = None
+    task_id: str | None = None
 
 
 class InboxSnapshotResponse(BaseModel):
@@ -43,6 +46,10 @@ class InboxMarkReadRequest(BaseModel):
     read: bool = True
 
 
+class InboxDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected"]
+
+
 def _message_key(message_id: str) -> str:
     return f"{INBOX_MESSAGE_KEY_PREFIX}{message_id}"
 
@@ -53,6 +60,7 @@ def _normalize_message(key: str, payload: Any) -> InboxMessage | None:
     message_id = str(payload.get("id") or key.removeprefix(INBOX_MESSAGE_KEY_PREFIX)).strip()
     if not message_id:
         return None
+    decision = payload.get("decision")
     return InboxMessage(
         id=message_id,
         title=str(payload.get("title") or ""),
@@ -60,6 +68,9 @@ def _normalize_message(key: str, payload: Any) -> InboxMessage | None:
         read=bool(payload.get("read", False)),
         read_at=str(payload["read_at"]) if payload.get("read_at") else None,
         body=str(payload.get("body") or ""),
+        requires_approval=bool(payload.get("requires_approval", False)),
+        decision=decision if decision in ("approved", "rejected") else None,
+        task_id=str(payload["task_id"]) if payload.get("task_id") else None,
     )
 
 
@@ -140,6 +151,34 @@ def create_inbox_router(
         payload = load_message(store, message_id)
         payload["read"] = read
         payload["read_at"] = datetime.now(UTC).isoformat() if read else None
+        message = _normalize_message(_message_key(message_id), payload)
+        if message is None:
+            # load_message already confirmed payload is a dict keyed by this
+            # message_id, so normalization only fails here on data corruption.
+            raise HTTPException(status_code=500, detail="Inbox message could not be loaded")
+        store.save_document(PROGENITOR_STATE_PREFIX, _message_key(message_id), payload)
+        broadcast_ui_event(
+            "inbox.message.upserted",
+            {"message": message.model_dump()},
+            request_id=request_id,
+        )
+        broadcast_snapshot(request_id=request_id)
+        return acknowledgement_response(request_id, ["inbox.snapshot"])
+
+    @router.post(
+        "/inbox/{message_id}/decision", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def decide_inbox_message(
+        http_request: Request,
+        message_id: str,
+        request: InboxDecisionRequest,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Record the user's approve/reject decision on a message."""
+        request_id = _request_correlation_id(http_request, x_request_id)
+        store = get_document_store()
+        payload = load_message(store, message_id)
+        payload["decision"] = request.decision
         message = _normalize_message(_message_key(message_id), payload)
         if message is None:
             # load_message already confirmed payload is a dict keyed by this

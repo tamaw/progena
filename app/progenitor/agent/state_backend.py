@@ -41,6 +41,7 @@ from deepagents.backends.utils import (
     slice_read_response,
 )
 
+from ..runtime.thread_context import get_current_thread_id
 from ..schedule.engine import parse_schedule_datetime
 from ..schemas import load_schema
 from ..state.models import ScheduleEntry
@@ -276,7 +277,12 @@ def markdown_to_inbox_message(content: str, message_id: str) -> dict[str, Any]:
     The filename is authoritative for ``id`` (same convention as kanban cards).
     The markdown body becomes ``body``. A non-empty ``title`` is the only hard
     requirement; ``read`` is coerced to a bool and ``created_at`` is stamped
-    when absent so agent-written files need only a title and a body. Unknown
+    when absent so agent-written files need only a title and a body. ``thread_id``
+    is likewise stamped from the current request's thread context when absent —
+    it is system-owned (never agent-authored) so an attachment referenced from
+    that thread can later be resolved with the same scoping the attachments API
+    already enforces. Both are backfilled only when missing, so an edit never
+    overwrites the values a message was originally created with. Unknown
     frontmatter keys round-trip untouched.
     """
     fields, body = _split_frontmatter(content)
@@ -289,6 +295,10 @@ def markdown_to_inbox_message(content: str, message_id: str) -> dict[str, Any]:
     message["read"] = bool(message.get("read", False))
     if not str(message.get("created_at") or "").strip():
         message["created_at"] = utcnow_isoformat()
+    if not str(message.get("thread_id") or "").strip():
+        thread_id = get_current_thread_id()
+        if thread_id:
+            message["thread_id"] = thread_id
     message.setdefault("read_at", None)
     return message
 

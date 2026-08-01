@@ -8,8 +8,10 @@ import DetailHeader, {
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
+  ApproveActionIcon,
   DeleteActionIcon,
   EditActionIcon,
+  RejectActionIcon,
 } from '../components/layout/DetailHeader';
 import {
   PaneEmptyState,
@@ -21,8 +23,10 @@ import {
   PaneListVirtualized,
 } from '../components/layout/PaneList';
 import { useConfig } from '../context/ConfigContext';
+import { useMermaidRender } from '../hooks/useMermaidRender';
 import { renderMarkdownToHtml } from '../lib/markdown';
 import {
+  decideInboxMessage,
   deleteInboxMessage,
   markInboxMessageRead,
   selectInboxMessages,
@@ -62,8 +66,12 @@ function previewText(body) {
 
 function InboxMessageBody({ content }) {
   const html = useMemo(() => renderMarkdownToHtml(content), [content]);
+  const containerRef = useRef(null);
+  useMermaidRender(containerRef, content);
   if (!content) return null;
-  return <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />;
+  return (
+    <div ref={containerRef} className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />
+  );
 }
 
 export default function InboxPage() {
@@ -169,6 +177,11 @@ export default function InboxPage() {
     }));
   }, [dispatch, inboxUrl, selectedMessageId, selectedMessageRead]);
 
+  const decide = useCallback((decision) => {
+    if (!selectedMessageId) return;
+    dispatch(decideInboxMessage({ inboxUrl, messageId: selectedMessageId, decision }));
+  }, [dispatch, inboxUrl, selectedMessageId]);
+
   const removeMessage = useCallback(() => {
     if (!selectedMessageId) return;
     dispatch(deleteInboxMessage({ inboxUrl, messageId: selectedMessageId }));
@@ -273,6 +286,21 @@ export default function InboxPage() {
             >
               {selectedMessage.read ? 'Read' : 'Unread'}
             </DetailStatus>,
+            selectedMessage.requires_approval
+              ? (
+                <DetailStatus
+                  key="decision"
+                  tone={selectedMessage.decision === 'approved'
+                    ? 'ok'
+                    : selectedMessage.decision === 'rejected' ? 'error' : 'warning'}
+                  className={`inbox-detail__status--decision-${selectedMessage.decision || 'pending'}`}
+                >
+                  {selectedMessage.decision === 'approved'
+                    ? 'Approved'
+                    : selectedMessage.decision === 'rejected' ? 'Rejected' : 'Approval required'}
+                </DetailStatus>
+              )
+              : null,
             selectedMessage.created_at
               ? <span key="created" className="taskid">Created {formatTimestamp(selectedMessage.created_at)}</span>
               : null,
@@ -296,6 +324,24 @@ export default function InboxPage() {
                 onClick={toggleRead}
                 disabled={!selectedMessage}
               />
+              {selectedMessage?.requires_approval && !selectedMessage.decision && (
+                <DetailHeaderAction
+                  icon={<ApproveActionIcon />}
+                  label="Approve"
+                  variant="success"
+                  className="inbox-detail__approve"
+                  onClick={() => decide('approved')}
+                />
+              )}
+              {selectedMessage?.requires_approval && !selectedMessage.decision && (
+                <DetailHeaderAction
+                  icon={<RejectActionIcon />}
+                  label="Reject"
+                  variant="danger"
+                  className="inbox-detail__reject"
+                  onClick={() => decide('rejected')}
+                />
+              )}
               <DetailHeaderAction
                 icon={<DeleteActionIcon />}
                 label="Delete"
