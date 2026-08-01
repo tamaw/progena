@@ -3,6 +3,7 @@ import {
   shouldShowChatContentLoading,
   shouldShowNewChatEmptyState,
   toValidTimestamp,
+  formatStartedTime,
   deriveChatTitle,
   collectMessageImages,
   countToolInvocations,
@@ -498,6 +499,33 @@ describe('toValidTimestamp', () => {
     expect(toValidTimestamp('not-a-date')).toBeNull();
     expect(toValidTimestamp({})).toBeNull();
     expect(toValidTimestamp(undefined)).toBeNull();
+  });
+});
+
+describe('formatStartedTime', () => {
+  const now = Date.parse('2026-06-15T12:00:00Z');
+
+  it('returns empty string for falsy/invalid input', () => {
+    expect(formatStartedTime(null, now)).toBe('');
+    expect(formatStartedTime(undefined, now)).toBe('');
+    expect(formatStartedTime('not-a-date', now)).toBe('');
+  });
+
+  it('omits the date for a timestamp within the last week', () => {
+    const threeDaysAgo = now - 3 * 86400000;
+    const formatted = formatStartedTime(threeDaysAgo, now);
+    expect(formatted).not.toMatch(/\d{1,2}\/\d{1,2}|Jun|June/);
+  });
+
+  it('includes a short date for a timestamp 7+ days old', () => {
+    const eightDaysAgo = now - 8 * 86400000;
+    const formatted = formatStartedTime(eightDaysAgo, now);
+    expect(formatted).toMatch(/Jun/);
+  });
+
+  it('accepts an ISO date string, matching timestamp behavior', () => {
+    const isoEightDaysAgo = new Date(now - 8 * 86400000).toISOString();
+    expect(formatStartedTime(isoEightDaysAgo, now)).toMatch(/Jun/);
   });
 });
 

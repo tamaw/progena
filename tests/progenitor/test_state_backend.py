@@ -471,6 +471,41 @@ def test_markdown_to_inbox_message_filename_id_wins():
     assert parsed["id"] == "msg_1"
 
 
+def test_markdown_to_inbox_message_stamps_thread_id_from_context():
+    from app.progenitor.runtime.thread_context import (
+        reset_current_thread_id,
+        set_current_thread_id,
+    )
+
+    token = set_current_thread_id("thread_123")
+    try:
+        parsed = markdown_to_inbox_message("---\ntitle: Hello\n---\n\nBody\n", "msg_1")
+    finally:
+        reset_current_thread_id(token)
+    assert parsed["thread_id"] == "thread_123"
+
+
+def test_markdown_to_inbox_message_no_thread_id_when_no_context():
+    parsed = markdown_to_inbox_message("---\ntitle: Hello\n---\n\nBody\n", "msg_1")
+    assert "thread_id" not in parsed
+
+
+def test_markdown_to_inbox_message_preserves_existing_thread_id_on_edit():
+    from app.progenitor.runtime.thread_context import (
+        reset_current_thread_id,
+        set_current_thread_id,
+    )
+
+    token = set_current_thread_id("thread_new")
+    try:
+        parsed = markdown_to_inbox_message(
+            "---\ntitle: Hello\nthread_id: thread_original\n---\n\nBody\n", "msg_1"
+        )
+    finally:
+        reset_current_thread_id(token)
+    assert parsed["thread_id"] == "thread_original"
+
+
 def test_markdown_to_inbox_message_requires_title():
     try:
         markdown_to_inbox_message("---\nread: false\n---\n\nNo title\n", "msg_1")

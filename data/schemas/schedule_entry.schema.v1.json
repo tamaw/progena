@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Schedule entry",
-  "description": "One entry's value in the 'schedule' state document. The entry's id is its object key in /state/schedule.json, not a field in this value.",
+  "description": "One entry's value in the 'schedule' state document. The entry's id is its object key in /config/schedule.json, not a field in this value.",
   "type": "object",
   "properties": {
     "message": {
