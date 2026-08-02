@@ -7042,11 +7042,12 @@ body,
   font: inherit;
 }
 
-.agents-graph-dock .canvas-dock-icon.start { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.ask { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.tool { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.decision { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.end { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
+.agents-graph-dock .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
+.agents-graph-dock .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
+.agents-graph-dock .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
+.agents-graph-dock .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
+.agents-graph-dock .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
+.agents-graph-dock .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
 
 /* Workflows dock items are also <button>s (see comment above) — same native
    chrome reset so the tinted .canvas-dock-icon colours aren't sitting on
@@ -7057,26 +7058,71 @@ body,
   font: inherit;
 }
 
-/* Per-kind accents for the executable workflow node kinds. Each overrides the
-   shared --node-color (defaulted to the agent colour) so steps read at a glance. */
-.agents-graph-node--start {
-  --node-color: #2f9e6f;
-}
-
-.agents-graph-node--ask {
+/* Per-kind accents for the executable routine node kinds (also set inline via
+   GRAPH_KIND_COLORS in AgentGraph.jsx, which takes precedence; kept here too
+   for any server-rendered/no-JS fallback). */
+.agents-graph-node--prompt {
   --node-color: #2f6ff6;
 }
 
-.agents-graph-node--tool {
+.agents-graph-node--code {
   --node-color: #b06ef6;
 }
 
-.agents-graph-node--decision {
+.agents-graph-node--eval {
   --node-color: #e0a23a;
 }
 
-.agents-graph-node--end {
+.agents-graph-node--subagent {
+  --node-color: #2f9e6f;
+}
+
+.agents-graph-node--agent {
+  --node-color: #ef6c2a;
+}
+
+.agents-graph-node--noop {
   --node-color: #6b7280;
+}
+
+.agents-graph-node__field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.agents-graph-node__field-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.agents-graph-node__routing {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--color-border);
+}
+
+.agents-graph-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
+.agents-graph-entry-select {
+  font: inherit;
+  color: inherit;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  padding: 2px 6px;
 }
 
 .agents-detail-grid {

@@ -96,8 +96,72 @@ const RECENCY_BUCKETS = [
 const FALLBACK_GRAPH = {
   status: 'Draft',
   summary: '',
+  entry: null,
   nodes: [],
   edges: [],
+};
+
+// A trimmed illustrative routine graph (parse -> deterministic gate -> respond),
+// standing in for the full example this DSL was derived from. Shows a prompt
+// node, a code node, and state_equals routing with a default branch.
+const DEMO_ROUTINE_GRAPH = {
+  status: 'Draft',
+  summary: 'Parses a request, then routes deterministically on whether it looks valid.',
+  entry: 'parse',
+  nodes: [
+    {
+      id: 'parse',
+      kind: 'prompt',
+      label: 'Parse',
+      output_key: 'parse',
+      config: {
+        prompt_template:
+          'Extract the request\'s target as JSON: {{"valid": <bool>}} -- no prose. Request: {request}',
+      },
+      x: 40,
+      y: 80,
+    },
+    {
+      id: 'route',
+      kind: 'code',
+      label: 'Route',
+      output_key: 'route',
+      config: {
+        inputs: { valid: 'parse_json.valid' },
+        expression: "'ok' if valid else 'invalid'",
+      },
+      x: 320,
+      y: 80,
+    },
+    {
+      id: 'respond_ok',
+      kind: 'prompt',
+      label: 'Respond OK',
+      output_key: 'respond_ok',
+      config: { prompt_template: 'Confirm the request was understood: {request}' },
+      x: 600,
+      y: 0,
+    },
+    {
+      id: 'respond_invalid',
+      kind: 'prompt',
+      label: 'Respond Invalid',
+      output_key: 'respond_invalid',
+      config: { prompt_template: 'Explain the request could not be parsed: {request}' },
+      x: 600,
+      y: 160,
+    },
+  ],
+  edges: [
+    { from: 'parse', to: 'route' },
+    {
+      from: 'route',
+      router: 'state_equals',
+      state_key: 'route',
+      branches: { ok: 'respond_ok' },
+      default: 'respond_invalid',
+    },
+  ],
 };
 
 // Routines isn't wired to real data yet — show one pretend entry instead of
@@ -115,6 +179,7 @@ const DUMMY_ROUTINES = [{
   repositories: [],
   knowledge: [],
   skills: [],
+  graph: DEMO_ROUTINE_GRAPH,
 }];
 
 function normalizeStatus(status) {

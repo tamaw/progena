@@ -19,6 +19,9 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from app.progenitor.routines.graph import VALID_ROUTINE_NODE_KINDS, validate_routine_graph
+from app.progenitor.schemas import load_schema
+
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .request_utils import BroadcastUiEvent
@@ -28,8 +31,9 @@ from .request_utils import request_correlation_id as _request_correlation_id
 class AgentGraphModel(BaseModel):
     status: str = "Draft"
     summary: str | None = None
+    entry: str | None = None
     nodes: list[dict[str, Any]] = []
-    edges: list[list[Any]] = []
+    edges: list[dict[str, Any]] = []
 
 
 class AgentProfile(BaseModel):
@@ -68,125 +72,35 @@ class AgentProfilesResponse(BaseModel):
 
 class AgentGraphUpdateRequest(BaseModel):
     nodes: list[dict[str, Any]]
-    edges: list[list[Any]]
+    edges: list[dict[str, Any]]
+    entry: str | None = None
     status: str | None = None
     summary: str | None = None
 
 
-# Allowed node "kind" values for the editable subagent workflow graph. These are
-# executable step kinds (not decorative): a workflow is a series of ``ask`` steps
-# with optional ``tool`` calls and ``decision`` branches between a ``start`` and
-# an ``end``. Kept in sync with the frontend node renderer; the JSON-schema
-# endpoint publishes these.
-VALID_NODE_KINDS = {"start", "ask", "tool", "decision", "end"}
+# Allowed node "kind" values for the editable routine graph. These are executable
+# step kinds, compiled into a LangGraph runnable by
+# ``app.progenitor.routines.factory``. Re-exported here for callers that imported
+# the old name (e.g. ``agent_store.reset_legacy_graphs``'s dev migration helper).
+VALID_NODE_KINDS = VALID_ROUTINE_NODE_KINDS
+
+# JSON schema for a full routine graph document (id/name/description/version/entry/
+# nodes/edges). Published so the Agents page can offer schema-aware JSON editing.
+# The PATCH endpoint below only validates the nodes/edges/entry slice it receives
+# (via ``validate_agent_graph``), since id/name/description/version are derived
+# from the owning agent record rather than round-tripped on the wire.
+AGENT_GRAPH_SCHEMA: dict[str, Any] = load_schema("graph.routine")
 
 
-# Predefined JSON schema for an editable subagent workflow graph. Published so the
-# Agents page can offer schema-aware JSON editing; the PATCH endpoint enforces the
-# same structural rules via ``validate_agent_graph``.
-AGENT_GRAPH_SCHEMA: dict[str, Any] = {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "title": "AgentGraph",
-    "type": "object",
-    "required": ["nodes", "edges"],
-    "description": (
-        "A subagent workflow: a series of steps run between a 'start' and an 'end'. "
-        "'ask' steps carry a prompt; 'tool' steps name a tool; 'decision' steps "
-        "branch via labelled outgoing edges."
-    ),
-    "properties": {
-        "status": {"type": "string"},
-        "summary": {"type": ["string", "null"]},
-        "nodes": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "required": ["id"],
-                "properties": {
-                    "id": {"type": "string", "minLength": 1},
-                    "label": {"type": "string"},
-                    "kind": {"type": "string", "enum": sorted(VALID_NODE_KINDS)},
-                    "prompt": {
-                        "type": "string",
-                        "description": "Instruction for an 'ask' step (required for kind=ask).",
-                    },
-                    "tool": {
-                        "type": "string",
-                        "description": "Tool name for a 'tool' step (required for kind=tool).",
-                    },
-                    "detail": {"type": "string"},
-                    "x": {"type": "number"},
-                    "y": {"type": "number"},
-                },
-            },
-        },
-        "edges": {
-            "type": "array",
-            "items": {
-                "type": "array",
-                "minItems": 2,
-                "maxItems": 3,
-                "items": {"type": "string"},
-                "description": (
-                    "[source, target] with an optional label; edges leaving a "
-                    "'decision' node must carry a label naming the branch."
-                ),
-            },
-        },
-    },
-}
-
-
-def validate_agent_graph(nodes: list[dict[str, Any]], edges: list[list[Any]]) -> None:
-    """Validate a workflow graph payload structurally. Raises ValueError on bad input."""
-    if not isinstance(nodes, list) or not isinstance(edges, list):
-        raise ValueError("graph nodes and edges must be lists")
-
-    ids: set[str] = set()
-    kinds: dict[str, str | None] = {}
-    start_count = 0
-    end_count = 0
-    for node in nodes:
-        if not isinstance(node, dict):
-            raise ValueError("each node must be an object")
-        node_id = node.get("id")
-        if not isinstance(node_id, str) or not node_id:
-            raise ValueError("each node needs a non-empty string id")
-        if node_id in ids:
-            raise ValueError(f"duplicate node id: {node_id}")
-        ids.add(node_id)
-        kind = node.get("kind")
-        if kind is not None and kind not in VALID_NODE_KINDS:
-            raise ValueError(f"unknown node kind: {kind}")
-        kinds[node_id] = kind
-        if kind == "start":
-            start_count += 1
-        elif kind == "end":
-            end_count += 1
-        elif kind == "ask" and not _nonempty_str(node.get("prompt")):
-            raise ValueError(f"'ask' node needs a non-empty prompt: {node_id}")
-        elif kind == "tool" and not _nonempty_str(node.get("tool")):
-            raise ValueError(f"'tool' node needs a non-empty tool: {node_id}")
-
-    if start_count > 1:
-        raise ValueError("graph can have at most one 'start' node")
-    if end_count > 1:
-        raise ValueError("graph can have at most one 'end' node")
-
-    for edge in edges:
-        if not isinstance(edge, list) or len(edge) < 2:
-            raise ValueError("each edge must be a [source, target] (optional label) list")
-        source, target = edge[0], edge[1]
-        if source not in ids or target not in ids:
-            raise ValueError(f"edge references unknown node: {source} -> {target}")
-        if kinds.get(source) == "decision" and not _nonempty_str(
-            edge[2] if len(edge) > 2 else None
-        ):
-            raise ValueError(f"edges leaving a 'decision' node need a label: {source} -> {target}")
-
-
-def _nonempty_str(value: Any) -> bool:
-    return isinstance(value, str) and bool(value.strip())
+def validate_agent_graph(
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]], entry: str | None = None
+) -> None:
+    """Validate a routine graph payload structurally. Raises ValueError on bad input."""
+    validate_routine_graph(nodes, edges)
+    if entry is not None:
+        node_ids = {node.get("id") for node in nodes if isinstance(node, dict)}
+        if entry not in node_ids:
+            raise ValueError(f"entry references unknown node: {entry}")
 
 
 def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
@@ -303,13 +217,13 @@ def create_agent_profile_router(
         if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
             raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
         try:
-            validate_agent_graph(body.nodes, body.edges)
+            validate_agent_graph(body.nodes, body.edges, body.entry)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         updated = store.update_graph(
             agent_id,
-            {"nodes": body.nodes, "edges": body.edges},
+            {"entry": body.entry, "nodes": body.nodes, "edges": body.edges},
             status=body.status,
             summary=body.summary,
         )

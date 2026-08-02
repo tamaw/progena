@@ -41,19 +41,24 @@ _EMPTY_METRICS = {
     "memories": "0",
 }
 
-# Default editable workflow graph for a freshly seeded subagent: the simplest
-# possible workflow — a single "ask" step. Edit it (via the Graph tab's "Edit as
-# JSON") to grow the workflow. The React Flow canvas renders the node kinds; the
-# schema/validation lives in ``agent_profile_routes``.
+# Default editable routine graph for a freshly seeded subagent: the simplest
+# possible routine — a single "prompt" step. Edit it (via the Graph tab's "Edit as
+# JSON") to grow the routine. The React Flow canvas renders the node kinds; the
+# schema/validation lives in ``app.progenitor.routines.graph`` (imported by
+# ``agent_profile_routes``).
 DEFAULT_AGENT_GRAPH: dict[str, Any] = {
     "status": "Draft",
-    "summary": "A single step. Edit this graph to build out the workflow.",
+    "summary": "A single step. Edit this graph to build out the routine.",
+    "entry": "prompt",
     "nodes": [
         {
-            "id": "ask",
-            "label": "Ask",
-            "kind": "ask",
-            "prompt": "Complete the delegated task and return the result.",
+            "id": "prompt",
+            "label": "Prompt",
+            "kind": "prompt",
+            "output_key": "prompt",
+            "config": {
+                "prompt_template": "Complete the delegated task and return the result.\n\nRequest: {request}"
+            },
             "x": 80,
             "y": 80,
         },
@@ -276,7 +281,11 @@ class AgentStore:
         payload = graph or DEFAULT_AGENT_GRAPH
         status = payload.get("status", "Draft")
         summary = payload.get("summary")
-        body = {"nodes": payload.get("nodes", []), "edges": payload.get("edges", [])}
+        body = {
+            "entry": payload.get("entry"),
+            "nodes": payload.get("nodes", []),
+            "edges": payload.get("edges", []),
+        }
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
@@ -303,6 +312,7 @@ class AgentStore:
                 if not kinds - valid_kinds:
                     continue
                 body = {
+                    "entry": DEFAULT_AGENT_GRAPH["entry"],
                     "nodes": DEFAULT_AGENT_GRAPH["nodes"],
                     "edges": DEFAULT_AGENT_GRAPH["edges"],
                 }
@@ -330,7 +340,11 @@ class AgentStore:
         status: str | None = None,
         summary: str | None = None,
     ) -> dict[str, Any] | None:
-        body = {"nodes": graph.get("nodes", []), "edges": graph.get("edges", [])}
+        body = {
+            "entry": graph.get("entry"),
+            "nodes": graph.get("nodes", []),
+            "edges": graph.get("edges", []),
+        }
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute("SELECT 1 FROM agent WHERE id = %s", (agent_id,))
             if cur.fetchone() is None:
@@ -389,11 +403,13 @@ def _graph_payload(graph_row: dict[str, Any] | None) -> dict[str, Any]:
     if not graph_row:
         return dict(DEFAULT_AGENT_GRAPH)
     graph = graph_row.get("graph")
+    entry = graph.get("entry") if isinstance(graph, dict) else None
     nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
     edges = graph.get("edges", []) if isinstance(graph, dict) else []
     return {
         "status": graph_row.get("status") or "Draft",
         "summary": graph_row.get("summary"),
+        "entry": entry,
         "nodes": nodes,
         "edges": edges,
     }
