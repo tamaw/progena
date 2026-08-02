@@ -126,7 +126,7 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/agents.json`: A2A agent registry and runtime tools
 - `/config/preferences.json`: User profile and UI settings (display name, timezone, theme, nav/panel layout)
 - `/config/health.json`: Read-only heartbeat status
-- `/config/tasks/board.json` and `/config/tasks/<id>.md`: Kanban structure and cards
+- `/tasks/board.json` and `/tasks/<id>.md`: Kanban structure and cards
 - `/workflows/<id>.json`: Workflow definitions
 
 Native `read`/`write`/`edit` operations on these paths validate and persist the

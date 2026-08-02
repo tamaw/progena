@@ -44,7 +44,7 @@ views backed by those documents:
 - `/config/agents.json` — A2A registry agents and runtime tools.
 - `/config/preferences.json` — user profile and UI settings (display name, timezone, theme, nav/panel layout).
 - `/config/health.json` — read-only heartbeat status.
-- `/config/tasks/board.json` and `/config/tasks/<id>.md` — kanban structure and cards.
+- `/tasks/board.json` and `/tasks/<id>.md` — kanban structure and cards.
 - `/workflows/<id>.json` — workflow definitions.
 
 Use the native `read_file`, `write_file`, and `edit_file` tools on those virtual

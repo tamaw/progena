@@ -1006,7 +1006,7 @@ _KANBAN_CARD_CONTENT_FIELDS = (
 
 # Last-dispatched state per card id, used to detect kanban.card.* changes that
 # didn't go through the REST routes below (an agent writing
-# /config/tasks/<id>.md directly bypasses them entirely). Guarded by
+# /tasks/<id>.md directly bypasses them entirely). Guarded by
 # _kanban_card_trigger_lock wherever it's read-then-written, so a REST-driven
 # change and the store-change reconciler picking up its own resulting NOTIFY
 # can't both decide to dispatch the same change.
@@ -1027,7 +1027,7 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
 
     Shared by the REST kanban routes and the generic store-change reconciler
     (_reconcile_kanban_card_triggers) so a card edit fires the same triggers
-    whether it came from the UI or an agent writing /config/tasks/<id>.md
+    whether it came from the UI or an agent writing /tasks/<id>.md
     directly.
     """
     triggers: list[dict] = []
@@ -1176,7 +1176,7 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
     The REST routes (create/patch/delete) dispatch triggers inline and then
     record the resulting state via _remember_kanban_card_state. But the
     runtime agent's actual day-to-day mechanism for touching cards is
-    writing straight to /config/tasks/<id>.md, which persists via
+    writing straight to /tasks/<id>.md, which persists via
     StateManager straight to Postgres -- it never goes through these routes.
     This reconciler runs off the same store-change watcher that already
     pushes kanban.snapshot live (see _queue_state_watch_status), diffing the
@@ -4232,7 +4232,7 @@ _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = None) -> None:
     """Always-on watcher that reconciles kanban.card.* workflow triggers for
     changes made outside the REST kanban routes -- chiefly the runtime agent
-    writing /config/tasks/<id>.md directly.
+    writing /tasks/<id>.md directly.
 
     Registered separately from _queue_state_watch_status, which returns
     immediately when no UI client is connected (fine for UI-push
