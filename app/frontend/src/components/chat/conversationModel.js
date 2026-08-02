@@ -152,16 +152,23 @@ function persistedStreamEvents(streamEvents) {
   ));
 }
 
+// tokenCount/reasoningTokenCount/cacheReadTokenCount/model are deliberately
+// excluded here. The locally-streamed tokenCount is a crude per-chunk
+// counter (see liveAssistantTurnModel.js's `next.tokenCount += 1`), not the
+// backend's real tokenizer-based count, so it never matches the canonical
+// value the reconciliation fetch returns -- and `model` is frequently unset
+// on the local turn. Including either meant every foreground send's own
+// reconciliation looked non-equivalent to its own canonical echo purely on
+// cosmetic metadata, forcing an unwanted swap-and-remount of the row the
+// user is looking at (visible as a "refresh" moments after every reply).
+// Those numbers self-correct the next time the thread is genuinely reloaded
+// (switch/refresh); they aren't worth discarding the row over.
 function messageRenderSignature(message) {
   return {
     role: typeof message?.role === 'string' ? message.role : '',
     content: typeof message?.content === 'string' ? message.content : '',
-    tokenCount: Number.isFinite(message?.tokenCount) ? message.tokenCount : 0,
-    reasoningTokenCount: Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0,
-    cacheReadTokenCount: Number.isFinite(message?.cacheReadTokenCount) ? message.cacheReadTokenCount : 0,
     reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
     agentName: typeof message?.agentName === 'string' ? message.agentName : '',
-    model: typeof message?.model === 'string' ? message.model : '',
     streamEvents: persistedStreamEvents(message?.streamEvents).map(eventRenderSignature),
   };
 }
