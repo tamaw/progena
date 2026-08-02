@@ -101,12 +101,13 @@ class TestBackendFactory:
             assert isinstance(backend.routes["/skills/"]._backend, FilesystemBackend)
 
     def test_state_manager_mounts_config_and_inbox_routes(self, monkeypatch):
-        """A state_manager adds the /config/, /config/tasks/, /workflows/, and /inbox/ mounts."""
+        """A state_manager adds /config/, /tasks/, /workflows/, /routines/, /inbox/."""
         from unittest.mock import MagicMock
 
         from app.progenitor.agent.state_backend import (
             InboxDirectoryBackend,
             KanbanTaskDirectoryBackend,
+            RoutineDirectoryBackend,
             StateDocumentBackend,
             WorkflowDirectoryBackend,
         )
@@ -117,8 +118,9 @@ class TestBackendFactory:
         # construction time, so the stub needs arbitrary attribute access.
         backend = create_progenitor_backend(project_root=".", state_manager=MagicMock())
         assert isinstance(backend.routes["/config/"], StateDocumentBackend)
-        assert isinstance(backend.routes["/config/tasks/"], KanbanTaskDirectoryBackend)
+        assert isinstance(backend.routes["/tasks/"], KanbanTaskDirectoryBackend)
         assert isinstance(backend.routes["/workflows/"], WorkflowDirectoryBackend)
+        assert isinstance(backend.routes["/routines/"], RoutineDirectoryBackend)
         assert isinstance(backend.routes["/inbox/"], InboxDirectoryBackend)
 
     def test_factory_defaults_to_cwd(self, monkeypatch):
@@ -177,9 +179,7 @@ class TestBackendFactory:
         self._patch_runtime_free_state_backend(monkeypatch)
         state_manager = FakeContentStateManager()
         state_manager._docs["skill"]["acme__formatter/lint/SKILL.md"] = "---\nname: lint\n---\n"
-        state_manager._docs["skill"]["other__plugin/quality/SKILL.md"] = (
-            "---\nname: quality\n---\n"
-        )
+        state_manager._docs["skill"]["other__plugin/quality/SKILL.md"] = "---\nname: quality\n---\n"
 
         backend = create_progenitor_backend(
             project_root=".",

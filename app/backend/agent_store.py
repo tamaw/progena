@@ -1,11 +1,22 @@
 """Backend-owned agent storage.
 
-Agents and their editable graphs are the backend's own data, so they live in a
-separate database on the *same* Postgres server as the Progenitor runtime (only
-the database name differs). The store is seeded from code-defined DeepAgent
-subagents (``app/progenitor/agent/subagents.py``) and the shared Postgres
-``registry`` document; live runtime status is merged in at read time by the
-route layer.
+Agent catalog metadata (name, role, status, etc.) is the backend's own data, so
+it lives in a separate database on the *same* Postgres server as the
+Progenitor runtime (only the database name differs). The store is seeded from
+code-defined DeepAgent subagents (``app/progenitor/agent/subagents.py``) and
+the shared Postgres ``registry`` document; live runtime status is merged in at
+read time by the route layer.
+
+An agent's *editable routine graph* is not backend-owned data, though: it is
+a document in the Progenitor runtime's own document store (the same Postgres
+``store`` table workflow definitions live in), keyed ``routine:<agent_id>``
+(see ``app.progenitor.routines.store``). This gives the agent the same
+read/write/edit experience over routine graphs as it has over workflow
+definitions (mounted ``/routines/<agent_id>.json`` by
+``app.progenitor.agent.state_backend.RoutineDirectoryBackend``), and lets the
+Agents page and the agent edit the exact same document. Only graph-editing
+bookkeeping that isn't part of the routine schema itself (``status``,
+``summary``) stays in the backend's own ``agent_graph`` table.
 """
 
 from __future__ import annotations
@@ -19,6 +30,15 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
+
+from app.progenitor.routines.graph import VALID_ROUTINE_NODE_KINDS
+from app.progenitor.routines.store import (
+    ROUTINE_GRAPH_KEY_PREFIX,
+    default_routine_graph,
+    routine_graph_key,
+)
+
+from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 
 logger = logging.getLogger(__name__)
 
@@ -41,29 +61,13 @@ _EMPTY_METRICS = {
     "memories": "0",
 }
 
-# Default editable routine graph for a freshly seeded subagent: the simplest
-# possible routine — a single "prompt" step. Edit it (via the Graph tab's "Edit as
-# JSON") to grow the routine. The React Flow canvas renders the node kinds; the
-# schema/validation lives in ``app.progenitor.routines.graph`` (imported by
-# ``agent_profile_routes``).
-DEFAULT_AGENT_GRAPH: dict[str, Any] = {
+# Default graph-editing bookkeeping (``agent_graph.status``/``.summary``) for a
+# freshly seeded subagent. The routine graph document itself (nodes/entry/edges)
+# is seeded separately via ``app.progenitor.routines.store.default_routine_graph``
+# into the shared document store -- see ``AgentStore.ensure_graph``.
+DEFAULT_AGENT_GRAPH_STATUS: dict[str, Any] = {
     "status": "Draft",
     "summary": "A single step. Edit this graph to build out the routine.",
-    "entry": "prompt",
-    "nodes": [
-        {
-            "id": "prompt",
-            "label": "Prompt",
-            "kind": "prompt",
-            "output_key": "prompt",
-            "config": {
-                "prompt_template": "Complete the delegated task and return the result.\n\nRequest: {request}"
-            },
-            "x": 80,
-            "y": 80,
-        },
-    ],
-    "edges": [],
 }
 
 
@@ -135,12 +139,13 @@ def ensure_database_exists(admin_url: str, db_name: str) -> None:
 class AgentStore:
     """Synchronous Postgres client for backend-owned agent data."""
 
-    def __init__(self, database_url: str) -> None:
+    def __init__(self, database_url: str, document_store: BackendDocumentStore) -> None:
         self._pool = ConnectionPool(
             conninfo=database_url,
             kwargs={"autocommit": True, "row_factory": dict_row},
             open=False,
         )
+        self._document_store = document_store
 
     def open(self) -> None:
         self._pool.open()
@@ -178,10 +183,49 @@ class AgentStore:
                     agent_id TEXT PRIMARY KEY REFERENCES agent(id) ON DELETE CASCADE,
                     status TEXT NOT NULL DEFAULT 'Draft',
                     summary TEXT,
-                    graph JSONB NOT NULL DEFAULT '{"nodes": [], "edges": []}'::jsonb,
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
                 """
+            )
+            cur.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'agent_graph' AND column_name = 'graph'
+                """
+            )
+            if cur.fetchone() is not None:
+                self._migrate_legacy_graph_column(cur)
+
+    def _migrate_legacy_graph_column(self, cur: Any) -> None:
+        """One-time migration: move ``agent_graph.graph`` JSONB rows into the
+        shared document store, then drop the column. ``_ensure_tables`` only
+        calls this when the column still exists, so re-running is a no-op.
+        """
+        cur.execute(
+            """
+            SELECT ag.agent_id, ag.graph, a.name, a.summary
+            FROM agent_graph ag JOIN agent a ON a.id = ag.agent_id
+            """
+        )
+        rows = cast(list[dict[str, Any]], cur.fetchall())
+        for row in rows:
+            graph = row.get("graph")
+            nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+            kinds = {n.get("kind") for n in nodes if isinstance(n, dict)}
+            document = default_routine_graph(
+                row["agent_id"], name=row.get("name"), description=row.get("summary") or ""
+            )
+            if isinstance(graph, dict) and not kinds - VALID_ROUTINE_NODE_KINDS:
+                document["entry"] = graph.get("entry") or document["entry"]
+                document["nodes"] = graph.get("nodes") or document["nodes"]
+                document["edges"] = graph.get("edges", [])
+            self._document_store.save_document(
+                PROGENITOR_STATE_PREFIX, routine_graph_key(row["agent_id"]), document
+            )
+        cur.execute("ALTER TABLE agent_graph DROP COLUMN graph")
+        if rows:
+            logger.info(
+                "Migrated %d legacy agent_graph.graph row(s) into the document store", len(rows)
             )
 
     def delete_agents_by_kind(self, kind: str) -> int:
@@ -216,11 +260,11 @@ class AgentStore:
                 return None
             agent = _row_to_agent(row)
             cur.execute(
-                "SELECT status, summary, graph FROM agent_graph WHERE agent_id = %s",
+                "SELECT status, summary FROM agent_graph WHERE agent_id = %s",
                 (agent_id,),
             )
             graph_row = cast(dict[str, Any] | None, cur.fetchone())
-        agent["graph"] = _graph_payload(graph_row)
+        agent["graph"] = self._graph_payload(agent_id, graph_row)
         return agent
 
     def upsert_agent(self, record: dict[str, Any]) -> None:
@@ -278,58 +322,59 @@ class AgentStore:
         return inserted
 
     def ensure_graph(self, agent_id: str, graph: dict[str, Any] | None = None) -> None:
-        payload = graph or DEFAULT_AGENT_GRAPH
-        status = payload.get("status", "Draft")
-        summary = payload.get("summary")
-        body = {
-            "entry": payload.get("entry"),
-            "nodes": payload.get("nodes", []),
-            "edges": payload.get("edges", []),
-        }
+        status_payload = graph or DEFAULT_AGENT_GRAPH_STATUS
+        status = status_payload.get("status", "Draft")
+        summary = status_payload.get("summary")
         with self._pool.connection() as conn, conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO agent_graph (agent_id, status, summary, graph)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO agent_graph (agent_id, status, summary)
+                VALUES (%s, %s, %s)
                 ON CONFLICT (agent_id) DO NOTHING
                 """,
-                (agent_id, status, summary, Jsonb(body)),
+                (agent_id, status, summary),
             )
+        # Mirror ON CONFLICT DO NOTHING above: only seed the routine document
+        # itself if this agent doesn't already have one.
+        if (
+            self._document_store.get_document(
+                PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
+            )
+            is not None
+        ):
+            return
+        document = default_routine_graph(agent_id)
+        if graph is not None:
+            document["entry"] = graph.get("entry", document["entry"])
+            document["nodes"] = graph.get("nodes", document["nodes"])
+            document["edges"] = graph.get("edges", document["edges"])
+        self._document_store.save_document(
+            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), document
+        )
 
     def reset_legacy_graphs(self, valid_kinds: set[str]) -> int:
-        """Reset stored graphs that use node kinds outside ``valid_kinds`` to the
-        current default. Dev convenience so the legacy decorative graphs don't get
-        stuck (``ensure_graph`` only seeds when a row is absent). Returns the count.
+        """Reset routine documents that use node kinds outside ``valid_kinds`` to
+        the current default. Dev convenience so the legacy decorative graphs
+        don't get stuck (``ensure_graph`` only seeds when a document is absent).
+        Returns the count.
         """
         reset = 0
-        with self._pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT agent_id, graph FROM agent_graph")
-            rows = cast(list[dict[str, Any]], cur.fetchall())
-            for row in rows:
-                graph = row.get("graph") or {}
-                nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-                kinds = {n.get("kind") for n in nodes if isinstance(n, dict)}
-                if not kinds - valid_kinds:
-                    continue
-                body = {
-                    "entry": DEFAULT_AGENT_GRAPH["entry"],
-                    "nodes": DEFAULT_AGENT_GRAPH["nodes"],
-                    "edges": DEFAULT_AGENT_GRAPH["edges"],
-                }
-                cur.execute(
-                    """
-                    UPDATE agent_graph
-                    SET status = %s, summary = %s, graph = %s, updated_at = now()
-                    WHERE agent_id = %s
-                    """,
-                    (
-                        DEFAULT_AGENT_GRAPH.get("status", "Draft"),
-                        DEFAULT_AGENT_GRAPH.get("summary"),
-                        Jsonb(body),
-                        row["agent_id"],
-                    ),
-                )
-                reset += 1
+        for key, document in self._document_store.list_documents(
+            PROGENITOR_STATE_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
+        ):
+            agent_id = key[len(ROUTINE_GRAPH_KEY_PREFIX) :]
+            graph = document.payload if isinstance(document.payload, dict) else {}
+            nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
+            kinds = {n.get("kind") for n in nodes if isinstance(n, dict)}
+            if not kinds - valid_kinds:
+                continue
+            replacement = default_routine_graph(
+                agent_id,
+                name=graph.get("name") if isinstance(graph, dict) else None,
+                description=graph.get("description", "") if isinstance(graph, dict) else "",
+            )
+            self._document_store.save_document(PROGENITOR_STATE_PREFIX, key, replacement)
+            reset += 1
         return reset
 
     def update_graph(
@@ -340,30 +385,51 @@ class AgentStore:
         status: str | None = None,
         summary: str | None = None,
     ) -> dict[str, Any] | None:
-        body = {
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT name, summary FROM agent WHERE id = %s", (agent_id,))
+            agent_row = cast(dict[str, Any] | None, cur.fetchone())
+            if agent_row is None:
+                return None
+            cur.execute(
+                """
+                INSERT INTO agent_graph (agent_id, status, summary, updated_at)
+                VALUES (%s, COALESCE(%s, 'Draft'), %s, now())
+                ON CONFLICT (agent_id) DO UPDATE SET
+                    status = COALESCE(EXCLUDED.status, agent_graph.status),
+                    summary = COALESCE(EXCLUDED.summary, agent_graph.summary),
+                    updated_at = now()
+                RETURNING status, summary
+                """,
+                (agent_id, status, summary),
+            )
+            graph_row = cast(dict[str, Any] | None, cur.fetchone())
+        document = default_routine_graph(
+            agent_id, name=agent_row.get("name"), description=agent_row.get("summary") or ""
+        )
+        document["entry"] = graph.get("entry")
+        document["nodes"] = graph.get("nodes", [])
+        document["edges"] = graph.get("edges", [])
+        self._document_store.save_document(
+            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), document
+        )
+        return self._graph_payload(agent_id, graph_row)
+
+    def _graph_payload(self, agent_id: str, graph_row: dict[str, Any] | None) -> dict[str, Any]:
+        default = default_routine_graph(agent_id)
+        document = self._document_store.get_document(
+            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), default
+        )
+        graph = document.payload if document is not None else default
+        if not isinstance(graph, dict):
+            graph = default
+        status_payload = graph_row or DEFAULT_AGENT_GRAPH_STATUS
+        return {
+            "status": status_payload.get("status") or "Draft",
+            "summary": status_payload.get("summary"),
             "entry": graph.get("entry"),
             "nodes": graph.get("nodes", []),
             "edges": graph.get("edges", []),
         }
-        with self._pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM agent WHERE id = %s", (agent_id,))
-            if cur.fetchone() is None:
-                return None
-            cur.execute(
-                """
-                INSERT INTO agent_graph (agent_id, status, summary, graph, updated_at)
-                VALUES (%s, %s, %s, %s, now())
-                ON CONFLICT (agent_id) DO UPDATE SET
-                    status = COALESCE(EXCLUDED.status, agent_graph.status),
-                    summary = COALESCE(EXCLUDED.summary, agent_graph.summary),
-                    graph = EXCLUDED.graph,
-                    updated_at = now()
-                RETURNING status, summary, graph
-                """,
-                (agent_id, status, summary, Jsonb(body)),
-            )
-            graph_row = cast(dict[str, Any] | None, cur.fetchone())
-        return _graph_payload(graph_row)
 
 
 def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
@@ -396,22 +462,6 @@ def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
         "url": details.get("url"),
         "card": details.get("card") or {},
         "updated": updated_at.isoformat() if updated_at else None,
-    }
-
-
-def _graph_payload(graph_row: dict[str, Any] | None) -> dict[str, Any]:
-    if not graph_row:
-        return dict(DEFAULT_AGENT_GRAPH)
-    graph = graph_row.get("graph")
-    entry = graph.get("entry") if isinstance(graph, dict) else None
-    nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-    edges = graph.get("edges", []) if isinstance(graph, dict) else []
-    return {
-        "status": graph_row.get("status") or "Draft",
-        "summary": graph_row.get("summary"),
-        "entry": entry,
-        "nodes": nodes,
-        "edges": edges,
     }
 
 
@@ -819,6 +869,7 @@ def configure_agent_store(
     admin_url: str | None,
     backend_url: str | None,
     backend_db_name: str | None,
+    document_store: BackendDocumentStore,
 ) -> AgentStore | None:
     """Open the backend agent store, creating its database if needed."""
     global _default_store
@@ -833,7 +884,7 @@ def configure_agent_store(
     if admin_url and backend_db_name:
         ensure_database_exists(admin_url, backend_db_name)
 
-    store = AgentStore(backend_url)
+    store = AgentStore(backend_url, document_store)
     store.open()
     # A2A and ACP agents are read through from Progenitor's registry; drop any
     # legacy rows left in the backend DB (A2A from the old sync architecture, ACP

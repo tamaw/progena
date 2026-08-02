@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..content_documents import content_document_key, content_document_prefix
+from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
@@ -545,6 +546,30 @@ class StateManager:
     async def list_workflow_definitions(self) -> list[dict[str, Any]]:
         """Return all workflow definition documents."""
         rows = await self._runtime_store.list_documents(WORKFLOW_DEFINITION_KEY_PREFIX)
+        return [payload for _, payload in rows if isinstance(payload, dict)]
+
+    # ==========================================================================
+    # Routine graphs
+    # ==========================================================================
+    async def get_routine_graph(self, agent_id: str) -> dict[str, Any] | None:
+        """Return one agent's routine graph document, or ``None`` if missing."""
+        key = routine_graph_key(agent_id)
+        payload = await self._runtime_store.peek_document(key)
+        return payload if isinstance(payload, dict) else None
+
+    async def save_routine_graph(self, agent_id: str, payload: dict[str, Any]) -> None:
+        """Persist one agent's routine graph document."""
+        key = routine_graph_key(agent_id)
+        await self._save_runtime_document(key, payload)
+
+    async def delete_routine_graph(self, agent_id: str) -> None:
+        """Remove one agent's routine graph document."""
+        key = routine_graph_key(agent_id)
+        await self._runtime_store.delete_document(key)
+
+    async def list_routine_graphs(self) -> list[dict[str, Any]]:
+        """Return all routine graph documents."""
+        rows = await self._runtime_store.list_documents(ROUTINE_GRAPH_KEY_PREFIX)
         return [payload for _, payload in rows if isinstance(payload, dict)]
 
     async def list_workflow_runs(self) -> list[dict[str, Any]]:
