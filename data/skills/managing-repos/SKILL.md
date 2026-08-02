@@ -70,22 +70,24 @@ Rules enforced on every write (a violating edit is rejected and nothing changes)
 4. **`local_path` may be relative** — a relative path resolves against the managed
    repos directory (`data/repos` locally), so a repo meant to live there just needs
    its folder name (e.g. `"my-service"`), not a full path.
-5. **Never regenerate the whole file.** Build only the one repo object with
-   `structured_output` (for several fields) or hand-author it directly (one or two
-   fields) and splice it into `repos` with `edit_file`.
+5. **Never regenerate the whole file.** Build only the one repo object and splice
+   it into `repos` with `edit_file`.
+6. **Always build new/replaced entries with `structured_output` against
+   `/schemas/repo_entry.schema.v1.json`** — never hand-author the JSON object
+   yourself. The schema's `additionalProperties: false` and `required` list are
+   exactly the rules the write validates against, so a schema-shaped result can't
+   be rejected for a missing/misnamed field the way freehand JSON can.
 
 ## Common Operations
 
 ### Declare / add a repo
 1. `read_file /config/repos.json`
 2. Derive the kebab-case id from the name.
-3. For a couple of fields, hand-author the object directly with `edit_file`:
-```json
-"my-service": { "name": "my-service", "local_path": "/home/user/code/my-service", "access": "read" }
-```
-   For several fields (remote, summary, owner), `read_file /schemas/repo_entry.schema.v1.json`
-   and run `structured_output json_schema=<that content> instruction="Build a repo entry named '<name>' at local_path '<path>' with access '<read|write>'."`,
-   then `edit_file` the result in under `repos` with the derived id as the key.
+3. `read_file /schemas/repo_entry.schema.v1.json`
+4. `structured_output json_schema=<content from step 3> instruction="Build a repo entry named '<name>' at local_path '<path>' with access '<read|write>'<, remote_url '<url>' if given><, summary '<summary>' if given>."`
+5. `edit_file /config/repos.json` to insert `"<id>": <result from step 4>` as a
+   new key under `repos` (or `write_file` only if `repos` is currently `{}`),
+   keeping every other repo untouched.
 
 ### Edit a field (e.g. change access or local_path)
 Change the relevant field on that repo in place with `edit_file`, preserving
