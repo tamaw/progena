@@ -89,7 +89,8 @@ data/sessions/
 data/attachments/
 logs/
 !logs/.gitkeep
-worktrees/
+data/repos/*
+!data/repos/.gitkeep
 tmp/
 .tmp/
 
