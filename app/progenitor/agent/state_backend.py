@@ -47,7 +47,7 @@ from ..state.models import ScheduleEntry
 from ..state.preferences import default_preferences_payload, validate_preferences_document
 from ..utils import utcnow, utcnow_isoformat
 from ..workflows import (
-    parse_workflow_definition_document,
+    validate_workflow_definition_document,
     workflow_file_name,
     workflow_id_from_path,
 )
@@ -1009,7 +1009,7 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            workflow = parse_workflow_definition_document(content)
+            workflow = validate_workflow_definition_document(content)
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:

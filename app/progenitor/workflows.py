@@ -375,7 +375,7 @@ def default_workflow_definition(
     }
 
 
-def parse_workflow_definition_document(content: str) -> dict[str, Any]:
+def validate_workflow_definition_document(content: str) -> dict[str, Any]:
     """Parse and validate a workflow definition JSON document."""
 
     try:
