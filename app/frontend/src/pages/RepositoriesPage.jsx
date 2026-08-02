@@ -32,7 +32,7 @@ import {
   selectWorkspaceSignal,
 } from '../store/uiDataSlice';
 
-const SOURCE_FILTERS = ['All sources', 'Remote', 'Local', 'Dirty'];
+const SOURCE_FILTERS = ['All', 'Remote', 'Local', 'Dirty'];
 
 const ACCESS_OPTIONS = [
   { value: 'read', label: 'Read only' },
