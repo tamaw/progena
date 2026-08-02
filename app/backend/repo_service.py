@@ -8,9 +8,17 @@ edit directly at ``/config/repos.json`` (see
 straight SQL through ``PostgresDocumentStore``, same as ``marketplaces``/``mcp``.
 
 Live git state (branches, commits, worktrees) lives in the separate
-``repo_scan`` document, written only by the heartbeat's
-``refresh_repo_scan_node`` (see ``app/progenitor/nodes/repo_scan.py``). The
-backend only ever reads it here -- there is no write path from this module.
+``repo_scan`` document. The heartbeat's ``refresh_repo_scan_node`` (see
+``app/progenitor/nodes/repo_scan.py``) is the periodic, local-only writer --
+it never does network I/O, so it can't tell a stale clone from a fresh one.
+``fetch_and_rescan_repo`` below is the on-demand counterpart: it runs
+``git fetch`` against one repo (real network I/O, deliberately never part of
+the heartbeat batch) and merges a fresh single-repo scan into the same
+document, so a manual "Fetch" click doesn't wait out the heartbeat interval.
+Both writers persist through the same ``save_document`` call the heartbeat
+uses, so the runtime's cached copy is invalidated the same way ``repos``
+writes already are (see ``_on_store_change`` in
+``app/progenitor/runtime/progenitor.py``).
 """
 
 from __future__ import annotations
@@ -18,7 +26,13 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.progenitor.config import default_repos_config_payload
+from app.progenitor.config import default_repos_config_payload, get_config
+from app.progenitor.repos.scan import (
+    RepoScanResult,
+    aggregate_workspace_signal,
+    fetch_repo,
+    scan_repo,
+)
 from app.progenitor.repos.schema import validate_repos_payload
 from app.progenitor.utils import utcnow_isoformat
 
@@ -74,6 +88,58 @@ def load_repo_scan() -> dict[str, Any]:
     )
     payload = document.payload if document is not None else default
     return payload if isinstance(payload, dict) else default
+
+
+class RepoFetchError(RuntimeError):
+    """Raised when ``git fetch`` fails for a declared repo."""
+
+
+async def fetch_and_rescan_repo(repo_id: str) -> dict[str, Any]:
+    """Run ``git fetch`` against one declared repo, then merge a fresh scan.
+
+    On-demand counterpart to the heartbeat's periodic local-only scan: does
+    real network I/O (deliberately never part of the heartbeat batch, see
+    module docstring), then re-scans just this repo and writes the merged
+    result into the same ``repo_scan`` document the heartbeat maintains, so
+    a manual click doesn't wait out the heartbeat interval to show whether
+    the repo is stale relative to its upstream.
+    """
+    declared = load_repos().get("repos") or {}
+    entry = declared.get(repo_id)
+    if not isinstance(entry, dict):
+        raise RepoNotFoundError(repo_id)
+    local_path = entry.get("local_path") or ""
+    worktree_dir = get_config().storage.worktree_dir
+
+    error = await fetch_repo(local_path, worktree_dir=worktree_dir)
+    if error:
+        raise RepoFetchError(error)
+
+    scan_result = await scan_repo(local_path, worktree_dir=worktree_dir)
+    scan_doc = load_repo_scan()
+    previous_scans = scan_doc.get("repos") or {}
+    # Reconstruct every other repo's last scan as a RepoScanResult (to_dict()'s
+    # keys mirror the dataclass fields exactly) so the real
+    # aggregate_workspace_signal -- the same one the heartbeat uses -- can run
+    # over the merged set instead of duplicating its aggregation logic here.
+    scans: dict[str, RepoScanResult] = {}
+    for other_id, other_scan in previous_scans.items():
+        if other_id == repo_id or not isinstance(other_scan, dict):
+            continue
+        try:
+            scans[other_id] = RepoScanResult(**other_scan)
+        except TypeError:
+            continue
+    scans[repo_id] = scan_result
+    signal = aggregate_workspace_signal(scans)
+
+    payload = {
+        "scanned_at": utcnow_isoformat(),
+        "repos": {rid: result.to_dict() for rid, result in scans.items()},
+        "workspace_signal": signal.to_dict(),
+    }
+    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, REPO_SCAN_DOC_KEY, payload)
+    return scan_result.to_dict()
 
 
 def create_repo(

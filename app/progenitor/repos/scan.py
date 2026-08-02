@@ -78,6 +78,7 @@ class RepoScanResult:
             "last_commit": self.last_commit,
             "branches": self.branches,
             "commits": self.commits,
+            "contributors": self.contributors,
             "upstream_ahead": self.upstream_ahead,
             "upstream_behind": self.upstream_behind,
             "error": self.error,
@@ -195,6 +196,23 @@ async def scan_repo(local_path: str, *, worktree_dir: Path | None = None) -> Rep
             result.upstream_ahead = int(ahead_str)
 
     return result
+
+
+async def fetch_repo(local_path: str, *, worktree_dir: Path | None = None) -> str | None:
+    """Run ``git fetch --prune`` against one declared repo's worktree.
+
+    On-demand only -- never called from the heartbeat's ``scan_repo`` batch,
+    which stays local-only by design (no network I/O on every tick). Updates
+    remote-tracking refs on disk so the *next* scan (heartbeat or another
+    on-demand one) reports fresh ``upstream_ahead``/``upstream_behind``
+    counts. Returns an error string on failure, ``None`` on success.
+    """
+    raw_path = Path(local_path) if local_path else Path()
+    repo_path = raw_path if raw_path.is_absolute() else (worktree_dir or Path.cwd()) / raw_path
+    if not local_path or not repo_path.is_dir():
+        return "repo not found on disk"
+    code, _, err = await _run_git(repo_path, "fetch", "--prune")
+    return None if code == 0 else (err or "git fetch failed")
 
 
 @dataclass
