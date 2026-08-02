@@ -6,10 +6,12 @@
   "properties": {
     "name": {
       "type": "string",
+      "minLength": 1,
       "description": "Human-readable display name."
     },
     "local_path": {
       "type": "string",
+      "minLength": 1,
       "description": "Where the repo lives on disk. Absolute, or relative to the managed repos directory (data/repos) for anything cloned there."
     },
     "access": {

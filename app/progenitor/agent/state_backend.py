@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -105,39 +104,13 @@ def validate_plugins_document(content: str) -> JsonDoc:
 
     Shape: ``{"plugins": {"<marketplace>/<plugin>": {...}}}``, no other top-level keys.
     Each plugin entry's shape mirrors ``data/schemas/plugin_entry.schema.v1.json``.
-    Runtime-owned fields (installed_version, installed_digest, available_version,
-    status, status_message, skills, installed_at, last_checked) are accepted but
-    never required; the reconciler manages them.
+    Delegates to :mod:`..plugins.schema` -- the same function the backend's
+    ``/api/ui/plugins`` routes call directly on already-parsed payloads, so
+    both write paths enforce identical rules.
     """
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"plugins"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+    from ..plugins.schema import validate_plugins_document as _validate
 
-    plugins = data.get("plugins")
-    if not isinstance(plugins, dict):
-        raise ValueError("missing 'plugins' object")
-
-    _PLUGIN_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
-    for key, entry in plugins.items():
-        if not _PLUGIN_KEY_RE.match(key):
-            raise ValueError(f"plugin key '{key}' must look like <marketplace>/<plugin>")
-        if not isinstance(entry, dict):
-            raise ValueError(f"plugin '{key}' must be an object")
-        source = entry.get("source")
-        if not source:
-            raise ValueError(f"plugin '{key}' is missing 'source'")
-        check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
-
-    return data
-
-
-_MARKETPLACE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+    return _validate(content)
 
 
 def validate_marketplaces_document(content: str) -> JsonDoc:
@@ -145,36 +118,13 @@ def validate_marketplaces_document(content: str) -> JsonDoc:
 
     Shape: ``{"marketplaces": {"<name>": {...}}}``, no other top-level keys.
     Each entry's shape mirrors ``data/schemas/marketplace_entry.schema.v1.json``.
+    Delegates to :mod:`..marketplaces` -- the same function the backend's
+    ``/api/ui/marketplaces`` route calls directly on already-parsed payloads,
+    so both write paths enforce identical rules.
     """
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"marketplaces"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+    from ..marketplaces import validate_marketplaces_document as _validate
 
-    marketplaces = data.get("marketplaces")
-    if not isinstance(marketplaces, dict):
-        raise ValueError("missing 'marketplaces' object")
-
-    for name, entry in marketplaces.items():
-        if not _MARKETPLACE_NAME_RE.match(name):
-            raise ValueError(
-                f"marketplace name '{name}' must be kebab-case (lowercase, digits, hyphens)"
-            )
-        if not isinstance(entry, dict):
-            raise ValueError(f"marketplace '{name}' must be an object")
-        source = entry.get("source")
-        if not isinstance(source, str) or not source.strip():
-            raise ValueError(f"marketplace '{name}' is missing 'source'")
-        if "added_at" not in entry:
-            entry["added_at"] = utcnow_isoformat()
-        check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
-
-    return data
+    return _validate(content)
 
 
 def validate_registry_document(content: str) -> JsonDoc:
