@@ -37,24 +37,26 @@ const graphDefaultEdgeOptions = {
   animated: true,
 };
 
-// Workflow step kinds offered in the canvas dock (drag onto the canvas or click
-// to add). Mirrors the backend VALID_NODE_KINDS executable schema.
+// Routine step kinds offered in the canvas dock (drag onto the canvas or click
+// to add). Mirrors app.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
 const GRAPH_NODE_KINDS = [
-  { kind: 'start', label: 'Start', icon: '▶' },
-  { kind: 'ask', label: 'Ask', icon: '?' },
-  { kind: 'tool', label: 'Tool', icon: '⚙' },
-  { kind: 'decision', label: 'Decision', icon: '⑃' },
-  { kind: 'end', label: 'End', icon: '■' },
+  { kind: 'prompt', label: 'Prompt', icon: '?' },
+  { kind: 'code', label: 'Code', icon: '⚙' },
+  { kind: 'eval', label: 'Eval', icon: '✓' },
+  { kind: 'subagent', label: 'Subagent', icon: '⇢' },
+  { kind: 'agent', label: 'Agent', icon: '◆' },
+  { kind: 'noop', label: 'Noop', icon: '·' },
 ];
 
 // Accent per kind (kept in sync with the .agents-graph-node--* CSS and used by
 // the minimap so steps read at a glance).
 const GRAPH_KIND_COLORS = {
-  start: '#2f9e6f',
-  ask: '#2f6ff6',
-  tool: '#b06ef6',
-  decision: '#e0a23a',
-  end: '#6b7280',
+  prompt: '#2f6ff6',
+  code: '#b06ef6',
+  eval: '#e0a23a',
+  subagent: '#2f9e6f',
+  agent: '#ef6c2a',
+  noop: '#6b7280',
 };
 
 const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
@@ -67,20 +69,137 @@ function minimapNodeColor(node) {
 // mutable refs through node data, which React forbids reading during render).
 const GraphEditContext = createContext({ updateNodeData: () => {}, updateEdgeLabel: () => {} });
 
-// Inline-editable workflow step, styled like the Workspace canvas nodes: a title
+// One config field bound to `data.config[field]` (a plain string value).
+function ConfigField({ id, config, field, label, placeholder, multiline, updateNodeConfig }) {
+  const value = config?.[field] || '';
+  const onChange = (event) => updateNodeConfig(id, { [field]: event.target.value });
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}</span>
+      {multiline ? (
+        <textarea className="nodrag nowheel agents-graph-node__prompt" value={value} placeholder={placeholder} onChange={onChange} />
+      ) : (
+        <input className="nodrag agents-graph-node__toolinput" value={value} placeholder={placeholder} onChange={onChange} />
+      )}
+    </label>
+  );
+}
+
+// `code`/`eval` nodes resolve named inputs from dotted `data` paths before
+// evaluation (config.inputs, an object). Edited as one "name: path" per line so
+// authors don't have to hand-write JSON for a small map.
+function inputsToText(inputs) {
+  return Object.entries(inputs || {}).map(([key, path]) => `${key}: ${path}`).join('\n');
+}
+
+function textToInputs(text) {
+  const result = {};
+  text.split('\n').forEach((line) => {
+    const separator = line.indexOf(':');
+    if (separator === -1) return;
+    const key = line.slice(0, separator).trim();
+    const path = line.slice(separator + 1).trim();
+    if (key) result[key] = path;
+  });
+  return result;
+}
+
+function InputsField({ id, config, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">Inputs (name: data.path)</span>
+      <textarea
+        className="nodrag nowheel agents-graph-node__prompt"
+        value={inputsToText(config?.inputs)}
+        placeholder="host: parse_json.host"
+        onChange={(event) => updateNodeConfig(id, { inputs: textToInputs(event.target.value) })}
+      />
+    </label>
+  );
+}
+
+// Kind-specific config fields, mirroring app.progenitor.routines.graph's per-kind
+// config shape (prompt_template/system_prompt, expression/inputs/rubric_prompt,
+// subagent_name/agent_name + prompt_template). `noop` has no config.
+function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
+  if (kind === 'prompt') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template… use {request} / {other_node} to reference state" multiline updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="system_prompt" label="System prompt (optional)" placeholder="Node-specific system prompt…" multiline updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'code' || kind === 'eval') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
+        {kind === 'eval' ? (
+          <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt (used if no expression)" placeholder="Ask the model a yes/no question…" multiline updateNodeConfig={updateNodeConfig} />
+        ) : null}
+        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'subagent') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="subagent_name" label="Subagent name" placeholder="repo-setup-worker" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the subagent…" multiline updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'agent') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="repo-manager" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  return null;
+}
+
+// Optional per-node `state_equals` routing: giving a node a state key turns its
+// outgoing edges into named branches (edge label = branch value) instead of a
+// single plain edge. Kept on the node (not the edge) since one router config
+// covers all of a node's outgoing edges — mirrors the compiled graph's edge
+// shape, see app.progenitor.routines.graph.RoutineEdge.
+function RoutingFields({ id, data, updateNodeData }) {
+  return (
+    <div className="agents-graph-node__routing">
+      <input
+        className="nodrag agents-graph-node__toolinput"
+        value={data.routerStateKey || ''}
+        placeholder="route on data.<key> (optional)"
+        onChange={(event) => updateNodeData(id, { routerStateKey: event.target.value })}
+      />
+      {data.routerStateKey ? (
+        <input
+          className="nodrag agents-graph-node__toolinput"
+          value={data.routerDefault || ''}
+          placeholder="default target node id"
+          onChange={(event) => updateNodeData(id, { routerDefault: event.target.value })}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// Inline-editable routine step, styled like the Workspace canvas nodes: a title
 // bar (type-icon chip + editable label + kind badge) over a body whose content is
-// editable per kind. Edits are autosaved by the canvas.
+// editable per kind, plus an optional routing footer. Edits are autosaved.
 function EditableGraphNode({ id, data, selected }) {
   const { updateNodeData } = useContext(GraphEditContext);
-  const hasTarget = data.kind !== 'start';
-  const hasSource = data.kind !== 'end';
-  const hasBody = data.kind === 'ask' || data.kind === 'decision' || data.kind === 'tool';
+  const updateNodeConfig = useCallback((nodeId, patch) => {
+    updateNodeData(nodeId, { config: { ...data.config, ...patch } });
+  }, [updateNodeData, data.config]);
   return (
     <div
       className={`canvas-node agents-graph-node agents-graph-node--${data.kind} ${selected ? 'selected' : ''}`}
       style={{ '--node-color': GRAPH_KIND_COLORS[data.kind] || data.color }}
     >
-      {hasTarget ? <Handle type="target" position={Position.Left} className="canvas-handle" /> : null}
+      <Handle type="target" position={Position.Left} className="canvas-handle" />
       <div className="node-title-bar drag-handle">
         <span className="node-type-icon">{GRAPH_KIND_ICONS[data.kind] || '•'}</span>
         <input
@@ -91,26 +210,11 @@ function EditableGraphNode({ id, data, selected }) {
         />
         <span className="node-status-badge agents-node-kind-badge">{data.kind}</span>
       </div>
-      {hasBody ? (
-        <div className="node-body node-body-compact">
-          {data.kind === 'tool' ? (
-            <input
-              className="nodrag agents-graph-node__toolinput"
-              value={data.tool || ''}
-              placeholder="tool name"
-              onChange={(event) => updateNodeData(id, { tool: event.target.value })}
-            />
-          ) : (
-            <textarea
-              className="nodrag nowheel agents-graph-node__prompt"
-              value={data.prompt || ''}
-              placeholder={data.kind === 'decision' ? 'Decision question…' : 'Prompt…'}
-              onChange={(event) => updateNodeData(id, { prompt: event.target.value })}
-            />
-          )}
-        </div>
-      ) : null}
-      {hasSource ? <Handle type="source" position={Position.Right} className="canvas-handle" /> : null}
+      <div className="node-body node-body-compact">
+        <NodeConfigBody id={id} kind={data.kind} config={data.config} updateNodeConfig={updateNodeConfig} />
+        <RoutingFields id={id} data={data} updateNodeData={updateNodeData} />
+      </div>
+      <Handle type="source" position={Position.Right} className="canvas-handle" />
     </div>
   );
 }
@@ -156,59 +260,120 @@ function EditableGraphEdge({
 const agentGraphNodeTypes = { agentGraph: EditableGraphNode };
 const agentGraphEdgeTypes = { editable: EditableGraphEdge };
 
+// A router edge (`{from, router: 'state_equals', state_key, branches, default}`)
+// configures all of one node's outgoing edges at once; pull that config out per
+// source node id so seedNodes/seedEdges can each apply their half of it.
+function deriveRouterConfig(graph) {
+  const routerByNode = {};
+  (graph.edges || []).forEach((edge) => {
+    if (edge && edge.router) {
+      routerByNode[edge.from] = { stateKey: edge.state_key || '', default: edge.default || '' };
+    }
+  });
+  return routerByNode;
+}
+
 function seedNodes(graph, agent) {
+  const routerByNode = deriveRouterConfig(graph);
   return (graph.nodes || []).map((node, index) => ({
     id: node.id,
     type: 'agentGraph',
-    position: { x: node.x ?? index * 240, y: node.y ?? 80 },
+    position: { x: node.x ?? index * 260, y: node.y ?? 80 },
     data: {
       kind: node.kind,
       label: node.label ?? node.id,
-      prompt: node.prompt,
-      tool: node.tool,
-      detail: node.detail,
+      config: node.config || {},
+      routerStateKey: routerByNode[node.id]?.stateKey || '',
+      routerDefault: routerByNode[node.id]?.default || '',
       color: agent.color,
     },
   }));
 }
 
 function seedEdges(graph, agent) {
-  return (graph.edges || []).map((edge, index) => {
-    const [source, target, label] = edge;
-    return {
-      id: `${source}-${target}-${index}`,
-      source,
-      target,
-      label,
+  const edges = [];
+  (graph.edges || []).forEach((edge, index) => {
+    if (!edge) return;
+    const style = { stroke: agent.color };
+    const markerEnd = { type: MarkerType.ArrowClosed, color: agent.color };
+    if (edge.router) {
+      Object.entries(edge.branches || {}).forEach(([branchValue, target], branchIndex) => {
+        edges.push({
+          id: `${edge.from}-${target}-${index}-${branchIndex}`,
+          source: edge.from,
+          target,
+          label: branchValue,
+          type: 'editable',
+          animated: true,
+          style,
+          markerEnd,
+        });
+      });
+      return;
+    }
+    edges.push({
+      id: `${edge.from}-${edge.to}-${index}`,
+      source: edge.from,
+      target: edge.to,
       type: 'editable',
       animated: true,
-      style: { stroke: agent.color },
-      markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
-    };
+      style,
+      markerEnd,
+    });
   });
+  return edges;
 }
 
 // Serialize the live React Flow state back into the backend graph schema,
-// stripping the injected callbacks and keeping positions for round-tripping.
+// stripping the injected callbacks and keeping positions for round-tripping. A
+// node with a `routerStateKey` collapses its outgoing edges into one router
+// edge (branches keyed by edge label); everything else stays a plain edge.
 function serializeGraph(nodes, edges, meta) {
+  const outgoingBySource = new Map();
+  edges.forEach((edge) => {
+    const list = outgoingBySource.get(edge.source) || [];
+    list.push(edge);
+    outgoingBySource.set(edge.source, list);
+  });
+
+  const serializedEdges = [];
+  nodes.forEach((node) => {
+    const data = node.data || {};
+    const outgoing = outgoingBySource.get(node.id) || [];
+    if (!outgoing.length) return;
+    if (data.routerStateKey) {
+      const branches = {};
+      outgoing.forEach((edge) => {
+        const label = (edge.label || '').toString().trim();
+        if (label) branches[label] = edge.target;
+      });
+      const routerEdge = { from: node.id, router: 'state_equals', state_key: data.routerStateKey, branches };
+      if (data.routerDefault) routerEdge.default = data.routerDefault;
+      serializedEdges.push(routerEdge);
+    } else {
+      outgoing.forEach((edge) => {
+        serializedEdges.push({ from: node.id, to: edge.target });
+      });
+    }
+  });
+
   return {
     status: meta.status || 'Draft',
     summary: meta.summary || '',
+    entry: meta.entry || nodes[0]?.id || null,
     nodes: nodes.map((node) => {
       const data = node.data || {};
-      const out = {
+      return {
         id: node.id,
         kind: data.kind,
         label: data.label,
+        output_key: node.id,
+        config: data.config || {},
         x: Math.round(node.position?.x ?? 0),
         y: Math.round(node.position?.y ?? 0),
       };
-      if (data.prompt) out.prompt = data.prompt;
-      if (data.tool) out.tool = data.tool;
-      if (data.detail) out.detail = data.detail;
-      return out;
     }),
-    edges: edges.map((edge) => (edge.label ? [edge.source, edge.target, String(edge.label)] : [edge.source, edge.target])),
+    edges: serializedEdges,
   };
 }
 
@@ -230,7 +395,11 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
 
   const [nodes, setNodes, onNodesChange] = useNodesState(seedNodes(graph, agent));
   const [edges, setEdges, onEdgesChange] = useEdgesState(seedEdges(graph, agent));
-  const [meta, setMeta] = useState({ status: graph.status || 'Draft', summary: graph.summary || '' });
+  const [meta, setMeta] = useState({
+    status: graph.status || 'Draft',
+    summary: graph.summary || '',
+    entry: graph.entry || (graph.nodes || [])[0]?.id || null,
+  });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
 
@@ -263,21 +432,19 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
     const data = {
       kind,
       label: kind.charAt(0).toUpperCase() + kind.slice(1),
+      config: {},
+      routerStateKey: '',
+      routerDefault: '',
       color: agent.color,
     };
-    if (kind === 'ask' || kind === 'decision') data.prompt = '';
-    if (kind === 'tool') data.tool = '';
     setNodes((current) => [...current, { id, type: 'agentGraph', position: point, data }]);
   }, [agent.color, reactFlow, setNodes]);
 
   const onConnect = useCallback((params) => {
-    const sourceNode = nodesRef.current.find((node) => node.id === params.source);
-    const label = sourceNode?.data?.kind === 'decision' ? 'branch' : undefined;
     setEdges((current) => addEdge({
       ...params,
       type: 'editable',
       animated: true,
-      label,
       style: { stroke: agent.color },
       markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
     }, current));
@@ -348,13 +515,23 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
 
   const handleJsonApply = useCallback(async (parsed) => {
-    const nextMeta = { status: parsed.status || 'Draft', summary: parsed.summary || '' };
+    const nextMeta = {
+      status: parsed.status || 'Draft',
+      summary: parsed.summary || '',
+      entry: parsed.entry || (parsed.nodes || [])[0]?.id || null,
+    };
     setMeta(nextMeta);
     const nextNodes = seedNodes(parsed, agent);
     const nextEdges = seedEdges(parsed, agent);
     setNodes(nextNodes);
     setEdges(nextEdges);
-    const payload = { status: nextMeta.status, summary: nextMeta.summary, nodes: parsed.nodes, edges: parsed.edges };
+    const payload = {
+      status: nextMeta.status,
+      summary: nextMeta.summary,
+      entry: nextMeta.entry,
+      nodes: parsed.nodes,
+      edges: parsed.edges,
+    };
     await persistRef.current(payload);
     lastSavedRef.current = JSON.stringify(serializeGraph(nextNodes, nextEdges, nextMeta));
     setSaveError(null);
@@ -374,6 +551,18 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
             <div className="agents-graph-floating">
               <span>{agent.name}</span>
               <span>{nodes.length} nodes</span>
+              <label className="agents-graph-entry">
+                Entry
+                <select
+                  className="nodrag agents-graph-entry-select"
+                  value={meta.entry || ''}
+                  onChange={(event) => setMeta((current) => ({ ...current, entry: event.target.value }))}
+                >
+                  {nodes.map((node) => (
+                    <option key={node.id} value={node.id}>{node.data?.label || node.id}</option>
+                  ))}
+                </select>
+              </label>
               {saveState !== 'idle' ? (
                 <span className={`agents-graph-save agents-graph-save--${saveState}`}>
                   {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
@@ -527,6 +716,7 @@ function graphToJson(graph) {
     {
       status: graph.status || 'Draft',
       summary: graph.summary || '',
+      entry: graph.entry ?? null,
       nodes: graph.nodes || [],
       edges: graph.edges || [],
     },

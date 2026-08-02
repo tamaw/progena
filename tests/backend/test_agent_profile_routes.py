@@ -21,12 +21,28 @@ from app.backend.agent_profile_routes import (
 _DEFAULT_GRAPH = {
     "status": "Draft",
     "summary": None,
+    "entry": "greet",
     "nodes": [
-        {"id": "start", "label": "Start", "kind": "start", "x": 0, "y": 0},
-        {"id": "ask", "label": "Ask", "kind": "ask", "prompt": "do the thing", "x": 200, "y": 0},
-        {"id": "end", "label": "End", "kind": "end", "x": 400, "y": 0},
+        {
+            "id": "greet",
+            "label": "Greet",
+            "kind": "prompt",
+            "output_key": "greet",
+            "config": {"prompt_template": "do the thing: {request}"},
+            "x": 0,
+            "y": 0,
+        },
+        {
+            "id": "gate",
+            "label": "Gate",
+            "kind": "code",
+            "output_key": "gate",
+            "config": {"expression": "True"},
+            "x": 200,
+            "y": 0,
+        },
     ],
-    "edges": [["start", "ask"], ["ask", "end"]],
+    "edges": [{"from": "greet", "to": "gate"}],
 }
 
 
@@ -85,6 +101,7 @@ class FakeAgentStore:
         payload = {
             "status": status or "Draft",
             "summary": summary,
+            "entry": graph.get("entry"),
             "nodes": graph["nodes"],
             "edges": graph["edges"],
         }
@@ -188,8 +205,12 @@ def test_graph_schema_published(harness):
 def test_graph_update_persists_and_broadcasts(harness):
     client, events = harness
     payload = {
-        "nodes": [{"id": "a", "kind": "start"}, {"id": "b", "kind": "end"}],
-        "edges": [["a", "b", "done"]],
+        "nodes": [
+            {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi {request}"}},
+            {"id": "b", "kind": "noop", "output_key": "b"},
+        ],
+        "edges": [{"from": "a", "to": "b"}],
+        "entry": "a",
         "status": "Designed",
     }
     response = client.patch("/api/ui/agent-profiles/alpha/graph", json=payload)
@@ -198,6 +219,7 @@ def test_graph_update_persists_and_broadcasts(harness):
     # Broadcast payload contains updated graph data
     graph_payload = events[-1][1]
     assert graph_payload["graph"]["status"] == "Designed"
+    assert graph_payload["graph"]["entry"] == "a"
     # Persisted: subsequent detail broadcasts the new graph data
     detail_resp = client.get("/api/ui/agent-profiles/alpha")
     assert_acknowledged(detail_resp, ["agent.upserted", "agent.selected"])
@@ -207,13 +229,26 @@ def test_graph_update_persists_and_broadcasts(harness):
 
 def test_graph_update_invalid_returns_422(harness):
     client, _ = harness
-    bad = {"nodes": [{"id": "a", "kind": "start"}], "edges": [["a", "ghost"]]}
+    bad = {
+        "nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}],
+        "edges": [{"from": "a", "to": "ghost"}],
+    }
     assert client.patch("/api/ui/agent-profiles/alpha/graph", json=bad).status_code == 422
+
+
+def test_graph_update_unknown_entry_returns_422(harness):
+    client, _ = harness
+    payload = {
+        "nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}],
+        "edges": [],
+        "entry": "ghost",
+    }
+    assert client.patch("/api/ui/agent-profiles/alpha/graph", json=payload).status_code == 422
 
 
 def test_graph_update_unknown_agent_returns_404(harness):
     client, _ = harness
-    payload = {"nodes": [{"id": "a", "kind": "start"}], "edges": []}
+    payload = {"nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}], "edges": []}
     assert client.patch("/api/ui/agent-profiles/missing/graph", json=payload).status_code == 404
 
 
@@ -273,7 +308,7 @@ def test_detail_a2a_reads_through_registry(harness, monkeypatch):
 
 def test_graph_update_rejected_for_a2a(harness):
     client, _ = harness
-    payload = {"nodes": [{"id": "a", "kind": "input"}], "edges": []}
+    payload = {"nodes": [{"id": "a", "kind": "noop", "output_key": "a"}], "edges": []}
     assert client.patch("/api/ui/agent-profiles/a2a-observe/graph", json=payload).status_code == 409
 
 
@@ -324,58 +359,80 @@ class TestBroadcastAgentProfilesSnapshot:
 
 
 class TestValidateAgentGraph:
-    def test_accepts_valid_series_of_asks(self):
+    def test_accepts_valid_routine(self):
         validate_agent_graph(
             [
-                {"id": "start", "kind": "start"},
-                {"id": "ask1", "kind": "ask", "prompt": "do x"},
-                {"id": "tool1", "kind": "tool", "tool": "search"},
-                {"id": "review", "kind": "decision", "prompt": "ok?"},
-                {"id": "end", "kind": "end"},
+                {"id": "parse", "kind": "prompt"},
+                {"id": "gate", "kind": "code"},
+                {"id": "handoff", "kind": "subagent"},
+                {"id": "done", "kind": "noop"},
             ],
             [
-                ["start", "ask1"],
-                ["ask1", "tool1"],
-                ["tool1", "review"],
-                ["review", "end", "approved"],
-                ["review", "ask1", "revise"],
+                {"from": "parse", "to": "gate"},
+                {
+                    "from": "gate",
+                    "router": "state_equals",
+                    "state_key": "gate",
+                    "branches": {"True": "handoff"},
+                    "default": "done",
+                },
+                {"from": "handoff", "to": "done"},
             ],
+            "parse",
         )
 
     def test_rejects_duplicate_ids(self):
         with pytest.raises(ValueError, match="duplicate"):
-            validate_agent_graph([{"id": "a"}, {"id": "a"}], [])
+            validate_agent_graph([{"id": "a", "kind": "noop"}, {"id": "a", "kind": "noop"}], [])
 
     def test_rejects_unknown_kind(self):
         with pytest.raises(ValueError, match="unknown node kind"):
             validate_agent_graph([{"id": "a", "kind": "bogus"}], [])
 
     def test_rejects_edge_to_unknown_node(self):
-        with pytest.raises(ValueError, match="unknown node"):
-            validate_agent_graph([{"id": "a"}], [["a", "b"]])
+        with pytest.raises(ValueError, match="unknown target node"):
+            validate_agent_graph([{"id": "a", "kind": "noop"}], [{"from": "a", "to": "b"}])
 
     def test_rejects_missing_node_id(self):
         with pytest.raises(ValueError, match="non-empty string id"):
-            validate_agent_graph([{"kind": "start"}], [])
+            validate_agent_graph([{"kind": "noop"}], [])
 
-    def test_rejects_ask_without_prompt(self):
-        with pytest.raises(ValueError, match="prompt"):
-            validate_agent_graph([{"id": "a", "kind": "ask"}], [])
+    def test_rejects_unknown_entry(self):
+        with pytest.raises(ValueError, match="entry references unknown node"):
+            validate_agent_graph([{"id": "a", "kind": "noop"}], [], "ghost")
 
-    def test_rejects_tool_without_tool(self):
-        with pytest.raises(ValueError, match="tool"):
-            validate_agent_graph([{"id": "a", "kind": "tool"}], [])
-
-    def test_rejects_decision_edge_without_label(self):
-        with pytest.raises(ValueError, match="label"):
+    def test_router_rejects_branch_to_unknown_node(self):
+        with pytest.raises(ValueError, match="unknown node"):
             validate_agent_graph(
+                [{"id": "a", "kind": "code"}],
                 [
-                    {"id": "d", "kind": "decision", "prompt": "ok?"},
-                    {"id": "e", "kind": "end"},
+                    {
+                        "from": "a",
+                        "router": "state_equals",
+                        "state_key": "a",
+                        "branches": {"True": "ghost"},
+                    }
                 ],
-                [["d", "e"]],
             )
 
-    def test_rejects_multiple_start_nodes(self):
-        with pytest.raises(ValueError, match="one 'start'"):
-            validate_agent_graph([{"id": "a", "kind": "start"}, {"id": "b", "kind": "start"}], [])
+    def test_router_rejects_empty_branches(self):
+        with pytest.raises(ValueError, match="at least one branch"):
+            validate_agent_graph(
+                [{"id": "a", "kind": "code"}],
+                [{"from": "a", "router": "state_equals", "state_key": "a", "branches": {}}],
+            )
+
+    def test_router_rejects_mixing_with_plain_edge(self):
+        with pytest.raises(ValueError, match="mixes a router edge"):
+            validate_agent_graph(
+                [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}, {"id": "c", "kind": "noop"}],
+                [
+                    {
+                        "from": "a",
+                        "router": "state_equals",
+                        "state_key": "a",
+                        "branches": {"True": "b"},
+                    },
+                    {"from": "a", "to": "c"},
+                ],
+            )

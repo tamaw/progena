@@ -1,0 +1,265 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Routine Graph",
+  "description": "A declarative graph agent compiled into a LangGraph runnable by app.progenitor.routines.factory. Backs the Routines page's per-agent execution graph, stored as the agent's 'graph' document (see app/backend/agent_store.py).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],
+  "properties": {
+    "id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "version": { "type": "string", "minLength": 1 },
+    "entry": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Node id the compiled graph enters after its private seed node."
+    },
+    "nodes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/node" }
+    },
+    "edges": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/$defs/plainEdge" },
+          { "$ref": "#/$defs/routerEdge" }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "node": {
+      "oneOf": [
+        { "$ref": "#/$defs/nodePrompt" },
+        { "$ref": "#/$defs/nodeCode" },
+        { "$ref": "#/$defs/nodeEval" },
+        { "$ref": "#/$defs/nodeSubagent" },
+        { "$ref": "#/$defs/nodeAgent" },
+        { "$ref": "#/$defs/nodeNoop" }
+      ]
+    },
+    "nodePrompt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "prompt" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prompt_template": { "type": "string" },
+            "prompt_file": { "type": "string" },
+            "system_prompt": { "type": "string" }
+          },
+          "oneOf": [
+            {
+              "required": ["prompt_template"],
+              "not": { "required": ["prompt_file"] }
+            },
+            {
+              "required": ["prompt_file"],
+              "not": { "required": ["prompt_template"] }
+            }
+          ]
+        }
+      }
+    },
+    "nodeCode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "code" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "language": { "const": "python" },
+            "expression": { "type": "string" },
+            "expression_file": { "type": "string" },
+            "inputs": {
+              "type": "object",
+              "additionalProperties": { "type": "string" },
+              "description": "local name -> dotted 'data' path, resolved before evaluation."
+            }
+          },
+          "oneOf": [
+            {
+              "required": ["expression"],
+              "not": { "required": ["expression_file"] }
+            },
+            {
+              "required": ["expression_file"],
+              "not": { "required": ["expression"] }
+            }
+          ]
+        }
+      }
+    },
+    "nodeEval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "eval" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "language": { "const": "python" },
+            "expression": { "type": "string" },
+            "expression_file": { "type": "string" },
+            "inputs": {
+              "type": "object",
+              "additionalProperties": { "type": "string" }
+            },
+            "rubric_prompt": {
+              "type": "string",
+              "description": "Used only when neither expression nor expression_file is set: the model is asked this and a response beginning (case-insensitively) with 'true' evaluates true."
+            }
+          },
+          "not": {
+            "allOf": [
+              { "required": ["expression"] },
+              { "required": ["expression_file"] }
+            ]
+          }
+        }
+      }
+    },
+    "nodeSubagent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "subagent" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subagent_name"],
+          "properties": {
+            "subagent_name": { "type": "string", "minLength": 1 },
+            "prompt_template": { "type": "string" },
+            "prompt_file": { "type": "string" }
+          },
+          "oneOf": [
+            {
+              "required": ["prompt_template"],
+              "not": { "required": ["prompt_file"] }
+            },
+            {
+              "required": ["prompt_file"],
+              "not": { "required": ["prompt_template"] }
+            }
+          ]
+        }
+      }
+    },
+    "nodeAgent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "agent" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent_name"],
+          "properties": {
+            "agent_name": { "type": "string", "minLength": 1 },
+            "prompt_template": { "type": "string" },
+            "prompt_file": { "type": "string" }
+          },
+          "oneOf": [
+            {
+              "required": ["prompt_template"],
+              "not": { "required": ["prompt_file"] }
+            },
+            {
+              "required": ["prompt_file"],
+              "not": { "required": ["prompt_template"] }
+            }
+          ]
+        }
+      }
+    },
+    "nodeNoop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "const": "noop" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "x": { "type": ["number", "null"] },
+        "y": { "type": ["number", "null"] },
+        "config": { "type": "object", "additionalProperties": false }
+      }
+    },
+    "plainEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "to": { "type": "string", "minLength": 1 }
+      }
+    },
+    "routerEdge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "router", "state_key", "branches"],
+      "properties": {
+        "from": { "type": "string", "minLength": 1 },
+        "router": { "const": "state_equals" },
+        "state_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Dotted path read from 'data' after the source node's update is merged."
+        },
+        "branches": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "default": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}
