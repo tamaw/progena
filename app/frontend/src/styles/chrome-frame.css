@@ -4860,19 +4860,24 @@ body,
   box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
 }
 
-.repo-source-row__mark--synced {
+.repo-source-row__mark--ok {
   background: var(--color-success);
   box-shadow: 0 0 0 3px rgba(76, 199, 144, 0.12);
 }
 
-.repo-source-row__mark--review {
-  background: var(--color-info);
-  box-shadow: 0 0 0 3px rgba(111, 150, 255, 0.14);
+.repo-source-row__mark--muted {
+  background: var(--color-text-muted);
+  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
 }
 
 .repo-source-row__mark--warning {
   background: var(--color-warning);
   box-shadow: 0 0 0 3px rgba(247, 177, 70, 0.14);
+}
+
+.repo-source-row__mark--error {
+  background: var(--color-error);
+  box-shadow: 0 0 0 3px rgba(224, 82, 74, 0.14);
 }
 
 .repo-source-row__top {
