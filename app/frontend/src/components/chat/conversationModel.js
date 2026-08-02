@@ -1,4 +1,5 @@
 import { extractMarkdownImages } from '../../lib/markdown';
+import { PERSISTED_CATEGORIES, categoryForEventType } from './streamFilters';
 
 export const CHAT_AGENT_NAME = 'Progenitor';
 export const DEFAULT_CHAT_TITLE = 'New chat';
@@ -133,19 +134,42 @@ function eventRenderSignature(event) {
   };
 }
 
+// Backend checkpoints never persist ephemeral/debug-only stream event
+// categories (see PERSISTED_CATEGORIES), so a just-finalized local message
+// always carries strictly more streamEvents than the canonical reconciliation
+// fetch that follows it. Comparing on the full unfiltered list made every
+// foreground send's own completion look non-equivalent to its own canonical
+// echo, forcing an unwanted swap-and-remount (visible as a "refresh"/flicker,
+// with the debug-only events disappearing) moments after every reply. Only
+// persisted categories are meaningful for deciding whether the canonical copy
+// actually differs from what's on screen.
+function persistedStreamEvents(streamEvents) {
+  if (!Array.isArray(streamEvents)) {
+    return [];
+  }
+  return streamEvents.filter((event) => (
+    PERSISTED_CATEGORIES.has(categoryForEventType(event?.eventType, event?.metadata))
+  ));
+}
+
+// tokenCount/reasoningTokenCount/cacheReadTokenCount/model are deliberately
+// excluded here. The locally-streamed tokenCount is a crude per-chunk
+// counter (see liveAssistantTurnModel.js's `next.tokenCount += 1`), not the
+// backend's real tokenizer-based count, so it never matches the canonical
+// value the reconciliation fetch returns -- and `model` is frequently unset
+// on the local turn. Including either meant every foreground send's own
+// reconciliation looked non-equivalent to its own canonical echo purely on
+// cosmetic metadata, forcing an unwanted swap-and-remount of the row the
+// user is looking at (visible as a "refresh" moments after every reply).
+// Those numbers self-correct the next time the thread is genuinely reloaded
+// (switch/refresh); they aren't worth discarding the row over.
 function messageRenderSignature(message) {
   return {
     role: typeof message?.role === 'string' ? message.role : '',
     content: typeof message?.content === 'string' ? message.content : '',
-    tokenCount: Number.isFinite(message?.tokenCount) ? message.tokenCount : 0,
-    reasoningTokenCount: Number.isFinite(message?.reasoningTokenCount) ? message.reasoningTokenCount : 0,
-    cacheReadTokenCount: Number.isFinite(message?.cacheReadTokenCount) ? message.cacheReadTokenCount : 0,
     reasoningText: typeof message?.reasoningText === 'string' ? message.reasoningText : '',
     agentName: typeof message?.agentName === 'string' ? message.agentName : '',
-    model: typeof message?.model === 'string' ? message.model : '',
-    streamEvents: Array.isArray(message?.streamEvents)
-      ? message.streamEvents.map(eventRenderSignature)
-      : [],
+    streamEvents: persistedStreamEvents(message?.streamEvents).map(eventRenderSignature),
   };
 }
 

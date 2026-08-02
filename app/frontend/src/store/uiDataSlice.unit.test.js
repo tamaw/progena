@@ -22,6 +22,8 @@ import reducer, {
   selectChatReconciliationState,
   selectErroredChatIds,
   selectGeneratingChatIds,
+  selectRequestIdByThreadId,
+  selectRequestIdForThread,
   selectChatSessions,
   selectKanbanBoard,
   selectPromptContentEntry,
@@ -297,6 +299,57 @@ describe('applyUiEvent reducer', () => {
     expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
     expect(selectUnreadChatIds({ uiData: s })).toEqual(['thread-background']);
     expect(selectErroredChatIds({ uiData: s })).toEqual(['thread-background']);
+  });
+
+  it('tracks generatingChatIds and requestIdByThreadId for the currently-viewed thread too', () => {
+    // A generation another surface (quick chat, another tab) started into the
+    // thread this tab already has selected as active must still be
+    // discoverable, so a spectator can attach to it.
+    let s = reducer(undefined, requestChatSessionDetail.pending('rid', {
+      chatsUrl: '/x', threadId: 'thread-active', requestId: 'REQ1',
+    }));
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: { session: { thread_id: 'thread-active' }, request_id: 'REQ1' },
+    }));
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.started',
+      payload: { request_id: 'REQ_OTHER', thread_id: 'thread-active' },
+    }));
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['thread-active']);
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-active')).toBe('REQ_OTHER');
+    expect(selectRequestIdByThreadId({ uiData: s })).toEqual({ 'thread-active': 'REQ_OTHER' });
+
+    s = reducer(s, applyUiEvent({
+      type: 'chat.response.completed',
+      payload: { request_id: 'REQ_OTHER' },
+    }));
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual([]);
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-active')).toBeNull();
+  });
+
+  it('seeds requestIdByThreadId from active_request_id on chat.session.selected (late-join discovery)', () => {
+    let s = reducer(undefined, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'REQ1',
+        session: { thread_id: 'thread-late', active_request_id: 'REQ_INFLIGHT' },
+      },
+    }));
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-late')).toBe('REQ_INFLIGHT');
+    expect(selectGeneratingChatIds({ uiData: s })).toEqual(['thread-late']);
+
+    // A later selection with no active_request_id (generation already
+    // finished by the time this fetch resolved) clears the stale mapping.
+    s = reducer(s, applyUiEvent({
+      type: 'chat.session.selected',
+      payload: {
+        request_id: 'REQ2',
+        session: { thread_id: 'thread-late', active_request_id: null },
+      },
+    }));
+    expect(selectRequestIdForThread({ uiData: s }, 'thread-late')).toBeNull();
   });
 
   it('clearActiveChatSession resets the active backend selection', () => {

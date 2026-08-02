@@ -20,11 +20,14 @@ import {
   fetchChatMessages,
   requestChatSessionDetail,
   requestChatSessionReconciliation,
+  savePreferences,
   selectActiveChatSession,
   selectActiveChatSessionState,
   selectChatReconciliationState,
   selectChatSessions,
   selectChatSessionsState,
+  selectPreferences,
+  selectPreferencesSaveRequest,
   updateChatSessionMetadata,
 } from '../store/uiDataSlice';
 import ChatInput from '../components/chat/ChatInput';
@@ -448,13 +451,15 @@ function ConversationPage() {
   const { threadId: urlThreadId } = useParams();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
-  const { connectionState, sendMessageStream, cancelStream } = useChatApi();
+  const { connectionState, sendMessageStream, cancelStream, observeResponseStream } = useChatApi();
   const { show } = useNotifications();
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
   const activeBackendChat = useSelector(selectActiveChatSession);
   const activeBackendChatState = useSelector(selectActiveChatSessionState);
   const chatReconciliationState = useSelector(selectChatReconciliationState);
+  const preferences = useSelector(selectPreferences);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
   const initialQuickChatHandoffRef = useRef(undefined);
   if (initialQuickChatHandoffRef.current === undefined) {
     initialQuickChatHandoffRef.current = loadQuickChatHandoff(config.storage.quickChatHandoff);
@@ -651,6 +656,7 @@ function ConversationPage() {
     threadId,
     sendMessageStream,
     cancelStream,
+    observeResponseStream,
     dispatch,
     getApiUrl,
     show,
@@ -835,6 +841,12 @@ function ConversationPage() {
     if (urlThreadId) {
       return undefined;
     }
+    // Need the roster (to confirm the last-viewed chat still exists) and
+    // preferences (to know which chat that was) before deciding between
+    // reopening it and falling back to a fresh draft.
+    if (!backendChatSessionsState.loaded || !preferences.loaded) {
+      return undefined;
+    }
 
     let cancelled = false;
 
@@ -851,6 +863,38 @@ function ConversationPage() {
       if (quickChatHandoff) {
         localStorage.removeItem(config.storage.quickChatHandoff);
         initialQuickChatHandoffRef.current = null;
+      }
+
+      // A quick-chat handoff is an explicit, in-the-moment intent ("promote
+      // this scratch conversation") and always wins. Otherwise, a bare visit
+      // to Chat reopens whatever the user last viewed rather than starting a
+      // new chat every time -- but only once that chat actually has content
+      // (see the persistence effect below); an untouched empty draft never
+      // becomes "last viewed", so this can't get stuck reopening a blank chat.
+      if (!quickChatHandoff && preferences.lastOpenChatId) {
+        const lastOpenChatId = preferences.lastOpenChatId;
+        const lastOpenChatExists = backendChatSessions.some(
+          (chat) => chat.thread_id === lastOpenChatId,
+        );
+        if (lastOpenChatExists) {
+          try {
+            if (!cancelled && !selectedBackendChatIdRef.current) {
+              await openBackendChat(lastOpenChatId);
+            }
+          } catch (error) {
+            if (!cancelled) {
+              // Keep the routed id and let the active detail error render in
+              // place, same as a failed routed open -- falling back to a
+              // fresh draft here would hide the actual failure.
+              console.warn('[ConversationPage] Failed to reopen last chat:', error);
+            }
+          } finally {
+            if (!cancelled) {
+              setDraftBootstrapSettled(true);
+            }
+          }
+          return;
+        }
       }
 
       try {
@@ -875,7 +919,16 @@ function ConversationPage() {
     return () => {
       cancelled = true;
     };
-  }, [acquireDraftChat, config.storage.quickChatHandoff, openBackendChat, urlThreadId]);
+  }, [
+    acquireDraftChat,
+    backendChatSessions,
+    backendChatSessionsState.loaded,
+    config.storage.quickChatHandoff,
+    openBackendChat,
+    preferences.lastOpenChatId,
+    preferences.loaded,
+    urlThreadId,
+  ]);
 
   useEffect(() => {
     const handlePromotedQuickChat = (event) => {
@@ -975,7 +1028,20 @@ function ConversationPage() {
         .filter(Boolean)
       : [];
     if (!areChatTranscriptsEquivalent(messages, canonicalMessages)) {
-      setMessages(mergeCanonicalMessages(messages, canonicalMessages));
+      // A spectated turn (someone else's send into a thread this page is
+      // just watching) never had the interleaved user message locally --
+      // only the assistant reply gets synthesized (see useChatStream's
+      // spectate finalize). That leaves `messages` one entry short of the
+      // canonical transcript, which would misalign mergeCanonicalMessages'
+      // by-index comparison and swap out every trailing row (a multi-row
+      // remount/flicker) instead of just the one row that legitimately
+      // needs its backend identity. Adopt the canonical list wholesale for
+      // that case; self-initiated sends keep the identity-preserving merge.
+      const isSpectatedReconciliation = typeof intent.streamId === 'string'
+        && intent.streamId.startsWith('spectate_');
+      setMessages(isSpectatedReconciliation
+        ? canonicalMessages
+        : mergeCanonicalMessages(messages, canonicalMessages));
       // Canonical reconciliation can replace the locally committed row with a
       // backend identity. The frozen live turn then cannot hide that row by
       // its client id, so hand visual ownership to the canonical transcript.
@@ -1035,6 +1101,31 @@ function ConversationPage() {
       localStorage.removeItem(config.storage.chatHistory);
     }
   }, [activeStreamIdRef, activeBackendChat, activeBackendChatState, backgroundOriginChatIdRef, config.storage.chatHistory, selectedBackendChatId, setIsGenerating, setLiveAssistantTurn]);
+
+  // Remember the last chat actually viewed/used (once it has content) so a
+  // bare visit to Chat can reopen it instead of always starting a new chat --
+  // see the bootstrap effect above. Keyed off local `messages`, not the
+  // backend detail fetch, so this also fires the moment a brand-new draft's
+  // first message lands, not just when reopening an existing chat.
+  const lastPersistedLastOpenChatIdRef = useRef(null);
+  useEffect(() => {
+    if (!threadId || messages.length === 0 || !preferences.loaded) {
+      return;
+    }
+    if (
+      lastPersistedLastOpenChatIdRef.current === threadId
+      || preferences.lastOpenChatId === threadId
+    ) {
+      lastPersistedLastOpenChatIdRef.current = threadId;
+      return;
+    }
+    lastPersistedLastOpenChatIdRef.current = threadId;
+    dispatch(savePreferences({
+      preferencesUrl: getApiUrl('preferences'),
+      ...preferencesSaveRequest,
+      lastOpenChatId: threadId,
+    }));
+  }, [threadId, messages.length, preferences.loaded, preferences.lastOpenChatId, dispatch, getApiUrl, preferencesSaveRequest]);
 
   // Prepends an older-messages page fetched via "Load earlier messages" into
   // local `messages` state. Deliberately independent of the reconciliation
