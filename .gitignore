@@ -107,3 +107,4 @@ tmp/
 *-cwd
 .ruff_cache
 .local/
+.perf/

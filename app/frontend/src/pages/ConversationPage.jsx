@@ -583,6 +583,14 @@ function ConversationPage() {
   // Current selection, mirrored into a ref so a stream that finishes in the
   // background can tell whether the user is now viewing its origin chat.
   const selectedBackendChatIdRef = useRef(null);
+  // Mirrors `backendChatSessions` so the draft-bootstrap effect below can
+  // read the current roster without depending on the array itself -- that
+  // array gets a new reference every time a draft session is created or
+  // updated, which is exactly what this effect's own bootstrap causes. Using
+  // it as a dependency turned the effect into a feedback loop: run ->
+  // acquire draft -> roster changes -> run again -> acquire another draft,
+  // hammering POST /chats/draft continuously even while the page sits idle.
+  const backendChatSessionsRef = useRef(backendChatSessions);
   const pendingOpenThreadIdRef = useRef(null);
   const selectionIntentRef = useRef(null);
   // Track recently added scheduled messages to deduplicate.
@@ -593,6 +601,10 @@ function ConversationPage() {
   useEffect(() => {
     selectedBackendChatIdRef.current = selectedBackendChatId;
   }, [selectedBackendChatId]);
+
+  useEffect(() => {
+    backendChatSessionsRef.current = backendChatSessions;
+  }, [backendChatSessions]);
 
   // Reload the currently-open backend chat's detail (used when a background
   // stream for the chat the user is viewing finishes — so the reply shows
@@ -873,7 +885,7 @@ function ConversationPage() {
       // becomes "last viewed", so this can't get stuck reopening a blank chat.
       if (!quickChatHandoff && preferences.lastOpenChatId) {
         const lastOpenChatId = preferences.lastOpenChatId;
-        const lastOpenChatExists = backendChatSessions.some(
+        const lastOpenChatExists = backendChatSessionsRef.current.some(
           (chat) => chat.thread_id === lastOpenChatId,
         );
         if (lastOpenChatExists) {
@@ -921,7 +933,6 @@ function ConversationPage() {
     };
   }, [
     acquireDraftChat,
-    backendChatSessions,
     backendChatSessionsState.loaded,
     config.storage.quickChatHandoff,
     openBackendChat,
