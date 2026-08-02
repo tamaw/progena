@@ -376,7 +376,7 @@ Runtime:
 
 DeepAgent virtual filesystem:
   -> /config/*.json reads/writes StateManager documents
-  -> /config/tasks/* reads/writes kanban documents
+  -> /tasks/* reads/writes kanban documents
   -> /workflows/*.json reads/writes workflow documents
 ```
 

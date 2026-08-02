@@ -366,7 +366,7 @@ function normalizeChecklistItems(items) {
     .filter((item) => item.title);
 }
 
-// Checklists are fully dynamic: the agent (via `/config/tasks/`) or the user can
+// Checklists are fully dynamic: the agent (via `/tasks/`) or the user can
 // add any number of named checklists. A legacy single `subtasks` list is
 // surfaced as one default checklist for backward compatibility.
 function normalizeChecklists(metadata) {
@@ -599,7 +599,7 @@ export default function TasksPage({ context = null }) {
     : 'Not blocked';
 
   // Creation is delegated to the Progenitor agent (same pattern as Tools and
-  // Schedules): there is no local create form. The agent writes `/config/tasks/`
+  // Schedules): there is no local create form. The agent writes `/tasks/`
   // entries and the new card arrives here live via the kanban.snapshot event.
   const openCreateTask = useCallback(() => {
     window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
