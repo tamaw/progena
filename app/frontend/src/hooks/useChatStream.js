@@ -216,12 +216,25 @@ export function useChatStream({
 
     if (!requestId) {
       if (spectatedRequestIdRef.current) {
+        const finishedStreamId = `spectate_${spectatedRequestIdRef.current}`;
         stopSpectating();
-        // The generation this hook was spectating just ended (or the viewer
-        // navigated away from it) — pick up the persisted, canonical reply
-        // the same way a self-initiated background stream's completion does.
+        // Finalize locally first (same shape a self-initiated foreground send
+        // ends with) and hand off to the existing canonical-reconciliation
+        // flow (mergeCanonicalMessages) rather than a full messages reload —
+        // that flow preserves ordering/scroll position; wholesale replacing
+        // `messages` mid-conversation visibly jumped the pane to the top.
+        const finalTurn = liveTurnRef.current?.streamId === finishedStreamId ? liveTurnRef.current : null;
+        const committed = finalTurn
+          ? finalizeLiveAssistantTurn(finalTurn, { status: 'completed', now: Date.now() })
+          : null;
+        if (committed) {
+          setMessages((prevMessages) => prevMessages.concat(committed));
+          setLiveAssistantTurn(committed);
+        } else {
+          setLiveAssistantTurn(null);
+        }
         if (threadId) {
-          reloadOpenChat?.(threadId);
+          requestForegroundReconciliation({ threadId, streamId: finishedStreamId });
         }
       }
       return;
@@ -254,7 +267,8 @@ export function useChatStream({
     backgroundGeneratingChatIds,
     requestIdByThreadId,
     observeResponseStream,
-    reloadOpenChat,
+    requestForegroundReconciliation,
+    setMessages,
     setLiveAssistantTurn,
     stopSpectating,
   ]);
