@@ -27,12 +27,14 @@ def validate_plugins_payload(data: Any) -> dict[str, Any]:
 
     Shape: no other top-level keys; each key is ``<marketplace>/<plugin>``,
     each value validated against ``data/schemas/plugin_entry.schema.v1.json``
-    (the enforced floor). ``source`` accepts either a relative-path string or
-    a structured object (see the schema's ``oneOf``) -- checked for truthiness
-    by hand since a schema-level non-empty constraint can't cover both shapes
-    cleanly. Runtime-owned fields (installed_version, installed_digest,
-    available_version, status, status_message, skills, installed_at,
-    last_checked) are accepted but never required; the reconciler manages them.
+    (the enforced floor, including ``source``'s discriminated oneOf --
+    ``{"source": "github", "repo": ...}`` or ``{"source": "url"|"git-subdir",
+    "url": ...}`` or a relative-path string; see
+    ``app/progenitor/plugins/sources.py:_resolve_plugin_source`` for exactly
+    what each source_type consumes). Runtime-owned fields (installed_version,
+    installed_digest, available_version, status, status_message, skills,
+    installed_at, last_checked) are accepted but never required; the
+    reconciler manages them.
     """
     if not isinstance(data, dict):
         raise ValueError("top level must be a JSON object")
@@ -49,9 +51,6 @@ def validate_plugins_payload(data: Any) -> dict[str, Any]:
             raise ValueError(f"plugin key '{key}' must look like <marketplace>/<plugin>")
         if not isinstance(entry, dict):
             raise ValueError(f"plugin '{key}' must be an object")
-        source = entry.get("source")
-        if not source:
-            raise ValueError(f"plugin '{key}' is missing 'source'")
         check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
 
     return data
