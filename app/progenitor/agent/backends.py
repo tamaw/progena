@@ -19,8 +19,8 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, and preferences.json, plus the /config/tasks/ task directory
-    (board.json and per-task <id>.md files).
+    agents.json, repos.json, and preferences.json, plus the /config/tasks/ task
+    directory (board.json and per-task <id>.md files).
     Writes persist via the StateManager; the runtime's store listener handles
     live MCP re-discovery, so no write-hook callback is needed here.
 
@@ -58,6 +58,7 @@ from .state_backend import (
     create_plugins_state_file,
     create_preferences_state_file,
     create_registry_state_file,
+    create_repos_state_file,
     create_schedule_state_file,
 )
 
@@ -171,6 +172,7 @@ def create_progenitor_backend(
             create_knowledge_state_file,
             create_schedule_state_file,
             create_registry_state_file,
+            create_repos_state_file,
             create_health_state_file,
             create_preferences_state_file,
         ]

@@ -163,7 +163,9 @@ def validate_marketplaces_document(content: str) -> JsonDoc:
 
     for name, entry in marketplaces.items():
         if not _MARKETPLACE_NAME_RE.match(name):
-            raise ValueError(f"marketplace name '{name}' must be kebab-case (lowercase, digits, hyphens)")
+            raise ValueError(
+                f"marketplace name '{name}' must be kebab-case (lowercase, digits, hyphens)"
+            )
         if not isinstance(entry, dict):
             raise ValueError(f"marketplace '{name}' must be an object")
         source = entry.get("source")
@@ -207,6 +209,58 @@ def validate_registry_document(content: str) -> JsonDoc:
     tools = data.get("tools")
     if not isinstance(tools, list):
         raise ValueError("missing 'tools' array")
+
+    return data
+
+
+_REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_REPO_ACCESS_VALUES = {"read", "write"}
+
+
+def validate_repos_document(content: str) -> JsonDoc:
+    """Parse + validate a ``repos.json`` payload (the ``repos`` document).
+
+    Shape: ``{"repos": {"<id>": {...}}}``, no other top-level keys. Each entry
+    declares a repository the operator wants tracked; git state (branches,
+    commits, worktrees) is scanned separately by the heartbeat and never lives
+    in this document.
+    """
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("top level must be a JSON object")
+    extra_keys = set(data) - {"repos"}
+    if extra_keys:
+        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+
+    repos = data.get("repos")
+    if not isinstance(repos, dict):
+        raise ValueError("missing 'repos' object")
+
+    for repo_id, entry in repos.items():
+        if not _REPO_ID_RE.match(repo_id):
+            raise ValueError(f"repo id '{repo_id}' must be kebab-case (lowercase, digits, hyphens)")
+        if not isinstance(entry, dict):
+            raise ValueError(f"repo '{repo_id}' must be an object")
+        name = entry.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"repo '{repo_id}' is missing 'name'")
+        local_path = entry.get("local_path")
+        if not isinstance(local_path, str) or not local_path.strip():
+            raise ValueError(f"repo '{repo_id}' is missing 'local_path'")
+        access = entry.get("access")
+        if access not in _REPO_ACCESS_VALUES:
+            raise ValueError(
+                f"repo '{repo_id}' access must be one of {sorted(_REPO_ACCESS_VALUES)}"
+            )
+        remote_url = entry.get("remote_url")
+        if remote_url is not None and not isinstance(remote_url, str):
+            raise ValueError(f"repo '{repo_id}' remote_url must be a string")
+        if "created_at" not in entry:
+            entry["created_at"] = utcnow_isoformat()
+        entry["updated_at"] = utcnow_isoformat()
 
     return data
 
@@ -597,6 +651,35 @@ def create_registry_state_file(
         save=save,
         validate=validate_registry_document,
         default={"agents": [], "tools": []},
+        on_change=on_change,
+    )
+
+
+def create_repos_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``repos.json`` state file backed by the StateManager.
+
+    Backs the ``repos`` document (``{"repos": {"<id>": {...}}}``); the operator
+    declares repositories here (name, remote, local worktree path, read/write
+    access) via the Repositories page or the agent directly. Live git state
+    (branches, commits, worktrees) is scanned by the heartbeat into a separate
+    ``repo_scan`` document, never written through this file.
+    """
+
+    async def save(doc: JsonDoc) -> None:
+        if not isinstance(doc, dict):
+            raise ValueError("repos.json must be a JSON object")
+        await state_manager.save_repos(doc)
+
+    return _simple_state_file(
+        "repos.json",
+        get=state_manager.get_repos,
+        save=save,
+        validate=validate_repos_document,
+        default={"repos": {}},
         on_change=on_change,
     )
 

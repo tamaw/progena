@@ -124,6 +124,7 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/knowledge.json`: Knowledge-base settings
 - `/config/schedule.json`: Scheduled tasks
 - `/config/agents.json`: A2A agent registry and runtime tools
+- `/config/repos.json`: Declared repositories (name, remote, local worktree path, read/write access); live git state (branches, commits) is scanned separately and not agent-editable
 - `/config/preferences.json`: User profile and UI settings (display name, timezone, theme, nav/panel layout)
 - `/config/health.json`: Read-only heartbeat status
 - `/config/tasks/board.json` and `/config/tasks/<id>.md`: Kanban structure and cards

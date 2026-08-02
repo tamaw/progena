@@ -5309,6 +5309,56 @@ body,
   border-color: transparent;
 }
 
+.repo-create-form {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  margin: 0 10px 10px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.repo-create-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.repo-create-form__field span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.repo-create-form__field input,
+.repo-create-form__field select {
+  padding: 7px 9px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 12.5px;
+}
+
+.repo-create-form__field input:focus,
+.repo-create-form__field select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.repo-create-form__error {
+  color: var(--color-error);
+  font-size: 11.5px;
+}
+
+.repo-create-form__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .repo-profile__body {
   width: 100%;
   max-width: none;
@@ -5389,42 +5439,6 @@ body,
   margin-left: auto;
 }
 
-.repo-kv-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 24px;
-  padding: 14px 18px;
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-}
-
-.repo-kv {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  justify-content: space-between;
-  min-width: 0;
-  padding: 4px 0;
-  font-size: 12.5px;
-}
-
-.repo-kv__label {
-  color: var(--color-text-muted);
-}
-
-.repo-kv__value {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  font-weight: 550;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .repo-list {
   display: grid;
   gap: 6px;
@@ -5473,8 +5487,7 @@ body,
 }
 
 .repo-branch__author,
-.repo-commit__time,
-.repo-agent-row__count {
+.repo-commit__time {
   color: var(--color-text-muted);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
@@ -5482,7 +5495,7 @@ body,
 
 .repo-commit {
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 10px;
   align-items: center;
   padding: 8px 0;
@@ -5492,20 +5505,6 @@ body,
 
 .repo-commit:last-child {
   border-bottom: 0;
-}
-
-.repo-commit__avatar,
-.repo-agent-row__avatar {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  color: #fff;
-  border-radius: 50%;
-  font-size: 10px;
-  font-weight: 700;
 }
 
 .repo-commit__message {
@@ -5534,39 +5533,6 @@ body,
   font-size: 12px;
   line-height: 1.85;
   white-space: pre;
-}
-
-.repo-agent-row {
-  display: grid;
-  grid-template-columns: 28px minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 8px 0;
-  color: var(--color-text-primary);
-  font-size: 12px;
-}
-
-.repo-agent-row__avatar {
-  width: 24px;
-  height: 24px;
-}
-
-.repo-agent-row__body {
-  display: grid;
-  min-width: 0;
-}
-
-.repo-agent-row__title {
-  color: var(--color-text-primary);
-  font-weight: 600;
-}
-
-.repo-agent-row__detail {
-  overflow: hidden;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .tools-pane {
@@ -7637,7 +7603,6 @@ body,
 
   .repositories-hero__metrics,
   .repo-intel-grid,
-  .repo-kv-grid,
   .tools-metrics,
   .agents-metrics,
   .tools-connection-grid {
@@ -7728,20 +7693,16 @@ body,
   }
 
   .repo-branch,
-  .repo-commit,
-  .repo-agent-row {
+  .repo-commit {
     grid-template-columns: minmax(0, 1fr) auto;
   }
 
-  .repo-branch__icon,
-  .repo-commit__avatar,
-  .repo-agent-row__avatar {
+  .repo-branch__icon {
     display: none;
   }
 
   .repo-branch__author,
-  .repo-commit__time,
-  .repo-agent-row__count {
+  .repo-commit__time {
     justify-self: end;
   }
 

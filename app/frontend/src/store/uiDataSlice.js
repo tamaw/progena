@@ -27,8 +27,9 @@ import * as workflows from './uiData/workflows';
 import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
+import * as repos from './uiData/repos';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -51,8 +52,7 @@ const domainReducers = domains.reduce(
 // here would collide with that event type's real handler in the merged
 // `eventHandlers` map above. Maps a realtime event type to the nav route that
 // owns it; only pages with a real live-update signal are tracked (Chat/Inbox
-// already have their own precise unread tracking; Repositories has no events
-// to drive it yet).
+// already have their own precise unread tracking).
 const NAV_ACTIVITY_EVENT_ROUTES = {
   'widgets.updated': '/dashboard',
   'kanban.snapshot': '/tasks',
@@ -72,6 +72,7 @@ const NAV_ACTIVITY_EVENT_ROUTES = {
   'workflow.run.updated': '/workflows',
   'workflow.run.completed': '/workflows',
   'workflow.run.failed': '/workflows',
+  'repositories.snapshot': '/repositories',
 };
 
 const navActivityInitialState = {
@@ -281,5 +282,17 @@ export {
   selectMarketplaceCatalog,
   selectPluginSkillContent,
 } from './uiData/marketplaces';
+
+export {
+  fetchRepos,
+  fetchRepoDetail,
+  createRepo,
+  updateRepo,
+  deleteRepo,
+  selectRepos,
+  selectReposState,
+  selectWorkspaceSignal,
+  selectRepoDetail,
+} from './uiData/repos';
 
 export default uiDataSlice.reducer;

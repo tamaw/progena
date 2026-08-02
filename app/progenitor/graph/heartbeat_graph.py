@@ -131,6 +131,7 @@ from ..nodes.registry import (
     startup_discover_agents_node,
     startup_refresh_registry_node,
 )
+from ..nodes.repo_scan import refresh_repo_scan_node
 from ..nodes.schedule import scheduled_completion_node, scheduler_tick_node
 from ..state.models import ProgenitorState, redact_secrets
 
@@ -186,6 +187,7 @@ def validate_heartbeat_context(context: HeartbeatContext) -> None:
         ("mcp_refresh_seconds", context.mcp_refresh_seconds),
         ("plugin_update_check_seconds", context.plugin_update_check_seconds),
         ("registry_refresh_seconds", context.registry_refresh_seconds),
+        ("repo_scan_seconds", context.repo_scan_seconds),
         ("heartbeat_health_seconds", context.heartbeat_health_seconds),
         ("input_timeout", context.input_timeout),
     ):
@@ -257,6 +259,7 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_node(
         "registry_refresh", _guard_maintenance_node("registry_refresh", refresh_registry_node)
     )
+    graph.add_node("repo_scan", _guard_maintenance_node("repo_scan", refresh_repo_scan_node))
     graph.add_node("idle_health", _guard_maintenance_node("idle_health", idle_health_tick_node))
     graph.add_node("setup", _guard_maintenance_node("setup", cycle_setup_node))
     graph.add_node("cycle", cycle_node)
@@ -297,7 +300,8 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_edge("acp_apply", "acp_notify")
     graph.add_edge("acp_notify", "registry_discover")
     graph.add_edge("registry_discover", "registry_refresh")
-    graph.add_edge("registry_refresh", "idle_health")
+    graph.add_edge("registry_refresh", "repo_scan")
+    graph.add_edge("repo_scan", "idle_health")
     graph.add_edge("idle_health", END)
     graph.add_conditional_edges(
         "setup",

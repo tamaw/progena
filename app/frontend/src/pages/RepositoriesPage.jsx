@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import {
   PaneList,
   PaneListFooter,
   PaneListFilters,
   PaneListToolbar,
   PaneListSearch,
-  PaneListSortButton,
   PaneListVirtualized,
+  PaneEmptyState,
 } from '../components/layout/PaneList';
 import DetailHeader, {
   CloneActionIcon,
@@ -18,477 +19,383 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
+import { useConfig } from '../context/ConfigContext';
+import { selectRealtimeConnected } from '../store/realtimeSlice';
+import {
+  createRepo,
+  deleteRepo,
+  fetchRepoDetail,
+  fetchRepos,
+  selectRepoDetail,
+  selectRepos,
+  selectReposState,
+  selectWorkspaceSignal,
+} from '../store/uiDataSlice';
 
-const SOURCE_FILTERS = ['All sources', 'GitHub', 'Local', 'Warnings'];
+const SOURCE_FILTERS = ['All sources', 'Remote', 'Local', 'Dirty'];
 
-const INITIAL_REPOSITORIES = [
-  {
-    id: 'repo-progenitor',
-    name: 'progenitor',
-    source: 'GitHub',
-    url: 'github.com/tamaw/progenitor',
-    branch: 'main',
-    status: 'active',
-    health: 'Synced',
-    summary: 'agent workspace · python/ts',
-    changed: 24,
-    prs: 5,
-    checks: '7/7',
-    updated: '4m',
-    owner: 'Progenitor',
-    accent: 'green',
-  },
-  {
-    id: 'repo-chrome',
-    name: 'agent-ui-kit',
-    source: 'GitHub',
-    url: 'github.com/tamaw/progenitor/tree/chrome',
-    branch: 'feature/chrome',
-    status: 'review',
-    health: 'Review',
-    summary: 'frontend shell · react/vite',
-    changed: 18,
-    prs: 3,
-    checks: '6/7',
-    updated: '19m',
-    owner: 'UI Agent',
-    accent: 'blue',
-  },
-  {
-    id: 'repo-runtime',
-    name: 'runtime-gateway',
-    source: 'Local',
-    url: './app/backend',
-    branch: 'main',
-    status: 'synced',
-    health: 'Ready',
-    summary: 'FastAPI · SSE streaming',
-    changed: 6,
-    prs: 0,
-    checks: '5/5',
-    updated: '42m',
-    owner: 'Runtime',
-    accent: 'purple',
-  },
-  {
-    id: 'repo-mcp',
-    name: 'mcp-registry',
-    source: 'GitHub',
-    url: 'github.com/tamaw/progenitor/tree/mcp',
-    branch: 'feature/tools',
-    status: 'warning',
-    health: 'Warning',
-    summary: 'tool registry · MCP servers',
-    changed: 11,
-    prs: 2,
-    checks: '4/5',
-    updated: '1h',
-    owner: 'Tools',
-    accent: 'amber',
-  },
-  {
-    id: 'repo-docs',
-    name: 'ops-playbooks',
-    source: 'Local',
-    url: './docs',
-    branch: 'main',
-    status: 'idle',
-    health: 'Indexed',
-    summary: 'docs · prompt packs',
-    changed: 3,
-    prs: 0,
-    checks: '2/2',
-    updated: '2h',
-    owner: 'Knowledge',
-    accent: 'slate',
-  },
+const ACCESS_OPTIONS = [
+  { value: 'read', label: 'Read only' },
+  { value: 'write', label: 'Read / write' },
 ];
 
-const REPOSITORY_DETAILS = {
-  'repo-progenitor': {
-    handle: 'github.com/tamaw/progenitor · agent workspace',
-    branchState: 'main · clean',
-    badges: ['6 sub-projects'],
-    commits: '1,284',
-    branches: '14',
-    openPullRequests: '5',
-    stats: [
-      { label: 'Commits (30d)', value: '418', detail: '241 by agents · 177 by humans' },
-      { label: 'Open PRs', value: '5', detail: '2 ready · 3 in review' },
-      { label: 'CI', value: '96%', detail: 'passing on main' },
-      { label: 'Coverage', value: '74.2%', detail: '+0.3% this week' },
-    ],
-    subProjects: [
-      ['backend', 'app/backend · fastapi'],
-      ['frontend', 'app/frontend · react/vite'],
-      ['agent loop', 'app/progenitor · langgraph'],
-      ['runtime', 'app/progenitor/runtime · sse'],
-      ['tools', 'app/progenitor/tools · python'],
-      ['docs', 'docs/ · markdown'],
-    ],
-    branchList: [
-      ['main', 'protected · default', 'a4f2e1c', '@progenitor · 4m ago'],
-      ['feature/chrome', '', '+24 / -8', '@builder · 19m ago'],
-      ['feature/tools', '', '+11 / -3', '@tools · 1h ago'],
-      ['fix/stream-order', '', '+8 / -2', '@reviewer · 3h ago'],
-      ['chore/eval-refresh', '', '+4 / -1', '@observer · Wed'],
-    ],
-    commitsList: [
-      ['P', '#2f6ff6', 'feat(chrome): tighten repository profile view', 'a4f2e1c', '4m'],
-      ['B', '#a78bfa', 'refactor(chat): promote reasoning entries into timeline', '9b32d10', '1h'],
-      ['O', '#22a06b', 'test(runtime): cover streamed heartbeat callbacks', '7a1e8c4', '3h'],
-      ['J', '#ef6c2a', 'fix(migrate): guard against stale quick chat sessions', '5db0119', 'Wed'],
-      ['P', '#2f6ff6', 'chore: refresh frontend build artifacts', '3c9f44d', 'Wed'],
-    ],
-    tree: `app/
-  -> backend/ · FastAPI gateway
-  -> frontend/ · chrome + pages
-app/progenitor/
-  -> graph/ · LangGraph routing
-  -> runtime/ · loop + queues
-  -> tools/ · system tools
-docs/ · architecture + evaluations
-tests/ · pytest suites`,
-    agents: [
-      ['P', '#2f6ff6', 'Progenitor', 'read · write · reason · last edit 4m ago', '418 commits'],
-      ['B', '#a78bfa', 'Builder', 'read · write · review · last edit 1h ago', '214 commits'],
-      ['O', '#22a06b', 'Observer', 'read · comment · last touch 3h ago', '61 commits'],
-      ['J', '#ef6c2a', 'Reviewer', 'read · review · last touch Wed', '12 commits'],
-    ],
-  },
-  'repo-chrome': {
-    handle: 'github.com/tamaw/progenitor/tree/chrome · frontend shell',
-    branchState: 'feature/chrome · review',
-    badges: ['4 sub-projects'],
-    commits: '612',
-    branches: '8',
-    openPullRequests: '3',
-    stats: [
-      { label: 'Commits (30d)', value: '128', detail: '92 by agents · 36 by humans' },
-      { label: 'Open PRs', value: '3', detail: '1 ready · 2 in review' },
-      { label: 'CI', value: '86%', detail: 'one frontend warning' },
-      { label: 'Coverage', value: '68.4%', detail: '+1.1% this week' },
-    ],
-    subProjects: [
-      ['shell', 'AppRuntimeShell · chrome frame'],
-      ['chat', 'chat panel · streaming'],
-      ['quick chat', 'top nav modal · markdown'],
-      ['pages', 'sessions/tasks/repos'],
-    ],
-    branchList: [
-      ['feature/chrome', 'active', '+18 / -6', '@progenitor · 19m ago'],
-      ['feature/quick-chat', '', '+12 / -4', '@builder · 1h ago'],
-      ['main', 'protected · default', 'c81ab20', '@reviewer · 2d ago'],
-    ],
-    commitsList: [
-      ['C', '#2f6ff6', 'feat(repos): align profile page with prototype', 'cbe1011', '19m'],
-      ['Q', '#22a06b', 'feat(quick-chat): stream markdown replies', '661a1de', '1h'],
-      ['U', '#a78bfa', 'style(chat): tune gutters and icon semantics', '3a71c90', '2h'],
-    ],
-    tree: `app/frontend/src/
-  -> components/ · shared chrome primitives
-  -> pages/ · route-level workspaces
-  -> styles/ · chrome-frame + chat panel
-new/ · visual prototype reference`,
-    agents: [
-      ['P', '#2f6ff6', 'Progenitor', 'write · review · last edit 19m ago', '128 commits'],
-      ['R', '#22a06b', 'Reviewer', 'read · comment · last touch 1h ago', '34 commits'],
-    ],
-  },
-};
-
-const FALLBACK_DETAIL = {
-  handle: 'local source · indexed workspace',
-  branchState: 'main · indexed',
-  badges: ['1 sub-project'],
-  commits: '94',
-  branches: '3',
-  openPullRequests: '0',
-  stats: [
-    { label: 'Commits (30d)', value: '24', detail: '16 by agents · 8 by humans' },
-    { label: 'Open PRs', value: '0', detail: 'nothing waiting' },
-    { label: 'CI', value: '100%', detail: 'checks green' },
-    { label: 'Coverage', value: 'n/a', detail: 'not reported' },
-  ],
-  subProjects: [
-    ['source', 'workspace root'],
-    ['docs', 'attached context'],
-  ],
-  branchList: [
-    ['main', 'default', 'indexed', '@progenitor · now'],
-    ['scratch/source-map', '', '+0 / -0', '@progenitor · now'],
-  ],
-  commitsList: [
-    ['P', '#2f6ff6', 'chore(source): index repository context', 'indexed', 'now'],
-  ],
-  tree: `./
-  -> app/ · source context
-  -> docs/ · knowledge context
-README.md`,
-  agents: [
-    ['P', '#2f6ff6', 'Progenitor', 'read · indexed · now', '24 commits'],
-  ],
-};
-
-const WORKSPACE_METRICS = [
-  { label: 'Linked repos', value: '9', detail: '3 active' },
-  { label: 'Open PRs', value: '14', detail: '5 reviewed' },
-  { label: 'Sync health', value: '99%', detail: '2 warnings' },
-  { label: 'Coverage', value: '74.2%', detail: '+0.3% this week' },
-];
-
-function normalizeStatus(status) {
-  if (status === 'warning') return 'warning';
-  if (status === 'review') return 'review';
-  if (status === 'active' || status === 'synced') return 'synced';
-  return 'idle';
+// A repo's row status is entirely derived from its latest heartbeat scan —
+// there is no PR/CI signal available (that needs a GitHub API integration
+// this pass deliberately doesn't add).
+function scanStatus(scan) {
+  if (!scan || !scan.exists) return 'pending';
+  if (!scan.is_git_repo) return 'error';
+  if (scan.error) return 'error';
+  if ((scan.dirty_count || 0) > 0) return 'dirty';
+  return 'clean';
 }
 
-// Map repo status to a shared DetailStatus tone (coloured dot + label).
 const REPO_STATUS_TONE = {
-  synced: 'ok',
-  review: 'info',
-  warning: 'warning',
-  idle: 'muted',
+  clean: 'ok',
+  dirty: 'warning',
+  error: 'error',
+  pending: 'muted',
 };
 
-function repositoryMatchesFilter(repository, activeFilter) {
-  if (activeFilter === 'All sources') {
-    return true;
-  }
-  if (activeFilter === 'Warnings') {
-    return repository.status === 'warning' || repository.status === 'review';
-  }
-  return repository.source === activeFilter;
+const REPO_STATUS_LABEL = {
+  clean: 'Synced',
+  dirty: 'Uncommitted changes',
+  error: 'Scan error',
+  pending: 'Not yet cloned',
+};
+
+function repositoryMatchesFilter(row, activeFilter) {
+  const isRemote = Boolean(row.declared?.remote_url);
+  if (activeFilter === 'Remote') return isRemote;
+  if (activeFilter === 'Local') return !isRemote;
+  if (activeFilter === 'Dirty') return (row.scan?.dirty_count || 0) > 0;
+  return true;
 }
 
-function groupRepositories(repositories) {
-  return repositories.reduce((groups, repository) => {
-    const group = repository.source === 'Local' ? 'Local paths' : 'GitHub remotes';
-    if (!groups.has(group)) {
-      groups.set(group, []);
-    }
-    groups.get(group).push(repository);
+function groupRepositories(rows) {
+  return rows.reduce((groups, row) => {
+    const group = row.declared?.remote_url ? 'Remote sources' : 'Local paths';
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push(row);
     return groups;
   }, new Map());
 }
 
-export default function RepositoriesPage() {
-  const [repositories, setRepositories] = useState(INITIAL_REPOSITORIES);
-  const [activeFilter, setActiveFilter] = useState(SOURCE_FILTERS[0]);
-  const [query, setQuery] = useState('');
-  const [selectedId, setSelectedId] = useState(INITIAL_REPOSITORIES[0].id);
+function RepoCreateForm({ onCancel, onCreate, submitting, error }) {
+  const [name, setName] = useState('');
+  const [localPath, setLocalPath] = useState('');
+  const [access, setAccess] = useState('read');
+  const [remoteUrl, setRemoteUrl] = useState('');
+  const [owner, setOwner] = useState('');
 
-  const filteredRepositories = useMemo(() => {
-    const normalizedQuery = query.trim().toLowerCase();
-    return repositories.filter((repository) => {
-      const matchesFilter = repositoryMatchesFilter(repository, activeFilter);
-      const haystack = `${repository.name} ${repository.url} ${repository.branch} ${repository.owner} ${repository.summary}`.toLowerCase();
-      const matchesQuery = !normalizedQuery || haystack.includes(normalizedQuery);
-      return matchesFilter && matchesQuery;
-    });
-  }, [activeFilter, query, repositories]);
-
-  const groupedRepositories = useMemo(() => groupRepositories(filteredRepositories), [filteredRepositories]);
-  const selectedRepository = repositories.find((repository) => repository.id === selectedId)
-    || filteredRepositories[0]
-    || repositories[0];
-
-  const selectedDetail = REPOSITORY_DETAILS[selectedRepository.id] ?? FALLBACK_DETAIL;
-
-  const connectRepository = () => {
-    const nextIndex = repositories.length + 1;
-    const nextRepository = {
-      id: `repo-scratch-${Date.now()}`,
-      name: `scratch-source-${nextIndex}`,
-      source: nextIndex % 2 === 0 ? 'GitHub' : 'Local',
-      url: nextIndex % 2 === 0 ? `github.com/tamaw/scratch-source-${nextIndex}` : `./scratch/source-${nextIndex}`,
-      branch: nextIndex % 2 === 0 ? 'feature/source-map' : 'main',
-      status: 'idle',
-      health: 'Indexed',
-      summary: 'fresh source · ready',
-      changed: 0,
-      prs: 0,
-      checks: '0/0',
-      updated: 'now',
-      owner: 'New source',
-      accent: nextIndex % 2 === 0 ? 'blue' : 'green',
-    };
-
-    setRepositories((current) => [nextRepository, ...current]);
-    setSelectedId(nextRepository.id);
+  const submit = (event) => {
+    event.preventDefault();
+    onCreate({ name, localPath, access, remoteUrl, owner });
   };
 
+  return (
+    <form className="repo-create-form" onSubmit={submit}>
+      <label className="repo-create-form__field">
+        <span>Name</span>
+        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="progenitor" required />
+      </label>
+      <label className="repo-create-form__field">
+        <span>Local worktree path</span>
+        <input
+          value={localPath}
+          onChange={(e) => setLocalPath(e.target.value)}
+          placeholder="progenitor"
+          required
+        />
+      </label>
+      <label className="repo-create-form__field">
+        <span>Remote URL (optional)</span>
+        <input
+          value={remoteUrl}
+          onChange={(e) => setRemoteUrl(e.target.value)}
+          placeholder="github.com/tamaw/progenitor"
+        />
+      </label>
+      <label className="repo-create-form__field">
+        <span>Owner (optional)</span>
+        <input value={owner} onChange={(e) => setOwner(e.target.value)} placeholder="Progenitor" />
+      </label>
+      <label className="repo-create-form__field">
+        <span>Access</span>
+        <select value={access} onChange={(e) => setAccess(e.target.value)}>
+          {ACCESS_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>{option.label}</option>
+          ))}
+        </select>
+      </label>
+      {error ? <div className="repo-create-form__error">{error}</div> : null}
+      <div className="repo-create-form__actions">
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={onCancel} disabled={submitting}>
+          Cancel
+        </button>
+        <button type="submit" className="repo-btn repo-btn--primary" disabled={submitting}>
+          {submitting ? 'Adding…' : 'Add repository'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+export default function RepositoriesPage() {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const reposUrl = getApiUrl('repos');
+  const realtimeConnected = useSelector(selectRealtimeConnected);
+  const rows = useSelector(selectRepos);
+  const workspaceSignal = useSelector(selectWorkspaceSignal);
+
+  const [activeFilter, setActiveFilter] = useState(SOURCE_FILTERS[0]);
+  const [query, setQuery] = useState('');
+  const [selectedId, setSelectedId] = useState(null);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState(null);
+  const [creating, setCreating] = useState(false);
+
+  const { loading } = useSelector(selectReposState);
+
+  useEffect(() => {
+    if (!realtimeConnected) return undefined;
+    dispatch(fetchRepos({ reposUrl })).unwrap().catch(() => {
+      // Failure is surfaced via repos.error in the store; nothing local to reset.
+    });
+    return undefined;
+  }, [dispatch, realtimeConnected, reposUrl]);
+
+  const filteredRows = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return rows.filter((row) => {
+      const matchesFilter = repositoryMatchesFilter(row, activeFilter);
+      if (!matchesFilter) return false;
+      if (!normalizedQuery) return true;
+      const haystack = `${row.declared?.name || ''} ${row.declared?.remote_url || ''} ${row.declared?.local_path || ''} ${row.declared?.owner || ''}`.toLowerCase();
+      return haystack.includes(normalizedQuery);
+    });
+  }, [activeFilter, query, rows]);
+
+  const groupedRows = useMemo(() => groupRepositories(filteredRows), [filteredRows]);
+  const selectedRow = rows.find((row) => row.id === selectedId) || filteredRows[0] || rows[0] || null;
+  const selectedRepoId = selectedRow?.id || null;
+
+  const detail = useSelector((state) => selectRepoDetail(state, selectedRepoId));
+
+  useEffect(() => {
+    if (!selectedRepoId) return;
+    dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
+  }, [dispatch, reposUrl, selectedRepoId]);
+
+  const handleCreate = useCallback(async ({ name, localPath, access, remoteUrl, owner }) => {
+    if (!name.trim() || !localPath.trim()) {
+      setCreateError('Name and local worktree path are required.');
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await dispatch(createRepo({
+        reposUrl,
+        name,
+        localPath,
+        access,
+        remoteUrl,
+        owner,
+      })).unwrap();
+      // The response is just an ack; the created entry arrives on the next
+      // `repositories.snapshot` broadcast, same as every other CRUD flow here.
+      setSelectedId(null);
+      setIsCreating(false);
+    } catch (err) {
+      setCreateError(err?.message || 'Failed to add repository.');
+    } finally {
+      setCreating(false);
+    }
+  }, [dispatch, reposUrl]);
+
+  const handleDelete = useCallback(() => {
+    if (!selectedRow) return;
+    dispatch(deleteRepo({ reposUrl, repoId: selectedRow.id }));
+    setSelectedId(null);
+  }, [dispatch, reposUrl, selectedRow]);
+
+  const status = scanStatus(selectedRow?.scan);
+  const declared = selectedRow?.declared || {};
+  const scan = detail?.scan || selectedRow?.scan || null;
 
   return (
     <PageShell className="repositories-page">
       <PaneList className="repositories-pane" label="Repositories">
-        <PaneListFilters filters={SOURCE_FILTERS} activeFilter={activeFilter} onFilterChange={setActiveFilter} />
-        <PaneListToolbar actionLabel="+ Source" onAction={connectRepository}>
+        <PaneListFilters
+          filters={SOURCE_FILTERS}
+          activeFilter={activeFilter}
+          onFilterChange={setActiveFilter}
+          actionLabel="+ New"
+          onAction={() => setIsCreating(true)}
+        />
+        <PaneListToolbar>
           <PaneListSearch value={query} placeholder="Search sources" onChange={setQuery} />
-          <PaneListSortButton title="Sort">Health</PaneListSortButton>
         </PaneListToolbar>
 
-        <PaneListVirtualized
-          groups={Array.from(groupedRepositories.entries()).map(([group, items]) => ({
-            key: group,
-            title: group,
-            items,
-          }))}
-          getItemKey={(repository) => repository.id}
-          estimatedItemHeight={92}
-          renderItem={(repository) => (
-            <button
-              type="button"
-              className={`repo-source-row ${selectedRepository.id === repository.id ? 'is-selected' : ''}`}
-              onClick={() => setSelectedId(repository.id)}
-            >
-              <span className={`repo-source-row__mark repo-source-row__mark--${normalizeStatus(repository.status)}`} />
-              <span className="repo-source-row__top">
-                <span className="repo-source-row__source">{repository.source}</span>
-                <span className="repo-source-row__branch">{repository.branch}</span>
-              </span>
-              <span className="repo-source-row__age">{repository.updated}</span>
-              <span className="repo-source-row__title">{repository.name}</span>
-              <span className="repo-source-row__meta">{repository.changed} changed · {repository.prs} PRs · checks {repository.checks}</span>
-            </button>
-          )}
-        />
-        {filteredRepositories.length === 0 ? (
-          <div className="empty-state small">No repositories match the current source filter.</div>
-        ) : null}
+        {isCreating ? (
+          <RepoCreateForm
+            onCancel={() => { setIsCreating(false); setCreateError(null); }}
+            onCreate={handleCreate}
+            submitting={creating}
+            error={createError}
+          />
+        ) : loading && rows.length === 0 ? (
+          <PaneEmptyState>Loading repositories…</PaneEmptyState>
+        ) : rows.length === 0 ? (
+          <PaneEmptyState>No repositories declared.</PaneEmptyState>
+        ) : filteredRows.length === 0 ? (
+          <PaneEmptyState>No repositories match the current filters.</PaneEmptyState>
+        ) : (
+          <PaneListVirtualized
+            groups={Array.from(groupedRows.entries()).map(([group, items]) => ({
+              key: group,
+              title: group,
+              items,
+            }))}
+            getItemKey={(row) => row.id}
+            estimatedItemHeight={92}
+            renderItem={(row) => {
+              const rowStatus = scanStatus(row.scan);
+              return (
+                <button
+                  type="button"
+                  className={`repo-source-row ${selectedRow?.id === row.id ? 'is-selected' : ''}`}
+                  onClick={() => setSelectedId(row.id)}
+                >
+                  <span className={`repo-source-row__mark repo-source-row__mark--${rowStatus === 'clean' ? 'synced' : rowStatus === 'dirty' ? 'review' : 'warning'}`} />
+                  <span className="repo-source-row__top">
+                    <span className="repo-source-row__source">{row.declared?.remote_url ? 'Remote' : 'Local'}</span>
+                    <span className="repo-source-row__branch">{row.scan?.branch || '—'}</span>
+                  </span>
+                  <span className="repo-source-row__age">{row.scan?.last_commit?.relative_time || '—'}</span>
+                  <span className="repo-source-row__title">{row.declared?.name}</span>
+                  <span className="repo-source-row__meta">
+                    {row.scan?.dirty_count || 0} changed · {row.scan?.branch_count || 0} branches
+                  </span>
+                </button>
+              );
+            }}
+          />
+        )}
 
-        <PaneListFooter>
-          <span>{selectedRepository.branch}</span>
-          <span>{selectedRepository.health}</span>
-        </PaneListFooter>
+        {selectedRow ? (
+          <PaneListFooter>
+            <span>{selectedRow.scan?.branch || '—'}</span>
+            <span>{REPO_STATUS_LABEL[status]}</span>
+          </PaneListFooter>
+        ) : null}
       </PaneList>
 
       <DetailPane className="repositories-main repo-profile">
-        <DetailHeader
-          title={selectedRepository.name}
-          actions={(
-            <DetailHeaderActions>
-              <DetailHeaderAction
-                icon={<CloneActionIcon />}
-                label="Clone"
-                tooltip={`Clone ${selectedRepository.name}`}
-                ariaLabel={`Clone ${selectedRepository.name}`}
-              />
-              <DetailHeaderAction
-                icon={<OpenActionIcon />}
-                label="Open in editor"
-                tooltip={`Open ${selectedRepository.name} in editor`}
-                ariaLabel={`Open ${selectedRepository.name} in editor`}
-              />
-              <DetailHeaderAction
-                icon={<PullActionIcon />}
-                label={`Pull ${selectedRepository.branch}`}
-                tooltip={`Pull ${selectedRepository.branch}`}
-                ariaLabel={`Pull ${selectedRepository.branch}`}
-                variant="primary"
-              />
-            </DetailHeaderActions>
-          )}
-          meta={[
-            <DetailStatus key="state" tone={REPO_STATUS_TONE[normalizeStatus(selectedRepository.status)]}>
-              {selectedDetail.branchState}
-            </DetailStatus>,
-            ...selectedDetail.badges.map((badge) => <span className="muted" key={badge}>{badge}</span>),
-            <span key="commits"><strong>{selectedDetail.commits}</strong> commits</span>,
-            <span key="branches"><strong>{selectedDetail.branches}</strong> branches</span>,
-            <span key="prs"><strong>{selectedDetail.openPullRequests}</strong> PRs open</span>,
-          ]}
-        />
+        {!selectedRow ? (
+          <div className="detail-pane__body">
+            <PaneEmptyState>Select a repository, or use + New to add one.</PaneEmptyState>
+          </div>
+        ) : (
+          <>
+            <DetailHeader
+              title={declared.name}
+              actions={(
+                <DetailHeaderActions>
+                  <DetailHeaderAction icon={<CloneActionIcon />} label="Clone" tooltip={`Clone ${declared.name}`} ariaLabel={`Clone ${declared.name}`} />
+                  <DetailHeaderAction icon={<OpenActionIcon />} label="Open in editor" tooltip={`Open ${declared.name} in editor`} ariaLabel={`Open ${declared.name} in editor`} />
+                  <DetailHeaderAction icon={<PullActionIcon />} label={`Pull ${scan?.branch || ''}`} tooltip="Pull" ariaLabel="Pull" variant="primary" />
+                  <DetailHeaderAction icon={<span aria-hidden="true">×</span>} label="Remove" tooltip="Remove declared repo" ariaLabel="Remove declared repo" onClick={handleDelete} />
+                </DetailHeaderActions>
+              )}
+              meta={[
+                <DetailStatus key="state" tone={REPO_STATUS_TONE[status]}>{REPO_STATUS_LABEL[status]}</DetailStatus>,
+                <span key="access" className="muted">{declared.access === 'write' ? 'read · write' : 'read only'}</span>,
+                <span key="commits"><strong>{scan?.commit_count ?? '—'}</strong> commits</span>,
+                <span key="branches"><strong>{scan?.branch_count ?? '—'}</strong> branches</span>,
+              ]}
+            />
 
-        <div className="repo-profile__body">
-          <section className="repo-stat-row" aria-label="Repository metrics">
-            {selectedDetail.stats.map((metric) => (
-              <article className="repo-stat-cell" key={metric.label}>
-                <div className="repo-stat-cell__label">{metric.label}</div>
-                <div className="repo-stat-cell__value">{metric.value}</div>
-                <div className="repo-stat-cell__detail">{metric.detail}</div>
-              </article>
-            ))}
-          </section>
-
-          <section className="repo-section">
-            <h2 className="repo-section__title">Workspace signal <span className="muted">{filteredRepositories.length} visible</span></h2>
-            <div className="repo-stat-row repo-stat-row--compact">
-              {WORKSPACE_METRICS.map((metric) => (
-                <article className="repo-stat-cell" key={metric.label}>
-                  <div className="repo-stat-cell__label">{metric.label}</div>
-                  <div className="repo-stat-cell__value">{metric.value}</div>
-                  <div className="repo-stat-cell__detail">{metric.detail}</div>
+            <div className="repo-profile__body">
+              <section className="repo-stat-row" aria-label="Repository metrics">
+                <article className="repo-stat-cell">
+                  <div className="repo-stat-cell__label">Commits (30d)</div>
+                  <div className="repo-stat-cell__value">{scan?.commits_30d ?? '—'}</div>
+                  <div className="repo-stat-cell__detail">on {scan?.branch || 'the current branch'}</div>
                 </article>
-              ))}
-            </div>
-          </section>
+                <article className="repo-stat-cell">
+                  <div className="repo-stat-cell__label">Uncommitted changes</div>
+                  <div className="repo-stat-cell__value">{scan?.dirty_count ?? '—'}</div>
+                  <div className="repo-stat-cell__detail">working tree</div>
+                </article>
+              </section>
 
-          <section className="repo-section">
-            <h2 className="repo-section__title">Sub-projects <span className="muted">{selectedDetail.subProjects.length}</span></h2>
-            <div className="repo-kv-grid">
-              {selectedDetail.subProjects.map(([label, value]) => (
-                <div className="repo-kv" key={label}>
-                  <span className="repo-kv__label">{label}</span>
-                  <span className="repo-kv__value">{value}</span>
+              <section className="repo-section">
+                <h2 className="repo-section__title">Workspace signal <span className="muted">{filteredRows.length} visible</span></h2>
+                <div className="repo-stat-row repo-stat-row--compact">
+                  <article className="repo-stat-cell">
+                    <div className="repo-stat-cell__label">Linked repos</div>
+                    <div className="repo-stat-cell__value">{workspaceSignal.linked_repos ?? rows.length}</div>
+                  </article>
+                  <article className="repo-stat-cell">
+                    <div className="repo-stat-cell__label">Sync health</div>
+                    <div className="repo-stat-cell__value">{workspaceSignal.sync_health_pct != null ? `${workspaceSignal.sync_health_pct}%` : '—'}</div>
+                  </article>
                 </div>
-              ))}
-            </div>
-          </section>
+              </section>
 
-          <section className="repo-section">
-            <h2 className="repo-section__title">
-              Branches <span className="muted">{selectedDetail.branches}</span>
-              <span className="repo-section__tools"><button type="button" className="repo-btn repo-btn--ghost">+ New branch</button></span>
-            </h2>
-            <div className="repo-list">
-              {selectedDetail.branchList.map(([branchName, branchMeta, ahead, author]) => (
-                <article className="repo-branch" key={branchName}>
-                  <span className="repo-branch__icon">⎇</span>
-                  <span className="repo-branch__name">{branchName} {branchMeta ? <span className="muted">· {branchMeta}</span> : null}</span>
-                  <span className="repo-branch__ahead">{ahead}</span>
-                  <span className="repo-branch__author">{author}</span>
-                </article>
-              ))}
-            </div>
-          </section>
+              <section className="repo-section">
+                <h2 className="repo-section__title">
+                  Branches <span className="muted">{scan?.branch_count ?? 0}</span>
+                </h2>
+                {scan?.branches?.length ? (
+                  <div className="repo-list">
+                    {scan.branches.map((branch) => (
+                      <article className="repo-branch" key={branch.name}>
+                        <span className="repo-branch__icon">⎇</span>
+                        <span className="repo-branch__name">
+                          {branch.name} {branch.is_default ? <span className="muted">· default</span> : null}
+                        </span>
+                        <span className="repo-branch__ahead">
+                          {branch.ahead != null ? `+${branch.ahead} / -${branch.behind}` : branch.sha}
+                        </span>
+                        <span className="repo-branch__author">{branch.author} · {branch.relative_time}</span>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <PaneEmptyState>
+                    {scan?.exists ? 'No branches found.' : 'Not yet cloned at the declared local path — no git state to show.'}
+                  </PaneEmptyState>
+                )}
+              </section>
 
-          <section className="repo-section">
-            <h2 className="repo-section__title">Recent commits <span className="muted">{selectedRepository.branch}</span></h2>
-            <div className="repo-list">
-              {selectedDetail.commitsList.map(([initial, color, message, sha, time]) => (
-                <article className="repo-commit" key={`${sha}-${message}`}>
-                  <span className="repo-commit__avatar" style={{ background: color }}>{initial}</span>
-                  <span className="repo-commit__message">{message}</span>
-                  <span className="repo-commit__sha">{sha}</span>
-                  <span className="repo-commit__time">{time}</span>
-                </article>
-              ))}
-            </div>
-          </section>
+              <section className="repo-section">
+                <h2 className="repo-section__title">Recent commits <span className="muted">{scan?.branch || ''}</span></h2>
+                {scan?.commits?.length ? (
+                  <div className="repo-list">
+                    {scan.commits.map((commit) => (
+                      <article className="repo-commit" key={commit.sha}>
+                        <span className="repo-commit__message">{commit.message}</span>
+                        <span className="repo-commit__sha">{commit.sha}</span>
+                        <span className="repo-commit__time">{commit.relative_time}</span>
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <PaneEmptyState>No commit history to show.</PaneEmptyState>
+                )}
+              </section>
 
-          <section className="repo-section">
-            <h2 className="repo-section__title">Tree</h2>
-            <pre className="repo-file-tree">{selectedDetail.tree}</pre>
-          </section>
-
-          <section className="repo-section">
-            <h2 className="repo-section__title">Connected agents <span className="muted">{selectedDetail.agents.length}</span></h2>
-            <div className="repo-list">
-              {selectedDetail.agents.map(([initial, color, name, detail, count]) => (
-                <article className="repo-agent-row" key={name}>
-                  <span className="repo-agent-row__avatar" style={{ background: color }}>{initial}</span>
-                  <span className="repo-agent-row__body">
-                    <span className="repo-agent-row__title">{name}</span>
-                    <span className="repo-agent-row__detail">{detail}</span>
-                  </span>
-                  <span className="repo-agent-row__count">{count}</span>
-                </article>
-              ))}
+              <section className="repo-section">
+                <h2 className="repo-section__title">Tree</h2>
+                <pre className="repo-file-tree">{scan?.tree || '—'}</pre>
+              </section>
             </div>
-          </section>
-        </div>
+          </>
+        )}
       </DetailPane>
     </PageShell>
   );

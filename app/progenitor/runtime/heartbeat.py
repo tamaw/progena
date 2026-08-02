@@ -37,6 +37,7 @@ _A2A_POLL = "a2a_poll"
 _ASYNC_SUBAGENT_POLL = "async_subagent_poll"
 _REGISTRY_DISCOVER = "registry_discover"
 _REGISTRY_REFRESH = "registry_refresh"
+_REPO_SCAN = "repo_scan"
 _IDLE_HEALTH = "idle_health"
 
 _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
@@ -47,6 +48,7 @@ _MAINTENANCE_INTERVALS: tuple[tuple[str, str, str], ...] = (
     (_ASYNC_SUBAGENT_POLL, "last_async_subagent_poll_at", "async_subagent_poll_seconds"),
     (_REGISTRY_DISCOVER, "last_registry_discovery_at", "registry_refresh_seconds"),
     (_REGISTRY_REFRESH, "last_registry_refresh_at", "registry_refresh_seconds"),
+    (_REPO_SCAN, "last_repo_scan_at", "repo_scan_seconds"),
     (_IDLE_HEALTH, "last_health_write_at", "heartbeat_health_seconds"),
 )
 
@@ -126,6 +128,8 @@ class ProgenitorLoop:
             mcp_refresh_seconds=float(config.runtime.mcp_refresh_seconds),
             plugin_update_check_seconds=float(config.runtime.plugin_update_check_seconds),
             registry_refresh_seconds=float(config.runtime.registry_refresh_seconds),
+            repo_scan_seconds=float(config.runtime.repo_scan_seconds),
+            worktree_dir=Path(config.storage.worktree_dir),
             heartbeat_health_seconds=float(
                 getattr(self.config.runtime, "checkpoint_interval_seconds", 30.0)
             ),
