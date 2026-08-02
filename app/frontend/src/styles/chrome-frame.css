@@ -4867,7 +4867,7 @@ body,
 
 .repo-source-row__mark--muted {
   background: var(--color-text-muted);
-  box-shadow: 0 0 0 3px rgba(148, 163, 184, 0.08);
+  box-shadow: none;
 }
 
 .repo-source-row__mark--warning {
