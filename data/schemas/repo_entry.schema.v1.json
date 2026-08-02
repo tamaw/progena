@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Repo entry",
+  "description": "One repo object under 'repos' in the 'repos' state document (repos.json). Declares a repository the operator wants tracked; live git state (branch, dirty count, commits) is scanned separately by the heartbeat and never lives here.",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Human-readable display name."
+    },
+    "local_path": {
+      "type": "string",
+      "description": "Where the repo lives on disk. Absolute, or relative to the managed repos directory (data/repos) for anything cloned there."
+    },
+    "access": {
+      "type": "string",
+      "enum": ["read", "write"],
+      "description": "Declared intent only - not filesystem-enforced. 'write' signals the agent may commit/push; 'read' signals inspect-only."
+    },
+    "remote_url": {
+      "type": "string",
+      "description": "Optional remote URL (e.g. github.com/org/repo)."
+    },
+    "summary": {
+      "type": "string",
+      "description": "Optional short note on what this repo is / why it's tracked."
+    },
+    "owner": {
+      "type": "string",
+      "description": "Optional owner/org label."
+    }
+  },
+  "required": ["name", "local_path", "access"],
+  "additionalProperties": false
+}

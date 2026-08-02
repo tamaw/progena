@@ -684,6 +684,35 @@ def create_repos_state_file(
     )
 
 
+def _reject_repo_scan_write(_content: Any) -> JsonDoc:
+    raise ValueError(
+        "repo_scan.json is read-only - it's written by the heartbeat's repo-scan tick, not the agent"
+    )
+
+
+def create_repo_scan_state_file(state_manager: Any) -> StateFile:
+    """Build the read-only ``repo_scan.json`` state file backed by the StateManager.
+
+    Surfaces the heartbeat's last derived git state per declared repo (branch,
+    dirty count, commit/branch counts, latest commit) so the agent can answer
+    "what's the status of X" without shelling out - the on-disk data can lag the
+    real repo by up to ``repo_scan_seconds``. Read-only: the document is entirely
+    heartbeat-owned, so both ``save`` and ``validate`` reject with the same
+    explanatory error rather than silently no-op'ing.
+    """
+
+    async def save(_doc: JsonDoc) -> None:
+        _reject_repo_scan_write(_doc)
+
+    return _simple_state_file(
+        "repo_scan.json",
+        get=state_manager.get_repo_scan,
+        save=save,
+        validate=_reject_repo_scan_write,
+        default={"scanned_at": None, "repos": {}, "workspace_signal": {}},
+    )
+
+
 def create_knowledge_state_file(
     state_manager: Any,
     *,
