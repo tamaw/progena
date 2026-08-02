@@ -468,11 +468,16 @@ function RoutineChain({ nodes, edges, entry }) {
   );
   // Build the whole reachable tree (forks included) fully, up front, in one
   // pure pass -- see buildChainTree's comment for why this can't be deferred
-  // into lazily-invoked React children.
-  const rendered = new Set();
-  const tree = buildChainTree(entry, nodesById, edgeBySource, new Set(), rendered);
-  const body = renderRun(tree, { sourceId: null, kind: 'entry' });
-  const unreachable = nodes.filter((node) => !rendered.has(node.id));
+  // into lazily-invoked React children. Memoized: without this, every
+  // re-render of the page (e.g. an unrelated realtime/SSE update bubbling
+  // through a parent selector) walked and re-built the whole tree from
+  // scratch, even though nodes/edges/entry hadn't changed.
+  const { tree, unreachable } = useMemo(() => {
+    const rendered = new Set();
+    const builtTree = buildChainTree(entry, nodesById, edgeBySource, new Set(), rendered);
+    return { tree: builtTree, unreachable: nodes.filter((node) => !rendered.has(node.id)) };
+  }, [entry, nodesById, edgeBySource, nodes]);
+  const body = useMemo(() => renderRun(tree, { sourceId: null, kind: 'entry' }), [tree]);
   return (
     <div className="routine-chain">
       <ChainCap kind="start" />

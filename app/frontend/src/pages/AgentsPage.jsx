@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getTimeBucket } from '../components/chat/conversationModel';
 import Select from '../components/common/Select';
 import { useConfig } from '../context/ConfigContext';
-import { selectRealtime } from '../store/realtimeSlice';
+import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
   fetchAgentProfiles,
   requestAgentDetail,
@@ -467,7 +467,7 @@ function AgentsPage({ variant = 'agents' }) {
   const basePath = isRoutines ? '/routines' : '/agents';
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
-  const realtime = useSelector(selectRealtime);
+  const realtimeConnected = useSelector(selectRealtimeConnected);
   const fetchedAgents = useSelector(selectAgentProfiles);
   // Routines shows one pretend entry for now instead of the real agent list.
   const agents = isRoutines ? DUMMY_ROUTINES : fetchedAgents;
@@ -520,7 +520,7 @@ function AgentsPage({ variant = 'agents' }) {
   // arrives on the stream (the GET just acknowledges and triggers it). Skipped
   // on Routines, which shows a pretend entry instead of the real list.
   useEffect(() => {
-    if (isRoutines || !realtime.connected) {
+    if (isRoutines || !realtimeConnected) {
       requestedListRef.current = null;
       return;
     }
@@ -529,7 +529,7 @@ function AgentsPage({ variant = 'agents' }) {
     }
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, isRoutines, realtime.connected]);
+  }, [agentsUrl, dispatch, isRoutines, realtimeConnected]);
 
   // Selection defaults to the first agent without writing state in an effect.
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
