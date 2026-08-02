@@ -30,7 +30,7 @@ DEFAULT_TIMEZONE = "Europe/London"
 DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
-DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
+DEFAULT_PROJECT_WORKTREE_DIR = DEFAULT_PROJECT_DATA_DIR / "repos"
 DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
 
 
@@ -54,10 +54,10 @@ def _default_worktree_dir(
     *,
     worktrees_root: Path | str | None = None,
 ) -> Path:
-    """Return the managed worktree directory for the current project root."""
+    """Return the managed repos/worktrees directory for the current project root."""
     if worktrees_root is not None:
-        return Path(worktrees_root) / "worktrees"
-    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "worktrees"
+        return Path(worktrees_root) / "repos"
+    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "data" / "repos"
 
 
 def _default_prompts_dir(project_root: Path | None = None) -> Path:
