@@ -192,7 +192,7 @@ async def create_progenitor_agent(
     # skills are static, baked into the image, and never seeded into Postgres.
     skills_dir = data_dir / "skills"
     worktree_dir = (
-        Path(getattr(config.storage, "worktree_dir", resolved_project_root / "worktrees"))
+        Path(getattr(config.storage, "worktree_dir", resolved_project_root / "data" / "repos"))
         .expanduser()
         .resolve()
     )
