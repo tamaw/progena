@@ -69,10 +69,29 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f progenitor
 docker compose -f docker/docker-compose.progenitor.yml down
 ```
 
-Open `http://localhost` for the UI and `http://localhost:8000` for the backend API.
+Open `https://localhost` for the UI (self-signed cert; the browser will warn
+once) and `https://localhost:8000` for the backend API. The stack is
+HTTPS-only -- there is no plain-http fallback to forget to remove before a
+real deployment.
 
 The Docker Compose stack includes a Postgres database with a named volume. The
 Progenitor runtime receives `PROGENITOR_DATABASE_URL` pointing at that service.
+
+#### Reaching the stack from another host on your network
+
+The checked-in self-signed certs (`app/frontend/certs/`, `docker/backend/certs/`)
+only cover `localhost`/`127.0.0.1` and the container's own service names, so a
+browser on another machine connecting by LAN IP or hostname (e.g.
+`https://192.168.0.2`) will fail TLS validation -- that address isn't in the
+cert's SAN list. Regenerate with the address(es) you'll actually connect from
+added, then rebuild and redeploy the frontend image:
+
+```bash
+docker/generate-certs.sh IP:192.168.0.2 DNS:cronix
+docker compose -f docker/docker-compose.progenitor.yml up --build -d
+```
+
+Re-run whenever the deployment's reachable address changes.
 
 ## Architecture
 
