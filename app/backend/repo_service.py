@@ -15,12 +15,11 @@ backend only ever reads it here -- there is no write path from this module.
 
 from __future__ import annotations
 
-import json
 import re
 from typing import Any
 
-from app.progenitor.agent.state_backend import validate_repos_document
 from app.progenitor.config import default_repos_config_payload
+from app.progenitor.repos.schema import validate_repos_payload
 from app.progenitor.utils import utcnow_isoformat
 
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
@@ -48,19 +47,6 @@ def _unique_repo_id(name: str, existing: dict[str, Any]) -> str:
         candidate = f"{base}-{suffix}"
         suffix += 1
     return candidate
-
-
-def validate_repos_payload(data: Any) -> dict[str, Any]:
-    """Validate a repos payload (``{"repos": {"<id>": {...}}}``).
-
-    Thin wrapper around the same validator the agent's ``/config/repos.json``
-    writes go through, so both paths enforce one schema. Raises ``ValueError``
-    (with a concise message) on any schema violation.
-    """
-    validated = validate_repos_document(json.dumps(data))
-    if not isinstance(validated, dict):
-        raise ValueError("top level must be a JSON object")
-    return validated
 
 
 def load_repos() -> dict[str, Any]:
