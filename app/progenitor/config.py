@@ -138,10 +138,12 @@ class RuntimeConfig:
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
     # Cadence for the heartbeat's git-status scan of declared repos.json
-    # entries (branch, dirty count, commits, worktrees). Cheap local
-    # subprocess calls, no network, so this can run far more often than the
-    # registry refresh.
-    repo_scan_seconds: int = 120
+    # entries (branch, dirty count, commits, contributors, worktrees).
+    # Local-only subprocess calls (no network -- see repos/scan.py's
+    # module docstring for the separate on-demand "Fetch" action), but each
+    # tick shells out per branch/commit/contributor per repo, so a large
+    # declared set can add up; default to hourly rather than the old 120s.
+    repo_scan_seconds: int = 3600
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
     checkpoint_interval_seconds: int = 30
@@ -164,7 +166,7 @@ class RuntimeConfig:
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
             plugin_update_check_seconds=env_int("PROGENITOR_PLUGIN_UPDATE_CHECK_SECONDS", 86400),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
-            repo_scan_seconds=env_int("PROGENITOR_REPO_SCAN_SECONDS", 120),
+            repo_scan_seconds=env_int("PROGENITOR_REPO_SCAN_SECONDS", 3600),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
             checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),

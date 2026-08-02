@@ -21,7 +21,7 @@ this skill does not run `git clone`.
 ## Live git status is a separate, read-only file
 Branch, dirty count, commit/branch counts, and recent commits are **not** in
 `repos.json` — they're scanned from disk by the heartbeat (every
-`repo_scan_seconds`, default 120s) into `/config/repo_scan.json`
+`repo_scan_seconds`, default 1h) into `/config/repo_scan.json`
 (`{ "scanned_at": ..., "repos": { "<repo-id>": { ... } }, "workspace_signal": {...} }`).
 `read_file` that file to answer "what's the status of X" — never guess, and never
 try to `write_file`/`edit_file` it (rejected: heartbeat-owned).
