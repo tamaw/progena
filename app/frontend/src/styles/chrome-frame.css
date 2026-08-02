@@ -6799,9 +6799,7 @@ body,
   height: 100%;
   min-height: 0;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 8% 2%, color-mix(in oklab, var(--agent-color, var(--color-accent)) 12%, transparent), transparent 30%),
-    var(--color-bg-secondary);
+  background: var(--color-bg-secondary);
 }
 
 .agents-graph-shell {
