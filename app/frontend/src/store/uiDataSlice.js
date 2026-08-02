@@ -166,6 +166,8 @@ export {
   selectActiveChatSession,
   selectActiveChatSessionState,
   selectChatReconciliationState,
+  selectRequestIdByThreadId,
+  selectRequestIdForThread,
 } from './uiData/chats';
 
 export {

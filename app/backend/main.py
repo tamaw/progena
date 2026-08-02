@@ -125,6 +125,19 @@ class ResponseStreamState:
 _response_streams: dict[str, ResponseStreamState] = {}
 
 
+def _active_request_id_for_thread(thread_id: str) -> str | None:
+    """Return the request_id of an in-flight (non-terminal) generation for ``thread_id``, if any.
+
+    Lets a viewer that mounts or switches onto a thread after its
+    ``chat.response.started`` broadcast already went out (a fresh page load, or
+    a second tab) discover the in-flight request and join its delta stream.
+    """
+    for state in _response_streams.values():
+        if state.thread_id == thread_id and not state.terminal_reached:
+            return state.request_id
+    return None
+
+
 def _response_stream_frame_id(request_id: str, seq: int) -> str:
     """Return the stable replay cursor for one response-content frame."""
     return f"chat-response:{request_id}:{seq}"

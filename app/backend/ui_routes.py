@@ -4735,12 +4735,21 @@ def _broadcast_chat_sessions_snapshot(include_archived: bool = True):
     )
 
 
+def _get_active_request_id_for_thread(thread_id: str) -> str | None:
+    # Deferred import: `main` imports this module, so importing `main` at
+    # module load time here would be circular.
+    from . import main as _main
+
+    return _main._active_request_id_for_thread(thread_id)
+
+
 router.include_router(
     create_chat_router(
         get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
         get_current_state=lambda thread_id: get_state_reader().get_progenitor_state(thread_id),
         get_thread_messages=lambda thread_id: get_state_reader().get_thread_messages(thread_id),
+        get_active_request_id=_get_active_request_id_for_thread,
     )
 )
 

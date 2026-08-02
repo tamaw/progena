@@ -448,7 +448,7 @@ function ConversationPage() {
   const { threadId: urlThreadId } = useParams();
   const { collapsed: sessionsCollapsed, setCollapsed: setSessionsCollapsed, paneClassName: sessionsPaneClassName } = usePaneCollapse('chat-sessions-pane');
   const { config, getApiUrl } = useConfig();
-  const { connectionState, sendMessageStream, cancelStream } = useChatApi();
+  const { connectionState, sendMessageStream, cancelStream, observeResponseStream } = useChatApi();
   const { show } = useNotifications();
   const backendChatSessions = useSelector(selectChatSessions);
   const backendChatSessionsState = useSelector(selectChatSessionsState);
@@ -651,6 +651,7 @@ function ConversationPage() {
     threadId,
     sendMessageStream,
     cancelStream,
+    observeResponseStream,
     dispatch,
     getApiUrl,
     show,

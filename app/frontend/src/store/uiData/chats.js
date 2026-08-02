@@ -34,6 +34,7 @@ export const initialState = {
     generatingChatIds: [],
     erroredChatIds: [],
     responseThreadsByRequestId: {},
+    requestIdByThreadId: {},
   },
   chats: {
     byId: {},
@@ -263,12 +264,14 @@ export const eventHandlers = {
       : null;
     if (requestId && threadId) {
       state.chatRuntime.responseThreadsByRequestId[requestId] = threadId;
+      state.chatRuntime.requestIdByThreadId[threadId] = requestId;
     }
     if (threadId) {
       state.chatRuntime.unreadChatIds = removeChatRuntimeId(state.chatRuntime.unreadChatIds, threadId);
       state.chatRuntime.erroredChatIds = removeChatRuntimeId(state.chatRuntime.erroredChatIds, threadId);
-    }
-    if (threadId && state.chats.active.threadId !== threadId) {
+      // Tracked even for the thread this tab is currently viewing: a
+      // generation started elsewhere (another surface, another tab) still
+      // needs to be discoverable so a spectator stream can attach to it.
       state.chatRuntime.generatingChatIds = addChatRuntimeId(
         state.chatRuntime.generatingChatIds,
         threadId,
@@ -280,6 +283,9 @@ export const eventHandlers = {
     const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
     if (requestId) {
       delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
+      delete state.chatRuntime.requestIdByThreadId[threadId];
     }
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
@@ -298,6 +304,9 @@ export const eventHandlers = {
     const isActiveThread = Boolean(threadId) && state.chats.active.threadId === threadId;
     if (requestId) {
       delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
+      delete state.chatRuntime.requestIdByThreadId[threadId];
     }
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
@@ -318,6 +327,9 @@ export const eventHandlers = {
     const threadId = responseThreadIdFor(payload, state.chatRuntime.responseThreadsByRequestId);
     if (requestId) {
       delete state.chatRuntime.responseThreadsByRequestId[requestId];
+    }
+    if (threadId && state.chatRuntime.requestIdByThreadId[threadId] === requestId) {
+      delete state.chatRuntime.requestIdByThreadId[threadId];
     }
     state.chatRuntime.generatingChatIds = removeChatRuntimeId(
       state.chatRuntime.generatingChatIds,
@@ -349,6 +361,22 @@ export const eventHandlers = {
     state.chats.loaded = true;
   },
   'chat.session.selected': (state, payload) => {
+    const sessionThreadId = payload.session?.thread_id || null;
+    const activeRequestId = typeof payload.session?.active_request_id === 'string'
+      ? payload.session.active_request_id
+      : null;
+    if (sessionThreadId) {
+      if (activeRequestId) {
+        state.chatRuntime.requestIdByThreadId[sessionThreadId] = activeRequestId;
+        state.chatRuntime.responseThreadsByRequestId[activeRequestId] = sessionThreadId;
+        state.chatRuntime.generatingChatIds = addChatRuntimeId(
+          state.chatRuntime.generatingChatIds,
+          sessionThreadId,
+        );
+      } else if (state.chatRuntime.requestIdByThreadId[sessionThreadId]) {
+        delete state.chatRuntime.requestIdByThreadId[sessionThreadId];
+      }
+    }
     if (state.chats.reconciliation.requestId === payload.request_id) {
       state.chats.reconciliation.detail = payload.session || null;
       state.chats.reconciliation.threadId = payload.session?.thread_id || null;
@@ -432,6 +460,10 @@ export const selectChatSessions = createSelector(
 export const selectChatSessionsState = (state) => state.uiData.chats;
 export const selectUnreadChatIds = (state) => state.uiData.chatRuntime.unreadChatIds;
 export const selectGeneratingChatIds = (state) => state.uiData.chatRuntime.generatingChatIds;
+export const selectRequestIdByThreadId = (state) => state.uiData.chatRuntime.requestIdByThreadId;
+export const selectRequestIdForThread = (state, threadId) => (
+  threadId ? state.uiData.chatRuntime.requestIdByThreadId[threadId] || null : null
+);
 export const selectErroredChatIds = (state) => state.uiData.chatRuntime.erroredChatIds;
 export const selectChatIndicators = createSelector(
   [selectUnreadChatIds, selectGeneratingChatIds, selectErroredChatIds],
