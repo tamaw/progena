@@ -65,7 +65,10 @@ def test_validate_marketplaces_document_rejects_bad_name():
 
 
 def test_validate_marketplaces_document_rejects_missing_source():
-    with pytest.raises(ValueError, match="marketplace 'acme-tools' is missing 'source'"):
+    with pytest.raises(
+        ValueError,
+        match="marketplace 'acme-tools' does not conform to schema: 'source' is a required property",
+    ):
         validate_marketplaces_document('{"marketplaces": {"acme-tools": {}}}')
 
 

@@ -41,6 +41,8 @@ async def test_a2a_completion_node_persists_one_tool_message() -> None:
             mcp_refresh_seconds=60.0,
             plugin_update_check_seconds=86400.0,
             registry_refresh_seconds=60.0,
+            repo_scan_seconds=3600.0,
+            worktree_dir=None,
             heartbeat_health_seconds=30.0,
             timezone="UTC",
             reasoning_enabled=False,
