@@ -80,6 +80,11 @@ def default_marketplaces_config_payload() -> dict[str, Any]:
     return {"marketplaces": {}}
 
 
+def default_repos_config_payload() -> dict[str, Any]:
+    """Return the default repos configuration stored in the shared state document."""
+    return {"repos": {}}
+
+
 def default_schedule_config_payload() -> dict[str, Any]:
     """Return the default (empty) schedule document persisted in Postgres."""
     return {}
@@ -132,6 +137,11 @@ class RuntimeConfig:
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
+    # Cadence for the heartbeat's git-status scan of declared repos.json
+    # entries (branch, dirty count, commits, worktrees). Cheap local
+    # subprocess calls, no network, so this can run far more often than the
+    # registry refresh.
+    repo_scan_seconds: int = 120
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
     checkpoint_interval_seconds: int = 30
@@ -154,6 +164,7 @@ class RuntimeConfig:
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
             plugin_update_check_seconds=env_int("PROGENITOR_PLUGIN_UPDATE_CHECK_SECONDS", 86400),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
+            repo_scan_seconds=env_int("PROGENITOR_REPO_SCAN_SECONDS", 120),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
             checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),
@@ -409,6 +420,11 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
         (
             "registry_refresh_seconds",
             config.runtime.registry_refresh_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 86400,
+        ),
+        (
+            "repo_scan_seconds",
+            config.runtime.repo_scan_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 86400,
         ),
         (

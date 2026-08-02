@@ -525,6 +525,8 @@ class SchedulingState(TypedDict, total=False):
     registry_discovery_summary: dict[str, Any] | None
     last_registry_refresh_at: str | None
     registry_refresh_summary: dict[str, Any] | None
+    last_repo_scan_at: str | None
+    repo_scan_summary: dict[str, Any] | None
     last_health_write_at: str | None
     is_scheduled_input: bool
     scheduled_schedule_id: str | None
