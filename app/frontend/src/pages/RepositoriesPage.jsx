@@ -48,11 +48,13 @@ function scanStatus(scan) {
   if (!scan.is_git_repo) return 'error';
   if (scan.error) return 'error';
   if ((scan.dirty_count || 0) > 0) return 'dirty';
+  if ((scan.upstream_ahead || 0) > 0 || (scan.upstream_behind || 0) > 0) return 'upstream';
   return 'clean';
 }
 
 const REPO_STATUS_TONE = {
-  clean: 'ok',
+  clean: 'muted',
+  upstream: 'ok',
   dirty: 'warning',
   error: 'error',
   pending: 'muted',
@@ -60,6 +62,7 @@ const REPO_STATUS_TONE = {
 
 const REPO_STATUS_LABEL = {
   clean: 'Synced',
+  upstream: 'Changes upstream',
   dirty: 'Uncommitted changes',
   error: 'Scan error',
   pending: 'Not yet cloned',
@@ -270,7 +273,7 @@ export default function RepositoriesPage() {
                   className={`repo-source-row ${selectedRow?.id === row.id ? 'is-selected' : ''}`}
                   onClick={() => setSelectedId(row.id)}
                 >
-                  <span className={`repo-source-row__mark repo-source-row__mark--${rowStatus === 'clean' ? 'synced' : rowStatus === 'dirty' ? 'review' : 'warning'}`} />
+                  <span className={`repo-source-row__mark repo-source-row__mark--${REPO_STATUS_TONE[rowStatus]}`} />
                   <span className="repo-source-row__top">
                     <span className="repo-source-row__source">{row.declared?.remote_url ? 'Remote' : 'Local'}</span>
                     <span className="repo-source-row__branch">{row.scan?.branch || '—'}</span>

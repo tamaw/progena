@@ -62,6 +62,8 @@ class RepoScanResult:
     branches: list[dict[str, Any]] = field(default_factory=list)
     commits: list[dict[str, str]] = field(default_factory=list)
     contributors: list[str] = field(default_factory=list)
+    upstream_ahead: int | None = None
+    upstream_behind: int | None = None
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -76,6 +78,8 @@ class RepoScanResult:
             "last_commit": self.last_commit,
             "branches": self.branches,
             "commits": self.commits,
+            "upstream_ahead": self.upstream_ahead,
+            "upstream_behind": self.upstream_behind,
             "error": self.error,
         }
 
@@ -181,6 +185,15 @@ async def scan_repo(local_path: str, *, worktree_dir: Path | None = None) -> Rep
     result.contributors = sorted(
         {line.strip() for line in contributors_out.splitlines() if line.strip()}
     )
+    upstream_code, upstream_counts, _ = await _run_git(
+        repo_path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD"
+    )
+    if upstream_code == 0 and "\t" in upstream_counts:
+        behind_str, ahead_str = upstream_counts.split("\t", 1)
+        if behind_str.strip().isdigit() and ahead_str.strip().isdigit():
+            result.upstream_behind = int(behind_str)
+            result.upstream_ahead = int(ahead_str)
+
     return result
 
 
