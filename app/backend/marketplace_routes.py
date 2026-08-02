@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
+from app.progenitor.marketplaces import validate_marketplaces_payload
 from app.progenitor.plugins.sources import PluginFetchError, fetch_marketplace
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
@@ -16,7 +17,6 @@ from .marketplace_service import (
     load_marketplaces,
     save_marketplaces,
     set_cached_catalog,
-    validate_marketplaces_payload,
 )
 from .request_utils import request_correlation_id as _request_correlation_id
 from .ui_routes import broadcast_marketplaces_snapshot, broadcast_plugin_catalog_snapshot

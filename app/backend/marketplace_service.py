@@ -13,11 +13,9 @@ UI stream the same way it already does for ``plugins``/``mcp``.
 
 from __future__ import annotations
 
-import json
 import time
 from typing import Any
 
-from app.progenitor.agent.state_backend import validate_marketplaces_document
 from app.progenitor.config import default_marketplaces_config_payload
 
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
@@ -25,19 +23,6 @@ from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
 MARKETPLACES_DOC_KEY = "marketplaces"
 _CATALOG_CACHE: dict[str, tuple[float, Any]] = {}
 _CATALOG_TTL_SECONDS = 300
-
-
-def validate_marketplaces_payload(data: Any) -> dict[str, Any]:
-    """Validate a marketplaces payload (``{"marketplaces": {"<name>": {...}}}``).
-
-    Thin wrapper around the same validator the agent's ``/config/marketplaces.json``
-    writes go through, so both paths enforce one schema. Raises ``ValueError``
-    (with a concise message) on any schema violation.
-    """
-    validated = validate_marketplaces_document(json.dumps(data))
-    if not isinstance(validated, dict):
-        raise ValueError("top level must be a JSON object")
-    return validated
 
 
 def load_marketplaces() -> dict[str, Any]:
