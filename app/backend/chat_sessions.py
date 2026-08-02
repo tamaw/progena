@@ -154,6 +154,7 @@ class ChatSessionSummary(BaseModel):
 class ChatSessionDetail(ChatSessionSummary):
     messages: list[ChatMessage] = Field(default_factory=list)
     has_more_messages: bool = False
+    active_request_id: str | None = None
 
 
 CHAT_MESSAGE_PAGE_SIZE = 50
@@ -294,16 +295,16 @@ def _resolve_thread_id(
     return None
 
 
-def _resolve_metadata_key(store: BackendDocumentStore, chat_id: str) -> str | None:
-    if _get_metadata(store, chat_id) is not None:
-        return chat_id
-    query_thread_id = _thread_id_from_session_id(chat_id)
+def _resolve_metadata_key(store: BackendDocumentStore, thread_id: str) -> str | None:
+    if _get_metadata(store, thread_id) is not None:
+        return thread_id
+    query_thread_id = _thread_id_from_session_id(thread_id)
     for key in _metadata_index(store):
         metadata = _get_metadata(store, key)
         if metadata is None:
             continue
-        thread_id = _thread_id_for_metadata(metadata)
-        if thread_id == chat_id or (query_thread_id and thread_id == query_thread_id):
+        candidate_thread_id = _thread_id_for_metadata(metadata)
+        if candidate_thread_id == thread_id or (query_thread_id and candidate_thread_id == query_thread_id):
             return key
     return None
 
