@@ -43,10 +43,9 @@ from deepagents.backends.utils import (
 
 from ..runtime.thread_context import get_current_thread_id
 from ..schedule.engine import parse_schedule_datetime
-from ..schemas import load_schema
+from ..schemas import check_entry_schema
 from ..state.models import ScheduleEntry
 from ..state.preferences import default_preferences_payload, validate_preferences_document
-from ..structured import validate_against_schema
 from ..utils import utcnow, utcnow_isoformat
 from ..workflows import (
     parse_workflow_definition_document,
@@ -89,7 +88,7 @@ def validate_mcp_document(content: str) -> JsonDoc:
     for name, cfg in servers.items():
         if not isinstance(cfg, dict):
             raise ValueError(f"server '{name}' must be an object")
-        _check_entry_schema(f"server '{name}'", cfg, "mcp_server_entry")
+        check_entry_schema(f"server '{name}'", cfg, "mcp_server_entry")
         url = str(cfg.get("url") or cfg.get("endpoint") or "").strip()
         if not url:
             raise ValueError(f"server '{name}' is missing 'url'")
@@ -133,7 +132,7 @@ def validate_plugins_document(content: str) -> JsonDoc:
         source = entry.get("source")
         if not source:
             raise ValueError(f"plugin '{key}' is missing 'source'")
-        _check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
+        check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
 
     return data
 
@@ -173,7 +172,7 @@ def validate_marketplaces_document(content: str) -> JsonDoc:
             raise ValueError(f"marketplace '{name}' is missing 'source'")
         if "added_at" not in entry:
             entry["added_at"] = utcnow_isoformat()
-        _check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
+        check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
 
     return data
 
@@ -202,7 +201,7 @@ def validate_registry_document(content: str) -> JsonDoc:
     for index, agent in enumerate(agents):
         if not isinstance(agent, dict):
             raise ValueError(f"agent {index} must be an object")
-        _check_entry_schema(f"agent {index}", agent, "agent_entry")
+        check_entry_schema(f"agent {index}", agent, "agent_entry")
         if not str(agent.get("name") or "").strip():
             raise ValueError(f"agent {index} is missing 'name'")
 
@@ -213,56 +212,19 @@ def validate_registry_document(content: str) -> JsonDoc:
     return data
 
 
-_REPO_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-_REPO_ACCESS_VALUES = {"read", "write"}
-
-
 def validate_repos_document(content: str) -> JsonDoc:
     """Parse + validate a ``repos.json`` payload (the ``repos`` document).
 
     Shape: ``{"repos": {"<id>": {...}}}``, no other top-level keys. Each entry
     declares a repository the operator wants tracked; git state (branches,
     commits, worktrees) is scanned separately by the heartbeat and never lives
-    in this document.
+    in this document. Delegates to :mod:`..repos.schema` -- the same function
+    the backend's ``/api/ui/repos`` routes call directly on already-parsed
+    payloads, so both write paths enforce identical rules.
     """
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"repos"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+    from ..repos.schema import validate_repos_document as _validate
 
-    repos = data.get("repos")
-    if not isinstance(repos, dict):
-        raise ValueError("missing 'repos' object")
-
-    for repo_id, entry in repos.items():
-        if not _REPO_ID_RE.match(repo_id):
-            raise ValueError(f"repo id '{repo_id}' must be kebab-case (lowercase, digits, hyphens)")
-        if not isinstance(entry, dict):
-            raise ValueError(f"repo '{repo_id}' must be an object")
-        name = entry.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError(f"repo '{repo_id}' is missing 'name'")
-        local_path = entry.get("local_path")
-        if not isinstance(local_path, str) or not local_path.strip():
-            raise ValueError(f"repo '{repo_id}' is missing 'local_path'")
-        access = entry.get("access")
-        if access not in _REPO_ACCESS_VALUES:
-            raise ValueError(
-                f"repo '{repo_id}' access must be one of {sorted(_REPO_ACCESS_VALUES)}"
-            )
-        remote_url = entry.get("remote_url")
-        if remote_url is not None and not isinstance(remote_url, str):
-            raise ValueError(f"repo '{repo_id}' remote_url must be a string")
-        if "created_at" not in entry:
-            entry["created_at"] = utcnow_isoformat()
-        entry["updated_at"] = utcnow_isoformat()
-
-    return data
+    return _validate(content)
 
 
 def validate_knowledge_document(content: str) -> JsonDoc:
@@ -397,25 +359,6 @@ def markdown_to_inbox_message(content: str, message_id: str) -> dict[str, Any]:
 
 def _doc_to_text(doc: JsonDoc) -> str:
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
-
-
-def _check_entry_schema(label: str, entry: dict[str, Any], schema_name: str) -> None:
-    """Validate one entry dict against its JSON Schema (the enforced floor).
-
-    The JSON Schema files under ``data/schemas/`` describe the same per-entry
-    shapes as this module's hand-rolled semantic checks (croniter parsing,
-    timestamp parsing, ...). Without this, the two sources of truth can
-    silently diverge; this makes the schema an enforced floor instead of just
-    documentation. Raises ``ValueError`` (matching this module's other
-    validators) on a schema violation or a missing/malformed schema file.
-    """
-    try:
-        schema = load_schema(schema_name)
-    except FileNotFoundError as exc:
-        raise ValueError(f"{label}: schema '{schema_name}' not found: {exc}") from exc
-    error = validate_against_schema(entry, schema)
-    if error is not None:
-        raise ValueError(f"{label} does not conform to schema: {error}")
 
 
 class _AsyncOnlyFileBackendMixin:
@@ -1212,7 +1155,7 @@ def validate_schedule_document(content: str) -> JsonDoc:
     for entry_id, item in data.items():
         if not isinstance(item, dict):
             raise ValueError(f"entry '{entry_id}' must be an object")
-        _check_entry_schema(f"entry '{entry_id}'", item, "schedule_entry")
+        check_entry_schema(f"entry '{entry_id}'", item, "schedule_entry")
 
         message = item.get("message")
         if not isinstance(message, str) or not message.strip():

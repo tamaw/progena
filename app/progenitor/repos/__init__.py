@@ -9,6 +9,7 @@ from .scan import (
     scan_declared_repos,
     scan_repo,
 )
+from .schema import validate_repos_document, validate_repos_payload
 
 __all__ = [
     "RepoScanResult",
@@ -16,4 +17,6 @@ __all__ = [
     "aggregate_workspace_signal",
     "scan_declared_repos",
     "scan_repo",
+    "validate_repos_document",
+    "validate_repos_payload",
 ]
