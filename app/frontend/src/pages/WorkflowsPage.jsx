@@ -949,7 +949,7 @@ const NODE_TYPES = {
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
 // left = expand the panel leftward, right = collapse it away). Ported from the
-// Agents/Sequences canvas.
+// Agents/Routines canvas.
 function ChevronLeftSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -977,7 +977,7 @@ const DOCK_ITEM_META = {
 };
 
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
-// from the Agents/Sequences canvas's GraphDock: drag onto the canvas or click
+// from the Agents/Routines canvas's GraphDock: drag onto the canvas or click
 // to add at the next slot. The event node is the fixed start and isn't
 // dock-addable.
 function WorkflowDock({ onAdd }) {
@@ -1008,7 +1008,7 @@ function WorkflowDock({ onAdd }) {
 }
 
 // Collapsed right-edge dock holding the workflow's auxiliary views (details
-// form, JSON editor, run history) — ported from the Agents/Sequences canvas's
+// form, JSON editor, run history) — ported from the Agents/Routines canvas's
 // GraphSideDock so the canvas itself can occupy the full page instead of
 // sharing space with a permanent header/form.
 const WORKFLOW_SIDE_ITEMS = [

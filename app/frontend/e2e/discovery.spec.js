@@ -16,7 +16,7 @@ const ROUTES = [
   ['Models', '/models'],
   ['Channels', '/channels'],
   ['Agents', '/agents'],
-  ['Sequences', '/sequences'],
+  ['Routines', '/routines'],
   ['Tools', '/tools'],
   ['Tasks', '/tasks'],
   ['Kanban', '/kanban'],
@@ -82,9 +82,9 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Sequences renders the React Flow graph canvas for the selected agent (AgentGraph extraction)', async ({ page }) => {
+  test('Routines renders the React Flow graph canvas for the selected agent (AgentGraph extraction)', async ({ page }) => {
     const errors = trackPageErrors(page);
-    await page.goto('/sequences');
+    await page.goto('/routines');
     // The extracted graph module mounts React Flow for the auto-selected agent.
     await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 20_000 });
     expect(errors).toEqual([]);

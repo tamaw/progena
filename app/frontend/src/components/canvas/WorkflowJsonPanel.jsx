@@ -22,7 +22,7 @@ function ChevronRightSmall() {
 // A lightweight JSON editor: an editable textarea overlaid on a highlight.js
 // rendered <pre> so the user gets JSON syntax highlighting while typing. The two
 // layers share identical typography so the caret/text line up; the textarea text
-// is transparent and the highlighted layer shows through. Mirrors the Sequences
+// is transparent and the highlighted layer shows through. Mirrors the Routines
 // page editor on the Agents canvas.
 export function JsonCodeEditor({ value, onChange }) {
   const highlightRef = useRef(null);
@@ -61,7 +61,7 @@ export function JsonCodeEditor({ value, onChange }) {
   );
 }
 
-// Collapsed right-edge rail that opens the JSON editor. Mirrors the Sequences
+// Collapsed right-edge rail that opens the JSON editor. Mirrors the Routines
 // canvas tools dock but overlays the workflow canvas's right edge.
 export function WorkflowJsonDock({ onOpen }) {
   return (

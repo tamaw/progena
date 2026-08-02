@@ -451,7 +451,7 @@ function ChevronRightSmall() {
   );
 }
 
-// Collapsed right-edge tools dock for the sequences canvas. Mirrors the left
+// Collapsed right-edge tools dock for the routines canvas. Mirrors the left
 // pane's collapse rail but on the right; each item expands its own panel. Add
 // future tools by extending GRAPH_SIDE_ITEMS and handling their id in onSelect.
 const GRAPH_SIDE_ITEMS = [
