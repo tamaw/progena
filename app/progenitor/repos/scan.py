@@ -17,9 +17,6 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 _GIT_TIMEOUT_SECONDS = 10.0
-_TREE_MAX_DEPTH = 2
-_TREE_MAX_ENTRIES = 40
-_TREE_SKIP_NAMES = {".git", "node_modules", "__pycache__", ".venv", ".mypy_cache", ".pytest_cache"}
 _COMMIT_LIST_LIMIT = 5
 _BRANCH_LIST_LIMIT = 25
 
@@ -50,31 +47,6 @@ async def _run_git(repo_path: Path, *args: str) -> tuple[int, str, str]:
     )
 
 
-def _shallow_tree(repo_path: Path) -> str:
-    """Render a depth-limited directory listing, VCS/build noise filtered."""
-    lines: list[str] = []
-
-    def walk(path: Path, prefix: str, depth: int) -> None:
-        if depth > _TREE_MAX_DEPTH or len(lines) >= _TREE_MAX_ENTRIES:
-            return
-        try:
-            entries = sorted(
-                (entry for entry in path.iterdir() if entry.name not in _TREE_SKIP_NAMES),
-                key=lambda entry: (not entry.is_dir(), entry.name.lower()),
-            )
-        except OSError:
-            return
-        for entry in entries:
-            if len(lines) >= _TREE_MAX_ENTRIES:
-                return
-            lines.append(f"{prefix}{entry.name}{'/' if entry.is_dir() else ''}")
-            if entry.is_dir():
-                walk(entry, prefix + "  ", depth + 1)
-
-    walk(repo_path, "", 1)
-    return "\n".join(lines)
-
-
 @dataclass
 class RepoScanResult:
     """One declared repo's derived git state, as of the last heartbeat tick."""
@@ -89,7 +61,7 @@ class RepoScanResult:
     last_commit: dict[str, str] | None = None
     branches: list[dict[str, Any]] = field(default_factory=list)
     commits: list[dict[str, str]] = field(default_factory=list)
-    tree: str = ""
+    contributors: list[str] = field(default_factory=list)
     error: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,7 +76,6 @@ class RepoScanResult:
             "last_commit": self.last_commit,
             "branches": self.branches,
             "commits": self.commits,
-            "tree": self.tree,
             "error": self.error,
         }
 
@@ -206,7 +177,10 @@ async def scan_repo(local_path: str, *, worktree_dir: Path | None = None) -> Rep
     _, recent_out, _ = await _run_git(repo_path, "log", "--since=30.days", "--format=%h")
     result.commits_30d = len([line for line in recent_out.splitlines() if line.strip()])
 
-    result.tree = _shallow_tree(repo_path)
+    _, contributors_out, _ = await _run_git(repo_path, "log", "--all", "--format=%an")
+    result.contributors = sorted(
+        {line.strip() for line in contributors_out.splitlines() if line.strip()}
+    )
     return result
 
 
@@ -215,25 +189,27 @@ class WorkspaceSignal:
     """Cross-repo aggregate shown in the Repositories page's workspace-signal row."""
 
     linked_repos: int = 0
-    sync_health_pct: float = 0.0
+    contributor_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "linked_repos": self.linked_repos,
-            "sync_health_pct": round(self.sync_health_pct, 1),
+            "contributor_count": self.contributor_count,
         }
 
 
 def aggregate_workspace_signal(scans: dict[str, RepoScanResult]) -> WorkspaceSignal:
-    """Aggregate cross-repo workspace signal from one scan batch."""
+    """Aggregate cross-repo workspace signal from one scan batch.
+
+    ``contributor_count`` is deduped by author name across every linked repo
+    (not summed per-repo), so someone committing to two declared repos only
+    counts once.
+    """
     resolved = [scan for scan in scans.values() if scan.exists and scan.is_git_repo]
-    if not resolved:
-        return WorkspaceSignal(linked_repos=len(scans), sync_health_pct=0.0)
-    clean = sum(1 for scan in resolved if scan.dirty_count == 0)
-    return WorkspaceSignal(
-        linked_repos=len(scans),
-        sync_health_pct=(clean / len(resolved)) * 100.0,
-    )
+    contributors: set[str] = set()
+    for scan in resolved:
+        contributors.update(scan.contributors)
+    return WorkspaceSignal(linked_repos=len(scans), contributor_count=len(contributors))
 
 
 async def scan_declared_repos(
