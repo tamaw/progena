@@ -289,6 +289,7 @@ export {
   createRepo,
   updateRepo,
   deleteRepo,
+  fetchRepoUpstream,
   selectRepos,
   selectReposState,
   selectWorkspaceSignal,

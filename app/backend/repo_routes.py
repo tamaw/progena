@@ -1,5 +1,6 @@
 """Repositories page API routes — the agent-editable ``repos`` document plus
-the heartbeat-derived ``repo_scan`` read-through."""
+the heartbeat-derived ``repo_scan`` read-through (and on-demand write, via
+``/fetch``, for the "Fetch" action)."""
 
 from __future__ import annotations
 
@@ -11,7 +12,14 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
-from .repo_service import RepoNotFoundError, create_repo, delete_repo, update_repo
+from .repo_service import (
+    RepoFetchError,
+    RepoNotFoundError,
+    create_repo,
+    delete_repo,
+    fetch_and_rescan_repo,
+    update_repo,
+)
 from .request_utils import request_correlation_id as _request_correlation_id
 from .ui_routes import broadcast_repo_detail, broadcast_repositories_snapshot
 
@@ -128,3 +136,27 @@ async def get_repo_detail(
     except RepoNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"repo '{repo_id}' not found") from exc
     return acknowledgement_response(request_id, ["repo.detail.updated"])
+
+
+@router.post("/{repo_id}/fetch", status_code=202, response_model=UiRequestAcknowledgement)
+async def fetch_repo_entry(
+    repo_id: str,
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+) -> UiRequestAcknowledgement:
+    """Run ``git fetch`` against one declared repo and broadcast the refreshed scan.
+
+    On-demand only -- checks whether the repo is stale relative to its
+    upstream without merging anything. Distinct from the heartbeat's
+    periodic local-only scan (see ``repo_service.fetch_and_rescan_repo``).
+    """
+    request_id = _request_correlation_id(request, x_request_id)
+    try:
+        await fetch_and_rescan_repo(repo_id)
+    except RepoNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"repo '{repo_id}' not found") from exc
+    except RepoFetchError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    broadcast_repositories_snapshot(request_id=request_id)
+    broadcast_repo_detail(repo_id, request_id=request_id)
+    return acknowledgement_response(request_id, ["repositories.snapshot", "repo.detail.updated"])

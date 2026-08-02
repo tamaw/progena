@@ -61,6 +61,19 @@ export const deleteRepo = createAcknowledgedThunk('uiData/deleteRepo', async ({ 
   });
 });
 
+// On-demand "Fetch": runs `git fetch` against the repo's remote and merges a
+// fresh scan into the repo_scan document server-side (see
+// app/backend/repo_service.py:fetch_and_rescan_repo), instead of waiting out
+// the heartbeat's own scan interval. Updated branch/upstream state arrives
+// on `repositories.snapshot` + `repo.detail.updated`, same as every other
+// write here.
+export const fetchRepoUpstream = createAcknowledgedThunk('uiData/fetchRepoUpstream', async ({ reposUrl, repoId }, { requestId }) => {
+  return requestAcknowledged(`${reposUrl}/${encodeURIComponent(repoId)}/fetch`, {
+    method: 'POST',
+    requestId,
+  });
+});
+
 export const eventHandlers = {
   'repositories.snapshot': (state, payload) => {
     state.repos.items = Array.isArray(payload.items) ? payload.items : [];

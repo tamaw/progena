@@ -10,13 +10,12 @@ import {
   PaneEmptyState,
 } from '../components/layout/PaneList';
 import DetailHeader, {
-  CloneActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
   OpenActionIcon,
-  PullActionIcon,
+  ReconnectActionIcon,
 } from '../components/layout/DetailHeader';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -26,6 +25,7 @@ import {
   createRepo,
   deleteRepo,
   fetchRepoDetail,
+  fetchRepoUpstream,
   fetchRepos,
   selectRepoDetail,
   selectRepos,
@@ -67,6 +67,13 @@ const REPO_STATUS_LABEL = {
   error: 'Scan error',
   pending: 'Not yet cloned',
 };
+
+// Declared remote_url is stored bare (e.g. "github.com/tamaw/marketplace",
+// no scheme) -- add https:// so window.open() navigates instead of resolving
+// it relative to the current page.
+function normalizeRemoteUrl(remoteUrl) {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(remoteUrl) ? remoteUrl : `https://${remoteUrl}`;
+}
 
 function repositoryMatchesFilter(row, activeFilter) {
   const isRemote = Boolean(row.declared?.remote_url);
@@ -159,6 +166,8 @@ export default function RepositoriesPage() {
   const [isCreating, setIsCreating] = useState(false);
   const [createError, setCreateError] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [fetching, setFetching] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   const { loading } = useSelector(selectReposState);
 
@@ -192,6 +201,10 @@ export default function RepositoriesPage() {
     dispatch(fetchRepoDetail({ reposUrl, repoId: selectedRepoId }));
   }, [dispatch, reposUrl, selectedRepoId]);
 
+  useEffect(() => {
+    setFetchError(null);
+  }, [selectedRepoId]);
+
   const handleCreate = useCallback(async ({ name, localPath, access, remoteUrl, owner }) => {
     if (!name.trim() || !localPath.trim()) {
       setCreateError('Name and local worktree path are required.');
@@ -223,6 +236,26 @@ export default function RepositoriesPage() {
     if (!selectedRow) return;
     dispatch(deleteRepo({ reposUrl, repoId: selectedRow.id }));
     setSelectedId(null);
+  }, [dispatch, reposUrl, selectedRow]);
+
+  const handleOpen = useCallback(() => {
+    if (!selectedRow?.declared?.remote_url) return;
+    window.open(normalizeRemoteUrl(selectedRow.declared.remote_url), '_blank', 'noopener,noreferrer');
+  }, [selectedRow]);
+
+  const handleFetch = useCallback(async () => {
+    if (!selectedRow?.declared?.remote_url) return;
+    setFetching(true);
+    setFetchError(null);
+    try {
+      await dispatch(fetchRepoUpstream({ reposUrl, repoId: selectedRow.id })).unwrap();
+      // Just an ack; the refreshed branch/upstream state arrives on the next
+      // `repositories.snapshot` + `repo.detail.updated` broadcast.
+    } catch (err) {
+      setFetchError(err?.message || 'Fetch failed.');
+    } finally {
+      setFetching(false);
+    }
   }, [dispatch, reposUrl, selectedRow]);
 
   const status = scanStatus(selectedRow?.scan);
@@ -302,9 +335,23 @@ export default function RepositoriesPage() {
               title={declared.name}
               actions={(
                 <DetailHeaderActions>
-                  <DetailHeaderAction icon={<CloneActionIcon />} label="Clone" tooltip={`Clone ${declared.name}`} ariaLabel={`Clone ${declared.name}`} />
-                  <DetailHeaderAction icon={<OpenActionIcon />} label="Open in editor" tooltip={`Open ${declared.name} in editor`} ariaLabel={`Open ${declared.name} in editor`} />
-                  <DetailHeaderAction icon={<PullActionIcon />} label={`Pull ${scan?.branch || ''}`} tooltip="Pull" ariaLabel="Pull" variant="primary" />
+                  <DetailHeaderAction
+                    icon={<OpenActionIcon />}
+                    label="Open"
+                    tooltip={declared.remote_url ? `Open ${declared.remote_url}` : 'No remote URL configured'}
+                    ariaLabel={`Open ${declared.name}`}
+                    onClick={handleOpen}
+                    disabled={!declared.remote_url}
+                  />
+                  <DetailHeaderAction
+                    icon={<ReconnectActionIcon />}
+                    label="Fetch"
+                    tooltip={declared.remote_url ? 'Fetch from remote — check for upstream changes' : 'No remote URL configured'}
+                    ariaLabel="Fetch from remote"
+                    variant="primary"
+                    onClick={handleFetch}
+                    disabled={!declared.remote_url || fetching}
+                  />
                   <DetailHeaderAction icon={<DeleteActionIcon />} label="Remove" tooltip="Remove declared repo" ariaLabel="Remove declared repo" onClick={handleDelete} />
                 </DetailHeaderActions>
               )}
@@ -313,6 +360,7 @@ export default function RepositoriesPage() {
                 <span key="access" className="muted">{declared.access === 'write' ? 'read · write' : 'read only'}</span>,
                 <span key="commits"><strong>{scan?.commit_count ?? '—'}</strong> commits</span>,
                 <span key="branches"><strong>{scan?.branch_count ?? '—'}</strong> branches</span>,
+                fetchError ? <DetailStatus key="fetch-error" tone="error">{fetchError}</DetailStatus> : null,
               ]}
             />
 

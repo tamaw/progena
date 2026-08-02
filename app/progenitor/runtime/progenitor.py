@@ -71,17 +71,20 @@ class Progenitor:
         disabled set re-applied. ``plugins`` triggers the plugin reconciler.
         ``repos`` drops the cached declared-repos document so the next
         heartbeat scan sees backend-side create/update/delete calls instead
-        of a stale in-process snapshot. This is the single path for both
-        UI-driven and agent-driven config changes — there is no separate
-        write-hook.
+        of a stale in-process snapshot. ``repo_scan`` does the same for the
+        heartbeat-derived git-state document -- the backend's on-demand
+        "Fetch" action (``repo_service.fetch_and_rescan_repo``) writes it
+        directly too now, alongside the heartbeat. This is the single path
+        for both UI-driven and agent-driven config changes -- there is no
+        separate write-hook.
         """
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
-        if key == "repos" and self.state_manager is not None:
-            self.state_manager.invalidate_document("repos")
+        if key in ("repos", "repo_scan") and self.state_manager is not None:
+            self.state_manager.invalidate_document(key)
         if self._mcp_scheduler is None and self._plugin_scheduler is None:
             return
         if key == "mcp" and self._mcp_scheduler is not None:

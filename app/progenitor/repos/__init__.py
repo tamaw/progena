@@ -6,6 +6,7 @@ from .scan import (
     RepoScanResult,
     WorkspaceSignal,
     aggregate_workspace_signal,
+    fetch_repo,
     scan_declared_repos,
     scan_repo,
 )
@@ -15,6 +16,7 @@ __all__ = [
     "RepoScanResult",
     "WorkspaceSignal",
     "aggregate_workspace_signal",
+    "fetch_repo",
     "scan_declared_repos",
     "scan_repo",
     "validate_repos_document",
