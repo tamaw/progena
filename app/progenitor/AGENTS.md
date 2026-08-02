@@ -125,7 +125,7 @@ The DeepAgent receives a virtual filesystem view backed by those documents:
 - `/config/schedule.json`: Scheduled tasks
 - `/config/agents.json`: A2A agent registry and runtime tools
 - `/config/repos.json`: Declared repositories (name, remote, local worktree path, read/write access) — agent-editable
-- `/config/repo_scan.json`: Read-only heartbeat-derived git state per declared repo (branch, dirty count, commits, tree); never agent-editable
+- `/config/repo_scan.json`: Read-only heartbeat-derived git state per declared repo (branch, dirty count, commits, contributor count); never agent-editable
 - `/config/preferences.json`: User profile and UI settings (display name, timezone, theme, nav/panel layout)
 - `/config/health.json`: Read-only heartbeat status
 - `/config/tasks/board.json` and `/config/tasks/<id>.md`: Kanban structure and cards

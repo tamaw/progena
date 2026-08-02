@@ -5521,20 +5521,6 @@ body,
   font-size: 10.5px;
 }
 
-.repo-file-tree {
-  margin: 0;
-  padding: 10px 14px;
-  overflow-x: auto;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-primary);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  font-family: var(--font-family-mono);
-  font-size: 12px;
-  line-height: 1.85;
-  white-space: pre;
-}
-
 .tools-pane {
   min-width: 300px;
 }

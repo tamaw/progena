@@ -340,8 +340,8 @@ export default function RepositoriesPage() {
                     <div className="repo-stat-cell__value">{workspaceSignal.linked_repos ?? rows.length}</div>
                   </article>
                   <article className="repo-stat-cell">
-                    <div className="repo-stat-cell__label">Sync health</div>
-                    <div className="repo-stat-cell__value">{workspaceSignal.sync_health_pct != null ? `${workspaceSignal.sync_health_pct}%` : '—'}</div>
+                    <div className="repo-stat-cell__label">Contributors</div>
+                    <div className="repo-stat-cell__value">{workspaceSignal.contributor_count ?? '—'}</div>
                   </article>
                 </div>
               </section>
@@ -389,10 +389,6 @@ export default function RepositoriesPage() {
                 )}
               </section>
 
-              <section className="repo-section">
-                <h2 className="repo-section__title">Tree</h2>
-                <pre className="repo-file-tree">{scan?.tree || '—'}</pre>
-              </section>
             </div>
           </>
         )}
