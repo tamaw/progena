@@ -976,7 +976,20 @@ function ConversationPage() {
         .filter(Boolean)
       : [];
     if (!areChatTranscriptsEquivalent(messages, canonicalMessages)) {
-      setMessages(mergeCanonicalMessages(messages, canonicalMessages));
+      // A spectated turn (someone else's send into a thread this page is
+      // just watching) never had the interleaved user message locally --
+      // only the assistant reply gets synthesized (see useChatStream's
+      // spectate finalize). That leaves `messages` one entry short of the
+      // canonical transcript, which would misalign mergeCanonicalMessages'
+      // by-index comparison and swap out every trailing row (a multi-row
+      // remount/flicker) instead of just the one row that legitimately
+      // needs its backend identity. Adopt the canonical list wholesale for
+      // that case; self-initiated sends keep the identity-preserving merge.
+      const isSpectatedReconciliation = typeof intent.streamId === 'string'
+        && intent.streamId.startsWith('spectate_');
+      setMessages(isSpectatedReconciliation
+        ? canonicalMessages
+        : mergeCanonicalMessages(messages, canonicalMessages));
       // Canonical reconciliation can replace the locally committed row with a
       // backend identity. The frozen live turn then cannot hide that row by
       // its client id, so hand visual ownership to the canonical transcript.
