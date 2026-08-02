@@ -11,6 +11,7 @@ import {
 } from '../components/layout/PaneList';
 import DetailHeader, {
   CloneActionIcon,
+  DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
   DetailStatus,
@@ -307,7 +308,7 @@ export default function RepositoriesPage() {
                   <DetailHeaderAction icon={<CloneActionIcon />} label="Clone" tooltip={`Clone ${declared.name}`} ariaLabel={`Clone ${declared.name}`} />
                   <DetailHeaderAction icon={<OpenActionIcon />} label="Open in editor" tooltip={`Open ${declared.name} in editor`} ariaLabel={`Open ${declared.name} in editor`} />
                   <DetailHeaderAction icon={<PullActionIcon />} label={`Pull ${scan?.branch || ''}`} tooltip="Pull" ariaLabel="Pull" variant="primary" />
-                  <DetailHeaderAction icon={<span aria-hidden="true">×</span>} label="Remove" tooltip="Remove declared repo" ariaLabel="Remove declared repo" onClick={handleDelete} />
+                  <DetailHeaderAction icon={<DeleteActionIcon />} label="Remove" tooltip="Remove declared repo" ariaLabel="Remove declared repo" onClick={handleDelete} />
                 </DetailHeaderActions>
               )}
               meta={[
