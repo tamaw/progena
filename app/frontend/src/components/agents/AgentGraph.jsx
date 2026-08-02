@@ -7,38 +7,28 @@ import {
   useRef,
   useState,
 } from 'react';
-import {
-  addEdge,
-  Background,
-  BaseEdge,
-  Controls,
-  EdgeLabelRenderer,
-  getSmoothStepPath,
-  Handle,
-  MarkerType,
-  MiniMap,
-  Position,
-  ReactFlow,
-  ReactFlowProvider,
-  useEdgesState,
-  useNodesState,
-  useReactFlow,
-} from '@xyflow/react';
-import '@xyflow/react/dist/style.css';
-// Reuse the shared canvas chrome (dock, minimap, controls, node card) so both
-// canvases share one source of truth. Agent-domain deltas live in chrome-frame.css.
+// Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
+// this still shares CSS with the Workflows canvas where the visuals overlap.
+// The Routines graph itself is NOT a free canvas though (see rationale below),
+// so it does not use React Flow at all.
 import '../../styles/canvas.css';
 import '../../styles/nodes.css';
 import hljs from 'highlight.js/lib/common';
 
-const graphFitViewOptions = { padding: 0.18 };
-const graphDefaultEdgeOptions = {
-  type: 'editable',
-  animated: true,
-};
+// A routine graph is compiled straight into a runnable LangGraph agent: node
+// position on screen carries no meaning (there's no "x"/"y" in the schema),
+// and every node MUST be reachable from a single `entry` point to ever run.
+// A free-drag canvas invites disconnected islands and arbitrary spatial
+// layout that says nothing about execution order, so this renders a rigid,
+// top-down chain instead: a fixed Start cap, one card per step, a fixed End
+// cap at every place the chain terminates, and a `+` control on each
+// connector to insert a step at that exact point. A `state_equals` router
+// node forks the chain into one column per branch (mirrors Azure Logic
+// Apps'/Power Automate's Condition/Switch actions) rather than trying to
+// force branching logic onto a single line.
 
-// Routine step kinds offered in the canvas dock (drag onto the canvas or click
-// to add). Mirrors app.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
+// Routine step kinds offered at each insertion point. Mirrors
+// app.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
 const GRAPH_NODE_KINDS = [
   { kind: 'prompt', label: 'Prompt', icon: '?' },
   { kind: 'code', label: 'Code', icon: '⚙' },
@@ -48,8 +38,7 @@ const GRAPH_NODE_KINDS = [
   { kind: 'noop', label: 'Noop', icon: '·' },
 ];
 
-// Accent per kind (kept in sync with the .agents-graph-node--* CSS and used by
-// the minimap so steps read at a glance).
+// Accent per kind (kept in sync with the .agents-graph-node--* CSS).
 const GRAPH_KIND_COLORS = {
   prompt: '#2f6ff6',
   code: '#b06ef6',
@@ -61,13 +50,32 @@ const GRAPH_KIND_COLORS = {
 
 const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
 
-function minimapNodeColor(node) {
-  return GRAPH_KIND_COLORS[node?.data?.kind] || '#8b949e';
+function titleCase(kind) {
+  return kind.charAt(0).toUpperCase() + kind.slice(1);
 }
 
-// Edit callbacks shared with the custom node/edge renderers (avoids threading
+function uniqueNodeId(kind, nodes) {
+  const ids = new Set(nodes.map((node) => node.id));
+  if (!ids.has(kind)) return kind;
+  let i = 1;
+  while (ids.has(`${kind}-${i}`)) i += 1;
+  return `${kind}-${i}`;
+}
+
+function uniqueBranchValue(branches) {
+  const used = new Set(Object.keys(branches || {}));
+  let i = 1;
+  while (used.has(`case-${i}`)) i += 1;
+  return `case-${i}`;
+}
+
+function makeNode(kind) {
+  return { id: '', kind, label: titleCase(kind), description: '', config: {} };
+}
+
+// Edit callbacks shared with the card/branch renderers (avoids threading
 // mutable refs through node data, which React forbids reading during render).
-const GraphEditContext = createContext({ updateNodeData: () => {}, updateEdgeLabel: () => {} });
+const GraphEditContext = createContext(null);
 
 // One config field bound to `data.config[field]` (a plain string value).
 function ConfigField({ id, config, field, label, placeholder, multiline, updateNodeConfig }) {
@@ -77,9 +85,9 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
       {multiline ? (
-        <textarea className="nodrag nowheel agents-graph-node__prompt" value={value} placeholder={placeholder} onChange={onChange} />
+        <textarea className="agents-graph-node__prompt" value={value} placeholder={placeholder} onChange={onChange} />
       ) : (
-        <input className="nodrag agents-graph-node__toolinput" value={value} placeholder={placeholder} onChange={onChange} />
+        <input className="agents-graph-node__toolinput" value={value} placeholder={placeholder} onChange={onChange} />
       )}
     </label>
   );
@@ -109,7 +117,7 @@ function InputsField({ id, config, updateNodeConfig }) {
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: data.path)</span>
       <textarea
-        className="nodrag nowheel agents-graph-node__prompt"
+        className="agents-graph-node__prompt"
         value={inputsToText(config?.inputs)}
         placeholder="host: parse_json.host"
         onChange={(event) => updateNodeConfig(id, { inputs: textToInputs(event.target.value) })}
@@ -160,241 +168,346 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
   return null;
 }
 
-// Optional per-node `state_equals` routing: giving a node a state key turns its
-// outgoing edges into named branches (edge label = branch value) instead of a
-// single plain edge. Kept on the node (not the edge) since one router config
-// covers all of a node's outgoing edges — mirrors the compiled graph's edge
-// shape, see app.progenitor.routines.graph.RoutineEdge.
-function RoutingFields({ id, data, updateNodeData }) {
+// A node becomes a router the moment it has branches; before that it's just a
+// "+ Split into branches" footer action. Once it is one, the state key it
+// routes on lives here (applies to all of that node's branches at once).
+function RoutingFooter({ id, routerEdge }) {
+  const { onChangeStateKey, onSplitIntoBranches, onRemoveBranching } = useContext(GraphEditContext);
+  if (!routerEdge) {
+    return (
+      <button type="button" className="agents-graph-node__split" onClick={() => onSplitIntoBranches(id)}>
+        + Split into branches
+      </button>
+    );
+  }
   return (
     <div className="agents-graph-node__routing">
       <input
-        className="nodrag agents-graph-node__toolinput"
-        value={data.routerStateKey || ''}
-        placeholder="route on data.<key> (optional)"
-        onChange={(event) => updateNodeData(id, { routerStateKey: event.target.value })}
+        className="agents-graph-node__toolinput"
+        value={routerEdge.state_key || ''}
+        placeholder="route on data.<key>"
+        onChange={(event) => onChangeStateKey(id, event.target.value)}
       />
-      {data.routerStateKey ? (
+      <button type="button" className="agents-graph-node__unsplit" onClick={() => onRemoveBranching(id)} title="Remove branching">
+        Remove branching
+      </button>
+    </div>
+  );
+}
+
+// One rigid step card: title bar (kind icon + editable label + kind badge)
+// over an editable body, plus the routing footer when it forks.
+function StepCard({ node, routerEdge }) {
+  const { updateNode, deleteNode } = useContext(GraphEditContext);
+  const updateNodeConfig = useCallback((nodeId, patch) => {
+    updateNode(nodeId, { config: { ...node.config, ...patch } });
+  }, [updateNode, node.config]);
+  return (
+    <div
+      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card`}
+      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+    >
+      <div className="node-title-bar">
+        <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
         <input
-          className="nodrag agents-graph-node__toolinput"
-          value={data.routerDefault || ''}
-          placeholder="default target node id"
-          onChange={(event) => updateNodeData(id, { routerDefault: event.target.value })}
+          className="node-title agents-node-title"
+          value={node.label || ''}
+          placeholder="Label"
+          onChange={(event) => updateNode(node.id, { label: event.target.value })}
         />
+        <span className="node-status-badge agents-node-kind-badge">{node.kind}</span>
+        <button
+          type="button"
+          className="agents-graph-node__delete"
+          onClick={() => deleteNode(node.id)}
+          title="Delete step"
+          aria-label="Delete step"
+        >
+          ×
+        </button>
+      </div>
+      <div className="node-body node-body-compact">
+        <NodeConfigBody id={node.id} kind={node.kind} config={node.config} updateNodeConfig={updateNodeConfig} />
+      </div>
+      <RoutingFooter id={node.id} routerEdge={routerEdge} />
+    </div>
+  );
+}
+
+// Fixed Start/End chrome. Never a schema node -- Start is purely "the chain
+// begins here" (points at `entry`), End is purely "this path terminates
+// here" (a node with no outgoing edge/branch). Rendered once per terminus,
+// so a branching routine can show multiple Ends -- that's real, not a bug.
+function ChainCap({ kind }) {
+  return <div className={`routine-cap routine-cap--${kind}`}>{kind === 'start' ? 'Start' : 'End'}</div>;
+}
+
+// A cycle (retry loop) or a rejoin (two branches converging on the same
+// node) both terminate the run they're rendered in rather than expanding
+// forever or duplicating a subtree. Loops are real (retry patterns); rejoins
+// are real (branches meeting back up) -- both are schema-legal edge targets.
+function ChainChip({ kind, label }) {
+  return <div className={`routine-chip routine-chip--${kind}`}>{label}</div>;
+}
+
+// The `+` on every connector: click to open a kind picker and insert a step
+// at exactly that point in the chain.
+function ConnectorInsert({ slot }) {
+  const { insertAt } = useContext(GraphEditContext);
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="routine-connector">
+      <span className="routine-connector__line" aria-hidden="true" />
+      <button
+        type="button"
+        className="routine-connector__btn"
+        onClick={() => setOpen((current) => !current)}
+        aria-label="Insert step here"
+        aria-expanded={open}
+      >
+        +
+      </button>
+      {open ? (
+        <div className="routine-connector__menu" role="menu">
+          {GRAPH_NODE_KINDS.map((item) => (
+            <button
+              key={item.kind}
+              type="button"
+              role="menuitem"
+              className="routine-connector__menu-item"
+              onClick={() => { insertAt(slot, item.kind); setOpen(false); }}
+            >
+              <span className={`canvas-dock-icon ${item.kind}`}>{item.icon}</span>
+              {item.label}
+            </button>
+          ))}
+        </div>
       ) : null}
     </div>
   );
 }
 
-// Inline-editable routine step, styled like the Workspace canvas nodes: a title
-// bar (type-icon chip + editable label + kind badge) over a body whose content is
-// editable per kind, plus an optional routing footer. Edits are autosaved.
-function EditableGraphNode({ id, data, selected }) {
-  const { updateNodeData } = useContext(GraphEditContext);
-  const updateNodeConfig = useCallback((nodeId, patch) => {
-    updateNodeData(nodeId, { config: { ...data.config, ...patch } });
-  }, [updateNodeData, data.config]);
+// Editable branch-case chip: the column header for one fork arm. Mirrors
+// Power Automate's per-case label -- double-click (or just focus) to rename.
+function BranchHeader({ value, isDefault, onRename, onRemove }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  function commit() {
+    setEditing(false);
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) onRename(trimmed);
+    else setDraft(value);
+  }
   return (
-    <div
-      className={`canvas-node agents-graph-node agents-graph-node--${data.kind} ${selected ? 'selected' : ''}`}
-      style={{ '--node-color': GRAPH_KIND_COLORS[data.kind] || data.color }}
-    >
-      <Handle type="target" position={Position.Left} className="canvas-handle" />
-      <div className="node-title-bar drag-handle">
-        <span className="node-type-icon">{GRAPH_KIND_ICONS[data.kind] || '•'}</span>
+    <div className={`routine-fork__header ${isDefault ? 'routine-fork__header--default' : ''}`}>
+      {isDefault ? (
+        <span className="routine-fork__header-label">Default</span>
+      ) : editing ? (
         <input
-          className="nodrag node-title agents-node-title"
-          value={data.label || ''}
-          placeholder="Label"
-          onChange={(event) => updateNodeData(id, { label: event.target.value })}
+          autoFocus
+          className="routine-fork__header-input"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => { if (event.key === 'Enter') commit(); }}
         />
-        <span className="node-status-badge agents-node-kind-badge">{data.kind}</span>
-      </div>
-      <div className="node-body node-body-compact">
-        <NodeConfigBody id={id} kind={data.kind} config={data.config} updateNodeConfig={updateNodeConfig} />
-        <RoutingFields id={id} data={data} updateNodeData={updateNodeData} />
-      </div>
-      <Handle type="source" position={Position.Right} className="canvas-handle" />
+      ) : (
+        <button type="button" className="routine-fork__header-label" onClick={() => setEditing(true)} title="Rename branch">
+          {value}
+        </button>
+      )}
+      <button type="button" className="routine-fork__header-remove" onClick={onRemove} title="Remove branch" aria-label="Remove branch">
+        ×
+      </button>
     </div>
   );
 }
 
-// Edge with a double-click-to-edit label. Decision branches and retry loops use
-// the label to name the route.
-function EditableGraphEdge({
-  id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, markerEnd, style, label,
-}) {
-  const { updateEdgeLabel } = useContext(GraphEditContext);
-  const [edgePath, labelX, labelY] = getSmoothStepPath({
-    sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition,
-  });
-  const [editing, setEditing] = useState(false);
-  const value = label ?? '';
+// Builds the whole reachable chain as a plain data tree in one synchronous,
+// side-effect-free pass -- BEFORE any JSX is produced. This has to happen up
+// front rather than by mutating shared state from inside lazily-invoked
+// React children (a fork's branches used to be rendered by calling this
+// recursively from within <ForkBlock>): React may invoke a function
+// component twice per commit (StrictMode), and a mutable `rendered`/
+// `visiting` Set mutated as a side effect of rendering would leak state from
+// a discarded first invocation into the real one, corrupting rejoin/cycle
+// detection. Building the full tree as pure data first, then rendering that
+// already-computed tree, sidesteps the whole class of bug.
+function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered) {
+  if (!nodeId) return null;
+  const node = nodesById.get(nodeId);
+  if (!node) return null;
+  if (visiting.has(nodeId)) return { type: 'loop', id: nodeId, label: node.label || nodeId };
+  if (rendered.has(nodeId)) return { type: 'rejoin', id: nodeId, label: node.label || nodeId };
+  rendered.add(nodeId);
+  visiting.add(nodeId);
+  const edge = edgeBySource.get(nodeId);
+  let next = null;
+  let fork = null;
+  if (edge && edge.router) {
+    fork = {
+      sourceId: nodeId,
+      edge,
+      branches: Object.entries(edge.branches || {}).map(([value, targetId]) => ({
+        value,
+        tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered),
+      })),
+      defaultTree: edge.default
+        ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered)
+        : null,
+    };
+  } else {
+    next = buildChainTree(edge ? edge.to : null, nodesById, edgeBySource, visiting, rendered);
+  }
+  visiting.delete(nodeId);
+  return { type: 'node', id: nodeId, node, next, fork };
+}
+
+// Renders an already-computed chain-tree run: a connector before each step,
+// the step itself, and either the next connector, a fork, or a terminus.
+// Pure -- safe to invoke from a React child any number of times.
+function renderRun(tree, initialSlot) {
+  const out = [];
+  let current = tree;
+  let slot = initialSlot;
+  let guard = 0;
+  while (guard++ < 2000) {
+    out.push(<ConnectorInsert key={`c-${slot.sourceId ?? 'root'}-${slot.kind}-${slot.value ?? ''}`} slot={slot} />);
+    if (current === null) {
+      out.push(<ChainCap key="end" kind="end" />);
+      break;
+    }
+    if (current.type === 'loop') {
+      out.push(<ChainChip key={`loop-${current.id}`} kind="loop" label={`↺ loops back to “${current.label}”`} />);
+      break;
+    }
+    if (current.type === 'rejoin') {
+      out.push(<ChainChip key={`rejoin-${current.id}`} kind="rejoin" label={`↳ continues at “${current.label}”`} />);
+      break;
+    }
+    out.push(<StepCard key={current.id} node={current.node} routerEdge={current.fork ? current.fork.edge : null} />);
+    if (current.fork) {
+      out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} />);
+      break;
+    }
+    slot = { sourceId: current.id, kind: 'plain' };
+    current = current.next;
+  }
+  return out;
+}
+
+// A router node forks into one column per branch (+ optional Default), each
+// an independently rigid chain -- no forced merge node, exactly like Azure
+// Logic Apps' Condition/Switch actions.
+function ForkBlock({ fork }) {
+  const { onAddBranch, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch } = useContext(GraphEditContext);
+  const { sourceId, edge, branches, defaultTree } = fork;
   return (
-    <>
-      <BaseEdge id={id} path={edgePath} markerEnd={markerEnd} style={style} />
-      <EdgeLabelRenderer>
-        <div
-          className="agents-graph-edge-label nodrag nopan"
-          style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-          onDoubleClick={() => setEditing(true)}
-        >
-          {editing ? (
-            <input
-              autoFocus
-              className="nodrag"
+    <div className="routine-fork">
+      <div className="routine-fork__row">
+        {branches.map(({ value, tree }) => (
+          <div key={value} className="routine-fork__column">
+            <BranchHeader
+              key={value}
               value={value}
-              onChange={(event) => updateEdgeLabel(id, event.target.value)}
-              onBlur={() => setEditing(false)}
-              onKeyDown={(event) => { if (event.key === 'Enter') setEditing(false); }}
+              onRename={(next) => onRenameBranch(sourceId, value, next)}
+              onRemove={() => onRemoveBranch(sourceId, value)}
             />
-          ) : (
-            value ? <span>{value}</span> : <span className="agents-graph-edge-label__add">+ label</span>
-          )}
+            {renderRun(tree, { sourceId, kind: 'branch', value })}
+          </div>
+        ))}
+        {edge.default ? (
+          <div className="routine-fork__column routine-fork__column--default">
+            <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
+            {renderRun(defaultTree, { sourceId, kind: 'default' })}
+          </div>
+        ) : (
+          <div className="routine-fork__column routine-fork__column--empty">
+            <button type="button" className="routine-fork__add-default" onClick={() => onAddDefault(sourceId)}>
+              + Add default
+            </button>
+          </div>
+        )}
+        <div className="routine-fork__column routine-fork__column--add">
+          <button type="button" className="routine-fork__add-branch" onClick={() => onAddBranch(sourceId)}>
+            + Add branch
+          </button>
         </div>
-      </EdgeLabelRenderer>
-    </>
+      </div>
+    </div>
   );
 }
 
-const agentGraphNodeTypes = { agentGraph: EditableGraphNode };
-const agentGraphEdgeTypes = { editable: EditableGraphEdge };
-
-// A router edge (`{from, router: 'state_equals', state_key, branches, default}`)
-// configures all of one node's outgoing edges at once; pull that config out per
-// source node id so seedNodes/seedEdges can each apply their half of it.
-function deriveRouterConfig(graph) {
-  const routerByNode = {};
-  (graph.edges || []).forEach((edge) => {
-    if (edge && edge.router) {
-      routerByNode[edge.from] = { stateKey: edge.state_key || '', default: edge.default || '' };
-    }
-  });
-  return routerByNode;
+// Nodes not reachable from `entry` (e.g. left behind after deleting whatever
+// pointed at them) never silently vanish -- they surface here so the author
+// can rewire or delete them explicitly instead of losing data invisibly.
+function UnreachableTray({ nodes }) {
+  const { deleteNode } = useContext(GraphEditContext);
+  if (!nodes.length) return null;
+  return (
+    <div className="routine-unreachable">
+      <div className="routine-unreachable__head">Unreachable steps ({nodes.length})</div>
+      <div className="routine-unreachable__list">
+        {nodes.map((node) => (
+          <div key={node.id} className="routine-unreachable__item">
+            <span className={`canvas-dock-icon ${node.kind}`}>{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
+            <span>{node.label || node.id}</span>
+            <button type="button" onClick={() => deleteNode(node.id)} title="Delete" aria-label="Delete">×</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
-function seedNodes(graph, agent) {
-  const routerByNode = deriveRouterConfig(graph);
-  return (graph.nodes || []).map((node, index) => ({
-    id: node.id,
-    type: 'agentGraph',
-    position: { x: node.x ?? index * 260, y: node.y ?? 80 },
-    data: {
-      kind: node.kind,
-      label: node.label ?? node.id,
-      config: node.config || {},
-      routerStateKey: routerByNode[node.id]?.stateKey || '',
-      routerDefault: routerByNode[node.id]?.default || '',
-      color: agent.color,
-    },
-  }));
+function RoutineChain({ nodes, edges, entry }) {
+  const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const edgeBySource = useMemo(
+    () => new Map(edges.filter((edge) => edge && edge.from).map((edge) => [edge.from, edge])),
+    [edges],
+  );
+  // Build the whole reachable tree (forks included) fully, up front, in one
+  // pure pass -- see buildChainTree's comment for why this can't be deferred
+  // into lazily-invoked React children.
+  const rendered = new Set();
+  const tree = buildChainTree(entry, nodesById, edgeBySource, new Set(), rendered);
+  const body = renderRun(tree, { sourceId: null, kind: 'entry' });
+  const unreachable = nodes.filter((node) => !rendered.has(node.id));
+  return (
+    <div className="routine-chain">
+      <ChainCap kind="start" />
+      {body}
+      <UnreachableTray nodes={unreachable} />
+    </div>
+  );
 }
 
-function seedEdges(graph, agent) {
-  const edges = [];
-  (graph.edges || []).forEach((edge, index) => {
-    if (!edge) return;
-    const style = { stroke: agent.color };
-    const markerEnd = { type: MarkerType.ArrowClosed, color: agent.color };
-    if (edge.router) {
-      Object.entries(edge.branches || {}).forEach(([branchValue, target], branchIndex) => {
-        edges.push({
-          id: `${edge.from}-${target}-${index}-${branchIndex}`,
-          source: edge.from,
-          target,
-          label: branchValue,
-          type: 'editable',
-          animated: true,
-          style,
-          markerEnd,
-        });
-      });
-      return;
-    }
-    edges.push({
-      id: `${edge.from}-${edge.to}-${index}`,
-      source: edge.from,
-      target: edge.to,
-      type: 'editable',
-      animated: true,
-      style,
-      markerEnd,
-    });
-  });
-  return edges;
-}
-
-// Serialize the live React Flow state back into the backend graph schema,
-// stripping the injected callbacks and keeping positions for round-tripping. A
-// node with a `routerStateKey` collapses its outgoing edges into one router
-// edge (branches keyed by edge label); everything else stays a plain edge.
+// Serialize the working nodes/edges/meta into the backend graph document
+// shape. `output_key` always mirrors `id` -- it isn't independently editable.
 function serializeGraph(nodes, edges, meta) {
-  const outgoingBySource = new Map();
-  edges.forEach((edge) => {
-    const list = outgoingBySource.get(edge.source) || [];
-    list.push(edge);
-    outgoingBySource.set(edge.source, list);
-  });
-
-  const serializedEdges = [];
-  nodes.forEach((node) => {
-    const data = node.data || {};
-    const outgoing = outgoingBySource.get(node.id) || [];
-    if (!outgoing.length) return;
-    if (data.routerStateKey) {
-      const branches = {};
-      outgoing.forEach((edge) => {
-        const label = (edge.label || '').toString().trim();
-        if (label) branches[label] = edge.target;
-      });
-      const routerEdge = { from: node.id, router: 'state_equals', state_key: data.routerStateKey, branches };
-      if (data.routerDefault) routerEdge.default = data.routerDefault;
-      serializedEdges.push(routerEdge);
-    } else {
-      outgoing.forEach((edge) => {
-        serializedEdges.push({ from: node.id, to: edge.target });
-      });
-    }
-  });
-
   return {
     status: meta.status || 'Draft',
     summary: meta.summary || '',
     entry: meta.entry || nodes[0]?.id || null,
-    nodes: nodes.map((node) => {
-      const data = node.data || {};
-      return {
-        id: node.id,
-        kind: data.kind,
-        label: data.label,
-        output_key: node.id,
-        config: data.config || {},
-        x: Math.round(node.position?.x ?? 0),
-        y: Math.round(node.position?.y ?? 0),
-      };
-    }),
-    edges: serializedEdges,
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      kind: node.kind,
+      label: node.label,
+      description: node.description || '',
+      output_key: node.id,
+      config: node.config || {},
+    })),
+    edges,
   };
 }
 
-function uniqueNodeId(kind, nodes) {
-  const ids = new Set(nodes.map((node) => node.id));
-  if (!ids.has(kind)) return kind;
-  let i = 1;
-  while (ids.has(`${kind}-${i}`)) i += 1;
-  return `${kind}-${i}`;
-}
-
-// The Sessions/Workspace canvas: an interactive React Flow editor with a bottom
-// dock of step kinds, a minimap (right), zoom controls (bottom-left), and inline
-// editable nodes/edges. Edits autosave (debounced) to the backend.
+// The routine canvas: a rigid top-down chain of steps with a floating status
+// bar and the same JSON-editor side panel the previous canvas had. Edits
+// autosave (debounced) to the backend.
 function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
-  const reactFlow = useReactFlow();
-  const wrapperRef = useRef(null);
   const persistRef = useRef(onPersist);
-
-  const [nodes, setNodes, onNodesChange] = useNodesState(seedNodes(graph, agent));
-  const [edges, setEdges, onEdgesChange] = useEdgesState(seedEdges(graph, agent));
+  const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
+  const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
     status: graph.status || 'Draft',
     summary: graph.summary || '',
@@ -403,91 +516,192 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
 
+  useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
+
+  // Refs mirror the latest state synchronously so insertAt/splitIntoBranches
+  // can compute a consistent next state without nesting setState calls
+  // inside other setState updaters.
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
-
-  const updateNodeData = useCallback((id, patch) => {
-    setNodes((current) => current.map((node) => (node.id === id ? { ...node, data: { ...node.data, ...patch } } : node)));
-  }, [setNodes]);
-
-  const updateEdgeLabel = useCallback((id, label) => {
-    setEdges((current) => current.map((edge) => (edge.id === id ? { ...edge, label } : edge)));
-  }, [setEdges]);
-
-  const editContext = useMemo(() => ({ updateNodeData, updateEdgeLabel }), [updateNodeData, updateEdgeLabel]);
-
-  // Keep refs in sync outside of render so callbacks/effects see the latest
-  // values (React forbids writing refs during render).
-  useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
+  const metaRef = useRef(meta);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
+  useEffect(() => { metaRef.current = meta; }, [meta]);
 
-  const addNode = useCallback((kind, position) => {
-    const id = uniqueNodeId(kind, nodesRef.current);
-    const point = position || (() => {
-      const rect = wrapperRef.current?.getBoundingClientRect();
-      if (!rect) return { x: 0, y: 0 };
-      return reactFlow.screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
-    })();
-    const data = {
-      kind,
-      label: kind.charAt(0).toUpperCase() + kind.slice(1),
-      config: {},
-      routerStateKey: '',
-      routerDefault: '',
-      color: agent.color,
-    };
-    setNodes((current) => [...current, { id, type: 'agentGraph', position: point, data }]);
-  }, [agent.color, reactFlow, setNodes]);
-
-  const onConnect = useCallback((params) => {
-    setEdges((current) => addEdge({
-      ...params,
-      type: 'editable',
-      animated: true,
-      style: { stroke: agent.color },
-      markerEnd: { type: MarkerType.ArrowClosed, color: agent.color },
-    }, current));
-  }, [agent.color, setEdges]);
-
-  const onDragOver = useCallback((event) => {
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
+  const updateNode = useCallback((id, patch) => {
+    setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...patch } : node)));
   }, []);
 
-  const onDrop = useCallback((event) => {
-    event.preventDefault();
-    const kind = event.dataTransfer.getData('application/agentgraph');
-    if (!kind) return;
-    const position = reactFlow.screenToFlowPosition({ x: event.clientX, y: event.clientY });
-    addNode(kind, position);
-  }, [addNode, reactFlow]);
+  const deleteNode = useCallback((id) => {
+    setNodes((current) => current.filter((node) => node.id !== id));
+    const outgoing = edgesRef.current.find((edge) => edge.from === id);
+    const singleTarget = outgoing && !outgoing.router ? outgoing.to : null;
+    setEdges((current) => {
+      const next = [];
+      current.forEach((edge) => {
+        if (edge.from === id) return; // the deleted node's own outgoing edge
+        if (edge.router) {
+          const branches = { ...edge.branches };
+          let changed = false;
+          Object.entries(branches).forEach(([value, target]) => {
+            if (target !== id) return;
+            changed = true;
+            if (singleTarget) branches[value] = singleTarget;
+            else delete branches[value];
+          });
+          let defaultTarget = edge.default;
+          if (defaultTarget === id) {
+            changed = true;
+            defaultTarget = singleTarget || undefined;
+          }
+          if (!changed) { next.push(edge); return; }
+          if (!Object.keys(branches).length && !defaultTarget) return; // router now empty, drop it
+          next.push({ ...edge, branches, ...(defaultTarget ? { default: defaultTarget } : { default: undefined }) });
+          return;
+        }
+        if (edge.to === id) {
+          if (singleTarget) next.push({ ...edge, to: singleTarget });
+          return;
+        }
+        next.push(edge);
+      });
+      return next;
+    });
+    // The virtual Start pointing at `entry` is itself an incoming reference
+    // to the deleted node -- splice it through to singleTarget exactly like
+    // every other incoming edge above, rather than leaving `entry` null.
+    setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
+  }, []);
 
-  // Delete selected nodes/edges on Delete/Backspace, but never while editing a
-  // node's text fields (so typing in a prompt doesn't remove the node).
-  useEffect(() => {
-    function handleKey(event) {
-      const tag = event.target.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
-      const selectedNodeIds = nodesRef.current.filter((node) => node.selected).map((node) => node.id);
-      const selectedEdgeIds = edgesRef.current.filter((edge) => edge.selected).map((edge) => edge.id);
-      if (!selectedNodeIds.length && !selectedEdgeIds.length) return;
-      if (selectedNodeIds.length) {
-        const removed = new Set(selectedNodeIds);
-        setNodes((current) => current.filter((node) => !removed.has(node.id)));
-        setEdges((current) => current.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target) && !selectedEdgeIds.includes(edge.id)));
+  const insertAt = useCallback((slot, kind) => {
+    const id = uniqueNodeId(kind, nodesRef.current);
+    const newNode = { ...makeNode(kind), id };
+    let targetId = null;
+    const nextEdges = edgesRef.current.map((edge) => (
+      edge.branches ? { ...edge, branches: { ...edge.branches } } : { ...edge }
+    ));
+    if (slot.kind === 'entry') {
+      targetId = metaRef.current.entry;
+      setMeta((current) => ({ ...current, entry: id }));
+    } else if (slot.kind === 'plain') {
+      const existing = nextEdges.find((edge) => edge.from === slot.sourceId);
+      if (existing) {
+        targetId = existing.to;
+        existing.to = id;
       } else {
-        const removed = new Set(selectedEdgeIds);
-        setEdges((current) => current.filter((edge) => !removed.has(edge.id)));
+        nextEdges.push({ from: slot.sourceId, to: id });
+      }
+    } else if (slot.kind === 'branch') {
+      const router = nextEdges.find((edge) => edge.from === slot.sourceId);
+      if (router) {
+        targetId = router.branches[slot.value];
+        router.branches[slot.value] = id;
+      }
+    } else if (slot.kind === 'default') {
+      const router = nextEdges.find((edge) => edge.from === slot.sourceId);
+      if (router) {
+        targetId = router.default;
+        router.default = id;
       }
     }
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [setNodes, setEdges]);
+    if (targetId) nextEdges.push({ from: id, to: targetId });
+    setNodes((current) => [...current, newNode]);
+    setEdges(nextEdges);
+  }, []);
 
-  // Debounced autosave: serialize the working graph and PATCH it. The first run
-  // records the baseline so simply opening the tab does not trigger a save.
+  const onChangeStateKey = useCallback((sourceId, value) => {
+    setEdges((current) => current.map((edge) => (
+      edge.from === sourceId && edge.router ? { ...edge, state_key: value } : edge
+    )));
+  }, []);
+
+  const splitIntoBranches = useCallback((sourceId) => {
+    const stateKey = window.prompt('Route on which data key? (e.g. "gate" for {{ data.gate }})', sourceId);
+    if (!stateKey) return;
+    const existing = edgesRef.current.find((edge) => edge.from === sourceId);
+    const carryOverTarget = existing && !existing.router ? existing.to : null;
+    const branchId = uniqueNodeId('noop', nodesRef.current);
+    const routerEdge = {
+      from: sourceId,
+      router: 'state_equals',
+      state_key: stateKey,
+      branches: { 'case-1': branchId },
+      ...(carryOverTarget ? { default: carryOverTarget } : {}),
+    };
+    setEdges((current) => [...current.filter((edge) => edge.from !== sourceId), routerEdge]);
+    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
+  }, []);
+
+  const removeBranching = useCallback((sourceId) => {
+    setEdges((current) => current.map((edge) => {
+      if (edge.from !== sourceId || !edge.router) return edge;
+      return edge.default ? { from: sourceId, to: edge.default } : null;
+    }).filter(Boolean));
+  }, []);
+
+  const onAddBranch = useCallback((sourceId) => {
+    const branchId = uniqueNodeId('noop', nodesRef.current);
+    setEdges((current) => current.map((edge) => {
+      if (edge.from !== sourceId || !edge.router) return edge;
+      const value = uniqueBranchValue(edge.branches);
+      return { ...edge, branches: { ...edge.branches, [value]: branchId } };
+    }));
+    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
+  }, []);
+
+  const onAddDefault = useCallback((sourceId) => {
+    const branchId = uniqueNodeId('noop', nodesRef.current);
+    setEdges((current) => current.map((edge) => (
+      edge.from === sourceId && edge.router ? { ...edge, default: branchId } : edge
+    )));
+    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
+  }, []);
+
+  const onRemoveBranch = useCallback((sourceId, value) => {
+    setEdges((current) => current.map((edge) => {
+      if (edge.from !== sourceId || !edge.router) return edge;
+      const branches = { ...edge.branches };
+      delete branches[value];
+      if (!Object.keys(branches).length && !edge.default) return null;
+      return { ...edge, branches };
+    }).filter(Boolean));
+  }, []);
+
+  const onRemoveDefault = useCallback((sourceId) => {
+    setEdges((current) => current.map((edge) => {
+      if (edge.from !== sourceId || !edge.router) return edge;
+      const { default: _drop, ...rest } = edge;
+      return rest;
+    }));
+  }, []);
+
+  const onRenameBranch = useCallback((sourceId, oldValue, newValue) => {
+    setEdges((current) => current.map((edge) => {
+      if (edge.from !== sourceId || !edge.router || !(oldValue in (edge.branches || {}))) return edge;
+      const branches = {};
+      Object.entries(edge.branches).forEach(([key, val]) => {
+        branches[key === oldValue ? newValue : key] = val;
+      });
+      return { ...edge, branches };
+    }));
+  }, []);
+
+  const editContext = useMemo(() => ({
+    updateNode,
+    deleteNode,
+    insertAt,
+    onChangeStateKey,
+    onSplitIntoBranches: splitIntoBranches,
+    onRemoveBranching: removeBranching,
+    onAddBranch,
+    onAddDefault,
+    onRemoveBranch,
+    onRemoveDefault,
+    onRenameBranch,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
+
+  // Debounced autosave: serialize the working graph and PATCH it. The first
+  // run records the baseline so simply opening the tab does not trigger a save.
   const lastSavedRef = useRef(null);
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
@@ -521,10 +735,8 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
       entry: parsed.entry || (parsed.nodes || [])[0]?.id || null,
     };
     setMeta(nextMeta);
-    const nextNodes = seedNodes(parsed, agent);
-    const nextEdges = seedEdges(parsed, agent);
-    setNodes(nextNodes);
-    setEdges(nextEdges);
+    setNodes((parsed.nodes || []).map((node) => ({ ...node })));
+    setEdges((parsed.edges || []).map((edge) => ({ ...edge })));
     const payload = {
       status: nextMeta.status,
       summary: nextMeta.summary,
@@ -533,36 +745,19 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
       edges: parsed.edges,
     };
     await persistRef.current(payload);
-    lastSavedRef.current = JSON.stringify(serializeGraph(nextNodes, nextEdges, nextMeta));
+    lastSavedRef.current = JSON.stringify(payload);
     setSaveError(null);
     setSaveState('saved');
-  }, [agent, setNodes, setEdges]);
+  }, []);
 
   return (
     <>
       <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
         <div className="agents-graph-shell">
-          <div
-            className="canvas-surface agents-graph-canvas"
-            ref={wrapperRef}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-          >
+          <div className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
               <span>{agent.name}</span>
-              <span>{nodes.length} nodes</span>
-              <label className="agents-graph-entry">
-                Entry
-                <select
-                  className="nodrag agents-graph-entry-select"
-                  value={meta.entry || ''}
-                  onChange={(event) => setMeta((current) => ({ ...current, entry: event.target.value }))}
-                >
-                  {nodes.map((node) => (
-                    <option key={node.id} value={node.id}>{node.data?.label || node.id}</option>
-                  ))}
-                </select>
-              </label>
+              <span>{nodes.length} step{nodes.length === 1 ? '' : 's'}</span>
               {saveState !== 'idle' ? (
                 <span className={`agents-graph-save agents-graph-save--${saveState}`}>
                   {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
@@ -571,39 +766,10 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
               <button type="button" onClick={onShowProfile}>Details</button>
             </div>
             <GraphEditContext.Provider value={editContext}>
-              <ReactFlow
-                nodes={nodes}
-                edges={edges}
-                onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
-                onConnect={onConnect}
-                nodeTypes={agentGraphNodeTypes}
-                edgeTypes={agentGraphEdgeTypes}
-                defaultEdgeOptions={graphDefaultEdgeOptions}
-                fitView
-                fitViewOptions={graphFitViewOptions}
-                minZoom={0.3}
-                maxZoom={2}
-                snapToGrid
-                snapGrid={[16, 16]}
-                nodesConnectable
-                nodesDraggable
-                elementsSelectable
-                deleteKeyCode={null}
-                multiSelectionKeyCode="Shift"
-              >
-                <Background gap={16} size={1} color="var(--color-border)" variant="dots" />
-                <Controls showInteractive={false} />
-                <MiniMap
-                  style={{ height: 100, width: 150 }}
-                  nodeColor={minimapNodeColor}
-                  maskColor="rgba(0, 0, 0, 0.6)"
-                  pannable
-                  zoomable
-                />
-              </ReactFlow>
+              <div className="routine-canvas__scroll">
+                <RoutineChain nodes={nodes} edges={edges} entry={meta.entry} />
+              </div>
             </GraphEditContext.Provider>
-            <GraphDock onAdd={addNode} />
           </div>
           {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
         </div>
@@ -667,47 +833,17 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-// Bottom-center dock of step kinds. Drag an item onto the canvas, or click to add
-// it at the canvas centre. Mirrors the Workspace dock.
-function GraphDock({ onAdd }) {
-  const onDragStart = (event, kind) => {
-    event.dataTransfer.setData('application/agentgraph', kind);
-    event.dataTransfer.effectAllowed = 'move';
-  };
-  return (
-    <div className="canvas-dock agents-graph-dock">
-      <div className="canvas-dock-shell">
-        {GRAPH_NODE_KINDS.map((item) => (
-          <button
-            key={item.kind}
-            type="button"
-            className={`canvas-dock-item agents-graph-dock__item--${item.kind}`}
-            draggable
-            onDragStart={(event) => onDragStart(event, item.kind)}
-            onClick={() => onAdd(item.kind)}
-          >
-            <span className={`canvas-dock-icon ${item.kind}`}>{item.icon}</span>
-            <span className="canvas-dock-tooltip">{item.label}</span>
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export function AgentGraphTab({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
   return (
-    <ReactFlowProvider>
-      <GraphCanvas
-        agent={agent}
-        graph={graph}
-        onPersist={onPersist}
-        onShowProfile={onShowProfile}
-        jsonOpen={jsonOpen}
-        onOpenJson={onOpenJson}
-        onCloseJson={onCloseJson}
-      />
-    </ReactFlowProvider>
+    <GraphCanvas
+      agent={agent}
+      graph={graph}
+      onPersist={onPersist}
+      onShowProfile={onShowProfile}
+      jsonOpen={jsonOpen}
+      onOpenJson={onOpenJson}
+      onCloseJson={onCloseJson}
+    />
   );
 }
 
