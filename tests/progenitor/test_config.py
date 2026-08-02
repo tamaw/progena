@@ -203,7 +203,7 @@ class TestStorageConfig:
         assert config.data_dir == project_root / "data"
         assert config.state_dir == project_root / "data" / "state"
         assert config.log_dir == project_root / "logs"
-        assert config.worktree_dir == project_root / "worktrees"
+        assert config.worktree_dir == project_root / "data" / "repos"
         assert config.prompts_dir == project_root / "data" / "prompts"
 
     def test_default_prompts_dir_uses_checked_in_repo_path(self):
@@ -220,7 +220,7 @@ class TestStorageConfig:
         assert config.data_dir == repo_root / "data"
         assert config.state_dir == repo_root / "data" / "state"
         assert config.log_dir == repo_root / "logs"
-        assert config.worktree_dir == repo_root / "worktrees"
+        assert config.worktree_dir == repo_root / "data" / "repos"
         assert config.prompts_dir == DEFAULT_PROMPTS_DIR
 
     def test_env_overrides(self):

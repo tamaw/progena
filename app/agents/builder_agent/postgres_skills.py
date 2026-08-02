@@ -69,9 +69,9 @@ async def ensure_skill_store() -> AsyncPostgresStore:
         if _store is not None:
             return _store
         from psycopg import AsyncConnection
-        from psycopg.rows import dict_row
+        from psycopg.rows import DictRow, dict_row
 
-        conn = await AsyncConnection.connect(
+        conn = await AsyncConnection[DictRow].connect(
             _database_url(), autocommit=True, prepare_threshold=0, row_factory=dict_row
         )
         _store = AsyncPostgresStore(conn=conn)
@@ -125,7 +125,9 @@ def strip_skill_frontmatter(content: str) -> str:
     return parts[2].strip()
 
 
-async def _get_skill_content(store: AsyncPostgresStore, segment: str, skill_name: str) -> str | None:
+async def _get_skill_content(
+    store: AsyncPostgresStore, segment: str, skill_name: str
+) -> str | None:
     key = f"{SKILL_KEY_PREFIX}{segment}/{skill_name}/SKILL.md"
     item = await store.aget(STATE_NAMESPACE, key)
     if item is None:
