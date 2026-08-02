@@ -19,7 +19,7 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, and preferences.json, plus the /config/tasks/ task directory
+    agents.json, and preferences.json, plus the /tasks/ task directory
     (board.json and per-task <id>.md files).
     Writes persist via the StateManager; the runtime's store listener handles
     live MCP re-discovery, so no write-hook callback is needed here.
@@ -48,6 +48,7 @@ from .state_backend import (
     ContentDocumentDirectoryBackend,
     InboxDirectoryBackend,
     KanbanTaskDirectoryBackend,
+    RoutineDirectoryBackend,
     StateDocumentBackend,
     StateFile,
     WorkflowDirectoryBackend,
@@ -162,7 +163,7 @@ def create_progenitor_backend(
         # State documents surfaced as virtual files (e.g. /config/mcp.json,
         # /config/schedule.json, /config/agents.json), backed by the runtime
         # StateManager so writes persist through the normal store path. Tasks get
-        # their own mount: a directory of per-task files (/config/tasks/<id>.md +
+        # their own mount: a directory of per-task files (/tasks/<id>.md +
         # board.json) so the agent edits one task per file instead of a giant blob.
         state_file_factories: list[Callable[[Any], StateFile]] = [
             create_mcp_state_file,
@@ -177,8 +178,9 @@ def create_progenitor_backend(
         routes["/config/"] = StateDocumentBackend(
             [factory(state_manager) for factory in state_file_factories]
         )
-        routes["/config/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
+        routes["/tasks/"] = KanbanTaskDirectoryBackend(state_manager)
         routes["/workflows/"] = WorkflowDirectoryBackend(state_manager)
+        routes["/routines/"] = RoutineDirectoryBackend(state_manager)
         # User inbox: a directory of per-message files (/inbox/<id>.md) the
         # agent writes to send the user rich markdown messages.
         routes["/inbox/"] = InboxDirectoryBackend(state_manager)

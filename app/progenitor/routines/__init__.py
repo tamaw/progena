@@ -9,6 +9,9 @@ Modules:
     graph: Pydantic models and structural validation for a routine graph document.
     expression: Restricted AST-based expression evaluator for 'code'/'eval' nodes.
     factory: Compiles a validated ``RoutineGraph`` into a LangGraph runnable.
+    store: Storage keys + parse/validate helpers shared by the runtime's
+        ``/routines/`` virtual-filesystem mount and the FastAPI backend's
+        document-store access to the same underlying document.
 """
 
 from __future__ import annotations
