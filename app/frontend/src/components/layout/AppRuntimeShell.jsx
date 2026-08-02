@@ -4,15 +4,18 @@ import { useDispatch, useSelector } from 'react-redux';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   ensureDraftChatSession,
+  fetchChatMessages,
   fetchPreferences,
   fetchWidgets,
   markAlertsViewed,
   savePreferences,
   selectChatIndicators,
+  selectGeneratingChatIds,
   selectInboxUnreadCount,
   selectLastReceivedAlert,
   selectPreferences,
   selectPreferencesSaveRequest,
+  selectRequestIdByThreadId,
   selectUnseenNavRoutes,
   selectUiStatus,
   selectUiWidgets,
@@ -87,6 +90,7 @@ import {
   normalizeAiPrompt,
   normalizeQuickChatConfig,
 } from './quickChatConfig';
+import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
 import PopupModal from '../common/PopupModal';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -819,10 +823,14 @@ function QuickChatPanel({
   pendingSubmission,
   onSubmissionConsumed,
 }) {
-  const { sendMessageStream, cancelStream } = useChatApi();
+  const { sendMessageStream, cancelStream, observeResponseStream } = useChatApi();
   const { config, getApiUrl } = useConfig();
   const dispatch = useDispatch();
   const uiEventQueue = useSelector(selectUiEventQueue);
+  const preferences = useSelector(selectPreferences);
+  const preferencesSaveRequest = useSelector(selectPreferencesSaveRequest);
+  const generatingChatIds = useSelector(selectGeneratingChatIds);
+  const requestIdByThreadId = useSelector(selectRequestIdByThreadId);
   const navigate = useNavigate();
   const location = useLocation();
   const isOnChatPage = location.pathname.startsWith('/chat');
@@ -842,6 +850,10 @@ function QuickChatPanel({
   const [composerSeed, setComposerSeed] = useState({ key: 0, message: '' });
   const sessionPromiseRef = useRef(null);
   const pendingDraftRef = useRef(null);
+  const pendingRehydrateRef = useRef(null);
+  const lastPersistedThreadIdRef = useRef(null);
+  const hasInitializedThreadRef = useRef(false);
+  const lastSentPageContextRef = useRef(null);
   const eventSequenceRef = useRef(0);
   const isQuickChatMountedRef = useRef(false);
   const activeAssistantIdRef = useRef(null);
@@ -863,22 +875,36 @@ function QuickChatPanel({
         const session = event?.payload?.session;
         const threadId = session?.thread_id;
         if (
-          !pendingDraft
-          || event?.payload?.request_id !== pendingDraft.requestId
-          || !['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
-          || typeof threadId !== 'string'
-          || !threadId
+          pendingDraft
+          && event?.payload?.request_id === pendingDraft.requestId
+          && ['chat.session.created', 'chat.session.metadata.updated'].includes(event?.type)
+          && typeof threadId === 'string'
+          && threadId
         ) {
-          return undefined;
+          pendingDraftRef.current = null;
+          sessionPromiseRef.current = Promise.resolve(threadId);
+          if (isQuickChatMountedRef.current) {
+            setScratchThreadId(threadId);
+          }
+          pendingDraft.resolve(threadId);
+          return false;
         }
 
-        pendingDraftRef.current = null;
-        sessionPromiseRef.current = Promise.resolve(threadId);
-        if (isQuickChatMountedRef.current) {
-          setScratchThreadId(threadId);
+        // A persisted quick-chat thread's messages, fetched directly (not
+        // through the shared `chats` slice, which would clobber the main
+        // Chat page's active-session state) to resume it after a reload.
+        const pendingRehydrate = pendingRehydrateRef.current;
+        if (
+          pendingRehydrate
+          && event?.type === 'chat.messages.page.loaded'
+          && event?.payload?.request_id === pendingRehydrate.requestId
+        ) {
+          pendingRehydrateRef.current = null;
+          pendingRehydrate.resolve(Array.isArray(event.payload.messages) ? event.payload.messages : []);
+          return false;
         }
-        pendingDraft.resolve(threadId);
-        return false;
+
+        return undefined;
       },
     );
   }, [uiEventQueue]);
@@ -925,6 +951,108 @@ function QuickChatPanel({
     return sessionPromise;
   }, [dispatch, getApiUrl]);
 
+  // Resume a thread persisted in preferences (see the mount effect below).
+  // Returns true once resumed (even with zero messages, e.g. a thread that
+  // was created but never sent to), or false if it couldn't be resumed
+  // (deleted/archived elsewhere) so the caller falls back to a fresh thread.
+  const rehydrateFromPersistedThread = useCallback(async (persistedThreadId) => {
+    const requestId = createUuid();
+    let resolveMessages;
+    const messagesPromise = new Promise((resolve) => {
+      resolveMessages = resolve;
+    });
+    pendingRehydrateRef.current = { requestId, resolve: resolveMessages };
+
+    const fetchRequest = dispatch(fetchChatMessages({
+      chatsUrl: getApiUrl('chats'),
+      threadId: persistedThreadId,
+      limit: 50,
+      requestId,
+    }));
+
+    let messages;
+    try {
+      await fetchRequest.unwrap();
+      messages = await messagesPromise;
+    } catch {
+      if (pendingRehydrateRef.current?.requestId === requestId) {
+        pendingRehydrateRef.current = null;
+      }
+      return false;
+    }
+
+    if (!isQuickChatMountedRef.current) {
+      return true;
+    }
+    setHistory(messages.map((message) => ({
+      id: message.id,
+      role: message.role,
+      content: stripPageContextBlock(message.content),
+      timestamp: (typeof message.created_at === 'string' && Date.parse(message.created_at)) || Date.now(),
+      isStreaming: false,
+    })));
+    setScratchThreadId(persistedThreadId);
+    sessionPromiseRef.current = Promise.resolve(persistedThreadId);
+    lastPersistedThreadIdRef.current = persistedThreadId;
+    return true;
+  }, [dispatch, getApiUrl]);
+
+  // Spectator support: render live deltas for a generation this panel did not
+  // itself dispatch -- e.g. the same thread open in the main Chat page (or
+  // another tab) was sent a message. `isSending` already covers "this panel
+  // is the one generating" (its own send flips it before `chat.response.started`
+  // ever reaches Redux), so this only attaches for everyone else's sends.
+  const spectatorCleanupRef = useRef(null);
+  const spectatedRequestIdRef = useRef(null);
+
+  useEffect(() => {
+    const shouldSpectate = Boolean(scratchThreadId)
+      && !isSending
+      && generatingChatIds.includes(scratchThreadId);
+    const requestId = shouldSpectate ? (requestIdByThreadId[scratchThreadId] || null) : null;
+
+    if (!requestId) {
+      if (spectatedRequestIdRef.current) {
+        spectatorCleanupRef.current?.();
+        spectatorCleanupRef.current = null;
+        spectatedRequestIdRef.current = null;
+        // The spectated generation just ended -- swap the live bubble for
+        // the persisted, canonical transcript, same as a refresh rehydrate.
+        void rehydrateFromPersistedThread(scratchThreadId);
+      }
+      return;
+    }
+    if (spectatedRequestIdRef.current === requestId) {
+      return;
+    }
+    spectatorCleanupRef.current?.();
+
+    const assistantId = `qchat_spectate_${requestId}`;
+    let assistantContent = '';
+    spectatedRequestIdRef.current = requestId;
+    setHistory((currentHistory) => currentHistory.concat({
+      id: assistantId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+      isStreaming: true,
+    }));
+
+    spectatorCleanupRef.current = observeResponseStream(requestId, {
+      onChunk: (chunk) => {
+        if (spectatedRequestIdRef.current !== requestId) return;
+        assistantContent += chunk;
+        setHistory((currentHistory) => currentHistory.map((turn) => (
+          turn.id === assistantId ? { ...turn, content: assistantContent } : turn
+        )));
+      },
+    });
+  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, observeResponseStream, rehydrateFromPersistedThread]);
+
+  useEffect(() => () => {
+    spectatorCleanupRef.current?.();
+  }, []);
+
   const ensureQuickThread = useCallback(async () => {
     if (scratchThreadId) {
       return scratchThreadId;
@@ -949,22 +1077,83 @@ function QuickChatPanel({
     quickChatMemory.threadId = scratchThreadId;
   }, [scratchThreadId]);
 
+  // Persist the default-mode quick chat's thread id in preferences (the same
+  // backend-persisted document `pinnedPanel` already lives in) so a pinned
+  // quick chat can rehydrate after a full page reload, not just a
+  // popover close/reopen. Other modes (schedule-create, mcp-create, ...) are
+  // one-off flows whose own config never survives a reload either (it's
+  // plain useState seeded from defaultQuickChatConfig), so persisting their
+  // thread would just orphan it.
+  useEffect(() => {
+    if (
+      normalizedConfig.mode !== 'default'
+      || !scratchThreadId
+      || scratchThreadId === lastPersistedThreadIdRef.current
+      || !preferences.loaded
+    ) {
+      return;
+    }
+    lastPersistedThreadIdRef.current = scratchThreadId;
+    if (scratchThreadId === preferences.quickChatThreadId) {
+      return;
+    }
+    dispatch(savePreferences({
+      preferencesUrl: getApiUrl('preferences'),
+      ...preferencesSaveRequest,
+      quickChatThreadId: scratchThreadId,
+    }));
+  }, [normalizedConfig.mode, scratchThreadId, preferences.loaded, preferences.quickChatThreadId, dispatch, getApiUrl, preferencesSaveRequest]);
+
   useEffect(() => {
     isQuickChatMountedRef.current = true;
-    if (quickChatMemory.threadId) {
-      sessionPromiseRef.current = Promise.resolve(quickChatMemory.threadId);
-    } else {
-      void startFreshQuickThread();
-    }
-
     return () => {
       activeAssistantIdRef.current = null;
+      // If a draft/rehydrate was still in flight, this abort leaves
+      // sessionPromiseRef resolved to null with nothing to retry it -- reset
+      // the "already decided" guard below so a remount (a real popover
+      // reopen, or React StrictMode's dev-only double-invoke of mount
+      // effects) starts over instead of treating the aborted attempt as done.
+      if (pendingDraftRef.current || pendingRehydrateRef.current) {
+        hasInitializedThreadRef.current = false;
+      }
       pendingDraftRef.current?.resolve(null);
       pendingDraftRef.current = null;
+      pendingRehydrateRef.current?.resolve([]);
+      pendingRehydrateRef.current = null;
       isQuickChatMountedRef.current = false;
       void cancelStream();
     };
-  }, [cancelStream, startFreshQuickThread]);
+  }, [cancelStream]);
+
+  // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
+  // mounts as soon as the shell adopts the pinned panel from its fast
+  // localStorage cache (see PINNED_PANEL_STORAGE_KEY below) -- well before
+  // the backend `preferences.snapshot` round-trip resolves -- so this can't
+  // just run once on mount like `startFreshQuickThread` used to: it has to
+  // wait for `preferences.loaded` before deciding there's nothing to resume.
+  useEffect(() => {
+    if (hasInitializedThreadRef.current) {
+      return;
+    }
+    if (quickChatMemory.threadId) {
+      hasInitializedThreadRef.current = true;
+      sessionPromiseRef.current = Promise.resolve(quickChatMemory.threadId);
+      return;
+    }
+    if (normalizedConfig.mode === 'default' && !preferences.loaded) {
+      return;
+    }
+    hasInitializedThreadRef.current = true;
+    if (normalizedConfig.mode === 'default' && preferences.quickChatThreadId) {
+      void rehydrateFromPersistedThread(preferences.quickChatThreadId).then((resumed) => {
+        if (!resumed && isQuickChatMountedRef.current) {
+          void startFreshQuickThread();
+        }
+      });
+    } else {
+      void startFreshQuickThread();
+    }
+  }, [normalizedConfig.mode, preferences.loaded, preferences.quickChatThreadId, rehydrateFromPersistedThread, startFreshQuickThread]);
 
 
   const submit = useCallback(async (message, attachments = []) => {
@@ -995,10 +1184,30 @@ function QuickChatPanel({
 
     try {
       const threadId = await ensureQuickThread();
+
+      // Tell the agent what the user is looking at, without cluttering the
+      // visible transcript: only the outgoing API payload for this one
+      // message gets the block prepended, never the displayed bubble or
+      // the prior-turn history resent on the next message. Only sent when
+      // it's actually new information for this thread -- a fresh thread
+      // (New chat, or a new page) always gets it; an unchanged page on an
+      // established thread doesn't, since the agent already has it.
+      const pageContext = derivePageContext(location.pathname);
+      const previousPageContext = lastSentPageContextRef.current;
+      const pageContextChanged = !previousPageContext
+        || previousPageContext.threadId !== threadId
+        || previousPageContext.page !== pageContext?.page
+        || previousPageContext.id !== pageContext?.id;
+      let outgoingText = text;
+      if (pageContext && pageContextChanged) {
+        outgoingText = `${formatPageContextBlock(pageContext)}\n\n${text}`;
+        lastSentPageContextRef.current = { threadId, ...pageContext };
+      }
+
       let assistantContent = '';
       const isStale = () => activeAssistantIdRef.current !== assistantId;
       await sendMessageStream(
-        text,
+        outgoingText,
         streamHistory,
         (chunk) => {
           if (isStale()) return;
@@ -1063,7 +1272,7 @@ function QuickChatPanel({
       }
       setIsSending(false);
     }
-  }, [ensureQuickThread, history, isSending, sendMessageStream]);
+  }, [ensureQuickThread, history, isSending, location.pathname, sendMessageStream]);
   useEffect(() => {
     if (!pendingSubmission?.message || isSending) {
       return;

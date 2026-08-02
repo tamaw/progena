@@ -9,6 +9,7 @@ import {
   markChatUnread,
   selectErroredChatIds,
   selectGeneratingChatIds,
+  selectRequestIdByThreadId,
   selectUnreadChatIds,
   touchChatSession,
 } from '../store/uiDataSlice';
@@ -55,6 +56,7 @@ export function useChatStream({
   threadId,
   sendMessageStream,
   cancelStream,
+  observeResponseStream,
   dispatch,
   getApiUrl,
   show,
@@ -68,6 +70,7 @@ export function useChatStream({
   const unreadChatIdList = useSelector(selectUnreadChatIds);
   const generatingChatIdList = useSelector(selectGeneratingChatIds);
   const erroredChatIdList = useSelector(selectErroredChatIds);
+  const requestIdByThreadId = useSelector(selectRequestIdByThreadId);
   const unreadChatIds = useMemo(() => new Set(unreadChatIdList), [unreadChatIdList]);
   const backgroundGeneratingChatIds = useMemo(() => new Set(generatingChatIdList), [generatingChatIdList]);
   const backgroundErrorChatIds = useMemo(() => new Set(erroredChatIdList), [erroredChatIdList]);
@@ -187,6 +190,90 @@ export function useChatStream({
       activeStreamIdRef.current = null;
     };
   }, [cancelTerminalHandoff, discardPendingText, preserveStreamInBackground]);
+
+  // Spectator support: render live deltas for a generation this hook did not
+  // itself dispatch (another surface, or another tab, sending into the
+  // thread currently on screen). `activeStreamIdRef`/`backgroundOriginChatIdRef`
+  // already cover "my own foreground/backgrounded stream" — this only
+  // attaches when neither of those own the currently-viewed thread.
+  const spectatorCleanupRef = useRef(null);
+  const spectatedRequestIdRef = useRef(null);
+
+  const stopSpectating = useCallback(() => {
+    spectatorCleanupRef.current?.();
+    spectatorCleanupRef.current = null;
+    spectatedRequestIdRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    const isOwnForegroundStream = activeStreamIdRef.current !== null;
+    const isOwnBackgroundedStream = backgroundOriginChatIdRef.current === threadId;
+    const shouldSpectate = Boolean(threadId)
+      && backgroundGeneratingChatIds.has(threadId)
+      && !isOwnForegroundStream
+      && !isOwnBackgroundedStream;
+    const requestId = shouldSpectate ? (requestIdByThreadId[threadId] || null) : null;
+
+    if (!requestId) {
+      if (spectatedRequestIdRef.current) {
+        const finishedStreamId = `spectate_${spectatedRequestIdRef.current}`;
+        stopSpectating();
+        // Finalize locally first (same shape a self-initiated foreground send
+        // ends with) and hand off to the existing canonical-reconciliation
+        // flow (mergeCanonicalMessages) rather than a full messages reload —
+        // that flow preserves ordering/scroll position; wholesale replacing
+        // `messages` mid-conversation visibly jumped the pane to the top.
+        const finalTurn = liveTurnRef.current?.streamId === finishedStreamId ? liveTurnRef.current : null;
+        const committed = finalTurn
+          ? finalizeLiveAssistantTurn(finalTurn, { status: 'completed', now: Date.now() })
+          : null;
+        if (committed) {
+          setMessages((prevMessages) => prevMessages.concat(committed));
+          setLiveAssistantTurn(committed);
+        } else {
+          setLiveAssistantTurn(null);
+        }
+        if (threadId) {
+          requestForegroundReconciliation({ threadId, streamId: finishedStreamId });
+        }
+      }
+      return;
+    }
+    if (spectatedRequestIdRef.current === requestId) {
+      return;
+    }
+
+    stopSpectating();
+    const streamId = `spectate_${requestId}`;
+    spectatedRequestIdRef.current = requestId;
+    setLiveAssistantTurn(createLiveAssistantTurn({ streamId, startedAt: Date.now() }));
+
+    spectatorCleanupRef.current = observeResponseStream(requestId, {
+      onChunk: (chunk) => {
+        if (spectatedRequestIdRef.current !== requestId) return;
+        setLiveAssistantTurn((turn) => (turn ? applyAssistantChunk(turn, chunk, Date.now()) : turn));
+      },
+      onStreamEvent: (streamEvent) => {
+        if (spectatedRequestIdRef.current !== requestId) return;
+        if (streamEvent.event_type === 'assistant_metadata' && streamEvent.metadata) {
+          setLiveAssistantTurn((turn) => (turn ? applyAssistantMetadata(turn, streamEvent.metadata) : turn));
+          return;
+        }
+        setLiveAssistantTurn((turn) => (turn ? applyAssistantStreamEvent(turn, streamEvent) : turn));
+      },
+    });
+  }, [
+    threadId,
+    backgroundGeneratingChatIds,
+    requestIdByThreadId,
+    observeResponseStream,
+    requestForegroundReconciliation,
+    setMessages,
+    setLiveAssistantTurn,
+    stopSpectating,
+  ]);
+
+  useEffect(() => stopSpectating, [stopSpectating]);
 
   // Dispatches the redux side effects for a resolveBackgroundStreamOutcome()
   // result whose action isn't 'foreground' (that case is handled inline by

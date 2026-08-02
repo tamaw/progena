@@ -17,6 +17,8 @@ export const initialState = {
     navCollapsed: false,
     pinnedPanel: null,
     notificationSounds: false,
+    quickChatThreadId: null,
+    lastOpenChatId: null,
     loaded: false,
     loading: false,
     error: null,
@@ -31,6 +33,12 @@ function applyPreferences(state, payload) {
   state.preferences.navCollapsed = payload.nav_collapsed === true;
   state.preferences.pinnedPanel = VALID_PINNED_PANELS.has(payload.pinned_panel) ? payload.pinned_panel : null;
   state.preferences.notificationSounds = payload.notification_sounds === true;
+  state.preferences.quickChatThreadId = typeof payload.quick_chat_thread_id === 'string' && payload.quick_chat_thread_id
+    ? payload.quick_chat_thread_id
+    : null;
+  state.preferences.lastOpenChatId = typeof payload.last_open_chat_thread_id === 'string' && payload.last_open_chat_thread_id
+    ? payload.last_open_chat_thread_id
+    : null;
   state.preferences.loaded = true;
   if (!state.preferences.loading || payload.request_id === state.preferences.requestId) {
     state.preferences.loading = false;
@@ -62,6 +70,8 @@ export const savePreferences = createAcknowledgedThunk(
       navCollapsed,
       pinnedPanel,
       notificationSounds,
+      quickChatThreadId,
+      lastOpenChatId,
     },
     { requestId },
   ) =>
@@ -74,6 +84,8 @@ export const savePreferences = createAcknowledgedThunk(
         nav_collapsed: navCollapsed,
         pinned_panel: pinnedPanel,
         notification_sounds: notificationSounds,
+        quick_chat_thread_id: quickChatThreadId,
+        last_open_chat_thread_id: lastOpenChatId,
       },
       requestId,
     }),
@@ -110,4 +122,6 @@ export const selectPreferencesSaveRequest = createSelector([selectPreferences], 
   navCollapsed: preferences.navCollapsed,
   pinnedPanel: preferences.pinnedPanel,
   notificationSounds: preferences.notificationSounds,
+  quickChatThreadId: preferences.quickChatThreadId,
+  lastOpenChatId: preferences.lastOpenChatId,
 }));

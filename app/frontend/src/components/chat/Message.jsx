@@ -149,6 +149,12 @@ function MessageView({
     timelineItems,
     attachments = [],
   } = message;
+  // Quick chat prepends a fenced page-context block ahead of the user's own
+  // text (see AppRuntimeShell's submit()); the main Chat page intentionally
+  // shows messages raw (it doubles as a debugging view), so that block is
+  // deliberately NOT stripped here -- only in quick chat's own rendering,
+  // which is a separate component (QuickChatMarkdown in AppRuntimeShell.jsx)
+  // and never routes through this one.
 
   const hasTimelineItems = role === 'assistant' && Array.isArray(timelineItems) && timelineItems.length > 0;
   const visibleStreamEvents = useMemo(() => {

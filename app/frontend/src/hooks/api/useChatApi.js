@@ -472,6 +472,100 @@ export function useChatApi() {
     [config.chat.defaultModel, getApiUrl, openResponseStream],
   );
 
+  // Attach to a response stream this hook instance did not dispatch itself —
+  // e.g. a generation another surface (quick chat, the Chat page, another
+  // browser tab) started into a thread this component is currently viewing.
+  // Unlike sendMessageStream's pending-stream machinery, this never POSTs and
+  // never owns cancel/acknowledgement lifecycle; the caller is expected to
+  // decide when the generation is over (via the thread's Redux
+  // generatingChatIds) and call the returned cleanup function itself. No
+  // `after` cursor is sent, so the backend replays its full retained frame
+  // buffer from the start — this is what makes "join in progress" work.
+  const observeResponseStream = useCallback((requestId, { onChunk, onStreamEvent } = {}) => {
+    const responsesUrl = getApiUrl('responses');
+    let source = null;
+    let reconnectTimer = null;
+    let connectAttempts = 0;
+    let stopped = false;
+    const receivedFrameIds = [];
+
+    const rememberFrameId = (frameId) => {
+      if (!frameId) return;
+      receivedFrameIds.push(frameId);
+      if (receivedFrameIds.length > MAX_RECEIVED_RESPONSE_FRAME_IDS) {
+        receivedFrameIds.shift();
+      }
+    };
+    const hasSeenFrameId = (frameId) => Boolean(frameId) && receivedFrameIds.includes(frameId);
+
+    const cleanup = () => {
+      source?.close();
+      source = null;
+      if (reconnectTimer !== null) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+    };
+
+    const connect = () => {
+      if (stopped) return;
+      cleanup();
+
+      const streamUrl = responseStreamUrl(responsesUrl, requestId);
+      const nextSource = new EventSource(streamUrl);
+      source = nextSource;
+
+      const handleContentFrame = (responseType, messageEvent) => {
+        if (source !== nextSource) return;
+        let payload;
+        try {
+          payload = JSON.parse(messageEvent.data);
+        } catch {
+          return;
+        }
+        const frameId = messageEvent.lastEventId;
+        if (hasSeenFrameId(frameId)) return;
+        rememberFrameId(frameId);
+        connectAttempts = 0;
+
+        if (responseType === 'chat.response.delta') {
+          const delta = typeof payload.delta === 'string' ? payload.delta : '';
+          if (delta) {
+            onChunk?.(delta);
+          }
+        } else {
+          onStreamEvent?.(payload);
+        }
+      };
+
+      nextSource.addEventListener('chat.response.delta', (event) => {
+        handleContentFrame('chat.response.delta', event);
+      });
+      nextSource.addEventListener('chat.response.event', (event) => {
+        handleContentFrame('chat.response.event', event);
+      });
+      nextSource.onerror = () => {
+        if (source !== nextSource || stopped) return;
+        cleanup();
+        connectAttempts += 1;
+        if (connectAttempts >= RESPONSE_CONNECT_FAILURE_LIMIT) {
+          return;
+        }
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, RESPONSE_RECONNECT_DELAY_MS);
+      };
+    };
+
+    connect();
+
+    return () => {
+      stopped = true;
+      cleanup();
+    };
+  }, [getApiUrl]);
+
   const cancelStream = useCallback(async () => {
     const requestId = activeStreamRequestIdRef.current;
     if (!requestId) {
@@ -502,5 +596,5 @@ export function useChatApi() {
     await pending?.terminal;
   }, [getApiUrl]);
 
-  return { connectionState, sendMessageStream, cancelStream };
+  return { connectionState, sendMessageStream, cancelStream, observeResponseStream };
 }

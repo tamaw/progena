@@ -42,6 +42,8 @@ def default_preferences_payload() -> dict[str, Any]:
         "nav_collapsed": False,
         "pinned_panel": None,
         "notification_sounds": False,
+        "quick_chat_thread_id": None,
+        "last_open_chat_thread_id": None,
     }
 
 
@@ -81,6 +83,8 @@ def validate_preferences_payload(payload: Any) -> dict[str, Any]:
         "nav_collapsed": payload.get("nav_collapsed", False),
         "pinned_panel": payload.get("pinned_panel"),
         "notification_sounds": payload.get("notification_sounds", False),
+        "quick_chat_thread_id": payload.get("quick_chat_thread_id"),
+        "last_open_chat_thread_id": payload.get("last_open_chat_thread_id"),
     }
 
 
