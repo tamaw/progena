@@ -3711,7 +3711,7 @@ body,
 
 /* Generic two-line list card: a leading status dot (empty unless something
    needs surfacing), a title/last-activity header line, and a single preview
-   line below. Shared by the Workflows list and the Sequences card list so
+   line below. Shared by the Workflows list and the Routines card list so
    both read the same way as the Chat sidebar's session cards. */
 .pane-card-row {
   display: grid;
@@ -6330,7 +6330,7 @@ body,
   overflow: hidden;
 }
 
-/* Collapsed right-edge tools dock for the sequences canvas — mirrors the left
+/* Collapsed right-edge tools dock for the routines canvas — mirrors the left
    pane's collapse rail. Holds one item (JSON) today; more can be added. */
 .agents-graph-side {
   flex: none;

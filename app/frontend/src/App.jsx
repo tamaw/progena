@@ -99,7 +99,7 @@ function WorkspaceScopedApp() {
                     <Route path="/models" element={<DeferredRoute Page={ModelsPage} fallback="Loading models..." />} />
                     <Route path="/channels" element={<DeferredRoute Page={ChannelsPage} fallback="Loading channels..." />} />
                     <Route path="/agents/:agentId?/:tab?" element={<DeferredRoute Page={AgentsPage} fallback="Loading agents..." variant="agents" />} />
-                    <Route path="/sequences/:agentId?" element={<DeferredRoute Page={AgentsPage} fallback="Loading sequences..." variant="sequences" />} />
+                    <Route path="/routines/:agentId?" element={<DeferredRoute Page={AgentsPage} fallback="Loading routines..." variant="routines" />} />
                     <Route path="/tools/:serverId?/:titleSlug?" element={<DeferredRoute Page={ToolsPage} fallback="Loading tools..." />} />
                     <Route path="/tasks/:cardId?/:titleSlug?" element={<DeferredRoute Page={TasksPage} fallback="Loading tasks..." />} />
                     <Route path="/projects" element={<Navigate to="/solutions/main/projects/backend-runtime" replace />} />

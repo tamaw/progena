@@ -9,7 +9,7 @@ the real architecture, the conventions to follow, and the gotchas to avoid.
 - **Vite 7** dev server / build (`type: module`, JSX in `.jsx`)
 - **Redux Toolkit 2** + **react-redux 9** for shared/realtime state
 - **react-router-dom 7** for routing (`App.jsx` wraps routes in `AppRuntimeShell`)
-- **@xyflow/react** (React Flow) for the workflow/sequence canvases
+- **@xyflow/react** (React Flow) for the workflow/routine canvases
 - **chart.js / react-chartjs-2** for dashboards
 - **vitest 3** for unit tests, **@playwright/test** for e2e
 - **ESLint 9** flat config (`eslint.config.js`)

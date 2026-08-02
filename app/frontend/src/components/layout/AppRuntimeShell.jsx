@@ -68,8 +68,8 @@ import {
   RefreshIcon,
   RepositoriesNavIcon,
   SchedulesNavIcon,
+  RoutinesNavIcon,
   SearchIcon,
-  SequencesNavIcon,
   SettingsAboutIcon,
   SettingsAgentsIcon,
   SettingsAppearanceIcon,
@@ -127,7 +127,7 @@ const navGroups = [
     label: 'Automate',
     items: [
       { to: '/workflows', icon: <WorkspaceNavIcon />, label: 'Workflows' },
-      { to: '/sequences', icon: <SequencesNavIcon />, label: 'Sequences' },
+      { to: '/routines', icon: <RoutinesNavIcon />, label: 'Routines' },
     ],
   },
   {

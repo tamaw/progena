@@ -89,7 +89,7 @@ const RECENCY_BUCKETS = [
   ['last-week', 'Last Week'],
   ['later', 'Later'],
 ];
-// The agent graph now lives on the Sequences page; the Agents page shows only
+// The agent graph now lives on the Routines page; the Agents page shows only
 // Details, so the detail tab row is hidden in both views.
 
 // Default graph shape for agents without a stored graph (passed to the canvas).
@@ -100,14 +100,14 @@ const FALLBACK_GRAPH = {
   edges: [],
 };
 
-// Sequences isn't wired to real data yet — show one pretend entry instead of
+// Routines isn't wired to real data yet — show one pretend entry instead of
 // the live agent list so the page reads as intentional, not empty/broken.
-const DUMMY_SEQUENCES = [{
-  id: 'sequence-demo',
+const DUMMY_ROUTINES = [{
+  id: 'routine-demo',
   kind: 'subagent',
-  name: 'Demo Sequence',
-  role: 'Placeholder — sequences aren’t wired up yet.',
-  summary: 'Placeholder — sequences aren’t wired up yet.',
+  name: 'Demo Routine',
+  role: 'Placeholder — routines aren’t wired up yet.',
+  summary: 'Placeholder — routines aren’t wired up yet.',
   status: 'draft',
   updated: new Date().toISOString(),
   model: '',
@@ -214,10 +214,10 @@ function AgentRow({ agent, selected, onSelect }) {
   );
 }
 
-// Sequences card list: a two-line card matching the Chat/Workflows pattern —
+// Routines card list: a two-line card matching the Chat/Workflows pattern —
 // a leading status dot (empty unless running/failed), name + last-activity
 // on the header line, and the agent's role as a single preview line below.
-function SequenceRow({ agent, selected, onSelect }) {
+function RoutineRow({ agent, selected, onSelect }) {
   const status = agent.status || 'draft';
   const dotTone = status === 'running' ? 'info' : (status === 'failed' || status === 'error') ? 'error' : '';
   return (
@@ -398,14 +398,14 @@ function DraftAgentDetailBody({ draft, onChange }) {
 }
 
 function AgentsPage({ variant = 'agents' }) {
-  const isSequences = variant === 'sequences';
-  const basePath = isSequences ? '/sequences' : '/agents';
+  const isRoutines = variant === 'routines';
+  const basePath = isRoutines ? '/routines' : '/agents';
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtime = useSelector(selectRealtime);
   const fetchedAgents = useSelector(selectAgentProfiles);
-  // Sequences shows one pretend entry for now instead of the real agent list.
-  const agents = isSequences ? DUMMY_SEQUENCES : fetchedAgents;
+  // Routines shows one pretend entry for now instead of the real agent list.
+  const agents = isRoutines ? DUMMY_ROUTINES : fetchedAgents;
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
 
@@ -444,7 +444,7 @@ function AgentsPage({ variant = 'agents' }) {
     setDraftAgent(null);
   }, []);
 
-  // Selection is derived from the URL (/agents/<id> or /sequences/<id>) so the
+  // Selection is derived from the URL (/agents/<id> or /routines/<id>) so the
   // view is refreshable and shareable; user actions navigate rather than setState.
   const selectedAgentId = routeAgentId ?? null;
 
@@ -453,9 +453,9 @@ function AgentsPage({ variant = 'agents' }) {
 
   // Load the agent list once the realtime stream is connected; the snapshot
   // arrives on the stream (the GET just acknowledges and triggers it). Skipped
-  // on Sequences, which shows a pretend entry instead of the real list.
+  // on Routines, which shows a pretend entry instead of the real list.
   useEffect(() => {
-    if (isSequences || !realtime.connected) {
+    if (isRoutines || !realtime.connected) {
       requestedListRef.current = null;
       return;
     }
@@ -464,25 +464,25 @@ function AgentsPage({ variant = 'agents' }) {
     }
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, isSequences, realtime.connected]);
+  }, [agentsUrl, dispatch, isRoutines, realtime.connected]);
 
   // Selection defaults to the first agent without writing state in an effect.
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
 
   const selectAgent = useCallback((id) => {
     setDraftAgent(null);
-    navigate(isSequences ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
-  }, [navigate, basePath, isSequences]);
-  // From a sequence graph, jump to that agent's profile on the Agents page.
+    navigate(isRoutines ? `${basePath}/${encodeURIComponent(id)}` : `${basePath}/${encodeURIComponent(id)}/details`);
+  }, [navigate, basePath, isRoutines]);
+  // From a routine graph, jump to that agent's profile on the Agents page.
   const showProfile = useCallback(() => {
     if (!effectiveAgentId) return;
     navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
   // Request the full profile (incl. graph) whenever the selection changes.
-  // Skipped on Sequences — the pretend entry has no real detail to fetch.
+  // Skipped on Routines — the pretend entry has no real detail to fetch.
   useEffect(() => {
-    if (isSequences || !effectiveAgentId) {
+    if (isRoutines || !effectiveAgentId) {
       return;
     }
     dispatch(requestAgentDetail({
@@ -490,7 +490,7 @@ function AgentsPage({ variant = 'agents' }) {
       agentId: effectiveAgentId,
       requestId: `${effectiveAgentId}-${Date.now()}`,
     }));
-  }, [agentsUrl, dispatch, effectiveAgentId, isSequences]);
+  }, [agentsUrl, dispatch, effectiveAgentId, isRoutines]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -500,22 +500,22 @@ function AgentsPage({ variant = 'agents' }) {
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
-  // Sequences view always shows the graph; Agents view always shows Details.
+  // Routines view always shows the graph; Agents view always shows Details.
   // The tab row is hidden in both (single view per page).
   const detailTabs = [];
-  const effectiveDetailTab = isSequences ? 'Graph' : 'Details';
+  const effectiveDetailTab = isRoutines ? 'Graph' : 'Details';
 
   // Reflect the active agent in the URL so the view is refreshable and shareable
-  // (e.g. /agents/subagent-code-reviewer/details or /sequences/subagent-...).
+  // (e.g. /agents/subagent-code-reviewer/details or /routines/subagent-...).
   useEffect(() => {
     if (!effectiveAgentId) return;
-    const target = isSequences
+    const target = isRoutines
       ? `${basePath}/${encodeURIComponent(effectiveAgentId)}`
       : `${basePath}/${encodeURIComponent(effectiveAgentId)}/details`;
     if (`${window.location.pathname}` !== target) {
       navigate(target, { replace: true });
     }
-  }, [effectiveAgentId, isSequences, basePath, navigate]);
+  }, [effectiveAgentId, isRoutines, basePath, navigate]);
 
   const visibleAgents = useMemo(
     () => sortAgents(agents.filter((agent) => matchesAgent(agent, activeFilter, search)), sortMode),
@@ -525,8 +525,8 @@ function AgentsPage({ variant = 'agents' }) {
   // "Recent" uses the chat sidebar's recency buckets, and "Type" keeps the
   // agent's own group headers.
   const sections = useMemo(() => {
-    // Sequences drops category grouping for now — a flat list, appearance-only.
-    if (isSequences || sortMode === 'Name') {
+    // Routines drops category grouping for now — a flat list, appearance-only.
+    if (isRoutines || sortMode === 'Name') {
       return [{ key: 'all', title: null, agents: visibleAgents }];
     }
     if (sortMode === 'Recent') {
@@ -543,7 +543,7 @@ function AgentsPage({ variant = 'agents' }) {
     return [...new Set(visibleAgents.map((agent) => agent.group || 'Agents'))]
       .map((group) => ({ key: group, title: group, agents: grouped[group] || [] }))
       .filter((section) => section.agents.length);
-  }, [isSequences, sortMode, visibleAgents]);
+  }, [isRoutines, sortMode, visibleAgents]);
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
   const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
@@ -584,8 +584,8 @@ function AgentsPage({ variant = 'agents' }) {
             groups={sections}
             getGroupItems={(section) => section.agents}
             renderItem={(agent) => (
-              isSequences ? (
-                <SequenceRow
+              isRoutines ? (
+                <RoutineRow
                   agent={agent}
                   selected={selectedAgent?.id === agent.id}
                   onSelect={selectAgent}
@@ -636,7 +636,7 @@ function AgentsPage({ variant = 'agents' }) {
         </DetailPane>
       ) : selectedAgent ? (
         <DetailPane className={`detail-pane--dense agents-detail ${effectiveDetailTab === 'Graph' ? 'is-graph-mode' : ''}`} label={`${selectedAgent.name} profile`}>
-          {/* Sequences (Graph) hides the detail header so the canvas fills the
+          {/* Routines (Graph) hides the detail header so the canvas fills the
               pane, matching the Workflows page. The Agents Details view keeps it. */}
           {effectiveDetailTab !== 'Graph' ? (
             <DetailHeader
