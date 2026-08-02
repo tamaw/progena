@@ -274,15 +274,9 @@ export default function RepositoriesPage() {
                   onClick={() => setSelectedId(row.id)}
                 >
                   <span className={`repo-source-row__mark repo-source-row__mark--${REPO_STATUS_TONE[rowStatus]}`} />
-                  <span className="repo-source-row__top">
-                    <span className="repo-source-row__source">{row.declared?.remote_url ? 'Remote' : 'Local'}</span>
-                    <span className="repo-source-row__branch">{row.scan?.branch || '—'}</span>
-                  </span>
-                  <span className="repo-source-row__age">{row.scan?.last_commit?.relative_time || '—'}</span>
                   <span className="repo-source-row__title">{row.declared?.name}</span>
-                  <span className="repo-source-row__meta">
-                    {row.scan?.dirty_count || 0} changed · {row.scan?.branch_count || 0} branches
-                  </span>
+                  <span className="repo-source-row__age">{row.scan?.last_commit?.relative_time || '—'}</span>
+                  <span className="repo-source-row__meta">{row.scan?.dirty_count ?? 0} uncommitted</span>
                 </button>
               );
             }}
