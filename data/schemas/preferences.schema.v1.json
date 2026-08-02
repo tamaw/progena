@@ -39,6 +39,11 @@
       "type": ["string", "null"],
       "description": "Thread id of the default-mode quick chat's scratch conversation, so a pinned quick chat can rehydrate after a page reload. null means no persisted thread.",
       "default": null
+    },
+    "last_open_chat_thread_id": {
+      "type": ["string", "null"],
+      "description": "Thread id of the last chat conversation the user viewed on the Chat page (once it has at least one message), so navigating to Chat without an explicit id reopens it instead of starting a new chat. null means none yet.",
+      "default": null
     }
   },
   "required": ["timezone"],
