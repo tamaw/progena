@@ -29,8 +29,6 @@ _DEFAULT_GRAPH = {
             "kind": "prompt",
             "output_key": "greet",
             "config": {"prompt_template": "do the thing: {request}"},
-            "x": 0,
-            "y": 0,
         },
         {
             "id": "gate",
@@ -38,8 +36,6 @@ _DEFAULT_GRAPH = {
             "kind": "code",
             "output_key": "gate",
             "config": {"expression": "True"},
-            "x": 200,
-            "y": 0,
         },
     ],
     "edges": [{"from": "greet", "to": "gate"}],
@@ -206,7 +202,12 @@ def test_graph_update_persists_and_broadcasts(harness):
     client, events = harness
     payload = {
         "nodes": [
-            {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi {request}"}},
+            {
+                "id": "a",
+                "kind": "prompt",
+                "output_key": "a",
+                "config": {"prompt_template": "hi {request}"},
+            },
             {"id": "b", "kind": "noop", "output_key": "b"},
         ],
         "edges": [{"from": "a", "to": "b"}],
@@ -230,7 +231,9 @@ def test_graph_update_persists_and_broadcasts(harness):
 def test_graph_update_invalid_returns_422(harness):
     client, _ = harness
     bad = {
-        "nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}],
+        "nodes": [
+            {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}
+        ],
         "edges": [{"from": "a", "to": "ghost"}],
     }
     assert client.patch("/api/ui/agent-profiles/alpha/graph", json=bad).status_code == 422
@@ -239,7 +242,9 @@ def test_graph_update_invalid_returns_422(harness):
 def test_graph_update_unknown_entry_returns_422(harness):
     client, _ = harness
     payload = {
-        "nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}],
+        "nodes": [
+            {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}
+        ],
         "edges": [],
         "entry": "ghost",
     }
@@ -248,7 +253,12 @@ def test_graph_update_unknown_entry_returns_422(harness):
 
 def test_graph_update_unknown_agent_returns_404(harness):
     client, _ = harness
-    payload = {"nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}], "edges": []}
+    payload = {
+        "nodes": [
+            {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}
+        ],
+        "edges": [],
+    }
     assert client.patch("/api/ui/agent-profiles/missing/graph", json=payload).status_code == 404
 
 
@@ -425,7 +435,11 @@ class TestValidateAgentGraph:
     def test_router_rejects_mixing_with_plain_edge(self):
         with pytest.raises(ValueError, match="mixes a router edge"):
             validate_agent_graph(
-                [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}, {"id": "c", "kind": "noop"}],
+                [
+                    {"id": "a", "kind": "code"},
+                    {"id": "b", "kind": "noop"},
+                    {"id": "c", "kind": "noop"},
+                ],
                 [
                     {
                         "from": "a",

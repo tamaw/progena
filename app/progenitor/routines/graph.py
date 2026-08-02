@@ -30,8 +30,6 @@ class RoutineNodePrompt(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 class RoutineNodeCode(BaseModel):
@@ -45,8 +43,6 @@ class RoutineNodeCode(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 class RoutineNodeEval(BaseModel):
@@ -60,8 +56,6 @@ class RoutineNodeEval(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 class RoutineNodeSubagent(BaseModel):
@@ -75,8 +69,6 @@ class RoutineNodeSubagent(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 class RoutineNodeAgent(BaseModel):
@@ -90,8 +82,6 @@ class RoutineNodeAgent(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 class RoutineNodeNoop(BaseModel):
@@ -105,8 +95,6 @@ class RoutineNodeNoop(BaseModel):
     output_key: str | None = None
     config: dict[str, Any] = Field(default_factory=dict)
     label: str | None = None
-    x: float | None = None
-    y: float | None = None
 
 
 RoutineNode = Annotated[
@@ -200,7 +188,9 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
                 raise ValueError(f"router edge from {source} needs at least one branch")
             for target in branches.values():
                 if target not in ids:
-                    raise ValueError(f"router edge from {source} branches to unknown node: {target}")
+                    raise ValueError(
+                        f"router edge from {source} branches to unknown node: {target}"
+                    )
             default = edge.get("default")
             if default is not None and default not in ids:
                 raise ValueError(f"router edge from {source} defaults to unknown node: {default}")

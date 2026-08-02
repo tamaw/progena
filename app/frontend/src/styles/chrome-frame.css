@@ -6925,9 +6925,6 @@ body,
   background: color-mix(in oklab, var(--node-color) 20%, transparent);
 }
 
-.agents-graph-canvas .canvas-handle {
-  background: var(--node-color);
-}
 
 /* Editable label in the shared title bar; kind badge reuses .node-status-badge. */
 .agents-node-title {
@@ -6977,35 +6974,6 @@ body,
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--node-color) 22%, transparent);
 }
 
-/* Editable edge label pill (double-click to edit). */
-.agents-graph-edge-label {
-  position: absolute;
-  pointer-events: all;
-  padding: 1px 7px;
-  color: var(--color-text-secondary);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
-  font-size: 10.5px;
-  font-weight: 700;
-  white-space: nowrap;
-  cursor: text;
-}
-
-.agents-graph-edge-label__add {
-  color: var(--color-text-muted);
-  opacity: 0.55;
-}
-
-.agents-graph-edge-label input {
-  width: 84px;
-  color: var(--color-text-primary);
-  background: transparent;
-  border: none;
-  font: inherit;
-  outline: none;
-}
-
 /* Save status chip in the floating header. */
 .agents-graph-floating .agents-graph-save--saving { color: var(--color-text-muted); }
 .agents-graph-floating .agents-graph-save--saved { color: var(--color-success, #22c55e); }
@@ -7036,18 +7004,6 @@ body,
 /* Dock items are <button>s here (the Workspace uses <div>s) — reset native
    button chrome so the shared .canvas-dock-item styling applies, then colour
    each icon by step kind. Structure/position come from workspace.css. */
-.agents-graph-dock .canvas-dock-item {
-  background: transparent;
-  border: none;
-  font: inherit;
-}
-
-.agents-graph-dock .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
-.agents-graph-dock .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
 
 /* Workflows dock items are also <button>s (see comment above) — same native
    chrome reset so the tinted .canvas-dock-icon colours aren't sitting on
@@ -7108,22 +7064,400 @@ body,
   border-top: 1px dashed var(--color-border);
 }
 
-.agents-graph-entry {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  color: var(--color-text-secondary);
+/* ── Rigid routine chain (replaces the free-drag canvas) ──────────────────
+   A routine graph compiles straight into a runnable LangGraph agent, so
+   position on screen carries no meaning; this renders top-down instead of
+   free-drag: a scrollable column, a fixed Start/End cap at every terminus,
+   one card per step, and a `+` on every connector to insert a step exactly
+   there. A `state_equals` router forks into swim-lane columns (one per
+   branch + optional Default), mirroring Azure Logic Apps'/Power Automate's
+   Condition/Switch actions -- see routine-fork* below. */
+.routine-canvas__scroll {
+  height: 100%;
+  overflow: auto;
+  padding: 56px 24px 48px;
 }
 
-.agents-graph-entry-select {
-  font: inherit;
-  color: inherit;
+.routine-chain {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+}
+
+.routine-canvas .routine-step-card {
+  width: min(480px, 100%);
+  max-width: 480px;
+}
+
+/* Start/End chrome -- never a schema node, purely "the chain begins/ends
+   here". A branching routine can render multiple Ends; that's real. */
+.routine-cap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 96px;
+  padding: 6px 18px;
+  color: var(--color-text-secondary);
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border);
-  border-radius: 5px;
-  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
+
+.routine-cap--start {
+  color: #3fb950;
+  background: color-mix(in oklab, #3fb950 14%, var(--color-bg-secondary));
+  border-color: color-mix(in oklab, #3fb950 40%, var(--color-border));
+}
+
+.routine-cap--end {
+  color: var(--color-text-muted);
+}
+
+/* A cycle (retry loop) or rejoin (two branches converging) terminates the
+   run it's rendered in instead of expanding forever/duplicating a subtree. */
+.routine-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 5px 12px;
+  color: var(--color-text-muted);
+  background: var(--color-bg-secondary);
+  border: 1px dashed var(--color-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-style: italic;
+}
+
+/* The connector line + its `+` insert control + kind-picker menu. */
+.routine-connector {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 34px;
+}
+
+.routine-connector__line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  background: var(--color-border);
+  transform: translateX(-50%);
+}
+
+.routine-connector__btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.routine-connector__btn:hover {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.routine-connector__menu {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 168px;
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  transform: translateX(-50%);
+}
+
+.routine-connector__menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  color: var(--color-text-primary);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.routine-connector__menu-item:hover {
+  background: var(--color-bg-hover);
+}
+
+.routine-connector__menu-item .canvas-dock-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+}
+
+.routine-connector__menu-item .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
+
+/* Delete-step control in the step card's title bar. */
+.agents-graph-node__delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.agents-graph-node__delete:hover {
+  color: var(--color-error, #ef4444);
+  background: var(--color-bg-hover);
+}
+
+/* "+ Split into branches" footer action, before a node has any routing. */
+.agents-graph-node__split {
+  width: 100%;
+  margin-top: 2px;
+  padding: 6px 10px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-top: 1px dashed var(--color-border);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agents-graph-node__split:hover {
+  color: var(--node-color);
+}
+
+.agents-graph-node__unsplit {
+  align-self: flex-start;
+  padding: 3px 8px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.agents-graph-node__unsplit:hover {
+  color: var(--color-error, #ef4444);
+  border-color: var(--color-error, #ef4444);
+}
+
+/* Router fork: one swim-lane column per branch (+ optional Default),
+   mirrors Azure Logic Apps'/Power Automate's Condition/Switch actions. No
+   forced merge node -- a branch just ends where it ends. */
+.routine-fork {
+  width: 100%;
+  padding-top: 8px;
+}
+
+.routine-fork__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 20px;
+  padding: 0 8px;
+}
+
+.routine-fork__column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 220px;
+  padding: 10px 12px;
+  background: color-mix(in oklab, var(--color-bg-primary) 60%, transparent);
+  border: 1px dashed var(--color-border);
+  border-radius: 12px;
+}
+
+.routine-fork__column--empty,
+.routine-fork__column--add {
+  justify-content: center;
+  min-height: 64px;
+  background: transparent;
+}
+
+.routine-fork__header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.routine-fork__header-label {
+  padding: 3px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: text;
+}
+
+.routine-fork__header--default .routine-fork__header-label {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.routine-fork__header-input {
+  padding: 3px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.routine-fork__header-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.routine-fork__header-remove:hover {
+  color: var(--color-error, #ef4444);
+  background: var(--color-bg-hover);
+}
+
+.routine-fork__add-branch,
+.routine-fork__add-default {
+  padding: 8px 14px;
+  color: var(--color-accent);
+  background: var(--color-bg-primary);
+  border: 1px dashed var(--color-border);
+  border-radius: 8px;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.routine-fork__add-branch:hover,
+.routine-fork__add-default:hover {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+/* Nodes unreachable from `entry` never silently vanish. */
+.routine-unreachable {
+  width: min(480px, 100%);
+  margin-top: 28px;
+  padding: 12px 14px;
+  background: color-mix(in oklab, var(--color-error, #ef4444) 6%, var(--color-bg-secondary));
+  border: 1px dashed color-mix(in oklab, var(--color-error, #ef4444) 35%, var(--color-border));
+  border-radius: 10px;
+}
+
+.routine-unreachable__head {
+  margin-bottom: 8px;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.routine-unreachable__list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.routine-unreachable__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.routine-unreachable__item .canvas-dock-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+}
+
+.routine-unreachable__item .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
+
+.routine-unreachable__item span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routine-unreachable__item button {
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.routine-unreachable__item button:hover {
+  color: var(--color-error, #ef4444);
+}
+
 
 .agents-detail-grid {
   display: grid;
