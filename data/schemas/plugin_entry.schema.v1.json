@@ -39,6 +39,18 @@
         }
       ]
     },
+    "marketplace_source": {
+      "type": ["string", "null"],
+      "description": "Registered marketplace source used to discover this plugin."
+    },
+    "marketplace_plugin_source": {
+      "type": ["string", "object", "null"],
+      "description": "Original plugin source from the marketplace manifest."
+    },
+    "marketplace_commit_sha": {
+      "type": ["string", "null"],
+      "description": "Repository commit used when the plugin was installed."
+    },
     "version": {
       "type": "string",
       "description": "Desired version pin (optional)."

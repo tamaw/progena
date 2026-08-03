@@ -43,7 +43,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 
@@ -434,11 +434,10 @@ export default function PluginsPage() {
           <PaneEmptyState>No plugins match the current filters.</PaneEmptyState>
         )}
         {pluginTree.length ? (
-          <PaneListVirtualized
+          <PaneListRows
             className="prompts-sidebar-body"
             groups={pluginTree.map((group) => ({ ...group, items: group.skills }))}
             getItemKey={(plugin) => plugin.name}
-            estimatedItemHeight={42}
             renderItem={(plugin) => (
               <PluginRow
                 plugin={plugin}

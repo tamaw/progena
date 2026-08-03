@@ -14,7 +14,9 @@ from typing import Any
 from ..utils import utcnow_isoformat
 from .sources import (
     MarketplaceCatalog,
+    _parse_github_source,
     compute_digest,
+    fetch_marketplace,
     fetch_plugin_files_with_report,
     resolve_plugin_version,
 )
@@ -30,31 +32,42 @@ def _plugin_segment(key: str) -> str:
 def _build_synthetic_catalog(
     entry: dict, plugin_name: str, marketplace_name: str
 ) -> MarketplaceCatalog:
-    """Create a single-plugin catalog so ``fetch_plugin_files_with_report`` can resolve the entry."""
+    """Create a pinned catalog for an installed plugin's direct HTTP fetch."""
+    source = entry.get("source")
+    source_url = entry.get("marketplace_source")
+    if not isinstance(source_url, str):
+        source_url = source.get("url") or source.get("repo") if isinstance(source, dict) else ""
+    repository: str | None = None
+    if isinstance(source_url, str) and source_url:
+        owner, repo, _ = _parse_github_source(source_url)
+        repository = f"{owner}/{repo}"
+    source_dict = source if isinstance(source, dict) else {}
     return MarketplaceCatalog(
         name=marketplace_name,
         owner={},
         plugins=[
             {
                 "name": plugin_name,
-                "source": entry["source"],
+                "source": source,
                 "version": entry.get("version"),
             }
         ],
+        repository=repository,
+        commit_sha=entry.get("marketplace_commit_sha") or source_dict.get("sha"),
     )
 
 
 async def _fetch_and_digest(
-    entry: dict, plugin_name: str, marketplace_name: str
+    entry: dict,
+    plugin_name: str,
+    marketplace_name: str,
+    catalog: MarketplaceCatalog | None = None,
 ) -> tuple[dict[str, str], str]:
-    """Fetch a plugin's skill files and compute their digest.
-
-    Returns ``(files, digest)``.  ``files`` keys are ``<skill>/<filename>``.
-    """
-    catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
+    """Fetch a plugin's skill files and compute their digest."""
+    if catalog is None:
+        catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
     files, _skipped = await fetch_plugin_files_with_report(catalog, plugin_name)
-    digest = compute_digest(files)
-    return files, digest
+    return files, compute_digest(files)
 
 
 async def check_plugin_updates(state_manager) -> dict[str, Any]:
@@ -69,31 +82,66 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
     summary: dict[str, list[str]] = {"updated_available": [], "errored": []}
     changed = False
     now = utcnow_isoformat()
+    catalogs: dict[str, MarketplaceCatalog] = {}
 
     for key, entry in list(plugins.items()):
         installed_version = entry.get("installed_version")
         if not installed_version:
             continue
-
         try:
             marketplace_name, plugin_name = key.split("/", 1)
-            files, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
+            marketplace_source = entry.get("marketplace_source")
+            if not isinstance(marketplace_source, str) or not marketplace_source:
+                files, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
+                current = dict(entry)
+                if digest != entry.get("installed_digest"):
+                    current["available_version"] = resolve_plugin_version(entry, None)
+                    summary["updated_available"].append(key)
+                    changed = True
+                current["last_checked"] = now
+                if current != entry:
+                    plugins[key] = current
+                continue
 
+            catalog = catalogs.get(marketplace_source)
+            if catalog is None:
+                catalog = await fetch_marketplace(marketplace_source)
+                catalogs[marketplace_source] = catalog
+            current_entry = next(
+                (p for p in catalog.plugins if p.get("name") == plugin_name),
+                None,
+            )
             current = dict(entry)
-            if digest != current.get("installed_digest"):
-                current["available_version"] = resolve_plugin_version(current, None)
+            if current_entry is None:
+                current["status"] = "error"
+                current["status_message"] = "No longer listed in marketplace"
+                current["last_checked"] = now
+                plugins[key] = current
+                summary["errored"].append(key)
+                changed = True
+                continue
+
+            files, digest = await _fetch_and_digest(
+                current_entry, plugin_name, marketplace_name, catalog
+            )
+            source_changed = current_entry.get("source") != entry.get("marketplace_plugin_source")
+            version = resolve_plugin_version(current_entry, None)
+            if (
+                digest != entry.get("installed_digest")
+                or source_changed
+                or (version != installed_version)
+            ):
+                current["available_version"] = version
                 summary["updated_available"].append(key)
                 changed = True
             current["last_checked"] = now
-
+            current["status"] = "installed"
+            current["status_message"] = ""
             if current != entry:
                 plugins[key] = current
         except Exception as exc:
             current = dict(entry)
             message = str(exc)
-            # See reconcile_plugins's matching guard: only persist when the
-            # error itself changed, never merely for a fresh last_checked
-            # timestamp -- that would loop forever via the store listener.
             status_changed = (
                 current.get("status") != "error" or current.get("status_message") != message
             )

@@ -15,6 +15,7 @@ from app.progenitor.plugins.sources import (
     MarketplaceCatalog,
     PluginFetchError,
     _build_codeload_url,
+    _configured_max_archive_bytes,
     _extract_archive,
     _extract_skills_from_files,
     _fetch_url,
@@ -205,11 +206,18 @@ def test_extract_archive_rejects_absolute_path() -> None:
         _extract_archive(raw)
 
 
-def test_extract_archive_rejects_size_cap() -> None:
-    # 33 MiB + 1 byte > 32 MiB cap
-    big = b"x" * (33_554_432 + 1)
-    raw = _make_tar_bytes({"owner-repo-ab12/bigfile": big})
-    with pytest.raises(PluginFetchError, match="exceeds 32 MiB"):
+def test_archive_limit_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROGENITOR_PLUGIN_MAX_ARCHIVE_MB", "96")
+    assert _configured_max_archive_bytes() == 96 * 1024 * 1024
+
+
+def test_extract_archive_rejects_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.progenitor.plugins.sources._MAX_ARCHIVE_BYTES",
+        2,
+    )
+    raw = _make_tar_bytes({"owner-repo-ab12/bigfile": b"abc"})
+    with pytest.raises(PluginFetchError, match="archive exceeds"):
         _extract_archive(raw)
 
 
@@ -229,95 +237,87 @@ def test_extract_archive_skips_directories() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_marketplace_archive(data: dict[str, Any]) -> bytes:
-    return _make_tar_bytes(
-        {"owner-repo-ab12/.claude-plugin/marketplace.json": json.dumps(data).encode()}
-    )
+def _make_marketplace_archive(
+    data: dict[str, Any],
+    manifest_path: str = ".claude-plugin/marketplace.json",
+) -> bytes:
+    return _make_tar_bytes({f"owner-repo-ab12/{manifest_path}": json.dumps(data).encode()})
 
 
 @pytest.mark.asyncio
-async def test_fetch_marketplace_parses_required_fields() -> None:
-    archive = _make_marketplace_archive(
-        {
-            "name": "Acme Tools",
-            "owner": {"name": "Acme Corp"},
-            "plugins": [{"name": "formatter", "source": {"source": "github", "repo": "acme/fmt"}}],
-        }
-    )
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = archive
-        catalog = await fetch_marketplace("acme/tools")
-    assert catalog.name == "Acme Tools"
-    assert catalog.owner == {"name": "Acme Corp"}
-    assert len(catalog.plugins) == 1
-    assert catalog.plugins[0]["name"] == "formatter"
+async def test_fetch_marketplace_reads_manifest_over_http() -> None:
+    manifest = {
+        "name": "Awesome Copilot",
+        "metadata": {"description": "Skills", "version": "1.0.0"},
+        "owner": {"name": "GitHub"},
+        "plugins": [{"name": "demo", "source": "plugins/demo"}],
+    }
 
+    async def fetch(url: str) -> bytes:
+        if url.endswith(".claude-plugin/marketplace.json"):
+            from aiohttp import ClientResponseError
 
-@pytest.mark.asyncio
-async def test_fetch_marketplace_404_raises() -> None:
-    from aiohttp import ClientResponseError
+            raise ClientResponseError(AsyncMock(), (), status=404)
+        return json.dumps(manifest).encode()
 
-    mock_exc = ClientResponseError(
-        request_info=AsyncMock(),
-        history=(),
-        status=404,
-    )
     with (
         patch(
-            "app.progenitor.plugins.sources._fetch_url",
-            side_effect=mock_exc,
+            "app.progenitor.plugins.sources._resolve_commit_sha",
+            new=AsyncMock(return_value="abc123"),
         ),
-        pytest.raises(PluginFetchError, match=r"not found \(404\)"),
+        patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch),
     ):
-        await fetch_marketplace("acme/nothing")
+        catalog = await fetch_marketplace("github/awesome-copilot")
+    assert catalog.commit_sha == "abc123"
+    assert catalog.repository == "github/awesome-copilot"
+    assert catalog.plugins[0]["source"] == "plugins/demo"
 
 
 @pytest.mark.asyncio
-async def test_fetch_marketplace_missing_json_raises() -> None:
-    archive = _make_tar_bytes({"owner-repo-ab12/README.md": b"hi"})
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = archive
-        with pytest.raises(PluginFetchError, match="marketplace.json not found"):
-            await fetch_marketplace("acme/tools")
-
-
-@pytest.mark.asyncio
-async def test_fetch_marketplace_bad_json_raises() -> None:
-    archive = _make_tar_bytes({"owner-repo-ab12/.claude-plugin/marketplace.json": b"not json"})
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = archive
-        with pytest.raises(PluginFetchError, match="not valid JSON"):
-            await fetch_marketplace("acme/tools")
-
-
-@pytest.mark.asyncio
-async def test_fetch_marketplace_missing_name_raises() -> None:
-    archive = _make_marketplace_archive({"owner": {"name": "x"}, "plugins": []})
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = archive
-        with pytest.raises(PluginFetchError, match="missing required field 'name'"):
-            await fetch_marketplace("acme/tools")
-
-
-@pytest.mark.asyncio
-async def test_fetch_marketplace_keeps_archive_files() -> None:
-    archive = _make_tar_bytes(
-        {
-            "owner-repo-ab12/.claude-plugin/marketplace.json": json.dumps(
-                {
-                    "name": "Acme",
-                    "owner": {"name": "x"},
-                    "plugins": [],
-                    "metadata": {"pluginRoot": "plugins"},
-                }
-            ).encode(),
-            "owner-repo-ab12/plugins/foo/SKILL.md": b"# Foo",
-        }
+async def test_fetch_plugin_skills_over_http() -> None:
+    catalog = MarketplaceCatalog(
+        name="Acme",
+        owner={"name": "Acme"},
+        plugins=[{"name": "demo", "source": "plugins/demo"}],
+        repository="acme/tools",
+        commit_sha="abc123",
     )
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = archive
-        catalog = await fetch_marketplace("acme/tools")
-    assert catalog._archive_files["plugins/foo/SKILL.md"] == b"# Foo"
+
+    async def fetch(url: str) -> bytes:
+        if "/git/trees/" in url:
+            return json.dumps(
+                {
+                    "tree": [
+                        {"path": "plugins/demo/skills/review/SKILL.md", "type": "blob"},
+                        {"path": "plugins/demo/README.md", "type": "blob"},
+                    ]
+                }
+            ).encode()
+        return b"---\nname: review\n---\n# Review"
+
+    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+        files, skipped = await fetch_plugin_files_with_report(catalog, "demo")
+    assert files == {"review/SKILL.md": "---\nname: review\n---\n# Review"}
+    assert skipped == 0
+
+
+@pytest.mark.asyncio
+async def test_missing_skills_directory_is_empty() -> None:
+    catalog = MarketplaceCatalog(
+        name="Acme",
+        owner={"name": "Acme"},
+        plugins=[{"name": "demo", "source": "plugins/demo"}],
+        repository="acme/tools",
+        commit_sha="abc123",
+    )
+
+    async def fetch(url: str) -> bytes:
+        return json.dumps({"tree": [{"path": "plugins/demo/README.md", "type": "blob"}]}).encode()
+
+    with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
+        files, skipped = await fetch_plugin_files_with_report(catalog, "demo")
+    assert files == {}
+    assert skipped == 0
 
 
 # ---------------------------------------------------------------------------
@@ -423,13 +423,7 @@ def test_extract_skills_root_fallback_uses_plugin_name_when_no_frontmatter() -> 
     assert skipped == 0
 
 
-def test_extract_skills_raises_when_no_skills_found() -> None:
-    files = {"README.md": b"# Readme"}
-    with pytest.raises(PluginFetchError, match="plugin ships no skills"):
-        _extract_skills_from_files(files, "my-plugin")
-
-
-def test_extract_skills_excludes_out_of_scope_paths() -> None:
+def test_extract_skills_excludes_unsupported_directories_and_files() -> None:
     files = {
         "skills/review/SKILL.md": b"# Review",
         "skills/review/commands/help.md": b"help",
@@ -484,146 +478,3 @@ def test_extract_skills_respects_50_file_cap() -> None:
 # ---------------------------------------------------------------------------
 # fetch_plugin_files_with_report (mocked archive)
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_relative_path() -> None:
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[{"name": "formatter", "source": "./formatter"}],
-        metadata={"pluginRoot": "plugins"},
-        _archive_files={
-            "plugins/formatter/SKILL.md": b"# Formatter",
-            "plugins/formatter/helper.md": b"help",
-        },
-    )
-    with patch("app.progenitor.plugins.sources._fetch_url") as mock_fetch:
-        # relative paths must NOT trigger a network fetch
-        files, skipped = await fetch_plugin_files_with_report(catalog, "formatter")
-        mock_fetch.assert_not_called()
-    assert "formatter/SKILL.md" in files
-    assert "formatter/helper.md" in files
-    assert skipped == 0
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_relative_path_at_archive_root() -> None:
-    """A plugin whose source is exactly "./" (no pluginRoot) covers the whole
-    marketplace archive -- the empty-relative-path edge case. Found via a live
-    fetch against the real anthropics/skills marketplace, whose plugin entries
-    use `"source": "./"` for a whole-repo plugin."""
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[{"name": "everything", "source": "./"}],
-        _archive_files={
-            "skills/xlsx/SKILL.md": b"# Xlsx",
-            "skills/docx/SKILL.md": b"# Docx",
-        },
-    )
-    files, skipped = await fetch_plugin_files_with_report(catalog, "everything")
-    assert "xlsx/SKILL.md" in files
-    assert "docx/SKILL.md" in files
-    assert skipped == 0
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_github_source() -> None:
-    plugin_archive = _make_tar_bytes(
-        {
-            "owner-repo-ab12/skills/review/SKILL.md": b"# Review",
-            "owner-repo-ab12/skills/review/ref.md": b"refs",
-        }
-    )
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[
-            {"name": "review", "source": {"source": "github", "repo": "acme/review", "ref": "v1"}}
-        ],
-    )
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = plugin_archive
-        files, skipped = await fetch_plugin_files_with_report(catalog, "review")
-    assert "review/SKILL.md" in files
-    assert "review/ref.md" in files
-    assert skipped == 0
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_git_subdir_source() -> None:
-    plugin_archive = _make_tar_bytes(
-        {
-            "owner-repo-ab12/plugins/review/skills/review/SKILL.md": b"# Review",
-        }
-    )
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[
-            {
-                "name": "review",
-                "source": {
-                    "source": "git-subdir",
-                    "url": "acme/monorepo",
-                    "path": "plugins/review",
-                    "ref": "main",
-                },
-            }
-        ],
-    )
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = plugin_archive
-        files, skipped = await fetch_plugin_files_with_report(catalog, "review")
-    assert "review/SKILL.md" in files
-    assert skipped == 0
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_not_found() -> None:
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[{"name": "missing", "source": {"source": "github", "repo": "acme/missing"}}],
-    )
-    from aiohttp import ClientResponseError
-
-    mock_exc = ClientResponseError(
-        request_info=AsyncMock(),
-        history=(),
-        status=404,
-    )
-    with (
-        patch(
-            "app.progenitor.plugins.sources._fetch_url",
-            side_effect=mock_exc,
-        ),
-        pytest.raises(PluginFetchError, match=r"not found \(404\)"),
-    ):
-        await fetch_plugin_files_with_report(catalog, "missing")
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_no_skills() -> None:
-    plugin_archive = _make_tar_bytes({"owner-repo-ab12/README.md": b"# Just a readme"})
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[{"name": "readme-only", "source": {"source": "github", "repo": "acme/empty"}}],
-    )
-    with patch("app.progenitor.plugins.sources._fetch_url", new_callable=AsyncMock) as mock_fetch:
-        mock_fetch.return_value = plugin_archive
-        with pytest.raises(PluginFetchError, match="plugin ships no skills"):
-            await fetch_plugin_files_with_report(catalog, "readme-only")
-
-
-@pytest.mark.asyncio
-async def test_fetch_plugin_files_rejects_npm() -> None:
-    catalog = MarketplaceCatalog(
-        name="Acme",
-        owner={"name": "x"},
-        plugins=[{"name": "bad", "source": {"source": "npm", "package": "x"}}],
-    )
-    with pytest.raises(PluginFetchError, match="unsupported source type 'npm'"):
-        await fetch_plugin_files_with_report(catalog, "bad")

@@ -44,7 +44,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
@@ -1981,14 +1981,13 @@ function ConversationPage() {
         {visibleSessionGroups.length === 0 ? (
           <PaneEmptyState>{sidebarEmptyMessageText}</PaneEmptyState>
         ) : (
-          <PaneListVirtualized
+          <PaneListRows
             groups={visibleSessionGroups.map((group) => ({
               key: group.key,
               title: group.label,
               items: group.items,
             }))}
             getItemKey={(item) => item.id}
-            estimatedItemHeight={70}
             renderItem={(item) => (
               <article
                 className={`chat-session-card${item.selected ? ' is-selected' : ''}${item.unread ? ' is-unread' : ''}`}

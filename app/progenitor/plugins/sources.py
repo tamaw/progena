@@ -10,10 +10,12 @@ import re
 import tarfile
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 import yaml
+
+from app.progenitor.utils import env_int
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +55,22 @@ _EXCLUDED_FILES = {
 
 _MAX_FILE_BYTES = 1_048_576  # 1 MiB
 _MAX_FILES_PER_PLUGIN = 50
-_MAX_ARCHIVE_BYTES = 33_554_432  # 32 MiB
+_DEFAULT_MAX_ARCHIVE_MB = 64
+
+
+def _configured_max_archive_bytes() -> int:
+    """Return the positive archive expansion limit configured by the environment."""
+    configured_mb = env_int("PROGENITOR_PLUGIN_MAX_ARCHIVE_MB", _DEFAULT_MAX_ARCHIVE_MB)
+    if configured_mb <= 0:
+        logger.warning(
+            "PROGENITOR_PLUGIN_MAX_ARCHIVE_MB must be positive; using default %d MiB",
+            _DEFAULT_MAX_ARCHIVE_MB,
+        )
+        configured_mb = _DEFAULT_MAX_ARCHIVE_MB
+    return configured_mb * 1024 * 1024
+
+
+_MAX_ARCHIVE_BYTES = _configured_max_archive_bytes()
 
 
 class PluginFetchError(Exception):
@@ -62,7 +79,7 @@ class PluginFetchError(Exception):
 
 @dataclass
 class MarketplaceCatalog:
-    """Parsed marketplace.json plus the archive needed for relative-path resolution."""
+    """Parsed marketplace.json and its pinned GitHub repository revision."""
 
     name: str
     owner: dict
@@ -70,8 +87,8 @@ class MarketplaceCatalog:
     description: str | None = None
     version: str | None = None
     metadata: dict = field(default_factory=dict)
-    # Internal — the extracted archive file map so that relative-path plugin
-    # sources ("./x") can be resolved without a second network round-trip.
+    repository: str | None = None
+    commit_sha: str | None = None
     _archive_files: dict[str, bytes] = field(default_factory=dict, repr=False)
 
 
@@ -132,30 +149,23 @@ def _parse_github_source(source: str) -> tuple[str, str, str | None]:
 
 
 def resolve_relative_plugin_source(
-    marketplace_source: str, plugin_source: str, plugin_root: str = ""
+    marketplace_source: str,
+    plugin_source: str,
+    plugin_root: str = "",
+    commit_sha: str | None = None,
 ) -> dict[str, Any]:
-    """Turn a plugin's marketplace-relative ``source`` (e.g. ``"./"`` or
-    ``"./formatter"``) into an absolute, self-sufficient source dict.
-
-    A relative-path plugin source is only meaningful together with the
-    marketplace archive it was resolved against -- ``plugins.json`` stores
-    each entry's ``source`` in isolation, with no reference back to its
-    marketplace, so a raw relative path can never be re-fetched by the
-    reconciler. Callers that install a plugin (the backend's install route)
-    must call this at install time, before persisting, so what lands in
-    ``plugins.json`` is a plain GitHub ``git-subdir`` source instead.
-
-    Only GitHub-shaped marketplace sources are supported, matching every
-    other source type in this module.
-    """
-    if not (isinstance(plugin_source, str) and plugin_source.startswith("./")):
+    """Resolve a marketplace-relative plugin path into a durable GitHub source."""
+    if not isinstance(plugin_source, str) or not plugin_source.strip():
+        raise PluginFetchError(f"not a relative plugin source: {plugin_source!r}")
+    if plugin_source.startswith(("http://", "https://")):
         raise PluginFetchError(f"not a relative plugin source: {plugin_source!r}")
     owner, repo, ref = _parse_github_source(marketplace_source)
-    rel = plugin_source[2:]
+    rel = plugin_source.removeprefix("./").strip("/")
     path = f"{plugin_root.rstrip('/')}/{rel}" if plugin_root else rel
-    path = path.strip("/")
     result: dict[str, Any] = {"source": "git-subdir", "url": f"{owner}/{repo}", "path": path}
-    if ref:
+    if commit_sha:
+        result["sha"] = commit_sha
+    elif ref:
         result["ref"] = ref
     return result
 
@@ -201,6 +211,60 @@ async def _fetch_url(url: str) -> bytes:
             response.raise_for_status()
             return bytes(await response.read())
     raise PluginFetchError("Too many redirects while fetching URL")
+
+
+async def _fetch_json_url(url: str) -> dict[str, Any]:
+    try:
+        raw = await _fetch_url(url)
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise PluginFetchError(f"invalid JSON response from {url}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise PluginFetchError(f"expected JSON object from {url}")
+    return value
+
+
+async def _resolve_commit_sha(owner: str, repo: str, ref: str) -> str:
+    url = f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}/commits/{quote(ref, safe='')}"
+    try:
+        payload = await _fetch_json_url(url)
+    except aiohttp.ClientResponseError as exc:
+        raise PluginFetchError(f"GitHub commit not found (404): {owner}/{repo}@{ref}") from exc
+    sha = payload.get("sha")
+    if not isinstance(sha, str) or not sha:
+        raise PluginFetchError(f"GitHub commit response missing sha for {owner}/{repo}@{ref}")
+    return sha
+
+
+def _raw_github_url(owner: str, repo: str, sha: str, path: str) -> str:
+    encoded_path = "/".join(quote(part) for part in path.strip("/").split("/"))
+    return f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/{quote(sha)}/{encoded_path}"
+
+
+async def _fetch_github_tree(owner: str, repo: str, sha: str, prefix: str) -> dict[str, bytes]:
+    url = (
+        f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
+        f"/git/trees/{quote(sha, safe='')}?recursive=1"
+    )
+    payload = await _fetch_json_url(url)
+    if payload.get("truncated"):
+        raise PluginFetchError(f"GitHub repository tree is too large: {owner}/{repo}")
+    tree = payload.get("tree")
+    if not isinstance(tree, list):
+        raise PluginFetchError(f"GitHub tree response missing tree for {owner}/{repo}")
+    prefix = prefix.strip("/")
+    prefix_with_slash = f"{prefix}/" if prefix else ""
+    files: dict[str, bytes] = {}
+    for item in tree:
+        if not isinstance(item, dict) or item.get("type") != "blob":
+            continue
+        path = item.get("path")
+        if not isinstance(path, str) or not path.startswith(prefix_with_slash):
+            continue
+        relative = path[len(prefix_with_slash) :]
+        if relative.startswith("skills/") or relative == "skills":
+            files[relative] = await _fetch_url(_raw_github_url(owner, repo, sha, path))
+    return files
 
 
 # ---------------------------------------------------------------------------
@@ -250,47 +314,34 @@ def _extract_archive(archive_bytes: bytes) -> dict[str, bytes]:
 # ---------------------------------------------------------------------------
 # Marketplace
 # ---------------------------------------------------------------------------
+_MARKETPLACE_MANIFEST_PATHS = (
+    ".claude-plugin/marketplace.json",
+    ".github/plugin/marketplace.json",
+)
 
 
 async def fetch_marketplace(source: str) -> MarketplaceCatalog:
-    """Download a marketplace archive, extract ``.claude-plugin/marketplace.json``,
-    and return the parsed catalog together with the full archive file map so that
-    relative-path plugin sources can be resolved later.
-    """
+    """Fetch and parse a GitHub marketplace manifest over direct HTTP."""
     owner, repo, ref = _parse_github_source(source)
     resolved_ref = ref or "HEAD"
-    archive_url = _build_codeload_url(owner, repo, resolved_ref)
-
-    try:
-        archive_bytes = await _fetch_url(archive_url)
-    except aiohttp.ClientResponseError as exc:
-        if exc.status == 404:
-            raise PluginFetchError(f"marketplace archive not found (404): {archive_url}") from exc
-        raise PluginFetchError(f"failed to download marketplace archive: {exc}") from exc
-    except Exception as exc:
-        raise PluginFetchError(f"failed to download marketplace archive: {exc}") from exc
-
-    try:
-        archive_files = _extract_archive(archive_bytes)
-    except PluginFetchError:
-        raise
-    except Exception as exc:
-        raise PluginFetchError(f"failed to expand marketplace archive: {exc}") from exc
-
-    marketplace_json_path = ".claude-plugin/marketplace.json"
-    raw = archive_files.get(marketplace_json_path)
-    if raw is None:
-        raise PluginFetchError(f"{marketplace_json_path} not found in marketplace archive")
-    try:
-        data = json.loads(raw.decode("utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-        raise PluginFetchError(f"marketplace.json is not valid JSON: {exc}") from exc
-
-    # Validate required fields
+    commit_sha = await _resolve_commit_sha(owner, repo, resolved_ref)
+    data: dict[str, Any] | None = None
+    for manifest_path in _MARKETPLACE_MANIFEST_PATHS:
+        try:
+            raw = await _fetch_url(_raw_github_url(owner, repo, commit_sha, manifest_path))
+            data = json.loads(raw.decode("utf-8"))
+            break
+        except aiohttp.ClientResponseError as exc:
+            if exc.status != 404:
+                raise PluginFetchError(f"failed to fetch marketplace manifest: {exc}") from exc
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise PluginFetchError(f"marketplace.json is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
-        raise PluginFetchError("marketplace.json top level must be an object")
+        paths = ", ".join(_MARKETPLACE_MANIFEST_PATHS)
+        raise PluginFetchError(f"marketplace.json not found (checked: {paths})")
+
     name = data.get("name")
-    if not name or not isinstance(name, str):
+    if not isinstance(name, str) or not name:
         raise PluginFetchError("marketplace.json missing required field 'name'")
     owner_info = data.get("owner")
     if not isinstance(owner_info, dict) or not owner_info.get("name"):
@@ -298,15 +349,17 @@ async def fetch_marketplace(source: str) -> MarketplaceCatalog:
     plugins = data.get("plugins")
     if not isinstance(plugins, list):
         raise PluginFetchError("marketplace.json missing required field 'plugins'")
-
+    metadata = data.get("metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
     return MarketplaceCatalog(
         name=name,
         owner=owner_info,
         plugins=plugins,
-        description=data.get("description"),
-        version=data.get("version"),
-        metadata=data.get("metadata") or {},
-        _archive_files=archive_files,
+        description=data.get("description") or metadata.get("description"),
+        version=data.get("version") or metadata.get("version"),
+        metadata=metadata,
+        repository=f"{owner}/{repo}",
+        commit_sha=commit_sha,
     )
 
 
@@ -377,61 +430,41 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
 
 
 async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dict[str, bytes]:
-    """Fetch the plugin archive (or slice of the marketplace archive) and return
-    a flat map of **plugin-root-relative** file paths to raw bytes.
-    """
+    """Fetch the selected plugin's ``skills/`` files over direct GitHub HTTP."""
     src = entry.get("source")
-    if isinstance(src, str) and src.startswith("./"):
-        # Relative path inside the marketplace archive
-        rel = src[2:]  # strip "./"
-        plugin_root = catalog.metadata.get("pluginRoot", "")
-        prefix = f"{plugin_root.rstrip('/')}/{rel}" if plugin_root else rel
-        prefix = prefix.strip("/")
-        prefix = f"{prefix}/" if prefix else ""
-        files: dict[str, bytes] = {}
-        for path, content in catalog._archive_files.items():
-            if path.startswith(prefix):
-                files[path[len(prefix) :]] = content
-        if not files:
+    if catalog.repository:
+        marketplace_owner, marketplace_repo = catalog.repository.split("/", 1)
+    elif isinstance(src, dict):
+        repository = src.get("repo") or src.get("url")
+        marketplace_owner, marketplace_repo, _ = _parse_github_source(str(repository or ""))
+    else:
+        raise PluginFetchError("marketplace catalog is missing its repository")
+    owner, repo, plugin_root = marketplace_owner, marketplace_repo, ""
+
+    if isinstance(src, str):
+        plugin_root = src.removeprefix("./").strip("/")
+    elif isinstance(src, dict):
+        source_type = src.get("source")
+        if source_type == "git-subdir":
+            owner, repo, _ = _parse_github_source(str(src.get("url") or ""))
+            plugin_root = str(src.get("path") or "").strip("/")
+        elif source_type == "github":
+            owner, repo = str(src.get("repo") or "").split("/", 1)
+            plugin_root = str(src.get("path") or "").strip("/")
+        else:
             raise PluginFetchError(
-                f"plugin '{entry.get('name')}' relative path '{src}' not found in marketplace archive"
+                f"plugin '{entry.get('name')}' uses unsupported source type {source_type!r}"
             )
-        return files
+    else:
+        raise PluginFetchError(f"plugin '{entry.get('name')}' has no source")
 
-    owner, repo, ref = _resolve_plugin_source(entry, catalog)
-    assert ref is not None  # only the "./" sentinel yields None, filtered out above
-    archive_url = _build_codeload_url(owner, repo, ref)
-    try:
-        archive_bytes = await _fetch_url(archive_url)
-    except aiohttp.ClientResponseError as exc:
-        if exc.status == 404:
-            raise PluginFetchError(f"plugin archive not found (404): {archive_url}") from exc
-        raise PluginFetchError(f"failed to download plugin archive: {exc}") from exc
-    except Exception as exc:
-        raise PluginFetchError(f"failed to download plugin archive: {exc}") from exc
-
-    try:
-        files = _extract_archive(archive_bytes)
-    except PluginFetchError:
-        raise
-    except Exception as exc:
-        raise PluginFetchError(f"failed to expand plugin archive: {exc}") from exc
-
-    # git-subdir: strip the subdirectory prefix if present
-    src_dict = src if isinstance(src, dict) else {}
-    if src_dict.get("source") == "git-subdir":
-        subdir = src_dict.get("path", "").rstrip("/") + "/"
-        if subdir and subdir != "/":
-            subdir_files: dict[str, bytes] = {}
-            for path, content in files.items():
-                if path.startswith(subdir):
-                    subdir_files[path[len(subdir) :]] = content
-            if not subdir_files:
-                raise PluginFetchError(
-                    f"git-subdir path '{src_dict.get('path')}' not found in plugin archive"
-                )
-            files = subdir_files
-    return files
+    source_ref = str(src.get("ref") or "HEAD") if isinstance(src, dict) else "HEAD"
+    sha = (
+        catalog.commit_sha
+        if (owner, repo) == (marketplace_owner, marketplace_repo) and catalog.commit_sha
+        else await _resolve_commit_sha(owner, repo, source_ref)
+    )
+    return await _fetch_github_tree(owner, repo, sha, plugin_root)
 
 
 def _extract_frontmatter_name(raw: bytes, fallback: str) -> str:
@@ -540,7 +573,9 @@ def _extract_skills_from_files(
         return result, skipped
 
     # 3. Nothing found
-    raise PluginFetchError("plugin ships no skills")
+    # A marketplace plugin without a skills/ directory is valid but provides
+    # no Progenitor skills.
+    return {}, 0
 
 
 async def fetch_plugin_files_with_report(
