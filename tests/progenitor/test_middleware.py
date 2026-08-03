@@ -424,6 +424,9 @@ class TestMiddlewareIntegration:
                     async def list_content_documents(self, kind):
                         return list(self._docs[kind].items())
 
+                    async def list_routine_graphs(self):
+                        return []
+
                 with tempfile.TemporaryDirectory() as tmpdir:
                     prompts_dir = Path(tmpdir) / "prompts"
                     prompts_dir.mkdir()

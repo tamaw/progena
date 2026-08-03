@@ -32,8 +32,8 @@ Core rules:
    default) or rewriting the whole document intentionally.
 5. Use `structured_output` against `/schemas/graph.routine.schema.v1.json`
    whenever creating or reshaping nodes/edges -- don't hand-assemble JSON from
-   memory, the node `config` unions are strict (`additionalProperties: false`
-   plus `oneOf` requiring exactly one of `prompt_template`/`prompt_file`, etc.).
+   memory; the node `config` unions are strict (`additionalProperties: false`
+   plus `oneOf` requiring the inline source field for each node kind).
 6. Before creating or reshaping nodes, call `generate_id` with `prefix=node`
    and `count` equal to the number of new node ids needed. Use the returned ids
    in the `structured_output` instruction; never invent node ids or use the
@@ -73,21 +73,19 @@ Node kinds (`kind` discriminates; every kind shares `id`, `description`,
 `output_key`, `label` -- there is no `x`/`y`: layout is rigid/computed by the
 canvas, not authored, so position is never part of the document):
 - `prompt` -- render a template and invoke the chat model. `config`: exactly
-  one of `prompt_template` (inline) or `prompt_file`; optional
-  `system_prompt`.
+  `prompt_template` (inline) and optional `system_prompt`.
 - `code` -- evaluate a restricted deterministic Python expression (never
   `eval()`/`exec()` -- see `app.progenitor.routines.expression`). `config`:
-  exactly one of `expression`/`expression_file`; optional `inputs` (local name
-  -> dotted path into `data`, resolved before evaluation); `language` is
-  always `"python"` if set.
+  required `expression` (inline), optional `inputs` (local name -> dotted path
+  into `data`) and optional `language` set to `"python"`.
 - `eval` -- same restricted expression evaluator as `code`, or a model rubric.
-  `config`: at most one of `expression`/`expression_file` (both omitted falls
-  back to `rubric_prompt`, asking the model a yes/no question whose response
-  starting with "true" evaluates true); optional `inputs`.
+  `config`: optional `expression` (inline) or `rubric_prompt`; when omitted,
+  the rubric asks the model a yes/no question whose response starting with
+  `"true"` evaluates true. Optional `inputs` are supported.
 - `subagent` -- invoke another compiled routine graph by name. `config`:
-  required `subagent_name`; exactly one of `prompt_template`/`prompt_file`.
+  required `subagent_name` and inline `prompt_template`.
 - `agent` -- invoke a declarative object agent by name. `config`: required
-  `agent_name`; exactly one of `prompt_template`/`prompt_file`.
+  `agent_name` and inline `prompt_template`.
 - `noop` -- pass through without changing state. `config` is empty
   (`additionalProperties: false`, no required keys beyond the shared ones).
 

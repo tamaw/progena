@@ -174,6 +174,7 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
             raise ValueError(f"unknown node kind: {kind}")
 
     router_sources: set[str] = set()
+    plain_sources: set[str] = set()
     for edge in edges:
         if not isinstance(edge, dict):
             raise ValueError("each edge must be an object")
@@ -201,6 +202,9 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
             target = edge.get("to")
             if target not in ids:
                 raise ValueError(f"edge references unknown target node: {target}")
+            if source in plain_sources:
+                raise ValueError(f"node has more than one plain edge: {source}")
+            plain_sources.add(source)
             if source in router_sources:
                 raise ValueError(f"node mixes a router edge with a plain edge: {source}")
 

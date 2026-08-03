@@ -65,11 +65,11 @@ export const requestAgentDetail = createAcknowledgedThunk('uiData/requestAgentDe
   );
 });
 
-export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph', ({ agentsUrl, agentId, nodes, edges, status, summary }, { requestId }) => requestAcknowledged(
+export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph', ({ agentsUrl, agentId, entry, nodes, edges, status, summary }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/${encodeURIComponent(agentId)}/graph`,
   {
     method: 'PATCH',
-    body: { nodes, edges, status, summary },
+    body: { entry, nodes, edges, status, summary },
     requestId,
   },
 ));

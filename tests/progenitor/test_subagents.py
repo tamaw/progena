@@ -149,6 +149,9 @@ class TestSubagentWiring:
                     async def list_content_documents(self, kind):
                         return list(self._docs[kind].items())
 
+                    async def list_routine_graphs(self):
+                        return []
+
                 await create_progenitor_agent(state_manager=_FakeStateManager())
 
                 call_kwargs = mock_create.call_args.kwargs

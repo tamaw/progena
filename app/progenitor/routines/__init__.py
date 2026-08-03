@@ -12,6 +12,10 @@ Modules:
     store: Storage keys + parse/validate helpers shared by the runtime's
         ``/routines/`` virtual-filesystem mount and the FastAPI backend's
         document-store access to the same underlying document.
+    revisions: Async readers for immutable routine graph revisions captured by a
+        Postgres trigger on the ``store`` table (backend-owned DDL).
+    subagent: ``CompiledSubAgent`` proxy that resolves a pinned or latest graph
+        revision and compiles/caches it per revision id.
 """
 
 from __future__ import annotations
