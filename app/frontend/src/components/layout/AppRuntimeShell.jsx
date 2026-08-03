@@ -2440,12 +2440,19 @@ function AppRuntimeShell() {
   useEffect(() => {
     const handleOpenQuickChat = (event) => {
       const nextConfig = normalizeQuickChatConfig(event.detail);
+      const prompt = normalizeAiPrompt(event.detail?.prompt);
+      if (prompt) {
+        quickChatSubmissionIdRef.current += 1;
+        setQuickChatSubmission({ id: quickChatSubmissionIdRef.current, message: prompt });
+      }
       setQuickChatConfig(nextConfig);
       setActivePanel('quickChat');
     };
     window.addEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
+    window.addEventListener('progenitor:run-routine', handleOpenQuickChat);
     return () => {
       window.removeEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
+      window.removeEventListener('progenitor:run-routine', handleOpenQuickChat);
     };
   }, []);
 
