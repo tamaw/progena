@@ -35,16 +35,21 @@ const GRAPH_NODE_KINDS = [
   { kind: 'eval', label: 'Eval', icon: '✓' },
   { kind: 'subagent', label: 'Subagent', icon: '⇢' },
   { kind: 'agent', label: 'Agent', icon: '◆' },
+  { kind: 'human', label: 'Human approval', icon: '!' },
+  { kind: 'foreach', label: 'Send fan-out', icon: '↗' },
+  { kind: 'subgraph', label: 'Subgraph', icon: '◈' },
   { kind: 'noop', label: 'Noop', icon: '·' },
 ];
 
-// Accent per kind (kept in sync with the .agents-graph-node--* CSS).
 const GRAPH_KIND_COLORS = {
   prompt: '#2f6ff6',
   code: '#b06ef6',
   eval: '#e0a23a',
   subagent: '#2f9e6f',
   agent: '#ef6c2a',
+  human: '#df4f74',
+  foreach: '#18a999',
+  subgraph: '#8b5cf6',
   noop: '#6b7280',
 };
 
@@ -149,21 +154,29 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
       </>
     );
   }
-  if (kind === 'subagent') {
+  if (kind === 'subagent' || kind === 'agent') {
+    const nameField = kind === 'subagent' ? 'subagent_name' : 'agent_name';
     return (
       <>
-        <ConfigField id={id} config={config} field="subagent_name" label="Subagent name" placeholder="repo-setup-worker" updateNodeConfig={updateNodeConfig} />
-        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the subagent…" multiline updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field={nameField} label={kind === 'subagent' ? 'Subagent name' : 'Agent name'} placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the target…" multiline updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
-  if (kind === 'agent') {
+  if (kind === 'human') {
+    return <ConfigField id={id} config={config} field="prompt" label="Approval prompt" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />;
+  }
+  if (kind === 'foreach') {
     return (
       <>
-        <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="repo-manager" updateNodeConfig={updateNodeConfig} />
-        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="items_path" label="Items path" placeholder="data.items" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="target" label="Fan-out target node" placeholder="process-item" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="item_key" label="Item state key" placeholder="item" updateNodeConfig={updateNodeConfig} />
       </>
     );
+  }
+  if (kind === 'subgraph') {
+    return <ConfigField id={id} config={config} field="subgraph_name" label="Subgraph name" placeholder="shared-validation-graph" updateNodeConfig={updateNodeConfig} />;
   }
   return null;
 }
@@ -574,6 +587,40 @@ function RoutineChain({ nodes, edges, entry }) {
     </div>
   );
 }
+function validateWorkingGraph(nodes, edges, entry) {
+  const errors = [];
+  const ids = new Set(nodes.map((node) => node.id).filter(Boolean));
+  if (!entry || !ids.has(entry)) errors.push('Entry must reference an existing node.');
+  nodes.forEach((node) => {
+    if (!node.id) errors.push('Every node needs an id.');
+    if (node.id === '__seed__') errors.push('__seed__ is reserved.');
+  });
+  edges.forEach((edge) => {
+    const targets = edge.router
+      ? [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])]
+      : [edge.to];
+    if (!ids.has(edge.from)) errors.push(`Edge source "${edge.from}" is missing.`);
+    targets.forEach((target) => {
+      if (!ids.has(target)) errors.push(`Edge target "${target}" is missing.`);
+    });
+  });
+  const reachable = new Set();
+  const visit = (id) => {
+    if (!id || reachable.has(id)) return;
+    reachable.add(id);
+    const outgoing = edges.filter((edge) => edge.from === id);
+    outgoing.forEach((edge) => {
+      if (edge.router) {
+        Object.values(edge.branches || {}).forEach(visit);
+        visit(edge.default);
+      } else visit(edge.to);
+    });
+  };
+  visit(entry);
+  nodes.filter((node) => !reachable.has(node.id)).forEach((node) => errors.push(`"${node.id}" is unreachable.`));
+  return errors;
+}
+
 
 // Serialize the working nodes/edges/meta into the backend graph document
 // shape. `output_key` always mirrors `id` -- it isn't independently editable.
@@ -591,10 +638,12 @@ function serializeGraph(nodes, edges, meta) {
       config: node.config || {},
     })),
     edges,
+    settings: meta.settings || {},
+    input_schema: meta.input_schema || null,
+    output_schema: meta.output_schema || null,
+    private_schema: meta.private_schema || null,
   };
 }
-
-// The routine canvas: a rigid top-down chain of steps with a floating status
 // bar and the same JSON-editor side panel the previous canvas had. Edits
 // autosave (debounced) to the backend.
 function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
@@ -605,6 +654,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
     status: graph.status || 'Draft',
     summary: graph.summary || '',
     entry: graph.entry || (graph.nodes || [])[0]?.id || null,
+    settings: graph.settings || {},
+    input_schema: graph.input_schema || null,
+    output_schema: graph.output_schema || null,
+    private_schema: graph.private_schema || null,
   });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
@@ -880,23 +933,25 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
   const selectedRouterEdge = selectedNode
     ? edges.find((edge) => edge.from === selectedNode.id && edge.router)
     : null;
+  const validationErrors = useMemo(
+    () => validateWorkingGraph(nodes, edges, meta.entry),
+    [nodes, edges, meta.entry],
+  );
 
   const handleJsonApply = useCallback(async (parsed) => {
     const nextMeta = {
       status: parsed.status || 'Draft',
       summary: parsed.summary || '',
       entry: parsed.entry || (parsed.nodes || [])[0]?.id || null,
+      settings: parsed.settings || {},
+      input_schema: parsed.input_schema || null,
+      output_schema: parsed.output_schema || null,
+      private_schema: parsed.private_schema || null,
     };
     setMeta(nextMeta);
     setNodes((parsed.nodes || []).map((node) => ({ ...node })));
     setEdges((parsed.edges || []).map((edge) => ({ ...edge })));
-    const payload = {
-      status: nextMeta.status,
-      summary: nextMeta.summary,
-      entry: nextMeta.entry,
-      nodes: parsed.nodes,
-      edges: parsed.edges,
-    };
+    const payload = serializeGraph(parsed.nodes || [], parsed.edges || [], nextMeta);
     await persistRef.current(payload);
     lastSavedRef.current = JSON.stringify(payload);
     setSaveError(null);
@@ -916,10 +971,17 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
                   {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
                 </span>
               ) : null}
+              <span
+                className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
+                role="status"
+                aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
+              >
+                {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
+              </span>
               <button type="button" onClick={onShowProfile}>Details</button>
-              <button type="button" className="repo-btn repo-btn--primary" onClick={onRun}>Run</button>
+              <button type="button" className="repo-btn repo-btn--primary" onClick={onRun} disabled={validationErrors.length > 0}>Run</button>
             </div>
-            <GraphEditContext.Provider value={editContext}>
+              <GraphEditContext.Provider value={editContext}>
               <div
                 className="routine-canvas__scroll"
                 onClick={(event) => {
@@ -1025,6 +1087,10 @@ function graphToJson(graph) {
       entry: graph.entry ?? null,
       nodes: graph.nodes || [],
       edges: graph.edges || [],
+      settings: graph.settings || {},
+      input_schema: graph.input_schema || null,
+      output_schema: graph.output_schema || null,
+      private_schema: graph.private_schema || null,
     },
     null,
     2,
