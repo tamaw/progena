@@ -13,7 +13,12 @@ from app.progenitor.content_documents import content_document_key
 from app.progenitor.plugins.schema import validate_plugins_payload
 
 # Imported at module level so tests can monkeypatch the fetch callable.
-from app.progenitor.plugins.sources import fetch_marketplace, resolve_relative_plugin_source
+from app.progenitor.plugins.sources import (
+    PluginFetchError,
+    fetch_marketplace,
+    fetch_plugin_files_with_report,
+    resolve_relative_plugin_source,
+)
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
@@ -157,6 +162,29 @@ async def install_plugin(
 
     broadcast_plugins_snapshot(saved, request_id=request_id)
     return acknowledgement_response(request_id, ["plugins.snapshot"])
+
+
+@router.get("/{marketplace}/{plugin}/preview")
+async def preview_plugin_skills(
+    marketplace: str,
+    plugin: str,
+) -> dict[str, Any]:
+    """Return skill names discoverable from an uninstalled marketplace plugin."""
+    source = _marketplace_source_url(marketplace)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"marketplace '{marketplace}' not found")
+    try:
+        catalog = await _resolve_catalog(marketplace)
+        if not any(
+            isinstance(entry, dict) and entry.get("name") == plugin for entry in catalog.plugins
+        ):
+            raise HTTPException(status_code=404, detail=f"plugin '{plugin}' not found")
+        files, _skipped = await fetch_plugin_files_with_report(catalog, plugin)
+    except PluginFetchError as exc:
+        status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    skills = sorted({path.split("/", 1)[0] for path in files if "/" in path})
+    return {"marketplace": marketplace, "plugin": plugin, "skills": skills}
 
 
 @router.delete("/{marketplace}/{plugin}", status_code=202, response_model=UiRequestAcknowledgement)

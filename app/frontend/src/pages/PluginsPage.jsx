@@ -97,6 +97,9 @@ export default function PluginsPage() {
   const [loading, setLoading] = useState(false);
   const [needsNewConversation, setNeedsNewConversation] = useState(false);
   const [previewSkill, setPreviewSkill] = useState(null);
+  const [marketplaceSkills, setMarketplaceSkills] = useState([]);
+  const [marketplaceSkillsKey, setMarketplaceSkillsKey] = useState('');
+  const [marketplaceSkillsLoading, setMarketplaceSkillsLoading] = useState(false);
 
   const catalog = useSelector((state) => selectMarketplaceCatalog(state, selectedMarketplace));
   const skillPreview = useSelector((state) => (
@@ -172,6 +175,42 @@ export default function PluginsPage() {
       active = false;
     };
   }, [realtime.connected, selectedMarketplace, dispatch, marketplacesUrl]);
+
+  // Discover skills from the marketplace source before installation.
+  useEffect(() => {
+    if (!realtime.connected || !selectedMarketplace || !selectedPlugin) {
+      return undefined;
+    }
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setMarketplaceSkillsLoading(true);
+    });
+    fetch(`${pluginsUrl}/${encodeURIComponent(selectedMarketplace)}/${encodeURIComponent(selectedPlugin.name)}/preview`)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Unable to preview plugin skills (${response.status})`);
+        }
+        return response.json();
+      })
+      .then((payload) => {
+        if (active) {
+          setMarketplaceSkillsKey(`${selectedMarketplace}/${selectedPlugin.name}`);
+          setMarketplaceSkills(Array.isArray(payload.skills) ? payload.skills : []);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setMarketplaceSkillsKey(`${selectedMarketplace}/${selectedPlugin.name}`);
+          setMarketplaceSkills([]);
+        }
+      })
+      .finally(() => {
+        if (active) setMarketplaceSkillsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [realtime.connected, selectedMarketplace, selectedPlugin, pluginsUrl]);
 
   // Fetch a skill's SKILL.md body on demand when its preview is opened.
   useEffect(() => {
@@ -385,6 +424,9 @@ export default function PluginsPage() {
     }];
   }, [visiblePlugins, selectedMarketplace]);
 
+  const selectedPluginKey = `${selectedMarketplace}/${selectedPlugin?.name || ''}`;
+  const previewSkills = marketplaceSkillsKey === selectedPluginKey ? marketplaceSkills : [];
+  const displayedSkills = isPluginInstalled ? (installedEntry?.skills || []) : previewSkills;
   return (
     <div className="plugins-page">
       {needsNewConversation ? (
@@ -550,12 +592,12 @@ export default function PluginsPage() {
                 <div className="tools-section__head">
                   <h2>
                     Skills provided
-                    {installedEntry?.skills?.length ? <span>{installedEntry.skills.length}</span> : null}
+                    {displayedSkills.length ? <span>{displayedSkills.length}</span> : null}
                   </h2>
                 </div>
                 <div className="tools-tool-list">
-                  {installedEntry?.skills && installedEntry.skills.length > 0 ? (
-                    installedEntry.skills.map((skill) => (
+                  {displayedSkills.length > 0 ? (
+                    displayedSkills.map((skill) => (
                       <button
                         type="button"
                         className={`tools-tool-row plugins-skill-row ${previewSkill === skill ? 'is-active' : ''}`}
@@ -565,15 +607,17 @@ export default function PluginsPage() {
                         <span className="tools-tool-row__icon"><SkillIcon /></span>
                         <div className="tools-tool-row__body">
                           <strong>{skill}</strong>
-                          <p>Installed skill from {selectedPlugin.displayName || selectedPlugin.name}</p>
+                          <p>{isPluginInstalled ? `Installed skill from ${selectedPlugin.displayName || selectedPlugin.name}` : 'Marketplace skill'}</p>
                         </div>
                       </button>
                     ))
                   ) : (
                     <PaneEmptyState>
-                      {isPluginInstalled
-                        ? 'No skills reported for this install.'
-                        : 'Install the plugin to see which skills it provides.'}
+                      {marketplaceSkillsLoading
+                        ? 'Loading skills…'
+                        : isPluginInstalled
+                          ? 'No skills reported for this install.'
+                          : 'No skills found in the marketplace source.'}
                     </PaneEmptyState>
                   )}
                 </div>
