@@ -16,7 +16,8 @@ from app.progenitor.plugins.schema import validate_plugins_payload
 from app.progenitor.plugins.sources import (
     PluginFetchError,
     fetch_marketplace,
-    fetch_plugin_files_with_report,
+    fetch_plugin_skill_content,
+    list_plugin_skill_names,
     resolve_relative_plugin_source,
 )
 
@@ -179,11 +180,10 @@ async def preview_plugin_skills(
             isinstance(entry, dict) and entry.get("name") == plugin for entry in catalog.plugins
         ):
             raise HTTPException(status_code=404, detail=f"plugin '{plugin}' not found")
-        files, _skipped = await fetch_plugin_files_with_report(catalog, plugin)
+        skills = await list_plugin_skill_names(catalog, plugin)
     except PluginFetchError as exc:
         status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
-    skills = sorted({path.split("/", 1)[0] for path in files if "/" in path})
     return {"marketplace": marketplace, "plugin": plugin, "skills": skills}
 
 
@@ -242,10 +242,20 @@ async def get_plugin_skill_content(
         or not isinstance(document.payload, dict)
         or not isinstance(document.payload.get("content"), str)
     ):
-        raise HTTPException(
-            status_code=404,
-            detail=f"skill '{skill_name}' not found for plugin '{marketplace}/{plugin}'",
-        )
+        try:
+            catalog = await _resolve_catalog(marketplace)
+            content = await fetch_plugin_skill_content(catalog, plugin, skill_name)
+        except PluginFetchError as exc:
+            status_code = 429 if "rate limit exceeded" in str(exc).lower() else 404
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        payload = {
+            "marketplace": marketplace,
+            "plugin": plugin,
+            "skill": skill_name,
+            "content": content,
+        }
+        broadcast_ui_event("plugin.skill.content.updated", payload, request_id=request_id)
+        return acknowledgement_response(request_id, ["plugin.skill.content.updated"])
 
     payload = {
         "marketplace": marketplace,

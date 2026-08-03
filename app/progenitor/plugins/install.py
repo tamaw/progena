@@ -14,6 +14,7 @@ from typing import Any
 from ..utils import utcnow_isoformat
 from .sources import (
     MarketplaceCatalog,
+    PluginFetchError,
     _parse_github_source,
     compute_digest,
     fetch_marketplace,
@@ -92,20 +93,13 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
             marketplace_name, plugin_name = key.split("/", 1)
             marketplace_source = entry.get("marketplace_source")
             if not isinstance(marketplace_source, str) or not marketplace_source:
-                files, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
-                current = dict(entry)
-                if digest != entry.get("installed_digest"):
-                    current["available_version"] = resolve_plugin_version(entry, None)
-                    summary["updated_available"].append(key)
-                    changed = True
-                current["last_checked"] = now
-                if current != entry:
-                    plugins[key] = current
-                continue
-
+                raise PluginFetchError(f"plugin '{key}' has no marketplace provenance")
             catalog = catalogs.get(marketplace_source)
             if catalog is None:
-                catalog = await fetch_marketplace(marketplace_source)
+                catalog = await fetch_marketplace(
+                    marketplace_source,
+                    resolve_revision=False,
+                )
                 catalogs[marketplace_source] = catalog
             current_entry = next(
                 (p for p in catalog.plugins if p.get("name") == plugin_name),
@@ -121,16 +115,8 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
                 changed = True
                 continue
 
-            files, digest = await _fetch_and_digest(
-                current_entry, plugin_name, marketplace_name, catalog
-            )
-            source_changed = current_entry.get("source") != entry.get("marketplace_plugin_source")
             version = resolve_plugin_version(current_entry, None)
-            if (
-                digest != entry.get("installed_digest")
-                or source_changed
-                or (version != installed_version)
-            ):
+            if version != installed_version:
                 current["available_version"] = version
                 summary["updated_available"].append(key)
                 changed = True
