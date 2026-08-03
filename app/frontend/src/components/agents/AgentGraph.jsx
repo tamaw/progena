@@ -210,22 +210,45 @@ function RoutingFooter({ id, routerEdge }) {
 
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node, routerEdge }) {
-  const { selectNode, selectedNodeId } = useContext(GraphEditContext);
+  const { selectNode, selectedNodeId, moveNode } = useContext(GraphEditContext);
+  const dragRef = useRef(null);
   const handleKeyDown = (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       selectNode(node.id, event);
     }
   };
+  const handlePointerDown = (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { x: event.clientX, y: event.clientY, originX: Number(node.x) || 0, originY: Number(node.y) || 0 };
+  };
+  const handlePointerMove = (event) => {
+    if (!dragRef.current) return;
+    moveNode(node.id, {
+      x: dragRef.current.originX + event.clientX - dragRef.current.x,
+      y: dragRef.current.originY + event.clientY - dragRef.current.y,
+    });
+  };
+  const handlePointerUp = (event) => {
+    if (dragRef.current) {
+      dragRef.current = null;
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    }
+  };
   return (
     <div
       className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}`}
-      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e', transform: `translate(${Number(node.x) || 0}px, ${Number(node.y) || 0}px)` }}
       role="button"
       tabIndex={0}
-      aria-label={`Edit ${node.label || node.id}`}
-      onClick={(event) => selectNode(node.id, event)}
+      aria-label={`${node.label || node.id} ${node.kind} step`}
+      onClick={(event) => { if (!dragRef.current) selectNode(node.id, event); }}
       onKeyDown={handleKeyDown}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
     >
       <div className="node-title-bar routine-step-card__title">
         <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
@@ -636,6 +659,8 @@ function serializeGraph(nodes, edges, meta) {
       description: node.description || '',
       output_key: node.id,
       config: node.config || {},
+      x: Number(node.x) || 0,
+      y: Number(node.y) || 0,
     })),
     edges,
     settings: meta.settings || {},
@@ -644,9 +669,7 @@ function serializeGraph(nodes, edges, meta) {
     private_schema: meta.private_schema || null,
   };
 }
-// bar and the same JSON-editor side panel the previous canvas had. Edits
-// autosave (debounced) to the backend.
-function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -694,6 +717,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
 
   const updateNode = useCallback((id, patch) => {
     setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...patch } : node)));
+  }, []);
+  const moveNode = useCallback((id, position) => {
+    setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...position } : node)));
   }, []);
 
   const deleteNode = useCallback((id) => {
@@ -887,6 +913,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
 
   const editContext = useMemo(() => ({
     updateNode,
+    moveNode,
     deleteNode,
     insertAt,
     onChangeStateKey,
@@ -900,7 +927,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
+  }), [updateNode, moveNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -978,6 +1005,15 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
               >
                 {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
               </span>
+              {runResult ? (
+                <span
+                  className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
+                  role="status"
+                  aria-label={`Routine result: ${runResult.status}`}
+                >
+                  {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
+                </span>
+              ) : null}
               <button type="button" onClick={onShowProfile}>Details</button>
               <button type="button" className="repo-btn repo-btn--primary" onClick={onRun} disabled={validationErrors.length > 0}>Run</button>
             </div>
@@ -1022,6 +1058,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, 
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
 // left = expand the panel leftward, right = collapse it away).
+// Chevrons for the right tools dock / collapse seam.
 function ChevronLeftSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
@@ -1033,14 +1070,11 @@ function ChevronLeftSmall() {
 function ChevronRightSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+      <path d="m6.2 4.2 3.6 3.8 3.6-3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
     </svg>
   );
 }
 
-// Collapsed right-edge tools dock for the routines canvas. Mirrors the left
-// pane's collapse rail but on the right; each item expands its own panel. Add
-// future tools by extending GRAPH_SIDE_ITEMS and handling their id in onSelect.
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
 ];
@@ -1064,13 +1098,15 @@ function GraphSideDock({ onSelect }) {
     </aside>
   );
 }
-export function AgentGraphTab({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+
+export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
   return (
     <GraphCanvas
       agent={agent}
       graph={graph}
       onPersist={onPersist}
       onRun={onRun}
+      runResult={runResult}
       onShowProfile={onShowProfile}
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}
@@ -1078,7 +1114,6 @@ export function AgentGraphTab({ agent, graph, onPersist, onRun, onShowProfile, j
     />
   );
 }
-
 function graphToJson(graph) {
   return JSON.stringify(
     {

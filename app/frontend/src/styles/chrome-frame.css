@@ -7020,8 +7020,14 @@ body,
   min-height: 48px;
   max-width: 220px;
   padding: 0;
-  cursor: pointer;
+  cursor: grab;
   user-select: none;
+  touch-action: none;
+  will-change: transform;
+}
+
+.routine-canvas .routine-step-card:active {
+  cursor: grabbing;
 }
 
 .routine-step-card__title {

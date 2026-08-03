@@ -36,6 +36,7 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import { AgentGraphTab } from '../components/agents/AgentGraph';
 import { A2ADetailBody, ACPDetailBody, SubagentDetailBody } from '../components/agents/AgentDetailBodies';
+import { ROUTINE_EXAMPLES } from './routineExamples';
 import { formatAge } from '../components/agents/agentFormat';
 
 
@@ -101,110 +102,17 @@ const FALLBACK_GRAPH = {
   edges: [],
 };
 
-// A trimmed illustrative routine graph (parse -> deterministic gate -> respond),
-// standing in for the full example this DSL was derived from. Shows a prompt
-// node, a code node, and state_equals routing with a default branch.
-const DEMO_ROUTINE_GRAPH = {
-  status: 'Draft',
-  summary: 'Demonstrates every routine node type with a deterministic route.',
-  entry: 'parse',
-  nodes: [
-    {
-      id: 'parse',
-      kind: 'prompt',
-      label: 'Prompt',
-      output_key: 'parse',
-      config: { prompt_template: 'Return a short acknowledgement of this routine run.' },
-      x: 40,
-      y: 80,
-    },
-    {
-      id: 'route',
-      kind: 'code',
-      label: 'Code',
-      output_key: 'route',
-      config: { expression: "'ok'" },
-      x: 320,
-      y: 80,
-    },
-    {
-      id: 'evaluate',
-      kind: 'eval',
-      label: 'Eval',
-      output_key: 'evaluate',
-      config: { expression: 'True' },
-      x: 600,
-      y: 80,
-    },
-    {
-      id: 'delegate',
-      kind: 'subagent',
-      label: 'Subagent',
-      output_key: 'delegate',
-      config: { subagent_name: 'hello-world', prompt_template: 'Return the delegation smoke-test token.' },
-      x: 880,
-      y: 0,
-    },
-    {
-      id: 'respond',
-      kind: 'prompt',
-      label: 'Response',
-      output_key: 'respond',
-      config: { prompt_template: 'Summarize the completed routine run in one sentence.' },
-      x: 1160,
-      y: 0,
-    },
-    {
-      id: 'finish',
-      kind: 'noop',
-      label: 'No-op',
-      output_key: 'finish',
-      config: {},
-      x: 1440,
-      y: 0,
-    },
-    {
-      id: 'agent',
-      kind: 'agent',
-      label: 'Agent',
-      output_key: 'agent',
-      config: { agent_name: 'general-purpose', prompt_template: 'Describe this routine graph.' },
-      x: 880,
-      y: 220,
-    },
-  ],
-  edges: [
-    { from: 'parse', to: 'route' },
-    { from: 'route', to: 'evaluate' },
-    {
-      from: 'evaluate',
-      router: 'state_equals',
-      state_key: 'evaluate',
-      branches: { true: 'delegate' },
-      default: 'agent',
-    },
-    { from: 'delegate', to: 'respond' },
-    { from: 'respond', to: 'finish' },
-  ],
-};
-
-// Routines isn't wired to real data yet — show one pretend entry instead of
-// the live agent list so the page reads as intentional, not empty/broken.
-const DUMMY_ROUTINES = [{
-  id: 'routine-demo',
-  kind: 'subagent',
-  name: 'Demo Routine',
-  role: 'Placeholder — routines aren’t wired up yet.',
-  summary: 'Placeholder — routines aren’t wired up yet.',
-  status: 'draft',
+// Seven connected examples keep the routine canvas useful as a validation
+// gallery. They intentionally cover different topology and control features.
+const DUMMY_ROUTINES = ROUTINE_EXAMPLES.map((example) => ({
+  ...example,
   updated: new Date().toISOString(),
   model: '',
   tools: [],
   repositories: [],
   knowledge: [],
   skills: [],
-  graph: DEMO_ROUTINE_GRAPH,
-}];
+}));
 
 function normalizeStatus(status) {
   if (!status || status === 'draft') {
@@ -594,6 +502,7 @@ function AgentsPage({ variant = 'agents' }) {
   const detailTabs = [];
   const effectiveDetailTab = isRoutines ? 'Graph' : 'Details';
 
+  const [runResult, setRunResult] = useState(null);
   // Reflect the active agent in the URL so the view is refreshable and shareable
   // (e.g. /agents/subagent-code-reviewer/details or /routines/subagent-...).
   useEffect(() => {
@@ -650,12 +559,20 @@ function AgentsPage({ variant = 'agents' }) {
   }
 
   const handleRunRoutine = useCallback(() => {
+    const nodes = selectedGraph.nodes || [];
+    const hasSimulatedFailure = nodes.some((node) => String(node.config?.expression || '').includes('raise '));
+    const result = {
+      status: hasSimulatedFailure ? 'error' : 'completed',
+      events: nodes.length,
+      revision: selectedGraph.settings?.checkpoint?.namespace || effectiveAgentId,
+    };
+    setRunResult(result);
     window.dispatchEvent(new CustomEvent('progenitor:run-routine', {
       detail: {
-        prompt: `Run the "${effectiveAgentId}" routine graph. Execute its prompt, code, eval, subagent, agent, and noop steps where possible, then report the result. Use the native hello-world subagent for the delegation step.`,
+        prompt: `Run the "${effectiveAgentId}" routine graph and report its simulated ${result.status} result.`,
       },
     }));
-  }, [effectiveAgentId]);
+  }, [effectiveAgentId, selectedGraph]);
 
 
   return (
@@ -784,6 +701,7 @@ function AgentsPage({ variant = 'agents' }) {
                   graph={selectedGraph}
                   onPersist={handleSaveGraph}
                   onRun={handleRunRoutine}
+                  runResult={runResult}
                   onShowProfile={showProfile}
                   jsonOpen={graphEditorOpen}
                   onOpenJson={() => setGraphEditorOpen(true)}
