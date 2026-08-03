@@ -101,6 +101,20 @@ class TestValidateRoutineGraphStructural:
             ],
         )
 
+    def test_rejects_multiple_plain_edges_from_same_source(self):
+        with pytest.raises(ValueError, match="more than one plain edge"):
+            validate_routine_graph(
+                [
+                    {"id": "a", "kind": "prompt"},
+                    {"id": "b", "kind": "noop"},
+                    {"id": "c", "kind": "noop"},
+                ],
+                [
+                    {"from": "a", "to": "b"},
+                    {"from": "a", "to": "c"},
+                ],
+            )
+
     def test_rejects_duplicate_node_id(self):
         with pytest.raises(ValueError, match="duplicate node id"):
             validate_routine_graph([{"id": "a", "kind": "noop"}, {"id": "a", "kind": "noop"}], [])

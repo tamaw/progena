@@ -15,11 +15,19 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
+from deepagents.middleware.async_subagents import AsyncSubAgent
+from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
 from ..config import ProgenitorConfig, get_config
 from ..content_documents import ensure_content_documents_seeded
+from ..routines.graph import validate_routine_graph_payload
+from ..routines.revisions import (
+    NullRoutineRevisionReader,
+    PostgresRoutineRevisionReader,
+)
+from ..routines.subagent import create_routine_subagent
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
@@ -34,6 +42,7 @@ from .middleware import (
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
+from .state import ProgenitorAgentState
 from .subagents import (
     create_progenitor_async_subagents,
     create_progenitor_subagents,
@@ -222,12 +231,13 @@ async def create_progenitor_agent(
     # listener re-discovers MCP tools when the mcp document changes (the same path
     # used for UI-driven server/tool toggles), so no per-backend write-hook is
     # needed. The managing-mcp skill documents this edit flow for the agent.
+    database_url = getattr(getattr(config, "database", None), "url", None) or None
     backend = create_progenitor_backend(
         project_root=project_root,
         skills_dir=skills_dir,
         worktree_dir=worktree_dir,
         state_manager=state_manager,
-        database_url=getattr(getattr(config, "database", None), "url", None) or None,
+        database_url=database_url,
         plugin_skill_segments=plugin_segments,
     )
 
@@ -295,6 +305,50 @@ async def create_progenitor_agent(
     subagents = create_progenitor_subagents(http_base_url, log_sink=log_sink)
     async_subagents = create_progenitor_async_subagents(http_base_url)
 
+    # Routine subagent proxies: one CompiledSubAgent per stored routine graph,
+    # so `task(subagent_type="<routine-id>", ...)` delegates into it. The
+    # routine set is resolved once, here, at graph construction -- a routine
+    # created after startup needs a runtime restart before its `task` target
+    # exists; editing an already-registered routine works live via revision
+    # pinning (see app.progenitor.routines.subagent).
+    revision_reader = (
+        PostgresRoutineRevisionReader(database_url) if database_url else NullRoutineRevisionReader()
+    )
+    routine_registry: dict[str, Any] = {}
+    reserved_names = {spec["name"] for spec in subagents}
+    routine_subagents: list[CompiledSubAgent] = []
+    for graph_doc in await state_manager.list_routine_graphs():
+        routine_id = str(graph_doc.get("id") or "").strip()
+        if not routine_id:
+            logger.warning("Skipping routine graph document with no id: %r", graph_doc)
+            continue
+        if routine_id in reserved_names:
+            logger.warning("Skipping routine %r: name collides with a native subagent", routine_id)
+            continue
+        try:
+            validate_routine_graph_payload(graph_doc)
+        except (ValueError, KeyError) as exc:
+            logger.warning("Skipping routine %r: invalid graph document: %s", routine_id, exc)
+            continue
+        description = str(graph_doc.get("description") or "").strip() or (
+            f"Runs the {graph_doc.get('name') or routine_id} routine graph."
+        )
+        routine_spec = create_routine_subagent(
+            routine_id=routine_id,
+            description=description,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            subagent_registry=routine_registry,
+        )
+        routine_subagents.append(routine_spec)
+        reserved_names.add(routine_id)
+        routine_registry[routine_id] = routine_spec["runnable"]
+    all_subagents: list[SubAgent | AsyncSubAgent | CompiledSubAgent] = [
+        *subagents,
+        *routine_subagents,
+    ]
+
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # Postgres-backed memory documents (see backends.py's /memories/ mount).
     custom_middleware.insert(
@@ -313,14 +367,16 @@ async def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=subagents,
+        subagents=all_subagents,
         middleware=custom_middleware,
         checkpointer=checkpointer,
+        state_schema=ProgenitorAgentState,
     )
 
     logger.info(
-        "Created Progenitor DeepAgent: model=%s subagents=%s",
+        "Created Progenitor DeepAgent: model=%s subagents=%s routine_subagents=%d",
         config.llm.model_default,
-        [subagent["name"] for subagent in subagents],
+        [subagent["name"] for subagent in all_subagents],
+        len(routine_subagents),
     )
     return agent

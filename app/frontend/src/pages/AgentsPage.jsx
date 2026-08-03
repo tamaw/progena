@@ -617,6 +617,7 @@ function AgentsPage({ variant = 'agents' }) {
     return dispatch(updateAgentGraph({
       agentsUrl,
       agentId: effectiveAgentId,
+      entry: parsed.entry,
       nodes: parsed.nodes,
       edges: parsed.edges,
       status: parsed.status,

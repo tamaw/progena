@@ -667,7 +667,11 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
           }
           if (!changed) { next.push(edge); return; }
           if (!Object.keys(branches).length && !defaultTarget) return; // router now empty, drop it
-          next.push({ ...edge, branches, ...(defaultTarget ? { default: defaultTarget } : { default: undefined }) });
+          if (!Object.keys(branches).length) {
+            next.push({ from: edge.from, to: defaultTarget });
+            return;
+          }
+          next.push({ ...edge, branches, ...(defaultTarget ? { default: defaultTarget } : { default: undefined } ) });
           return;
         }
         if (edge.to === id) {
@@ -803,6 +807,7 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
       const branches = { ...edge.branches };
       delete branches[value];
       if (!Object.keys(branches).length && !edge.default) return null;
+      if (!Object.keys(branches).length) return { from: edge.from, to: edge.default };
       return { ...edge, branches };
     }).filter(Boolean));
   }, []);
@@ -811,8 +816,9 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
     setEdges((current) => current.map((edge) => {
       if (edge.from !== sourceId || !edge.router) return edge;
       const { default: _drop, ...rest } = edge;
+      if (!Object.keys(rest.branches || {}).length) return null;
       return rest;
-    }));
+    }).filter(Boolean));
   }, []);
 
   const onRenameBranch = useCallback((sourceId, oldValue, newValue) => {

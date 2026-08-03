@@ -21,6 +21,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool, PoolClosed
 
 from app.backend.delta_channel_replay import replay_delta_messages
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 
 PROGENITOR_STATE_PREFIX = "progenitor.state"
 PROGENITOR_LOG_PREFIX = "progenitor.logs"
@@ -267,6 +268,7 @@ class PostgresDocumentStore:
         self._pool.open()
         self._ensure_store_table()
         self._ensure_change_trigger()
+        self._ensure_routine_revision_history()
 
     def close(self) -> None:
         self._pool.close()
@@ -375,6 +377,101 @@ class PostgresDocumentStore:
                 FOR EACH ROW EXECUTE FUNCTION progenitor_notify_store_change()
                 """
             )
+
+    def _ensure_routine_revision_history(self) -> None:
+        """Capture immutable routine graph revisions via a Postgres trigger.
+
+        The ``store`` table is LangGraph's own; this never alters its schema.
+        A row trigger on ``store`` inserts into a separate
+        ``routine_graph_revisions`` table whenever a routine document is
+        written, so a chat thread that pinned a revision keeps resolving the
+        graph it started on even after the routine is edited again.
+        """
+        state_prefix = PROGENITOR_STATE_PREFIX
+        key_prefix = ROUTINE_GRAPH_KEY_PREFIX
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS routine_graph_revisions (
+                    routine_id  TEXT NOT NULL,
+                    graph       JSONB NOT NULL,
+                    revision_id TEXT NOT NULL GENERATED ALWAYS AS (encode(sha256(jsonb_send(graph)), 'hex')) STORED,
+                    captured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    PRIMARY KEY (routine_id, revision_id)
+                )
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS routine_graph_revisions_latest
+                    ON routine_graph_revisions (routine_id, captured_at DESC, revision_id DESC)
+                """
+            )
+            capture_sql = (  # nosec B608 - fixed internal namespace placeholders
+                """
+                CREATE OR REPLACE FUNCTION progenitor_capture_routine_revision()
+                RETURNS trigger AS $$
+                DECLARE
+                    graph_doc JSONB;
+                BEGIN
+                    IF NEW.prefix = '__STATE_PREFIX__'
+                        AND NEW.key LIKE '__KEY_PREFIX__%'
+                        AND length(NEW.key) > length('__KEY_PREFIX__') THEN
+                        graph_doc := NEW.value -> 'payload';
+                        IF graph_doc IS NOT NULL AND jsonb_typeof(graph_doc) = 'object' THEN
+                            INSERT INTO routine_graph_revisions (routine_id, graph)
+                            VALUES (substring(NEW.key from length('__KEY_PREFIX__') + 1), graph_doc)
+                            ON CONFLICT (routine_id, revision_id) DO NOTHING;
+                        END IF;
+                    END IF;
+                    RETURN NULL;
+                END;
+                $$ LANGUAGE plpgsql;
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)
+            )
+            cur.execute(capture_sql)
+            cur.execute("DROP TRIGGER IF EXISTS progenitor_capture_routine_revision ON store")
+            cur.execute(
+                """
+                CREATE TRIGGER progenitor_capture_routine_revision
+                AFTER INSERT OR UPDATE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                """
+            )
+            cur.execute(
+                """
+                CREATE OR REPLACE FUNCTION progenitor_routine_revisions_immutable()
+                RETURNS trigger AS $$
+                BEGIN
+                    RAISE EXCEPTION 'routine_graph_revisions rows are immutable (attempted % on %/%)',
+                        TG_OP, OLD.routine_id, OLD.revision_id;
+                END;
+                $$ LANGUAGE plpgsql;
+                """
+            )
+            cur.execute(
+                "DROP TRIGGER IF EXISTS progenitor_routine_revisions_immutable ON routine_graph_revisions"
+            )
+            cur.execute(
+                """
+                CREATE TRIGGER progenitor_routine_revisions_immutable
+                BEFORE UPDATE ON routine_graph_revisions
+                FOR EACH ROW EXECUTE FUNCTION progenitor_routine_revisions_immutable()
+                """
+            )
+            backfill_sql = (  # nosec B608 - fixed internal namespace placeholders
+                """
+                INSERT INTO routine_graph_revisions (routine_id, graph)
+                SELECT substring(key from length('__KEY_PREFIX__') + 1), value -> 'payload'
+                FROM store
+                WHERE prefix = '__STATE_PREFIX__'
+                  AND key LIKE '__KEY_PREFIX__%'
+                  AND length(key) > length('__KEY_PREFIX__')
+                  AND jsonb_typeof(value -> 'payload') = 'object'
+                ON CONFLICT (routine_id, revision_id) DO NOTHING
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)
+            )
+            cur.execute(backfill_sql)
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None

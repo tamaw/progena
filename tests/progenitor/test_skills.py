@@ -123,6 +123,9 @@ class FakeContentStateManager:
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         return list(self._docs[kind].items())
 
+    async def list_routine_graphs(self) -> list[dict]:
+        return []
+
 
 class TestSkillsWiring:
     """Test that skills are wired into the DeepAgent factory."""

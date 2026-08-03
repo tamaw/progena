@@ -395,12 +395,12 @@ class AgentStore:
                 INSERT INTO agent_graph (agent_id, status, summary, updated_at)
                 VALUES (%s, COALESCE(%s, 'Draft'), %s, now())
                 ON CONFLICT (agent_id) DO UPDATE SET
-                    status = COALESCE(EXCLUDED.status, agent_graph.status),
+                    status = COALESCE(%s, agent_graph.status),
                     summary = COALESCE(EXCLUDED.summary, agent_graph.summary),
                     updated_at = now()
                 RETURNING status, summary
                 """,
-                (agent_id, status, summary),
+                (agent_id, status, summary, status),
             )
             graph_row = cast(dict[str, Any] | None, cur.fetchone())
         document = default_routine_graph(

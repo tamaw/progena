@@ -56,6 +56,24 @@ def test_default_routine_graph_is_schema_valid_and_round_trips():
     assert parsed["nodes"][0]["id"] == "prompt"
 
 
+def test_parse_routine_graph_document_preserves_edge_aliases():
+    graph = default_routine_graph("edge-agent")
+    graph["nodes"].append(
+        {
+            "id": "done",
+            "label": "Done",
+            "kind": "noop",
+            "output_key": "done",
+            "config": {},
+        }
+    )
+    graph["edges"] = [{"from": "prompt", "to": "done"}]
+
+    parsed = parse_routine_graph_document(json.dumps(graph))
+
+    assert parsed["edges"] == [{"from": "prompt", "to": "done"}]
+
+
 def test_default_routine_graph_falls_back_name_to_id():
     graph = default_routine_graph("bare-agent")
     assert graph["name"] == "bare-agent"
