@@ -12,23 +12,9 @@ import json
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from ..schemas import load_schema
-from ..structured import validate_against_schema
+from ..schemas import check_entry_schema
 
 PREFERENCES_DOC_KEY = "preferences"
-
-
-def _check_schema(payload: dict[str, Any]) -> None:
-    """Validate ``payload`` against ``preferences.schema.v1.json`` (the enforced floor).
-
-    Mirrors ``state_backend._check_entry_schema``, but for the whole document
-    rather than one entry in a collection — ``preferences.json`` has no
-    array/map of entries to validate piecewise.
-    """
-    schema = load_schema("preferences")
-    error = validate_against_schema(payload, schema)
-    if error is not None:
-        raise ValueError(f"preferences document does not conform to schema: {error}")
 
 
 def default_preferences_payload() -> dict[str, Any]:
@@ -61,7 +47,7 @@ def validate_preferences_payload(payload: Any) -> dict[str, Any]:
     """
     if not isinstance(payload, dict):
         raise ValueError("preferences document must be a JSON object")
-    _check_schema(payload)
+    check_entry_schema("preferences document", payload, "preferences")
 
     display_name = payload.get("display_name", "")
     if not isinstance(display_name, str):

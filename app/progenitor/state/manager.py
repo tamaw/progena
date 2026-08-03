@@ -164,6 +164,15 @@ class StateManager:
             self._state_cache[name] = await self._runtime_store.get_document(name, {})
         return self._state_cache[name]
 
+    def invalidate_document(self, name: str) -> None:
+        """Drop a cached document so the next read re-fetches from the store.
+
+        Needed when another process (the backend, via a direct Postgres
+        write) mutates a document this instance has already cached — the
+        runtime store listener calls this on the matching NOTIFY key.
+        """
+        self._state_cache.pop(name, None)
+
     async def _save_runtime_document(self, name: str, payload: Any) -> None:
         """Save and cache a native-store-backed state document."""
         self._state_cache[name] = payload
@@ -278,6 +287,30 @@ class StateManager:
     async def save_registry(self, registry: dict[str, Any]) -> None:
         """Persist the tool registry document."""
         await self._save_runtime_document("registry", registry)
+
+    # ==========================================================================
+    # Repos management (declared repositories, agent-editable)
+    # ==========================================================================
+    async def get_repos(self) -> dict[str, Any]:
+        """Return the declared-repositories document."""
+        repos = await self._get_runtime_document("repos")
+        return dict(repos) if isinstance(repos, dict) else {}
+
+    async def save_repos(self, repos: dict[str, Any]) -> None:
+        """Persist the declared-repositories document."""
+        await self._save_runtime_document("repos", repos)
+
+    # ==========================================================================
+    # Repo scan (heartbeat-derived git state, read-only for the agent)
+    # ==========================================================================
+    async def get_repo_scan(self) -> dict[str, Any]:
+        """Return the heartbeat's last derived git-state scan."""
+        scan = await self._get_runtime_document("repo_scan")
+        return dict(scan) if isinstance(scan, dict) else {}
+
+    async def save_repo_scan(self, payload: dict[str, Any]) -> None:
+        """Persist the heartbeat's derived git-state scan."""
+        await self._save_runtime_document("repo_scan", payload)
 
     # ==========================================================================
     # MCP configuration

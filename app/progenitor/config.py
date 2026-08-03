@@ -30,7 +30,7 @@ DEFAULT_TIMEZONE = "Europe/London"
 DEFAULT_PROJECT_DATA_DIR = Path(__file__).resolve().parents[2] / "data"
 DEFAULT_PROJECT_STATE_DIR = DEFAULT_PROJECT_DATA_DIR / "state"
 DEFAULT_PROJECT_LOG_DIR = Path(__file__).resolve().parents[2] / "logs"
-DEFAULT_PROJECT_WORKTREE_DIR = Path(__file__).resolve().parents[2] / "worktrees"
+DEFAULT_PROJECT_WORKTREE_DIR = DEFAULT_PROJECT_DATA_DIR / "repos"
 DEFAULT_PROJECT_PROMPTS_DIR = DEFAULT_PROJECT_DATA_DIR / "prompts"
 
 
@@ -54,10 +54,10 @@ def _default_worktree_dir(
     *,
     worktrees_root: Path | str | None = None,
 ) -> Path:
-    """Return the managed worktree directory for the current project root."""
+    """Return the managed repos/worktrees directory for the current project root."""
     if worktrees_root is not None:
-        return Path(worktrees_root) / "worktrees"
-    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "worktrees"
+        return Path(worktrees_root) / "repos"
+    return DEFAULT_PROJECT_WORKTREE_DIR if project_root is None else project_root / "data" / "repos"
 
 
 def _default_prompts_dir(project_root: Path | None = None) -> Path:
@@ -78,6 +78,11 @@ def default_plugins_config_payload() -> dict[str, Any]:
 def default_marketplaces_config_payload() -> dict[str, Any]:
     """Return the default marketplaces configuration stored in the shared state document."""
     return {"marketplaces": {}}
+
+
+def default_repos_config_payload() -> dict[str, Any]:
+    """Return the default repos configuration stored in the shared state document."""
+    return {"repos": {}}
 
 
 def default_schedule_config_payload() -> dict[str, Any]:
@@ -132,6 +137,13 @@ class RuntimeConfig:
     # Refresh cadence for agent cards + /health. Kept at 900s to avoid hammering
     # each agent's health endpoint; the read-through Agents page tolerates this.
     registry_refresh_seconds: int = 900
+    # Cadence for the heartbeat's git-status scan of declared repos.json
+    # entries (branch, dirty count, commits, contributors, worktrees).
+    # Local-only subprocess calls (no network -- see repos/scan.py's
+    # module docstring for the separate on-demand "Fetch" action), but each
+    # tick shells out per branch/commit/contributor per repo, so a large
+    # declared set can add up; default to hourly rather than the old 120s.
+    repo_scan_seconds: int = 3600
     log_level: str = "info"
     log_format: str = "text"  # "text" | "json" for structured logging
     checkpoint_interval_seconds: int = 30
@@ -154,6 +166,7 @@ class RuntimeConfig:
             mcp_refresh_seconds=env_int("PROGENITOR_MCP_REFRESH_SECONDS", 900),
             plugin_update_check_seconds=env_int("PROGENITOR_PLUGIN_UPDATE_CHECK_SECONDS", 86400),
             registry_refresh_seconds=env_int("PROGENITOR_REGISTRY_REFRESH_SECONDS", 900),
+            repo_scan_seconds=env_int("PROGENITOR_REPO_SCAN_SECONDS", 3600),
             log_level=os.getenv("PROGENITOR_LOG_LEVEL", "info"),
             log_format=os.getenv("PROGENITOR_LOG_FORMAT", "text"),
             checkpoint_interval_seconds=env_int("PROGENITOR_CHECKPOINT_INTERVAL_SECONDS", 30),
@@ -409,6 +422,11 @@ def _collect_validation_issues(config: ProgenitorConfig) -> list[str]:
         (
             "registry_refresh_seconds",
             config.runtime.registry_refresh_seconds,
+            lambda v: isinstance(v, int) and 0 < v <= 86400,
+        ),
+        (
+            "repo_scan_seconds",
+            config.runtime.repo_scan_seconds,
             lambda v: isinstance(v, int) and 0 < v <= 86400,
         ),
         (

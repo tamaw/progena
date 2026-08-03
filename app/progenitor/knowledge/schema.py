@@ -22,6 +22,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from ..schemas import check_entry_schema
 from .embedding import EMBED_DIM, EMBED_MODEL_NAME
 
 VALID_METRICS = ("cosine", "l2", "inner_product")
@@ -192,6 +193,7 @@ def validate_knowledge_payload(data: Any) -> dict[str, Any]:
             source["id"] = source_id
             sources.append(source)
         entry["sources"] = sources
+        check_entry_schema(f"base '{base_id}'", entry, "knowledge_base_entry")
         bases.append(entry)
 
     return {"bases": bases}
