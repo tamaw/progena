@@ -114,6 +114,31 @@ class TestStateManager:
         assert schedule["schedule-1"].id == "schedule-1"
 
     @pytest.mark.asyncio
+    async def test_update_schedule_entry_preserves_extra_fields(self):
+        manager = StateManager(runtime_store=_FakeRuntimeStore())
+        await manager.initialize()
+        from app.progenitor.utils import utcnow
+
+        entry = ScheduleEntry(
+            id="schedule-2",
+            message="Say hi",
+            scheduled_at="2026-08-03T12:00:00+00:00",
+            created_at=utcnow(),
+        )
+        await manager.save_schedule({entry.id: entry})
+
+        updated = await manager.update_schedule_entry(
+            entry.id,
+            {"last_run_status": "running", "enabled": False},
+        )
+
+        assert updated is True
+        stored = (await manager.get_schedule())["schedule-2"]
+        assert stored.last_run_status == "running"
+        assert stored.enabled is False
+        assert stored.message == "Say hi"
+
+    @pytest.mark.asyncio
     async def test_get_schedule_migrates_legacy_list_payload(self):
         store = _FakeRuntimeStore()
         store._documents["schedule"] = [
