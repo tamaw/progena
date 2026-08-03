@@ -216,6 +216,13 @@ async def _fetch_url(url: str) -> bytes:
 async def _fetch_json_url(url: str) -> dict[str, Any]:
     try:
         raw = await _fetch_url(url)
+    except aiohttp.ClientResponseError as exc:
+        if exc.status == 403:
+            raise PluginFetchError(
+                "GitHub API rate limit exceeded; configure GITHUB_TOKEN or retry later"
+            ) from exc
+        raise PluginFetchError(f"GitHub API request failed ({exc.status})") from exc
+    try:
         value = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise PluginFetchError(f"invalid JSON response from {url}: {exc}") from exc
@@ -239,6 +246,16 @@ async def _resolve_commit_sha(owner: str, repo: str, ref: str) -> str:
 def _raw_github_url(owner: str, repo: str, sha: str, path: str) -> str:
     encoded_path = "/".join(quote(part) for part in path.strip("/").split("/"))
     return f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/{quote(sha)}/{encoded_path}"
+
+
+async def _resolve_default_branch(owner: str, repo: str) -> str:
+    payload = await _fetch_json_url(f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}")
+    branch = payload.get("default_branch")
+    if not isinstance(branch, str) or not branch:
+        raise PluginFetchError(
+            f"GitHub repository response missing default_branch for {owner}/{repo}"
+        )
+    return branch
 
 
 async def _fetch_github_tree(owner: str, repo: str, sha: str, prefix: str) -> dict[str, bytes]:
@@ -323,7 +340,7 @@ _MARKETPLACE_MANIFEST_PATHS = (
 async def fetch_marketplace(source: str) -> MarketplaceCatalog:
     """Fetch and parse a GitHub marketplace manifest over direct HTTP."""
     owner, repo, ref = _parse_github_source(source)
-    resolved_ref = ref or "HEAD"
+    resolved_ref = ref or await _resolve_default_branch(owner, repo)
     commit_sha = await _resolve_commit_sha(owner, repo, resolved_ref)
     data: dict[str, Any] | None = None
     for manifest_path in _MARKETPLACE_MANIFEST_PATHS:
@@ -401,7 +418,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         # Treat GitHub url like github source
         owner, repo, ref = _parse_github_source(url)
         sha = src.get("sha")
-        resolved = sha or ref or "HEAD"
+        resolved = sha or ref or "main"
         return owner, repo, resolved
     if source_type == "github":
         repo_str = src.get("repo", "")
@@ -412,7 +429,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         owner, repo = repo_str.split("/", 1)
         explicit_ref = src.get("ref")
         sha = src.get("sha")
-        resolved = sha or explicit_ref or "HEAD"
+        resolved = sha or explicit_ref or "main"
         return owner, repo, resolved
     if source_type == "git-subdir":
         url = src.get("url", "")
@@ -421,7 +438,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         owner, repo, _parsed_ref = _parse_github_source(url)
         explicit_ref = src.get("ref")
         sha = src.get("sha")
-        resolved = sha or explicit_ref or "HEAD"
+        resolved = sha or explicit_ref or "main"
         return owner, repo, resolved
     raise PluginFetchError(
         f"plugin '{entry.get('name')}' uses unknown source type '{source_type}'; "
@@ -458,7 +475,7 @@ async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dic
     else:
         raise PluginFetchError(f"plugin '{entry.get('name')}' has no source")
 
-    source_ref = str(src.get("ref") or "HEAD") if isinstance(src, dict) else "HEAD"
+    source_ref = str(src.get("ref") or "main") if isinstance(src, dict) else "main"
     sha = (
         catalog.commit_sha
         if (owner, repo) == (marketplace_owner, marketplace_repo) and catalog.commit_sha
