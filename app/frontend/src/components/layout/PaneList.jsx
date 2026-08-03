@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { createPortal } from 'react-dom';
 import { usePaneCollapse, NARROW_MQ } from './usePaneCollapse';
 
-/** Provided by PaneSection; consumed by PaneListVirtualized to auto-collapse on item selection. */
+/** Provided by PaneSection; consumed by pane list rows to auto-collapse on selection. */
 const PaneAutoCollapseCtx = createContext(null);
 
 /**
@@ -10,7 +10,7 @@ const PaneAutoCollapseCtx = createContext(null);
  * element into document.body so that position:fixed children are never
  * clipped by app-shell__content's stacking context.
  *
- * PaneListVirtualized can auto-collapse when an item is selected on mobile.
+ * PaneListRows can auto-collapse when a row is selected on mobile.
  */
 export function PaneSection({ as = 'section', className, onItemSelect, children, ...props }) {
   // Capitalised local variable required for JSX to treat it as a component ref.
@@ -264,11 +264,7 @@ function PaneListSortMenu({ title, options, value, onSelect }) {
   );
 }
 
-const DEFAULT_VIRTUAL_ITEM_HEIGHT = 72;
-const DEFAULT_VIRTUAL_GROUP_HEIGHT = 30;
-const DEFAULT_VIRTUAL_OVERSCAN = 8;
-
-function VirtualGroupHeader({ title, count }) {
+function PaneListGroupHeader({ title, count }) {
   return (
     <div className="sess-group__head">
       {title} <span className="muted">· {count}</span>
@@ -277,12 +273,13 @@ function VirtualGroupHeader({ title, count }) {
 }
 
 /**
- * Render only the rows near the scroll viewport. `groups` keeps the existing
- * master-detail page grouping model; `items` handles an ungrouped card list.
- * Row heights are measured after mount so wrapped cards remain safe while the
- * initial estimate keeps the scrollbar stable before measurement.
+ * Render grouped or ungrouped pane rows in normal document flow.
+ *
+ * Keeping every row in the document lets the browser calculate the complete
+ * scroll height natively; row components remain responsible for their own
+ * natural height and text truncation.
  */
-export function PaneListVirtualized({
+export function PaneListRows({
   groups,
   items,
   getGroupItems = (group) => group.items || [],
@@ -291,33 +288,25 @@ export function PaneListVirtualized({
   getItemKey = (item, index) => item.id || item.path || index,
   renderItem,
   renderGroupHeader = (group, groupItems) => (
-    <VirtualGroupHeader title={getGroupTitle(group)} count={groupItems.length} />
+    <PaneListGroupHeader title={getGroupTitle(group)} count={groupItems.length} />
   ),
-  estimatedItemHeight = DEFAULT_VIRTUAL_ITEM_HEIGHT,
-  estimatedGroupHeight = DEFAULT_VIRTUAL_GROUP_HEIGHT,
-  overscan = DEFAULT_VIRTUAL_OVERSCAN,
   className = '',
 }) {
   const collapseIfNarrow = useContext(PaneAutoCollapseCtx);
-  const scrollRef = useRef(null);
-  const rowElementsRef = useRef(new Map());
-  const heightsRef = useRef(new Map());
-  const [viewport, setViewport] = useState({ height: 640, top: 0 });
-  const [, setHeightRevision] = useState(0);
-
   const rows = useMemo(() => {
     if (Array.isArray(groups)) {
       return groups.flatMap((group, groupIndex) => {
         const groupItems = getGroupItems(group);
         const groupKey = String(getGroupKey(group, groupIndex));
         const title = getGroupTitle(group);
-        const header = title == null ? [] : [{
-          key: `group:${groupKey}`,
-          type: 'group',
-          group,
-          groupItems,
-          estimatedHeight: estimatedGroupHeight,
-        }];
+        const header = title == null
+          ? []
+          : [{
+            key: `group:${groupKey}`,
+            type: 'group',
+            group,
+            groupItems,
+          }];
         return [
           ...header,
           ...groupItems.map((item, itemIndex) => ({
@@ -325,7 +314,6 @@ export function PaneListVirtualized({
             type: 'item',
             item,
             itemIndex,
-            estimatedHeight: estimatedItemHeight,
           })),
         ];
       });
@@ -335,103 +323,17 @@ export function PaneListVirtualized({
       type: 'item',
       item,
       itemIndex: index,
-      estimatedHeight: estimatedItemHeight,
     }));
-  }, [
-    estimatedGroupHeight,
-    estimatedItemHeight,
-    getGroupItems,
-    getGroupKey,
-    getGroupTitle,
-    getItemKey,
-    groups,
-    items,
-  ]);
-
-  const layout = (() => {
-    let top = 0;
-    const positioned = rows.map((row) => {
-      const height = heightsRef.current.get(row.key) || row.estimatedHeight;
-      const positionedRow = { ...row, top, height };
-      top += height;
-      return positionedRow;
-    });
-    return { rows: positioned, totalHeight: top };
-  })();
-
-  const visibleRows = useMemo(() => {
-    const min = Math.max(0, viewport.top - (estimatedItemHeight * overscan));
-    const max = viewport.top + viewport.height + (estimatedItemHeight * overscan);
-    return layout.rows.filter((row) => row.top + row.height >= min && row.top <= max);
-  }, [estimatedItemHeight, layout.rows, overscan, viewport.height, viewport.top]);
-
-  useEffect(() => {
-    const scrollArea = scrollRef.current;
-    if (!scrollArea) return undefined;
-
-    const syncViewport = () => {
-      setViewport({
-        height: scrollArea.clientHeight || 640,
-        top: scrollArea.scrollTop || 0,
-      });
-    };
-    syncViewport();
-    window.addEventListener('resize', syncViewport);
-    return () => window.removeEventListener('resize', syncViewport);
-  }, []);
-
-  useEffect(() => {
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const observer = new ResizeObserver((entries) => {
-      let changed = false;
-      entries.forEach((entry) => {
-        // Observe the row's rendered content, not the wrapper: the wrapper
-        // carries an inline `minHeight` floor (the current estimate), so
-        // measuring it directly can only ever grow a row, never shrink it
-        // back down when the real content is shorter than the estimate.
-        const key = entry.target.closest('[data-virtual-row-key]')?.dataset.virtualRowKey;
-        const nextHeight = Math.ceil(entry.borderBoxSize?.[0]?.blockSize || entry.contentRect.height);
-        if (key && nextHeight > 0 && heightsRef.current.get(key) !== nextHeight) {
-          heightsRef.current.set(key, nextHeight);
-          changed = true;
-        }
-      });
-      if (changed) setHeightRevision((value) => value + 1);
-    });
-    visibleRows.forEach((row) => {
-      const element = rowElementsRef.current.get(row.key);
-      const target = element?.firstElementChild || element;
-      if (target) observer.observe(target);
-    });
-    return () => observer.disconnect();
-  }, [visibleRows]);
-
-  const handleScroll = (event) => {
-    setViewport({
-      height: event.currentTarget.clientHeight || 640,
-      top: event.currentTarget.scrollTop || 0,
-    });
-  };
+  }, [getGroupItems, getGroupKey, getGroupTitle, getItemKey, groups, items]);
 
   return (
     <div
-      ref={scrollRef}
       className={`sess-list__scroll ${className}`.trim()}
       onClick={collapseIfNarrow ?? undefined}
-      onScroll={handleScroll}
     >
-      <div className="pane-list-virtualized" style={{ height: `${layout.totalHeight}px` }}>
-        {visibleRows.map((row) => (
-          <div
-            key={row.key}
-            ref={(element) => {
-              if (element) rowElementsRef.current.set(row.key, element);
-              else rowElementsRef.current.delete(row.key);
-            }}
-            data-virtual-row-key={row.key}
-            className="pane-list-virtualized__row"
-            style={{ top: `${row.top}px`, minHeight: `${row.height}px` }}
-          >
+      <div className="pane-list-rows">
+        {rows.map((row) => (
+          <div key={row.key} className="pane-list-row">
             {row.type === 'group'
               ? renderGroupHeader(row.group, row.groupItems)
               : renderItem(row.item, row.itemIndex)}

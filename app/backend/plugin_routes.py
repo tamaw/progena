@@ -117,13 +117,9 @@ async def install_plugin(
         )
 
     resolved_source = plugin_entry.get("source")
-    if isinstance(resolved_source, str) and resolved_source.startswith("./"):
-        # A relative-path source is only meaningful together with the
-        # marketplace archive it was resolved against; plugins.json entries
-        # are self-sufficient and carry no reference back to their
-        # marketplace, so store an absolute git-subdir source instead of the
-        # raw relative path -- otherwise the reconciler can never re-fetch it.
-        marketplace_source_url = _marketplace_source_url(marketplace_name)
+    marketplace_source_url = _marketplace_source_url(marketplace_name)
+    marketplace_commit_sha = getattr(catalog, "commit_sha", None)
+    if isinstance(resolved_source, str) and not resolved_source.startswith(("http://", "https://")):
         if not marketplace_source_url:
             raise HTTPException(
                 status_code=400, detail=f"marketplace '{marketplace_name}' not found"
@@ -131,7 +127,10 @@ async def install_plugin(
         plugin_root = str(getattr(catalog, "metadata", {}).get("pluginRoot", "") or "")
         try:
             resolved_source = resolve_relative_plugin_source(
-                marketplace_source_url, resolved_source, plugin_root
+                marketplace_source_url,
+                resolved_source,
+                plugin_root,
+                marketplace_commit_sha,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -139,6 +138,9 @@ async def install_plugin(
     new_entry: dict[str, Any] = {
         "source": resolved_source,
         "version": plugin_entry.get("version"),
+        "marketplace_source": marketplace_source_url,
+        "marketplace_plugin_source": plugin_entry.get("source"),
+        "marketplace_commit_sha": marketplace_commit_sha,
         "status": "pending",
     }
     new_entry = {k: v for k, v in new_entry.items() if v is not None}

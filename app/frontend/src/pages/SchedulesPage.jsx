@@ -11,7 +11,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -627,7 +627,7 @@ function SchedulesPage() {
         ) : error && !schedules.length ? (
           <PaneEmptyState>{error}</PaneEmptyState>
         ) : visibleSchedules.length ? (
-          <PaneListVirtualized
+          <PaneListRows
             groups={order
               .filter((group) => groupedSchedules[group]?.length)
               .map((group) => ({

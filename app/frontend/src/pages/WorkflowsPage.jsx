@@ -43,7 +43,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
@@ -1772,11 +1772,10 @@ function WorkflowsInner() {
             {workflowsState.error && !workflows.length ? <PaneEmptyState>Failed to load workflows.</PaneEmptyState> : null}
             {!workflowsState.loading && !visibleItems.length ? <PaneEmptyState>No workflows match the current filters.</PaneEmptyState> : null}
             {!workflowsState.loading && visibleItems.length ? (
-              <PaneListVirtualized
+              <PaneListRows
                 className="workspace-sidebar__scroll"
                 items={visibleItems}
                 getItemKey={(item) => item.id}
-                estimatedItemHeight={72}
                 renderItem={(item) => (
                   <WorkflowRow
                     item={item}

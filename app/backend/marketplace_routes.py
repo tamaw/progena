@@ -35,6 +35,8 @@ def _catalog_to_dict(catalog: Any) -> dict[str, Any]:
         "description": getattr(catalog, "description", None),
         "version": getattr(catalog, "version", None),
         "metadata": getattr(catalog, "metadata", {}),
+        "repository": getattr(catalog, "repository", None),
+        "commit_sha": getattr(catalog, "commit_sha", None),
     }
 
 
