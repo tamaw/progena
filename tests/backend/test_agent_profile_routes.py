@@ -239,6 +239,16 @@ def test_graph_update_invalid_returns_422(harness):
     assert client.patch("/api/ui/agent-profiles/alpha/graph", json=bad).status_code == 422
 
 
+def test_graph_update_rejects_node_that_is_not_full_schema_valid(harness):
+    client, _ = harness
+    bad = {
+        "nodes": [{"id": "a", "kind": "prompt", "output_key": "a", "config": {}}],
+        "edges": [],
+        "entry": "a",
+    }
+    assert client.patch("/api/ui/agent-profiles/alpha/graph", json=bad).status_code == 422
+
+
 def test_graph_update_unknown_entry_returns_422(harness):
     client, _ = harness
     payload = {

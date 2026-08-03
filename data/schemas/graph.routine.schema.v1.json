@@ -13,7 +13,8 @@
     "entry": {
       "type": "string",
       "minLength": 1,
-      "description": "Node id the compiled graph enters after its private seed node."
+      "not": { "const": "__seed__" },
+      "description": "Node id the compiled graph enters after its private seed node. __seed__ is reserved for the compiler."
     },
     "nodes": {
       "type": "array",
@@ -31,6 +32,12 @@
     }
   },
   "$defs": {
+    "nodeId": {
+      "type": "string",
+      "minLength": 1,
+      "not": { "const": "__seed__" },
+      "description": "User-defined node id. __seed__ is reserved for the compiler's private seed node."
+    },
     "node": {
       "oneOf": [
         { "$ref": "#/$defs/nodePrompt" },
@@ -46,7 +53,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "prompt" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
@@ -77,7 +84,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "code" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
@@ -113,7 +120,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "eval" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
@@ -148,7 +155,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "subagent" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
@@ -180,7 +187,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "agent" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
@@ -212,7 +219,7 @@
       "additionalProperties": false,
       "required": ["id", "kind", "output_key"],
       "properties": {
-        "id": { "type": "string", "minLength": 1 },
+        "id": { "$ref": "#/$defs/nodeId" },
         "kind": { "const": "noop" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },

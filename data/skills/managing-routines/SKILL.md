@@ -34,6 +34,10 @@ Core rules:
    whenever creating or reshaping nodes/edges -- don't hand-assemble JSON from
    memory, the node `config` unions are strict (`additionalProperties: false`
    plus `oneOf` requiring exactly one of `prompt_template`/`prompt_file`, etc.).
+6. Before creating or reshaping nodes, call `generate_id` with `prefix=node`
+   and `count` equal to the number of new node ids needed. Use the returned ids
+   in the `structured_output` instruction; never invent node ids or use the
+   reserved compiler id `__seed__`. The tool supports up to 50 ids in one call.
 
 Recommended flow for building out a routine:
 1. `ls /routines/` to see which agents already have a graph.
@@ -41,10 +45,11 @@ Recommended flow for building out a routine:
    it's created (seeded as a single `prompt` node), so there is no "create"
    step distinct from "edit".
 3. `read_file /schemas/graph.routine.schema.v1.json`.
-4. One `structured_output` call, `schema_file: graph.routine.schema.v1.json`,
-   instruction describing the whole routine (every node and the edges
-   connecting them), with `id`/`name`/`description`/`version` copied forward
-   from the file you just read.
+4. Call `generate_id prefix=node count=<number of new nodes>` for the node ids,
+   then make one `structured_output` call, `schema_file:
+   graph.routine.schema.v1.json`, describing the whole routine (every node and
+   the edges connecting them), with `id`/`name`/`description`/`version` copied
+   forward from the file you just read and the generated node ids assigned.
 5. `write_file /routines/<agent-id>.json`.
 
 Recommended flow for a small edit:
@@ -98,6 +103,7 @@ Validation reminders:
 - every node kind requires `id`, `kind`, `output_key` (`prompt`/`code`/`eval`/
   `subagent`/`agent` also require `config`)
 - node ids must be unique within the graph
+- node ids must not be `__seed__`; that identifier is reserved for the compiler
 - `entry` must reference an existing node id
 - edges must reference existing node ids on both ends (plain `to`, router
   `branches` values, and router `default`)

@@ -70,6 +70,12 @@ class TestValidateRoutineGraphPayload:
         with pytest.raises(ValueError, match="schema validation failed"):
             validate_routine_graph_payload(payload)
 
+    def test_rejects_compiler_seed_node_id(self, example_payload):
+        payload = copy.deepcopy(example_payload)
+        payload["nodes"][0]["id"] = "__seed__"
+        with pytest.raises(ValueError, match="schema validation failed"):
+            validate_routine_graph_payload(payload)
+
 
 class TestValidateRoutineGraphStructural:
     """The lighter nodes/edges-only check used by the PATCH route (no id/name/
@@ -98,6 +104,10 @@ class TestValidateRoutineGraphStructural:
     def test_rejects_duplicate_node_id(self):
         with pytest.raises(ValueError, match="duplicate node id"):
             validate_routine_graph([{"id": "a", "kind": "noop"}, {"id": "a", "kind": "noop"}], [])
+
+    def test_rejects_compiler_seed_node_id(self):
+        with pytest.raises(ValueError, match="node id is reserved"):
+            validate_routine_graph([{"id": "__seed__", "kind": "noop"}], [])
 
     def test_rejects_unsupported_router_kind(self):
         with pytest.raises(ValueError, match="unsupported router kind"):
