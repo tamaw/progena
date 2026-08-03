@@ -498,7 +498,12 @@ async def list_plugin_skill_names(catalog: MarketplaceCatalog, plugin_name: str)
     if entry is None:
         raise PluginFetchError(f"plugin '{plugin_name}' not found")
     files = await _fetch_plugin_archive(entry, catalog, load_files=False)
-    return sorted({path.split("/", 1)[0] for path in files if "/" in path})
+    names = {
+        (path.removeprefix("skills/").split("/", 1)[0])
+        for path in files
+        if path.endswith("/SKILL.md") and "/" in path
+    }
+    return sorted(name for name in names if name)
 
 
 async def fetch_plugin_skill_content(
@@ -511,10 +516,12 @@ async def fetch_plugin_skill_content(
     if entry is None:
         raise PluginFetchError(f"plugin '{plugin_name}' not found")
     src = entry.get("source")
-    if catalog.repository:
+    if isinstance(src, dict) and src.get("source") in {"github", "git-subdir"}:
+        owner, repo, source_ref = _parse_github_source(str(src.get("repo") or src.get("url") or ""))
+        source_ref = str(src.get("ref") or source_ref or "main")
+    elif catalog.repository:
         owner, repo = catalog.repository.split("/", 1)
-    elif isinstance(src, dict):
-        owner, repo, _ = _parse_github_source(str(src.get("repo") or src.get("url") or ""))
+        source_ref = "main"
     else:
         raise PluginFetchError("marketplace catalog is missing its repository")
     root = ""
@@ -522,8 +529,12 @@ async def fetch_plugin_skill_content(
         root = src.removeprefix("./").strip("/")
     elif isinstance(src, dict):
         root = str(src.get("path") or "").strip("/")
-    sha = catalog.commit_sha or await _resolve_commit_sha(owner, repo, "main")
     path = "/".join(part for part in (root, "skills", skill_name, "SKILL.md") if part)
+    sha = (
+        catalog.commit_sha
+        if catalog.repository == f"{owner}/{repo}" and catalog.commit_sha
+        else await _resolve_commit_sha(owner, repo, source_ref)
+    )
     try:
         raw = await _fetch_url(_raw_github_url(owner, repo, sha, path))
     except aiohttp.ClientResponseError as exc:
