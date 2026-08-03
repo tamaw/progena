@@ -207,13 +207,10 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
             needs_install = installed_version is None or (
                 desired_version is not None and desired_version != installed_version
             )
-            files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
             resolved_version = resolve_plugin_version(current, None)
-
             if needs_install:
-                # Write skill documents
+                files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
                 for path, content in files.items():
-                    # path is like "skill-name/SKILL.md"
                     await state_manager.save_content_document("skill", f"{seg}/{path}", content)
 
                 skills = sorted({p.split("/", 1)[0] for p in files if "/" in p})
@@ -227,13 +224,6 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
                 current["available_version"] = None
                 summary["installed"].append(key)
                 changed = True
-            else:
-                # Frozen or already up-to-date — just check for updates
-                if digest != current.get("installed_digest"):
-                    current["available_version"] = resolved_version
-                    summary["updated_available"].append(key)
-                    changed = True
-                current["last_checked"] = now
 
             if current != entry:
                 plugins[key] = current
