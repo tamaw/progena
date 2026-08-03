@@ -248,17 +248,14 @@ def _raw_github_url(owner: str, repo: str, sha: str, path: str) -> str:
     return f"https://raw.githubusercontent.com/{quote(owner)}/{quote(repo)}/{quote(sha)}/{encoded_path}"
 
 
-async def _resolve_default_branch(owner: str, repo: str) -> str:
-    payload = await _fetch_json_url(f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}")
-    branch = payload.get("default_branch")
-    if not isinstance(branch, str) or not branch:
-        raise PluginFetchError(
-            f"GitHub repository response missing default_branch for {owner}/{repo}"
-        )
-    return branch
-
-
-async def _fetch_github_tree(owner: str, repo: str, sha: str, prefix: str) -> dict[str, bytes]:
+async def _fetch_github_tree(
+    owner: str,
+    repo: str,
+    sha: str,
+    prefix: str,
+    *,
+    load_files: bool = True,
+) -> dict[str, bytes]:
     url = (
         f"https://api.github.com/repos/{quote(owner)}/{quote(repo)}"
         f"/git/trees/{quote(sha, safe='')}?recursive=1"
@@ -280,7 +277,9 @@ async def _fetch_github_tree(owner: str, repo: str, sha: str, prefix: str) -> di
             continue
         relative = path[len(prefix_with_slash) :]
         if relative.startswith("skills/") or relative == "skills":
-            files[relative] = await _fetch_url(_raw_github_url(owner, repo, sha, path))
+            files[relative] = (
+                await _fetch_url(_raw_github_url(owner, repo, sha, path)) if load_files else b""
+            )
     return files
 
 
@@ -337,15 +336,20 @@ _MARKETPLACE_MANIFEST_PATHS = (
 )
 
 
-async def fetch_marketplace(source: str) -> MarketplaceCatalog:
-    """Fetch and parse a GitHub marketplace manifest over direct HTTP."""
+async def fetch_marketplace(
+    source: str,
+    *,
+    resolve_revision: bool = True,
+) -> MarketplaceCatalog:
+    """Fetch and parse a marketplace manifest over direct HTTP."""
     owner, repo, ref = _parse_github_source(source)
-    resolved_ref = ref or await _resolve_default_branch(owner, repo)
-    commit_sha = await _resolve_commit_sha(owner, repo, resolved_ref)
+    resolved_ref = ref or "main"
+    commit_sha = await _resolve_commit_sha(owner, repo, resolved_ref) if resolve_revision else None
+    manifest_ref = commit_sha or resolved_ref
     data: dict[str, Any] | None = None
     for manifest_path in _MARKETPLACE_MANIFEST_PATHS:
         try:
-            raw = await _fetch_url(_raw_github_url(owner, repo, commit_sha, manifest_path))
+            raw = await _fetch_url(_raw_github_url(owner, repo, manifest_ref, manifest_path))
             data = json.loads(raw.decode("utf-8"))
             break
         except aiohttp.ClientResponseError as exc:
@@ -446,7 +450,12 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
     )
 
 
-async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dict[str, bytes]:
+async def _fetch_plugin_archive(
+    entry: dict,
+    catalog: MarketplaceCatalog,
+    *,
+    load_files: bool = True,
+) -> dict[str, bytes]:
     """Fetch the selected plugin's ``skills/`` files over direct GitHub HTTP."""
     src = entry.get("source")
     if catalog.repository:
@@ -481,7 +490,52 @@ async def _fetch_plugin_archive(entry: dict, catalog: MarketplaceCatalog) -> dic
         if (owner, repo) == (marketplace_owner, marketplace_repo) and catalog.commit_sha
         else await _resolve_commit_sha(owner, repo, source_ref)
     )
-    return await _fetch_github_tree(owner, repo, sha, plugin_root)
+    return await _fetch_github_tree(owner, repo, sha, plugin_root, load_files=load_files)
+
+
+async def list_plugin_skill_names(catalog: MarketplaceCatalog, plugin_name: str) -> list[str]:
+    entry = next((p for p in catalog.plugins if p.get("name") == plugin_name), None)
+    if entry is None:
+        raise PluginFetchError(f"plugin '{plugin_name}' not found")
+    files = await _fetch_plugin_archive(entry, catalog, load_files=False)
+    return sorted({path.split("/", 1)[0] for path in files if "/" in path})
+
+
+async def fetch_plugin_skill_content(
+    catalog: MarketplaceCatalog,
+    plugin_name: str,
+    skill_name: str,
+) -> str:
+    """Fetch one marketplace SKILL.md directly at the catalog revision."""
+    entry = next((p for p in catalog.plugins if p.get("name") == plugin_name), None)
+    if entry is None:
+        raise PluginFetchError(f"plugin '{plugin_name}' not found")
+    src = entry.get("source")
+    if catalog.repository:
+        owner, repo = catalog.repository.split("/", 1)
+    elif isinstance(src, dict):
+        owner, repo, _ = _parse_github_source(str(src.get("repo") or src.get("url") or ""))
+    else:
+        raise PluginFetchError("marketplace catalog is missing its repository")
+    root = ""
+    if isinstance(src, str):
+        root = src.removeprefix("./").strip("/")
+    elif isinstance(src, dict):
+        root = str(src.get("path") or "").strip("/")
+    sha = catalog.commit_sha or await _resolve_commit_sha(owner, repo, "main")
+    path = "/".join(part for part in (root, "skills", skill_name, "SKILL.md") if part)
+    try:
+        raw = await _fetch_url(_raw_github_url(owner, repo, sha, path))
+    except aiohttp.ClientResponseError as exc:
+        if exc.status == 404:
+            raise PluginFetchError(
+                f"skill '{skill_name}' not found for plugin '{plugin_name}'"
+            ) from exc
+        raise
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PluginFetchError(f"skill '{skill_name}' is not valid UTF-8") from exc
 
 
 def _extract_frontmatter_name(raw: bytes, fallback: str) -> str:
