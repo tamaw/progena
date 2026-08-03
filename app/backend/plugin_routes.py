@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from app.progenitor.agent.state_backend import validate_plugins_document
 from app.progenitor.config import default_plugins_config_payload
 from app.progenitor.content_documents import content_document_key
+from app.progenitor.plugins.schema import validate_plugins_payload
 
 # Imported at module level so tests can monkeypatch the fetch callable.
 from app.progenitor.plugins.sources import fetch_marketplace, resolve_relative_plugin_source
@@ -39,9 +38,9 @@ def _load_plugins_document() -> dict[str, Any]:
 
 def _save_plugins_document(payload: dict[str, Any]) -> dict[str, Any]:
     """Persist the installed-plugins document after validating it."""
-    validate_plugins_document(json.dumps(payload))
-    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, "plugins", payload)
-    return payload
+    validated = validate_plugins_payload(payload)
+    get_default_document_store().save_document(PROGENITOR_STATE_PREFIX, "plugins", validated)
+    return validated
 
 
 def _marketplace_source_url(marketplace_name: str) -> str | None:

@@ -1,6 +1,7 @@
 """Tests for new_conversation system tool integration with DeepAgent + ProgenitorLoop."""
 
 import json
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -51,13 +52,20 @@ class _MockRuntimeConfig:
     mcp_refresh_seconds: int = 900
     plugin_update_check_seconds: int = 86400
     registry_refresh_seconds: int = 900
+    repo_scan_seconds: int = 3600
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
 
 
 @dataclass
+class _MockStorageConfig:
+    worktree_dir: Path = field(default_factory=lambda: Path(tempfile.mkdtemp()) / "worktrees")
+
+
+@dataclass
 class _MockConfig:
     runtime: _MockRuntimeConfig = field(default_factory=_MockRuntimeConfig)
+    storage: _MockStorageConfig = field(default_factory=_MockStorageConfig)
 
 
 @pytest.mark.asyncio

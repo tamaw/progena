@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -48,13 +47,12 @@ from ..routines.store import (
 )
 from ..runtime.thread_context import get_current_thread_id
 from ..schedule.engine import parse_schedule_datetime
-from ..schemas import load_schema
+from ..schemas import check_entry_schema
 from ..state.models import ScheduleEntry
 from ..state.preferences import default_preferences_payload, validate_preferences_document
-from ..structured import validate_against_schema
 from ..utils import utcnow, utcnow_isoformat
 from ..workflows import (
-    parse_workflow_definition_document,
+    validate_workflow_definition_document,
     workflow_file_name,
     workflow_id_from_path,
 )
@@ -94,7 +92,7 @@ def validate_mcp_document(content: str) -> JsonDoc:
     for name, cfg in servers.items():
         if not isinstance(cfg, dict):
             raise ValueError(f"server '{name}' must be an object")
-        _check_entry_schema(f"server '{name}'", cfg, "mcp_server_entry")
+        check_entry_schema(f"server '{name}'", cfg, "mcp_server_entry")
         url = str(cfg.get("url") or cfg.get("endpoint") or "").strip()
         if not url:
             raise ValueError(f"server '{name}' is missing 'url'")
@@ -111,39 +109,13 @@ def validate_plugins_document(content: str) -> JsonDoc:
 
     Shape: ``{"plugins": {"<marketplace>/<plugin>": {...}}}``, no other top-level keys.
     Each plugin entry's shape mirrors ``data/schemas/plugin_entry.schema.v1.json``.
-    Runtime-owned fields (installed_version, installed_digest, available_version,
-    status, status_message, skills, installed_at, last_checked) are accepted but
-    never required; the reconciler manages them.
+    Delegates to :mod:`..plugins.schema` -- the same function the backend's
+    ``/api/ui/plugins`` routes call directly on already-parsed payloads, so
+    both write paths enforce identical rules.
     """
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"plugins"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+    from ..plugins.schema import validate_plugins_document as _validate
 
-    plugins = data.get("plugins")
-    if not isinstance(plugins, dict):
-        raise ValueError("missing 'plugins' object")
-
-    _PLUGIN_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9-]*$")
-    for key, entry in plugins.items():
-        if not _PLUGIN_KEY_RE.match(key):
-            raise ValueError(f"plugin key '{key}' must look like <marketplace>/<plugin>")
-        if not isinstance(entry, dict):
-            raise ValueError(f"plugin '{key}' must be an object")
-        source = entry.get("source")
-        if not source:
-            raise ValueError(f"plugin '{key}' is missing 'source'")
-        _check_entry_schema(f"plugin '{key}'", entry, "plugin_entry")
-
-    return data
-
-
-_MARKETPLACE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+    return _validate(content)
 
 
 def validate_marketplaces_document(content: str) -> JsonDoc:
@@ -151,36 +123,13 @@ def validate_marketplaces_document(content: str) -> JsonDoc:
 
     Shape: ``{"marketplaces": {"<name>": {...}}}``, no other top-level keys.
     Each entry's shape mirrors ``data/schemas/marketplace_entry.schema.v1.json``.
+    Delegates to :mod:`..marketplaces` -- the same function the backend's
+    ``/api/ui/marketplaces`` route calls directly on already-parsed payloads,
+    so both write paths enforce identical rules.
     """
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"not valid JSON: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ValueError("top level must be a JSON object")
-    extra_keys = set(data) - {"marketplaces"}
-    if extra_keys:
-        raise ValueError(f"unexpected top-level key(s): {', '.join(sorted(extra_keys))}")
+    from ..marketplaces import validate_marketplaces_document as _validate
 
-    marketplaces = data.get("marketplaces")
-    if not isinstance(marketplaces, dict):
-        raise ValueError("missing 'marketplaces' object")
-
-    for name, entry in marketplaces.items():
-        if not _MARKETPLACE_NAME_RE.match(name):
-            raise ValueError(
-                f"marketplace name '{name}' must be kebab-case (lowercase, digits, hyphens)"
-            )
-        if not isinstance(entry, dict):
-            raise ValueError(f"marketplace '{name}' must be an object")
-        source = entry.get("source")
-        if not isinstance(source, str) or not source.strip():
-            raise ValueError(f"marketplace '{name}' is missing 'source'")
-        if "added_at" not in entry:
-            entry["added_at"] = utcnow_isoformat()
-        _check_entry_schema(f"marketplace '{name}'", entry, "marketplace_entry")
-
-    return data
+    return _validate(content)
 
 
 def validate_registry_document(content: str) -> JsonDoc:
@@ -207,7 +156,7 @@ def validate_registry_document(content: str) -> JsonDoc:
     for index, agent in enumerate(agents):
         if not isinstance(agent, dict):
             raise ValueError(f"agent {index} must be an object")
-        _check_entry_schema(f"agent {index}", agent, "agent_entry")
+        check_entry_schema(f"agent {index}", agent, "agent_entry")
         if not str(agent.get("name") or "").strip():
             raise ValueError(f"agent {index} is missing 'name'")
 
@@ -216,6 +165,21 @@ def validate_registry_document(content: str) -> JsonDoc:
         raise ValueError("missing 'tools' array")
 
     return data
+
+
+def validate_repos_document(content: str) -> JsonDoc:
+    """Parse + validate a ``repos.json`` payload (the ``repos`` document).
+
+    Shape: ``{"repos": {"<id>": {...}}}``, no other top-level keys. Each entry
+    declares a repository the operator wants tracked; git state (branches,
+    commits, worktrees) is scanned separately by the heartbeat and never lives
+    in this document. Delegates to :mod:`..repos.schema` -- the same function
+    the backend's ``/api/ui/repos`` routes call directly on already-parsed
+    payloads, so both write paths enforce identical rules.
+    """
+    from ..repos.schema import validate_repos_document as _validate
+
+    return _validate(content)
 
 
 def validate_knowledge_document(content: str) -> JsonDoc:
@@ -350,25 +314,6 @@ def markdown_to_inbox_message(content: str, message_id: str) -> dict[str, Any]:
 
 def _doc_to_text(doc: JsonDoc) -> str:
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
-
-
-def _check_entry_schema(label: str, entry: dict[str, Any], schema_name: str) -> None:
-    """Validate one entry dict against its JSON Schema (the enforced floor).
-
-    The JSON Schema files under ``data/schemas/`` describe the same per-entry
-    shapes as this module's hand-rolled semantic checks (croniter parsing,
-    timestamp parsing, ...). Without this, the two sources of truth can
-    silently diverge; this makes the schema an enforced floor instead of just
-    documentation. Raises ``ValueError`` (matching this module's other
-    validators) on a schema violation or a missing/malformed schema file.
-    """
-    try:
-        schema = load_schema(schema_name)
-    except FileNotFoundError as exc:
-        raise ValueError(f"{label}: schema '{schema_name}' not found: {exc}") from exc
-    error = validate_against_schema(entry, schema)
-    if error is not None:
-        raise ValueError(f"{label} does not conform to schema: {error}")
 
 
 class _AsyncOnlyFileBackendMixin:
@@ -605,6 +550,64 @@ def create_registry_state_file(
         validate=validate_registry_document,
         default={"agents": [], "tools": []},
         on_change=on_change,
+    )
+
+
+def create_repos_state_file(
+    state_manager: Any,
+    *,
+    on_change: Callable[[], Awaitable[None]] | None = None,
+) -> StateFile:
+    """Build the ``repos.json`` state file backed by the StateManager.
+
+    Backs the ``repos`` document (``{"repos": {"<id>": {...}}}``); the operator
+    declares repositories here (name, remote, local worktree path, read/write
+    access) via the Repositories page or the agent directly. Live git state
+    (branches, commits, worktrees) is scanned by the heartbeat into a separate
+    ``repo_scan`` document, never written through this file.
+    """
+
+    async def save(doc: JsonDoc) -> None:
+        if not isinstance(doc, dict):
+            raise ValueError("repos.json must be a JSON object")
+        await state_manager.save_repos(doc)
+
+    return _simple_state_file(
+        "repos.json",
+        get=state_manager.get_repos,
+        save=save,
+        validate=validate_repos_document,
+        default={"repos": {}},
+        on_change=on_change,
+    )
+
+
+def _reject_repo_scan_write(_content: Any) -> JsonDoc:
+    raise ValueError(
+        "repo_scan.json is read-only - it's written by the heartbeat's repo-scan tick, not the agent"
+    )
+
+
+def create_repo_scan_state_file(state_manager: Any) -> StateFile:
+    """Build the read-only ``repo_scan.json`` state file backed by the StateManager.
+
+    Surfaces the heartbeat's last derived git state per declared repo (branch,
+    dirty count, commit/branch counts, latest commit) so the agent can answer
+    "what's the status of X" without shelling out - the on-disk data can lag the
+    real repo by up to ``repo_scan_seconds``. Read-only: the document is entirely
+    heartbeat-owned, so both ``save`` and ``validate`` reject with the same
+    explanatory error rather than silently no-op'ing.
+    """
+
+    async def save(_doc: JsonDoc) -> None:
+        _reject_repo_scan_write(_doc)
+
+    return _simple_state_file(
+        "repo_scan.json",
+        get=state_manager.get_repo_scan,
+        save=save,
+        validate=_reject_repo_scan_write,
+        default={"scanned_at": None, "repos": {}, "workspace_signal": {}},
     )
 
 
@@ -1011,7 +1014,7 @@ class WorkflowDirectoryBackend(_AsyncOnlyFileBackendMixin):
         if workflow_id is None:
             return WriteResult(error=f"Unknown workflow file '{file_path}' (expected <id>.json)")
         try:
-            workflow = parse_workflow_definition_document(content)
+            workflow = validate_workflow_definition_document(content)
         except ValueError as exc:
             return WriteResult(error=f"Invalid workflow {name}: {exc}")
         if workflow.get("id") != workflow_id:
@@ -1220,7 +1223,7 @@ def validate_schedule_document(content: str) -> JsonDoc:
     for entry_id, item in data.items():
         if not isinstance(item, dict):
             raise ValueError(f"entry '{entry_id}' must be an object")
-        _check_entry_schema(f"entry '{entry_id}'", item, "schedule_entry")
+        check_entry_schema(f"entry '{entry_id}'", item, "schedule_entry")
 
         message = item.get("message")
         if not isinstance(message, str) or not message.strip():
