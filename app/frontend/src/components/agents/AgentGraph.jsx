@@ -195,42 +195,76 @@ function RoutingFooter({ id, routerEdge }) {
   );
 }
 
-// One rigid step card: title bar (kind icon + editable label + kind badge)
-// over an editable body, plus the routing footer when it forks.
+// Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node, routerEdge }) {
-  const { updateNode, deleteNode } = useContext(GraphEditContext);
-  const updateNodeConfig = useCallback((nodeId, patch) => {
-    updateNode(nodeId, { config: { ...node.config, ...patch } });
-  }, [updateNode, node.config]);
+  const { selectNode, selectedNodeId } = useContext(GraphEditContext);
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      selectNode(node.id, event);
+    }
+  };
   return (
     <div
-      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card`}
+      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}`}
       style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+      role="button"
+      tabIndex={0}
+      aria-label={`Edit ${node.label || node.id}`}
+      onClick={(event) => selectNode(node.id, event)}
+      onKeyDown={handleKeyDown}
     >
-      <div className="node-title-bar">
+      <div className="node-title-bar routine-step-card__title">
         <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
-        <input
-          className="node-title agents-node-title"
-          value={node.label || ''}
-          placeholder="Label"
-          onChange={(event) => updateNode(node.id, { label: event.target.value })}
-        />
-        <span className="node-status-badge agents-node-kind-badge">{node.kind}</span>
-        <button
-          type="button"
-          className="agents-graph-node__delete"
-          onClick={() => deleteNode(node.id)}
-          title="Delete step"
-          aria-label="Delete step"
-        >
-          ×
-        </button>
+        <span className="routine-step-card__copy">
+          <strong className="routine-step-card__label">{node.label || node.id}</strong>
+          <span className="node-status-badge agents-node-kind-badge">{node.kind}</span>
+        </span>
+        {routerEdge ? <span className="routine-step-card__branches">{Object.keys(routerEdge.branches || {}).length + (routerEdge.default ? 1 : 0)} paths</span> : null}
       </div>
-      <div className="node-body node-body-compact">
-        <NodeConfigBody id={node.id} kind={node.kind} config={node.config} updateNodeConfig={updateNodeConfig} />
-      </div>
-      <RoutingFooter id={node.id} routerEdge={routerEdge} />
     </div>
+  );
+}
+
+// Full configuration for the selected node. It floats inside the canvas and
+// is deliberately separate from the chain so large prompts never resize it.
+function NodeInspector({ node, routerEdge, onClose, style }) {
+  const { updateNode, deleteNode } = useContext(GraphEditContext);
+  if (!node) return null;
+  const handleConfig = (patch) => updateNode(node.id, { config: { ...node.config, ...patch } });
+  return (
+    <aside
+      className="routine-node-inspector"
+      style={{ ...style, '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+      aria-label={`${node.label || node.id} details`}
+    >
+      <header className="routine-node-inspector__head">
+        <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
+        <div>
+          <strong>{node.label || node.id}</strong>
+          <span className="routine-node-inspector__kind">{node.kind}</span>
+        </div>
+        <button type="button" className="routine-node-inspector__close" onClick={onClose} aria-label="Close node details">×</button>
+      </header>
+      <div className="routine-node-inspector__body">
+        <label className="agents-graph-node__field">
+          <span className="agents-graph-node__field-label">Label</span>
+          <input
+            className="agents-graph-node__toolinput"
+            value={node.label || ''}
+            placeholder="Label"
+            onChange={(event) => updateNode(node.id, { label: event.target.value })}
+          />
+        </label>
+        <NodeConfigBody id={node.id} kind={node.kind} config={node.config} updateNodeConfig={handleConfig} />
+        <RoutingFooter id={node.id} routerEdge={routerEdge} />
+      </div>
+      <footer className="routine-node-inspector__foot">
+        <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onClose(); }}>
+          Delete step
+        </button>
+      </footer>
+    </aside>
   );
 }
 
@@ -323,6 +357,29 @@ function BranchHeader({ value, isDefault, onRename, onRemove }) {
   );
 }
 
+// Follow a simple branch until it terminates. The optional join action creates
+// a shared plain node, so this is enough to detect the common continuation
+// without inventing another schema node kind.
+function plainPath(startId, edgeBySource) {
+  const path = [];
+  const seen = new Set();
+  let current = startId;
+  while (current && !seen.has(current)) {
+    path.push(current);
+    seen.add(current);
+    const edge = edgeBySource.get(current);
+    if (!edge || edge.router) break;
+    current = edge.to;
+  }
+  return path;
+}
+
+function findCommonJoin(targetIds, edgeBySource) {
+  if (targetIds.length < 2) return null;
+  const paths = targetIds.map((targetId) => plainPath(targetId, edgeBySource));
+  return paths[0].find((candidate) => paths.every((path) => path.includes(candidate))) || null;
+}
+
 // Builds the whole reachable chain as a plain data tree in one synchronous,
 // side-effect-free pass -- BEFORE any JSX is produced. This has to happen up
 // front rather than by mutating shared state from inside lazily-invoked
@@ -333,10 +390,11 @@ function BranchHeader({ value, isDefault, onRename, onRemove }) {
 // a discarded first invocation into the real one, corrupting rejoin/cycle
 // detection. Building the full tree as pure data first, then rendering that
 // already-computed tree, sidesteps the whole class of bug.
-function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered) {
+function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, stopAt = null) {
   if (!nodeId) return null;
   const node = nodesById.get(nodeId);
   if (!node) return null;
+  if (nodeId === stopAt) return { type: 'join', id: nodeId, label: node.label || nodeId };
   if (visiting.has(nodeId)) return { type: 'loop', id: nodeId, label: node.label || nodeId };
   if (rendered.has(nodeId)) return { type: 'rejoin', id: nodeId, label: node.label || nodeId };
   rendered.add(nodeId);
@@ -345,19 +403,27 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered) {
   let next = null;
   let fork = null;
   if (edge && edge.router) {
+    const targetIds = [
+      ...Object.values(edge.branches || {}),
+      ...(edge.default ? [edge.default] : []),
+    ];
+    const joinId = findCommonJoin(targetIds, edgeBySource);
     fork = {
       sourceId: nodeId,
       edge,
       branches: Object.entries(edge.branches || {}).map(([value, targetId]) => ({
         value,
-        tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered),
+        tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, joinId),
       })),
       defaultTree: edge.default
-        ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered)
+        ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered, joinId)
+        : null,
+      joinTree: joinId
+        ? buildChainTree(joinId, nodesById, edgeBySource, visiting, rendered)
         : null,
     };
   } else {
-    next = buildChainTree(edge ? edge.to : null, nodesById, edgeBySource, visiting, rendered);
+    next = buildChainTree(edge ? edge.to : null, nodesById, edgeBySource, visiting, rendered, stopAt);
   }
   visiting.delete(nodeId);
   return { type: 'node', id: nodeId, node, next, fork };
@@ -385,6 +451,10 @@ function renderRun(tree, initialSlot) {
       out.push(<ChainChip key={`rejoin-${current.id}`} kind="rejoin" label={`↳ continues at “${current.label}”`} />);
       break;
     }
+    if (current.type === 'join') {
+      out.push(<ChainChip key={`join-${current.id}`} kind="rejoin" label={`↳ joins at “${current.label}”`} />);
+      break;
+    }
     out.push(<StepCard key={current.id} node={current.node} routerEdge={current.fork ? current.fork.edge : null} />);
     if (current.fork) {
       out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} />);
@@ -400,8 +470,16 @@ function renderRun(tree, initialSlot) {
 // an independently rigid chain -- no forced merge node, exactly like Azure
 // Logic Apps' Condition/Switch actions.
 function ForkBlock({ fork }) {
-  const { onAddBranch, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch } = useContext(GraphEditContext);
-  const { sourceId, edge, branches, defaultTree } = fork;
+  const {
+    onAddBranch,
+    onAddDefault,
+    onRemoveBranch,
+    onRemoveDefault,
+    onRenameBranch,
+    onJoinBranches,
+  } = useContext(GraphEditContext);
+  const { sourceId, edge, branches, defaultTree, joinTree } = fork;
+  const pathCount = branches.length + (edge.default ? 1 : 0);
   return (
     <div className="routine-fork">
       <div className="routine-fork__row">
@@ -434,6 +512,16 @@ function ForkBlock({ fork }) {
           </button>
         </div>
       </div>
+      {joinTree ? (
+        <div className="routine-fork__join">
+          <span className="routine-fork__join-label">Branches joined</span>
+          {renderRun(joinTree, { sourceId, kind: 'join' })}
+        </div>
+      ) : pathCount > 1 ? (
+        <button type="button" className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
+          + Join branches
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -520,6 +608,9 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
   });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
+  const [selectedNodeId, setSelectedNodeId] = useState(null);
+  const [inspectorPosition, setInspectorPosition] = useState(null);
+  const canvasRef = useRef(null);
 
   useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
 
@@ -530,6 +621,21 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
   const edgesRef = useRef(edges);
   const metaRef = useRef(meta);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
+  const selectNode = useCallback((id, event) => {
+    const canvas = canvasRef.current;
+    const target = event.currentTarget;
+    if (!canvas || !target) return;
+    const canvasRect = canvas.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const panelWidth = 340;
+    const left = Math.max(16, Math.min(
+      targetRect.right - canvasRect.left + 14,
+      canvasRect.width - panelWidth - 16,
+    ));
+    const top = Math.max(72, targetRect.top - canvasRect.top);
+    setSelectedNodeId(id);
+    setInspectorPosition({ left, top });
+  }, []);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
   useEffect(() => { metaRef.current = meta; }, [meta]);
 
@@ -661,6 +767,35 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
     )));
     setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
   }, []);
+  const onJoinBranches = useCallback((sourceId) => {
+    const router = edgesRef.current.find((edge) => edge.from === sourceId && edge.router);
+    if (!router) return;
+    const targets = [
+      ...Object.values(router.branches || {}),
+      ...(router.default ? [router.default] : []),
+    ];
+    const terminals = targets.map((targetId) => {
+      let current = targetId;
+      const seen = new Set();
+      while (current && !seen.has(current)) {
+        seen.add(current);
+        const outgoing = edgesRef.current.find((edge) => edge.from === current);
+        if (!outgoing || outgoing.router) return outgoing ? null : current;
+        current = outgoing.to;
+      }
+      return null;
+    }).filter(Boolean);
+    if (terminals.length < 2 || new Set(terminals).size < 2) return;
+    const joinId = uniqueNodeId('noop', nodesRef.current);
+    const nextEdges = [...edgesRef.current];
+    [...new Set(terminals)].forEach((terminalId) => {
+      if (!nextEdges.some((edge) => edge.from === terminalId)) {
+        nextEdges.push({ from: terminalId, to: joinId });
+      }
+    });
+    setNodes((current) => [...current, { ...makeNode('noop'), id: joinId, label: 'Join branches' }]);
+    setEdges(nextEdges);
+  }, []);
 
   const onRemoveBranch = useCallback((sourceId, value) => {
     setEdges((current) => current.map((edge) => {
@@ -699,11 +834,14 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
     onSplitIntoBranches: splitIntoBranches,
     onRemoveBranching: removeBranching,
     onAddBranch,
+    onJoinBranches,
+    selectNode,
+    selectedNodeId,
     onAddDefault,
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -732,6 +870,10 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
   }, [nodes, edges, meta]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
+  const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
+  const selectedRouterEdge = selectedNode
+    ? edges.find((edge) => edge.from === selectedNode.id && edge.router)
+    : null;
 
   const handleJsonApply = useCallback(async (parsed) => {
     const nextMeta = {
@@ -759,7 +901,7 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
     <>
       <section className="agents-graph-panel" style={{ '--agent-color': agent.color }}>
         <div className="agents-graph-shell">
-          <div className="canvas-surface agents-graph-canvas routine-canvas">
+          <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
               <span>{agent.name}</span>
               <span>{nodes.length} step{nodes.length === 1 ? '' : 's'}</span>
@@ -771,9 +913,25 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
               <button type="button" onClick={onShowProfile}>Details</button>
             </div>
             <GraphEditContext.Provider value={editContext}>
-              <div className="routine-canvas__scroll">
+              <div
+                className="routine-canvas__scroll"
+                onClick={(event) => {
+                  if (!event.target.closest('button, input, textarea, [role="button"], .routine-node-inspector')) {
+                    setSelectedNodeId(null);
+                    setInspectorPosition(null);
+                  }
+                }}
+              >
                 <RoutineChain nodes={nodes} edges={edges} entry={meta.entry} />
               </div>
+              {selectedNode && inspectorPosition ? (
+                <NodeInspector
+                  node={selectedNode}
+                  routerEdge={selectedRouterEdge}
+                  onClose={() => { setSelectedNodeId(null); setInspectorPosition(null); }}
+                  style={inspectorPosition}
+                />
+              ) : null}
             </GraphEditContext.Provider>
           </div>
           {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
