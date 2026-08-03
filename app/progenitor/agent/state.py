@@ -9,7 +9,7 @@ edited again, while a new thread picks up the latest revision.
 
 from __future__ import annotations
 
-from typing import Annotated, NotRequired
+from typing import Annotated
 
 from deepagents.graph import DeepAgentState
 
@@ -27,4 +27,4 @@ class ProgenitorAgentState(DeepAgentState):
     # Field name must stay the literal below (TypedDict annotations can't use a
     # variable) — kept in sync with ROUTINE_REVISIONS_STATE_KEY in
     # app.progenitor.routines.subagent.
-    routine_revisions: NotRequired[Annotated[dict[str, str], merge_routine_revisions]]  # type: ignore[valid-type]
+    routine_revisions: Annotated[dict[str, str], merge_routine_revisions]
