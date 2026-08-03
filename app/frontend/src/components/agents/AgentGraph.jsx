@@ -597,7 +597,7 @@ function serializeGraph(nodes, edges, meta) {
 // The routine canvas: a rigid top-down chain of steps with a floating status
 // bar and the same JSON-editor side panel the previous canvas had. Edits
 // autosave (debounced) to the backend.
-function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+function GraphCanvas({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -917,6 +917,7 @@ function GraphCanvas({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJ
                 </span>
               ) : null}
               <button type="button" onClick={onShowProfile}>Details</button>
+              <button type="button" className="repo-btn repo-btn--primary" onClick={onRun}>Run</button>
             </div>
             <GraphEditContext.Provider value={editContext}>
               <div
@@ -1001,13 +1002,13 @@ function GraphSideDock({ onSelect }) {
     </aside>
   );
 }
-
-export function AgentGraphTab({ agent, graph, onPersist, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+export function AgentGraphTab({ agent, graph, onPersist, onRun, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
   return (
     <GraphCanvas
       agent={agent}
       graph={graph}
       onPersist={onPersist}
+      onRun={onRun}
       onShowProfile={onShowProfile}
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}

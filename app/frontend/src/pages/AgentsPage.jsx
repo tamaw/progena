@@ -106,61 +106,85 @@ const FALLBACK_GRAPH = {
 // node, a code node, and state_equals routing with a default branch.
 const DEMO_ROUTINE_GRAPH = {
   status: 'Draft',
-  summary: 'Parses a request, then routes deterministically on whether it looks valid.',
+  summary: 'Demonstrates every routine node type with a deterministic route.',
   entry: 'parse',
   nodes: [
     {
       id: 'parse',
       kind: 'prompt',
-      label: 'Parse',
+      label: 'Prompt',
       output_key: 'parse',
-      config: {
-        prompt_template:
-          'Extract the request\'s target as JSON: {{"valid": <bool>}} -- no prose. Request: {request}',
-      },
+      config: { prompt_template: 'Return a short acknowledgement of this routine run.' },
       x: 40,
       y: 80,
     },
     {
       id: 'route',
       kind: 'code',
-      label: 'Route',
+      label: 'Code',
       output_key: 'route',
-      config: {
-        inputs: { valid: 'parse_json.valid' },
-        expression: "'ok' if valid else 'invalid'",
-      },
+      config: { expression: "'ok'" },
       x: 320,
       y: 80,
     },
     {
-      id: 'respond_ok',
-      kind: 'prompt',
-      label: 'Respond OK',
-      output_key: 'respond_ok',
-      config: { prompt_template: 'Confirm the request was understood: {request}' },
+      id: 'evaluate',
+      kind: 'eval',
+      label: 'Eval',
+      output_key: 'evaluate',
+      config: { expression: 'True' },
       x: 600,
+      y: 80,
+    },
+    {
+      id: 'delegate',
+      kind: 'subagent',
+      label: 'Subagent',
+      output_key: 'delegate',
+      config: { subagent_name: 'hello-world', prompt_template: 'Return the delegation smoke-test token.' },
+      x: 880,
       y: 0,
     },
     {
-      id: 'respond_invalid',
+      id: 'respond',
       kind: 'prompt',
-      label: 'Respond Invalid',
-      output_key: 'respond_invalid',
-      config: { prompt_template: 'Explain the request could not be parsed: {request}' },
-      x: 600,
-      y: 160,
+      label: 'Response',
+      output_key: 'respond',
+      config: { prompt_template: 'Summarize the completed routine run in one sentence.' },
+      x: 1160,
+      y: 0,
+    },
+    {
+      id: 'finish',
+      kind: 'noop',
+      label: 'No-op',
+      output_key: 'finish',
+      config: {},
+      x: 1440,
+      y: 0,
+    },
+    {
+      id: 'agent',
+      kind: 'agent',
+      label: 'Agent',
+      output_key: 'agent',
+      config: { agent_name: 'general-purpose', prompt_template: 'Describe this routine graph.' },
+      x: 880,
+      y: 220,
     },
   ],
   edges: [
     { from: 'parse', to: 'route' },
+    { from: 'route', to: 'evaluate' },
     {
-      from: 'route',
+      from: 'evaluate',
       router: 'state_equals',
-      state_key: 'route',
-      branches: { ok: 'respond_ok' },
-      default: 'respond_invalid',
+      state_key: 'evaluate',
+      branches: { true: 'delegate' },
+      default: 'agent',
     },
+    { from: 'delegate', to: 'respond' },
+    { from: 'respond', to: 'finish' },
   ],
 };
 
@@ -625,6 +649,14 @@ function AgentsPage({ variant = 'agents' }) {
     })).unwrap();
   }
 
+  const handleRunRoutine = useCallback(() => {
+    window.dispatchEvent(new CustomEvent('progenitor:run-routine', {
+      detail: {
+        prompt: `Run the "${effectiveAgentId}" routine graph. Execute its prompt, code, eval, subagent, agent, and noop steps where possible, then report the result. Use the native hello-world subagent for the delegation step.`,
+      },
+    }));
+  }, [effectiveAgentId]);
+
 
   return (
     <PageShell>
@@ -751,6 +783,7 @@ function AgentsPage({ variant = 'agents' }) {
                   agent={selectedAgent}
                   graph={selectedGraph}
                   onPersist={handleSaveGraph}
+                  onRun={handleRunRoutine}
                   onShowProfile={showProfile}
                   jsonOpen={graphEditorOpen}
                   onOpenJson={() => setGraphEditorOpen(true)}
