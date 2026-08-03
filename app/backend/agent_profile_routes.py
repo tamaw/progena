@@ -39,6 +39,10 @@ class AgentGraphModel(BaseModel):
     entry: str | None = None
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
+    settings: dict[str, Any] = {}
+    input_schema: dict[str, str] | None = None
+    output_schema: dict[str, str] | None = None
+    private_schema: dict[str, str] | None = None
 
 
 class AgentProfile(BaseModel):
@@ -81,6 +85,10 @@ class AgentGraphUpdateRequest(BaseModel):
     entry: str | None = None
     status: str | None = None
     summary: str | None = None
+    settings: dict[str, Any] = {}
+    input_schema: dict[str, str] | None = None
+    output_schema: dict[str, str] | None = None
+    private_schema: dict[str, str] | None = None
 
 
 # Allowed node "kind" values for the editable routine graph. These are executable
@@ -118,19 +126,30 @@ def validate_agent_graph_document(
     agent_id: str,
     name: str,
     description: str,
+    settings: dict[str, Any] | None = None,
+    input_schema: dict[str, str] | None = None,
+    output_schema: dict[str, str] | None = None,
+    private_schema: dict[str, str] | None = None,
 ) -> None:
     """Validate the complete routine document that the route will persist."""
-    validate_routine_graph_payload(
-        {
-            "id": agent_id,
-            "name": name,
-            "description": description,
-            "version": ROUTINE_GRAPH_VERSION,
-            "entry": entry,
-            "nodes": nodes,
-            "edges": edges,
-        }
-    )
+    document = {
+        "id": agent_id,
+        "name": name,
+        "description": description,
+        "version": ROUTINE_GRAPH_VERSION,
+        "entry": entry,
+        "nodes": nodes,
+        "edges": edges,
+        "settings": settings or {},
+    }
+    for key, value in (
+        ("input_schema", input_schema),
+        ("output_schema", output_schema),
+        ("private_schema", private_schema),
+    ):
+        if value is not None:
+            document[key] = value
+    validate_routine_graph_payload(document)
 
 
 def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
@@ -257,13 +276,25 @@ def create_agent_profile_router(
                 agent_id=agent_id,
                 name=str(agent.get("name") or agent_id),
                 description=str(agent.get("summary") or ""),
+                settings=body.settings,
+                input_schema=body.input_schema,
+                output_schema=body.output_schema,
+                private_schema=body.private_schema,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
         updated = store.update_graph(
             agent_id,
-            {"entry": body.entry, "nodes": body.nodes, "edges": body.edges},
+            {
+                "entry": body.entry,
+                "nodes": body.nodes,
+                "edges": body.edges,
+                "settings": body.settings,
+                "input_schema": body.input_schema,
+                "output_schema": body.output_schema,
+                "private_schema": body.private_schema,
+            },
             status=body.status,
             summary=body.summary,
         )
