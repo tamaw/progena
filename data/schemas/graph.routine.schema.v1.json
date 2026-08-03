@@ -29,7 +29,11 @@
           { "$ref": "#/$defs/routerEdge" }
         ]
       }
-    }
+    },
+    "settings": { "type": "object" },
+    "input_schema": { "type": "object", "additionalProperties": { "type": "string" } },
+    "output_schema": { "type": "object", "additionalProperties": { "type": "string" } },
+    "private_schema": { "type": "object", "additionalProperties": { "type": "string" } }
   },
   "$defs": {
     "nodeId": {
@@ -45,7 +49,10 @@
         { "$ref": "#/$defs/nodeEval" },
         { "$ref": "#/$defs/nodeSubagent" },
         { "$ref": "#/$defs/nodeAgent" },
-        { "$ref": "#/$defs/nodeNoop" }
+        { "$ref": "#/$defs/nodeNoop" },
+        { "$ref": "#/$defs/nodeHuman" },
+        { "$ref": "#/$defs/nodeForeach" },
+        { "$ref": "#/$defs/nodeSubgraph" }
       ]
     },
     "nodePrompt": {
@@ -60,21 +67,15 @@
         "label": { "type": ["string", "null"] },
         "config": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "prompt_template": { "type": "string" },
             "prompt_file": { "type": "string" },
             "system_prompt": { "type": "string" }
           },
           "oneOf": [
-            {
-              "required": ["prompt_template"],
-              "not": { "required": ["prompt_file"] }
-            },
-            {
-              "required": ["prompt_file"],
-              "not": { "required": ["prompt_template"] }
-            }
+            { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+            { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
           ]
         }
       }
@@ -91,7 +92,7 @@
         "label": { "type": ["string", "null"] },
         "config": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "language": { "const": "python" },
             "expression": { "type": "string" },
@@ -127,7 +128,7 @@
         "label": { "type": ["string", "null"] },
         "config": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "properties": {
             "language": { "const": "python" },
             "expression": { "type": "string" },
@@ -162,7 +163,7 @@
         "label": { "type": ["string", "null"] },
         "config": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": ["subagent_name"],
           "properties": {
             "subagent_name": { "type": "string", "minLength": 1 },
@@ -194,7 +195,7 @@
         "label": { "type": ["string", "null"] },
         "config": {
           "type": "object",
-          "additionalProperties": false,
+          "additionalProperties": true,
           "required": ["agent_name"],
           "properties": {
             "agent_name": { "type": "string", "minLength": 1 },
@@ -224,7 +225,46 @@
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
         "label": { "type": ["string", "null"] },
-        "config": { "type": "object", "additionalProperties": false }
+        "config": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "nodeHuman": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "kind": { "const": "human" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string", "minLength": 1 },
+        "label": { "type": ["string", "null"] },
+        "config": { "type": "object" }
+      }
+    },
+    "nodeForeach": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "kind": { "const": "foreach" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string" },
+        "label": { "type": ["string", "null"] },
+        "config": { "type": "object" }
+      }
+    },
+    "nodeSubgraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "output_key", "config"],
+      "properties": {
+        "id": { "$ref": "#/$defs/nodeId" },
+        "kind": { "const": "subgraph" },
+        "description": { "type": "string" },
+        "output_key": { "type": "string" },
+        "label": { "type": ["string", "null"] },
+        "config": { "type": "object" }
       }
     },
     "plainEdge": {
