@@ -19,7 +19,12 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from app.progenitor.routines.graph import VALID_ROUTINE_NODE_KINDS, validate_routine_graph
+from app.progenitor.routines.graph import (
+    ROUTINE_GRAPH_VERSION,
+    VALID_ROUTINE_NODE_KINDS,
+    validate_routine_graph,
+    validate_routine_graph_payload,
+)
 from app.progenitor.schemas import load_schema
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
@@ -86,21 +91,46 @@ VALID_NODE_KINDS = VALID_ROUTINE_NODE_KINDS
 
 # JSON schema for a full routine graph document (id/name/description/version/entry/
 # nodes/edges). Published so the Agents page can offer schema-aware JSON editing.
-# The PATCH endpoint below only validates the nodes/edges/entry slice it receives
-# (via ``validate_agent_graph``), since id/name/description/version are derived
-# from the owning agent record rather than round-tripped on the wire.
+# The PATCH endpoint derives id/name/description/version from the owning agent
+# record, combines those fields with the submitted graph, and validates the
+# resulting full document before persistence.
 AGENT_GRAPH_SCHEMA: dict[str, Any] = load_schema("graph.routine")
 
 
 def validate_agent_graph(
-    nodes: list[dict[str, Any]], edges: list[dict[str, Any]], entry: str | None = None
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    entry: str | None = None,
 ) -> None:
-    """Validate a routine graph payload structurally. Raises ValueError on bad input."""
+    """Validate the nodes/edges slice used by graph-shape callers."""
     validate_routine_graph(nodes, edges)
     if entry is not None:
         node_ids = {node.get("id") for node in nodes if isinstance(node, dict)}
         if entry not in node_ids:
             raise ValueError(f"entry references unknown node: {entry}")
+
+
+def validate_agent_graph_document(
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    entry: str | None,
+    *,
+    agent_id: str,
+    name: str,
+    description: str,
+) -> None:
+    """Validate the complete routine document that the route will persist."""
+    validate_routine_graph_payload(
+        {
+            "id": agent_id,
+            "name": name,
+            "description": description,
+            "version": ROUTINE_GRAPH_VERSION,
+            "entry": entry,
+            "nodes": nodes,
+            "edges": edges,
+        }
+    )
 
 
 def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
@@ -216,8 +246,18 @@ def create_agent_profile_router(
         store = _require_store()
         if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
             raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
+        agent = await asyncio.to_thread(store.get_agent, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
         try:
-            validate_agent_graph(body.nodes, body.edges, body.entry)
+            validate_agent_graph_document(
+                body.nodes,
+                body.edges,
+                body.entry,
+                agent_id=agent_id,
+                name=str(agent.get("name") or agent_id),
+                description=str(agent.get("summary") or ""),
+            )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 

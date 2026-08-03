@@ -22,9 +22,9 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
 from .expression import evaluate_expression
-from .graph import RoutineEdge, RoutineGraph, RoutineNode
+from .graph import ROUTINE_SEED_NODE_ID, RoutineEdge, RoutineGraph, RoutineNode
 
-_SEED_NODE_ID = "__seed__"
+_SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 
