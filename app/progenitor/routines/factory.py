@@ -122,7 +122,9 @@ def resolve_data_path(data: dict[str, Any], path: str) -> Any:
     return value
 
 
-def _resolve_inputs(node_id: str, inputs_config: dict[str, str], data: dict[str, Any]) -> dict[str, Any]:
+def _resolve_inputs(
+    node_id: str, inputs_config: dict[str, str], data: dict[str, Any]
+) -> dict[str, Any]:
     namespace: dict[str, Any] = {}
     for local_name, path in inputs_config.items():
         try:
@@ -140,7 +142,9 @@ def _require_no_file_source(node_id: str, kind: str, config: dict[str, Any], fil
         )
 
 
-def _combined_system_prompt(base_system_prompt: str | None, node_system_prompt: str | None) -> str | None:
+def _combined_system_prompt(
+    base_system_prompt: str | None, node_system_prompt: str | None
+) -> str | None:
     parts = [p for p in (base_system_prompt, node_system_prompt) if p]
     return "\n\n".join(parts) if parts else None
 
@@ -154,7 +158,9 @@ def _seed_node() -> Any:
     return seed
 
 
-def _build_prompt_node(node: RoutineNode, *, model: BaseChatModel, base_system_prompt: str | None) -> Any:
+def _build_prompt_node(
+    node: RoutineNode, *, model: BaseChatModel, base_system_prompt: str | None
+) -> Any:
     config = node.config
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "prompt", config, "prompt_file")
@@ -168,7 +174,9 @@ def _build_prompt_node(node: RoutineNode, *, model: BaseChatModel, base_system_p
         try:
             rendered = template.format(**data)
         except KeyError as exc:
-            raise KeyError(f"prompt node {node.id}: template references missing state key: {exc}") from exc
+            raise KeyError(
+                f"prompt node {node.id}: template references missing state key: {exc}"
+            ) from exc
 
         messages: list[BaseMessage] = []
         system_prompt = _combined_system_prompt(base_system_prompt, node_system_prompt)
@@ -227,7 +235,9 @@ def _build_eval_node(node: RoutineNode, *, model: BaseChatModel) -> Any:
         try:
             rendered = rubric_prompt.format(**data)
         except KeyError as exc:
-            raise KeyError(f"eval node {node.id}: rubric_prompt references missing state key: {exc}") from exc
+            raise KeyError(
+                f"eval node {node.id}: rubric_prompt references missing state key: {exc}"
+            ) from exc
         response = await model.ainvoke([HumanMessage(content=rendered)])
         text = normalize_message_content(response.content).strip()
         result = text.lower().startswith("true")
@@ -252,7 +262,9 @@ def _build_subagent_node(node: RoutineNode, *, subagent_registry: dict[str, Any]
         try:
             rendered = template.format(**data)
         except KeyError as exc:
-            raise KeyError(f"subagent node {node.id}: template references missing state key: {exc}") from exc
+            raise KeyError(
+                f"subagent node {node.id}: template references missing state key: {exc}"
+            ) from exc
 
         target = subagent_registry[subagent_name]
         result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})
@@ -280,7 +292,9 @@ def _build_agent_node(node: RoutineNode, *, agent_registry: dict[str, Any]) -> A
         try:
             rendered = template.format(**data)
         except KeyError as exc:
-            raise KeyError(f"agent node {node.id}: template references missing state key: {exc}") from exc
+            raise KeyError(
+                f"agent node {node.id}: template references missing state key: {exc}"
+            ) from exc
 
         target = agent_registry[agent_name]
         result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})

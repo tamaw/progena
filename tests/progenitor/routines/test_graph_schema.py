@@ -134,7 +134,11 @@ class TestValidateRoutineGraphStructural:
     def test_rejects_second_router_edge_from_same_source(self):
         with pytest.raises(ValueError, match="more than one router edge"):
             validate_routine_graph(
-                [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}, {"id": "c", "kind": "noop"}],
+                [
+                    {"id": "a", "kind": "code"},
+                    {"id": "b", "kind": "noop"},
+                    {"id": "c", "kind": "noop"},
+                ],
                 [
                     {
                         "from": "a",
