@@ -78,7 +78,10 @@ def test_validate_plugins_document_rejects_malformed_plugin_key():
 
 
 def test_validate_plugins_document_rejects_missing_source():
-    with pytest.raises(ValueError, match="plugin 'acme-tools/formatter' is missing 'source'"):
+    with pytest.raises(
+        ValueError,
+        match="plugin 'acme-tools/formatter' does not conform to schema: 'source' is a required property",
+    ):
         validate_plugins_document('{"plugins": {"acme-tools/formatter": {}}}')
 
 

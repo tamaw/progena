@@ -21,6 +21,7 @@ class MockRuntimeConfig:
     mcp_refresh_seconds: int = 900
     plugin_update_check_seconds: int = 86400
     registry_refresh_seconds: int = 900
+    repo_scan_seconds: int = 3600
     max_input_queue_size: int = 5
     max_output_queue_size: int = 5
     timezone: str = "UTC"

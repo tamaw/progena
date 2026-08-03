@@ -83,6 +83,7 @@ from .knowledge_service import snapshot_bases as snapshot_knowledge_bases
 from .marketplace_service import load_marketplaces
 from .preferences_service import load_preferences
 from .prompt_service import PromptService
+from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
@@ -4204,6 +4205,8 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
         ):
             broadcast_workflow_runs_snapshot()
+        if changed_key in (None, "repos", "repo_scan"):
+            broadcast_repositories_snapshot()
         if changed_key is None or changed_key in _WIDGET_KEYS:
             broadcast_widgets_snapshot()
     except Exception:
@@ -4620,6 +4623,29 @@ def broadcast_marketplaces_snapshot(
     """
     payload = load_marketplaces() if marketplaces is None else marketplaces
     return broadcast_ui_event("marketplaces.snapshot", payload, request_id=request_id)
+
+
+def broadcast_repositories_snapshot(
+    *,
+    request_id: str | None = None,
+) -> UiEventEnvelope:
+    """Broadcast the merged declared+scanned repository list to /api/ui/stream
+    subscribers.
+
+    Emitted after backend-side repo CRUD, whenever the ``repos`` document
+    changes (agent edits via ``/config/repos.json``), and whenever the
+    heartbeat's ``repo_scan`` document changes (surfaced via the Postgres
+    NOTIFY watcher), so the Repositories page reflects both kinds of change
+    live without refetching.
+    """
+    payload = {"items": merged_repo_rows(), "workspace_signal": workspace_signal()}
+    return broadcast_ui_event("repositories.snapshot", payload, request_id=request_id)
+
+
+def broadcast_repo_detail(repo_id: str, *, request_id: str | None = None) -> UiEventEnvelope:
+    """Broadcast one repo's merged declared+scanned detail payload."""
+    payload = merged_repo_detail(repo_id)
+    return broadcast_ui_event("repo.detail.updated", payload, request_id=request_id)
 
 
 def broadcast_plugins_snapshot(

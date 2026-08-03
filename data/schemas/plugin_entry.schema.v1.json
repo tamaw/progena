@@ -5,23 +5,37 @@
   "type": "object",
   "properties": {
     "source": {
-      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object.",
+      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object; see app/progenitor/plugins/sources.py:_resolve_plugin_source for exactly what each source_type consumes.",
       "oneOf": [
         {
           "type": "string",
+          "minLength": 1,
           "description": "Relative path to the plugin source (e.g., './my-plugin')."
         },
         {
           "type": "object",
-          "description": "Structured plugin source (e.g., GitHub or git-subdir).",
+          "description": "GitHub repo source, resolved via the 'repo' field (owner/name).",
           "properties": {
-            "source": { "type": "string" },
-            "repo": { "type": "string" },
+            "source": { "const": "github" },
+            "repo": { "type": "string", "minLength": 1 },
+            "ref": { "type": "string" },
+            "sha": { "type": "string" }
+          },
+          "required": ["source", "repo"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "description": "Direct GitHub URL or git-subdir source, resolved via the 'url' field.",
+          "properties": {
+            "source": { "enum": ["url", "git-subdir"] },
+            "url": { "type": "string", "minLength": 1 },
             "ref": { "type": "string" },
             "sha": { "type": "string" },
-            "url": { "type": "string" },
             "path": { "type": "string" }
-          }
+          },
+          "required": ["source", "url"],
+          "additionalProperties": false
         }
       ]
     },

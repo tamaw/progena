@@ -19,8 +19,8 @@ Profile:
     skill reads before calling structured_output
   - /config/ -> Postgres state documents the agent can read/edit as files,
     including mcp.json, plugins.json, marketplaces.json, schedule.json,
-    agents.json, and preferences.json, plus the /tasks/ task directory
-    (board.json and per-task <id>.md files).
+    agents.json, repos.json, and preferences.json, plus the /tasks/ task
+    directory (board.json and per-task <id>.md files).
     Writes persist via the StateManager; the runtime's store listener handles
     live MCP re-discovery, so no write-hook callback is needed here.
 
@@ -59,6 +59,8 @@ from .state_backend import (
     create_plugins_state_file,
     create_preferences_state_file,
     create_registry_state_file,
+    create_repo_scan_state_file,
+    create_repos_state_file,
     create_schedule_state_file,
 )
 
@@ -100,7 +102,7 @@ def create_progenitor_backend(
         schemas_dir: JSON Schema directory. Defaults to ``<project_root>/data/schemas``.
         skills_dir: Progenitor's own skill directory. Defaults to
             ``<project_root>/data/skills``. Disk-mounted read-only at ``/skills/``.
-        worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/worktrees``.
+        worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/data/repos``.
         state_manager: Required for prompts/memories/config mounts and for
             installed marketplace-plugin skill mounts (all Postgres-backed);
             without it those routes are omitted entirely.
@@ -118,7 +120,7 @@ def create_progenitor_backend(
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
     resolved_skills_dir = Path(skills_dir) if skills_dir else root / "data" / "skills"
-    resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "worktrees"
+    resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "data" / "repos"
 
     def _route_backend(
         path: Path,
@@ -172,6 +174,8 @@ def create_progenitor_backend(
             create_knowledge_state_file,
             create_schedule_state_file,
             create_registry_state_file,
+            create_repos_state_file,
+            create_repo_scan_state_file,
             create_health_state_file,
             create_preferences_state_file,
         ]
