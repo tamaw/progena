@@ -133,8 +133,8 @@ data/
   attachments/          # Uploaded file cache/data
   prompts/              # Prompt templates
   skills/               # DeepAgent SKILL.md files (grouped by agent)
+  repos/                # Git worktrees for builds (used by Builder Agent)
 logs/                   # File-backed logs for non-runtime helpers/tests
-worktrees/              # Git worktrees for builds (used by Builder Agent)
 ```
 
 ### Runtime persistence

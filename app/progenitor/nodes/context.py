@@ -25,6 +25,8 @@ class HeartbeatContext:
     mcp_refresh_seconds: float
     plugin_update_check_seconds: float
     registry_refresh_seconds: float
+    repo_scan_seconds: float
+    worktree_dir: Path | None
     heartbeat_health_seconds: float
     timezone: str
     reasoning_enabled: bool

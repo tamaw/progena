@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .prompts.paths import resolve_data_dir
+from .structured import validate_against_schema
 
 # Schema files follow the convention ``<name>.schema.v<n>.json`` so a document's
 # contract can evolve without breaking older references. A bare logical name
@@ -114,3 +115,23 @@ def load_schema(filename: str, *, schemas_dir: Path | str | None = None) -> dict
     if not isinstance(parsed, dict):
         raise ValueError(f"Schema file {schema_file} must contain a JSON object")
     return parsed
+
+
+def check_entry_schema(label: str, entry: dict[str, Any], schema_name: str) -> None:
+    """Validate one entry dict against its JSON Schema (the enforced floor).
+
+    The JSON Schema files under ``data/schemas/`` describe the same per-entry
+    shapes as each config document's hand-rolled semantic checks (croniter
+    parsing, timestamp parsing, kebab-case ids, ...). Without this, the two
+    sources of truth can silently diverge; this makes the schema an enforced
+    floor instead of just documentation for ``structured_output``. Raises
+    ``ValueError`` on a schema violation or a missing/malformed schema file, so
+    callers can surface it the same way as their other validation errors.
+    """
+    try:
+        schema = load_schema(schema_name)
+    except FileNotFoundError as exc:
+        raise ValueError(f"{label}: schema '{schema_name}' not found: {exc}") from exc
+    error = validate_against_schema(entry, schema)
+    if error is not None:
+        raise ValueError(f"{label} does not conform to schema: {error}")

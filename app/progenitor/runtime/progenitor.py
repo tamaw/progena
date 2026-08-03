@@ -69,16 +69,24 @@ class Progenitor:
         ``mcp`` (server config: add/remove/enable/disable/url) needs a full
         re-discovery; ``mcp_tools`` (a per-tool enable toggle) only needs the
         disabled set re-applied. ``plugins`` triggers the plugin reconciler.
-        This is the single path for both UI-driven and agent-driven config
-        changes — there is no separate write-hook.
+        ``repos`` drops the cached declared-repos document so the next
+        heartbeat scan sees backend-side create/update/delete calls instead
+        of a stale in-process snapshot. ``repo_scan`` does the same for the
+        heartbeat-derived git-state document -- the backend's on-demand
+        "Fetch" action (``repo_service.fetch_and_rescan_repo``) writes it
+        directly too now, alongside the heartbeat. This is the single path
+        for both UI-driven and agent-driven config changes -- there is no
+        separate write-hook.
         """
-        if self._mcp_scheduler is None and self._plugin_scheduler is None:
-            return
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
+        if key in ("repos", "repo_scan") and self.state_manager is not None:
+            self.state_manager.invalidate_document(key)
+        if self._mcp_scheduler is None and self._plugin_scheduler is None:
+            return
         if key == "mcp" and self._mcp_scheduler is not None:
             self._mcp_scheduler.request(full=True)
         elif key == "mcp_tools" and self._mcp_scheduler is not None:

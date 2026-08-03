@@ -22,6 +22,7 @@ const defaultConfig = {
       marketplaces: '/api/ui/marketplaces',
       plugins: '/api/ui/plugins',
       schedules: '/api/ui/schedules',
+      repos: '/api/ui/repos',
       logs: '/api/ui/logs',
       actionRun: '/api/ui/actions/run',
       actionGenerate: '/api/ui/actions/generate',
