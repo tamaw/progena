@@ -18,11 +18,14 @@ from typing import Annotated, Any, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langgraph.cache.memory import InMemoryCache
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+from langgraph.runtime import Runtime
+from langgraph.types import CachePolicy, RetryPolicy, Send, interrupt
 
 from .expression import evaluate_expression
-from .graph import ROUTINE_SEED_NODE_ID, RoutineEdge, RoutineGraph, RoutineNode
+from .graph import ROUTINE_SEED_NODE_ID, RoutineContext, RoutineEdge, RoutineGraph, RoutineNode
 
 _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
@@ -39,6 +42,75 @@ def _merge_data(existing: dict[str, Any] | None, update: dict[str, Any] | None) 
 class RoutineState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     data: Annotated[dict[str, Any], _merge_data]
+
+
+class RoutinePrivateState(TypedDict, total=False):
+    """Private execution channels kept out of a routine's public output."""
+
+    data: Annotated[dict[str, Any], _merge_data]
+
+
+def _emit(runtime: Runtime | None, event: str, payload: dict[str, Any]) -> None:
+    if runtime is not None:
+        runtime.stream_writer({"event": event, **payload})
+
+
+def _context_data(runtime: Runtime | None) -> dict[str, Any]:
+    context = getattr(runtime, "context", None) if runtime is not None else None
+    return {"context": dict(context or {})}
+
+
+def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
+    retry = config.get("retry")
+    if retry is False:
+        return None
+    if retry is None:
+        return None
+    values: dict[str, Any] = {
+        "initial_interval": float(retry.get("initial_interval", 0.1)),
+        "backoff_factor": float(retry.get("backoff_factor", 2.0)),
+        "max_interval": float(retry.get("max_interval", 5.0)),
+        "max_attempts": int(retry.get("max_attempts", 3)),
+        "jitter": bool(retry.get("jitter", False)),
+        "retry_on": Exception,
+    }
+    return RetryPolicy(**values)
+
+
+def _cache_policy(config: dict[str, Any]) -> CachePolicy | None:
+    cache = config.get("cache")
+    if cache is None or cache is False:
+        return None
+    return CachePolicy(
+        key_func=_cache_key,
+        ttl=int(cache["ttl"]) if isinstance(cache, dict) and cache.get("ttl") is not None else None,
+    )
+
+
+def _schema_type(name: str, fields: dict[str, str] | None) -> Any:
+    if not fields:
+        return None
+    annotations = dict.fromkeys(fields, Any)
+    typed_dict_factory: Any = TypedDict
+    return typed_dict_factory(name, annotations, total=False)
+
+
+def _cache_key(value: Any) -> str:
+    if isinstance(value, dict):
+        normalized = {}
+        for key, item in value.items():
+            if key == "messages" and isinstance(item, list):
+                normalized[key] = [
+                    {
+                        "type": getattr(message, "type", ""),
+                        "content": normalize_message_content(getattr(message, "content", "")),
+                    }
+                    for message in item
+                ]
+            else:
+                normalized[key] = item
+        return json.dumps(normalized, sort_keys=True, default=str)
+    return repr(value)
 
 
 # Documents the node-callable shape; builder functions below are annotated -> Any
@@ -150,10 +222,11 @@ def _combined_system_prompt(
 
 
 def _seed_node() -> Any:
-    async def seed(state: RoutineState) -> dict[str, Any]:
+    async def seed(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
         messages = state.get("messages") or []
         request = normalize_message_content(messages[-1].content) if messages else ""
-        return {"data": {"request": request}}
+        _emit(runtime, "routine.seed", {"request": request})
+        return {"data": {"request": request, **_context_data(runtime)}}
 
     return seed
 
@@ -169,8 +242,8 @@ def _build_prompt_node(
         raise ValueError(f"prompt node {node.id}: config needs 'prompt_template'")
     node_system_prompt = config.get("system_prompt")
 
-    async def run(state: RoutineState) -> dict[str, Any]:
-        data = state.get("data", {})
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        data = {**state.get("data", {}), **_context_data(runtime)}
         try:
             rendered = template.format(**data)
         except KeyError as exc:
@@ -183,15 +256,15 @@ def _build_prompt_node(
         if system_prompt:
             messages.append(SystemMessage(content=system_prompt))
         messages.append(HumanMessage(content=rendered))
-
+        _emit(runtime, "routine.node.started", {"node": node.id, "kind": node.kind})
         response = await model.ainvoke(messages)
         text = normalize_message_content(response.content)
+        _emit(runtime, "routine.node.completed", {"node": node.id, "kind": node.kind})
 
         result: dict[str, Any] = {output_key: text}
         parsed = extract_json_object(text)
         if parsed is not None:
             result[f"{output_key}_json"] = parsed
-
         return {"messages": [AIMessage(content=text)], "data": result}
 
     return run
@@ -318,6 +391,65 @@ def _build_noop_node(node: RoutineNode) -> Any:
     return run
 
 
+def _build_human_node(node: RoutineNode) -> Any:
+    config = node.config
+    output_key = node.output_key or node.id
+    prompt = str(config.get("prompt") or node.description or f"Input for {node.id}")
+
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        answer = interrupt({"node": node.id, "prompt": prompt})
+        _emit(runtime, "routine.human.resumed", {"node": node.id})
+        return {"data": {output_key: answer}}
+
+    return run
+
+
+def _build_foreach_node(node: RoutineNode) -> Any:
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        items_path = str(node.config.get("items_path") or "")
+        items = resolve_data_path(state.get("data", {}), items_path)
+        if not isinstance(items, list):
+            raise ValueError(f"foreach node {node.id}: items_path must resolve to a list")
+        _emit(runtime, "routine.foreach.expanded", {"node": node.id, "count": len(items)})
+        return {"data": {f"{node.id}_items": items}}
+
+    return run
+
+
+def _build_subgraph_node(node: RoutineNode, *, subgraph_registry: dict[str, Any]) -> Any:
+    output_key = node.output_key or node.id
+    name = str(node.config.get("subgraph_name") or "")
+
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        target = subgraph_registry.get(name)
+        if target is None:
+            raise KeyError(f"node {node.id}: unknown subgraph '{name}'")
+        result = await target.ainvoke(state)
+        messages = result.get("messages") or []
+        text = normalize_message_content(messages[-1].content) if messages else ""
+        child_data = result.get("data") or {}
+        return {"messages": [AIMessage(content=text)], "data": {**child_data, output_key: text}}
+
+    return run
+
+
+def _build_send_router(node: RoutineNode) -> Callable[[RoutineState], list[Send]]:
+    items_path = str(node.config.get("items_path") or "")
+    target = str(node.config.get("target") or "")
+    item_key = str(node.config.get("item_key") or "item")
+
+    def route(state: RoutineState) -> list[Send]:
+        items = resolve_data_path(state.get("data", {}), items_path)
+        if not isinstance(items, list):
+            raise ValueError(f"foreach node {node.id}: items_path must resolve to a list")
+        return [
+            Send(target, {"messages": state.get("messages") or [], "data": {item_key: item}})
+            for item in items
+        ]
+
+    return route
+
+
 def _build_node_callable(
     node: RoutineNode,
     *,
@@ -325,6 +457,7 @@ def _build_node_callable(
     base_system_prompt: str | None,
     subagent_registry: dict[str, Any],
     agent_registry: dict[str, Any],
+    subgraph_registry: dict[str, Any],
 ) -> Any:
     if node.kind == "prompt":
         return _build_prompt_node(node, model=model, base_system_prompt=base_system_prompt)
@@ -336,6 +469,12 @@ def _build_node_callable(
         return _build_subagent_node(node, subagent_registry=subagent_registry)
     if node.kind == "agent":
         return _build_agent_node(node, agent_registry=agent_registry)
+    if node.kind == "human":
+        return _build_human_node(node)
+    if node.kind == "foreach":
+        return _build_foreach_node(node)
+    if node.kind == "subgraph":
+        return _build_subgraph_node(node, subgraph_registry=subgraph_registry)
     if node.kind == "noop":
         return _build_noop_node(node)
     raise ValueError(f"unknown node kind: {node.kind}")
@@ -369,23 +508,31 @@ def compile_routine_graph(
     model: BaseChatModel,
     subagent_registry: dict[str, Any] | None = None,
     agent_registry: dict[str, Any] | None = None,
+    subgraph_registry: dict[str, Any] | None = None,
     base_system_prompt: str | None = None,
+    checkpointer: Any | None = None,
+    cache: Any | None = None,
 ):
-    """Compile a validated ``RoutineGraph`` into a runnable ``StateGraph``.
+    """Compile a routine with LangGraph persistence, retries, context and fan-out.
 
-    ``subagent_registry``/``agent_registry`` default to empty dicts (no real subagent/agent
-    wiring in this pass — callers pass fakes in tests, or a real registry once that follow-up
-    lands). Missing registry lookups raise ``KeyError`` at node-execution time, not compile
-    time, mirroring the source spec this was adapted from.
+    The graph document controls optional node retries/caches and recursion limits;
+    callers provide the checkpointer and invocation context when resumability or
+    human approval is required.
     """
     subagent_registry = subagent_registry or {}
     agent_registry = agent_registry or {}
+    subgraph_registry = subgraph_registry or {}
 
     node_ids = {node.id for node in graph.nodes}
     if graph.entry not in node_ids:
         raise ValueError(f"entry references unknown node: {graph.entry}")
 
-    builder = StateGraph(RoutineState)
+    builder = StateGraph(
+        RoutineState,
+        context_schema=RoutineContext,
+        input_schema=_schema_type("RoutineInputState", graph.input_schema),
+        output_schema=_schema_type("RoutineOutputState", graph.output_schema),
+    )
     builder.add_node(_SEED_NODE_ID, _seed_node())
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
@@ -399,7 +546,10 @@ def compile_routine_graph(
                 base_system_prompt=base_system_prompt,
                 subagent_registry=subagent_registry,
                 agent_registry=agent_registry,
+                subgraph_registry=subgraph_registry,
             ),
+            retry_policy=_retry_policy(node.config),
+            cache_policy=_cache_policy(node.config),
         )
 
     outgoing: dict[str, list[RoutineEdge]] = defaultdict(list)
@@ -408,6 +558,9 @@ def compile_routine_graph(
 
     for node in graph.nodes:
         edges = outgoing.get(node.id, [])
+        if node.kind == "foreach":
+            builder.add_conditional_edges(node.id, _build_send_router(node))
+            continue
         if not edges:
             builder.add_edge(node.id, END)
             continue
@@ -420,4 +573,10 @@ def compile_routine_graph(
                     raise ValueError(f"edge from {edge.from_} has no target")
                 builder.add_edge(node.id, edge.to)
 
-    return builder.compile()
+    if graph.settings.get("cache") and cache is None:
+        cache = InMemoryCache()
+    compiled = builder.compile(checkpointer=checkpointer, cache=cache)
+    limit = graph.settings.get("recursion_limit")
+    if limit is not None:
+        compiled = compiled.with_config({"recursion_limit": int(limit)})
+    return compiled

@@ -7,7 +7,7 @@ than defining its own node-kind vocabulary.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,8 +16,34 @@ from ..structured import validate_against_schema
 
 ROUTINE_GRAPH_VERSION = "1.0.0"
 ROUTINE_SEED_NODE_ID = "__seed__"
+VALID_ROUTINE_NODE_KINDS = {
+    "prompt",
+    "code",
+    "eval",
+    "subagent",
+    "agent",
+    "noop",
+    "human",
+    "foreach",
+    "subgraph",
+}
 
-VALID_ROUTINE_NODE_KINDS = {"prompt", "code", "eval", "subagent", "agent", "noop"}
+ROUTINE_NODE_RETRY_DEFAULTS = {
+    "initial_interval": 0.1,
+    "backoff_factor": 2.0,
+    "max_interval": 5.0,
+    "max_attempts": 3,
+    "jitter": False,
+}
+
+
+class RoutineContext(TypedDict, total=False):
+    """Per-invocation values injected into every routine node."""
+
+    user_id: str
+    workspace_id: str
+    request_id: str
+    metadata: dict[str, Any]
 
 
 class RoutineNodePrompt(BaseModel):
@@ -85,6 +111,39 @@ class RoutineNodeAgent(BaseModel):
     label: str | None = None
 
 
+class RoutineNodeHuman(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["human"] = "human"
+    description: str = ""
+    output_key: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    label: str | None = None
+
+
+class RoutineNodeForeach(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["foreach"] = "foreach"
+    description: str = ""
+    output_key: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    label: str | None = None
+
+
+class RoutineNodeSubgraph(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["subgraph"] = "subgraph"
+    description: str = ""
+    output_key: str | None = None
+    config: dict[str, Any] = Field(default_factory=dict)
+    label: str | None = None
+
+
 class RoutineNodeNoop(BaseModel):
     """Pass through without changing state."""
 
@@ -104,7 +163,10 @@ RoutineNode = Annotated[
     | RoutineNodeEval
     | RoutineNodeSubagent
     | RoutineNodeAgent
-    | RoutineNodeNoop,
+    | RoutineNodeNoop
+    | RoutineNodeHuman
+    | RoutineNodeForeach
+    | RoutineNodeSubgraph,
     Field(discriminator="kind"),
 ]
 
@@ -146,6 +208,10 @@ class RoutineGraph(BaseModel):
     entry: str
     nodes: list[RoutineNode]
     edges: list[RoutineEdge] = Field(default_factory=list)
+    settings: dict[str, Any] = Field(default_factory=dict)
+    input_schema: dict[str, str] | None = None
+    output_schema: dict[str, str] | None = None
+    private_schema: dict[str, str] | None = None
 
 
 def _node_output_key(node: RoutineNode) -> str:
