@@ -301,9 +301,28 @@ function ChainChip({ kind, label }) {
 function ConnectorInsert({ slot }) {
   const { insertAt } = useContext(GraphEditContext);
   const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const handlePointer = (event) => {
+      if (wrapRef.current && !wrapRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    const handleKey = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', handlePointer);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handlePointer);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [open]);
+
   return (
-    <div className="routine-connector">
-      <span className="routine-connector__line" aria-hidden="true" />
+    <div className="routine-connector" ref={wrapRef}>
       <button
         type="button"
         className="routine-connector__btn"
