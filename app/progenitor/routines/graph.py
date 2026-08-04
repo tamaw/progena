@@ -16,6 +16,8 @@ from ..structured import validate_against_schema
 
 ROUTINE_GRAPH_VERSION = "1.0.0"
 ROUTINE_SEED_NODE_ID = "__seed__"
+ROUTINE_PROJECT_NODE_ID = "__project_output__"
+RESERVED_ROUTINE_NODE_IDS = frozenset({ROUTINE_SEED_NODE_ID, ROUTINE_PROJECT_NODE_ID})
 VALID_ROUTINE_NODE_KINDS = {
     "prompt",
     "code",
@@ -230,8 +232,8 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
         node_id = node.get("id")
         if not isinstance(node_id, str) or not node_id:
             raise ValueError("each node needs a non-empty string id")
-        if node_id == ROUTINE_SEED_NODE_ID:
-            raise ValueError(f"node id is reserved: {ROUTINE_SEED_NODE_ID}")
+        if node_id in RESERVED_ROUTINE_NODE_IDS:
+            raise ValueError(f"node id is reserved: {node_id}")
         if node_id in ids:
             raise ValueError(f"duplicate node id: {node_id}")
         ids.add(node_id)

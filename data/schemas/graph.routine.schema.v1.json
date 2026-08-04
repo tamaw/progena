@@ -13,8 +13,8 @@
     "entry": {
       "type": "string",
       "minLength": 1,
-      "not": { "const": "__seed__" },
-      "description": "Node id the compiled graph enters after its private seed node. __seed__ is reserved for the compiler."
+      "not": { "enum": ["__seed__", "__project_output__"] },
+      "description": "Node id the compiled graph enters after its private seed node. __seed__ and __project_output__ are reserved for the compiler."
     },
     "nodes": {
       "type": "array",
@@ -49,16 +49,28 @@
         }
       }
     },
-    "input_schema": { "type": "object", "additionalProperties": { "type": "string" } },
-    "output_schema": { "type": "object", "additionalProperties": { "type": "string" } },
-    "private_schema": { "type": "object", "additionalProperties": { "type": "string" } }
+    "input_schema": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" },
+      "description": "Flat field-name -> type-name map (the type name is documentation only, never enforced). Each field becomes a real top-level graph input channel alongside 'messages': a caller can invoke with {\"messages\": [...], \"<field>\": <value>}, and the compiler copies each declared field's value into data.<field> before the graph runs, so node config.inputs paths and prompt templates can reference it. 'messages' is always accepted regardless of what's declared here."
+    },
+    "output_schema": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" },
+      "description": "Flat field-name -> type-name map. Each field is resolved as a dotted path against the final 'data' (see routerEdge.state_key for the same dotted-path convention) and returned as a top-level output channel; fields absent from 'data' at the end of the run are silently omitted rather than erroring. Declaring this makes the compiled graph's invoke() return ONLY {\"messages\": [...], <declared fields>} instead of the full internal state -- everything else (including 'data' itself) is dropped, matching LangGraph's own output_schema projection. 'messages' is always included regardless of what's declared here. A field cannot appear in both output_schema and private_schema (compile error)."
+    },
+    "private_schema": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" },
+      "description": "Flat field-name -> type-name map: these are 'data' keys internal nodes read/write that must never be projected into output_schema, even if a node happens to compute a same-named field. Declaring a field here that's also in output_schema is a compile error. Only has an observable effect together with output_schema -- without a declared output_schema there's no projection to exclude a field from, so invoke() still returns the full internal state either way. Per LangGraph's own caveat, this does not hide the field from stream_mode='values' -- only from invoke()'s return and from output_schema's projection."
+    }
   },
   "$defs": {
     "nodeId": {
       "type": "string",
       "minLength": 1,
-      "not": { "const": "__seed__" },
-      "description": "User-defined node id. __seed__ is reserved for the compiler's private seed node."
+      "not": { "enum": ["__seed__", "__project_output__"] },
+      "description": "User-defined node id. __seed__ and __project_output__ are reserved for the compiler's private seed/output-projection nodes."
     },
     "node": {
       "oneOf": [
