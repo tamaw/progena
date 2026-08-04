@@ -592,16 +592,17 @@ function ForkBlock({ fork }) {
   // a branch that loops back or hits a nested fork never falls through to
   // whatever sits below this one, so it has no business fanning into a
   // "Join branches" connector. Mirrors `onJoinBranches`'s own terminal walk.
-  const joinableValues = new Set([
+  const joinableValues = useMemo(() => new Set([
     ...branches.filter(({ tree }) => chainTerminus(tree) === 'end').map(({ value }) => value),
     ...(edge.default && chainTerminus(defaultTree) === 'end' ? ['default'] : []),
-  ]);
+  ]), [branches, edge.default, defaultTree]);
   const canOfferJoin = joinableValues.size > 1;
   const hasJoin = Boolean(joinTree);
 
   const containerRef = useRef(null);
   const columnRefs = useRef(new Map());
   const targetRef = useRef(null);
+  const [fanOut, setFanOut] = useState(null);
   const [connector, setConnector] = useState(null);
 
   const registerColumn = useCallback((key) => (el) => {
@@ -614,23 +615,35 @@ function ForkBlock({ fork }) {
     if (!container) return undefined;
     const recompute = () => {
       const containerRect = container.getBoundingClientRect();
-      const cols = Array.from(columnRefs.current.values())
-        .map((el) => {
+      const cols = Array.from(columnRefs.current.entries())
+        .map(([key, el]) => {
           const r = el.getBoundingClientRect();
           return {
+            key,
             x: r.left + r.width / 2 - containerRect.left,
+            top: r.top - containerRect.top,
             bottom: r.bottom - containerRect.top,
           };
         })
         .sort((a, b) => a.x - b.x);
-      if (cols.length < 2 || !targetRef.current) {
+
+      if (cols.length < 2) {
+        setFanOut(null);
+      } else {
+        const spreadY = Math.max(Math.min(...cols.map((c) => c.top)) - 8, 0);
+        const midX = (cols[0].x + cols[cols.length - 1].x) / 2;
+        setFanOut({ cols, spreadY, midX });
+      }
+
+      const joinCols = cols.filter((c) => hasJoin || joinableValues.has(c.key));
+      if (joinCols.length < 2 || !targetRef.current) {
         setConnector(null);
         return;
       }
       const targetRect = targetRef.current.getBoundingClientRect();
-      const mergeY = Math.max(...cols.map((c) => c.bottom)) + 18;
-      const midX = (cols[0].x + cols[cols.length - 1].x) / 2;
-      setConnector({ cols, mergeY, midX, targetTop: targetRect.top - containerRect.top });
+      const mergeY = Math.max(...joinCols.map((c) => c.bottom)) + 18;
+      const joinMidX = (joinCols[0].x + joinCols[joinCols.length - 1].x) / 2;
+      setConnector({ cols: joinCols, mergeY, midX: joinMidX, targetTop: targetRect.top - containerRect.top });
     };
     recompute();
     const observed = [container, ...columnRefs.current.values()];
@@ -642,17 +655,27 @@ function ForkBlock({ fork }) {
       ro.disconnect();
       window.removeEventListener('resize', recompute);
     };
-  }, [branches.length, edge.default, hasJoin]);
+  }, [branches.length, edge.default, hasJoin, joinableValues]);
 
   return (
     <div className="routine-fork" ref={containerRef}>
+      {fanOut ? (
+        <svg className="routine-fork__connector" aria-hidden="true">
+          <line x1={fanOut.midX} y1={0} x2={fanOut.midX} y2={fanOut.spreadY} />
+          <line
+            x1={fanOut.cols[0].x}
+            y1={fanOut.spreadY}
+            x2={fanOut.cols[fanOut.cols.length - 1].x}
+            y2={fanOut.spreadY}
+          />
+          {fanOut.cols.map((c) => (
+            <line key={c.key} x1={c.x} y1={fanOut.spreadY} x2={c.x} y2={c.top} />
+          ))}
+        </svg>
+      ) : null}
       <div className="routine-fork__row">
         {branches.map(({ value, tree }) => (
-          <div
-            key={value}
-            className="routine-fork__column"
-            ref={joinTree || joinableValues.has(value) ? registerColumn(value) : undefined}
-          >
+          <div key={value} className="routine-fork__column" ref={registerColumn(value)}>
             <BranchHeader
               key={value}
               value={value}
@@ -663,10 +686,7 @@ function ForkBlock({ fork }) {
           </div>
         ))}
         {edge.default ? (
-          <div
-            className="routine-fork__column routine-fork__column--default"
-            ref={joinTree || joinableValues.has('default') ? registerColumn('default') : undefined}
-          >
+          <div className="routine-fork__column routine-fork__column--default" ref={registerColumn('default')}>
             <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
             {renderRun(defaultTree, { sourceId, kind: 'default' })}
           </div>
