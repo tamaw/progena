@@ -766,10 +766,6 @@ function validateWorkingGraph(nodes, edges, entry) {
 
 // Serialize the working nodes/edges/meta into the backend graph document
 // shape. `output_key` always mirrors `id` -- it isn't independently editable.
-// No `x`/`y`: node position carries no meaning in this rigid top-down chain
-// (see the file-header comment) and the schema forbids unknown node fields
-// (RoutineNode* models are `extra="forbid"`) -- sending them made every save
-// of a real (non-gallery) routine graph fail schema validation outright.
 function serializeGraph(nodes, edges, meta) {
   return {
     status: meta.status || 'Draft',

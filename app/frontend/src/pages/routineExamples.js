@@ -1,7 +1,3 @@
-// No x/y: node position carries no meaning in the routine editor's rigid
-// top-down chain layout, and the backend schema forbids the fields outright
-// (RoutineNode* models are `extra="forbid"`) -- see AgentGraph.jsx's
-// serializeGraph comment.
 const node = (id, kind, label, config = {}) => ({
   id,
   kind,
