@@ -6855,18 +6855,13 @@ body,
 }
 
 
-/* Editable label in the shared title bar; kind badge reuses .node-status-badge. */
+/* Editable label in the shared title bar. */
 .agents-node-title {
   padding: 1px 4px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
   user-select: text;
-}
-
-.agents-node-kind-badge {
-  color: var(--node-color);
-  background: color-mix(in oklab, var(--node-color) 14%, transparent);
 }
 
 /* Step content inputs. */
