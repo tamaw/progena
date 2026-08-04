@@ -422,7 +422,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         # Treat GitHub url like github source
         owner, repo, ref = _parse_github_source(url)
         sha = src.get("sha")
-        resolved = sha or ref or "main"
+        resolved = sha or ref or "HEAD"
         return owner, repo, resolved
     if source_type == "github":
         repo_str = src.get("repo", "")
@@ -433,7 +433,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         owner, repo = repo_str.split("/", 1)
         explicit_ref = src.get("ref")
         sha = src.get("sha")
-        resolved = sha or explicit_ref or "main"
+        resolved = sha or explicit_ref or "HEAD"
         return owner, repo, resolved
     if source_type == "git-subdir":
         url = src.get("url", "")
@@ -442,7 +442,7 @@ def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[st
         owner, repo, _parsed_ref = _parse_github_source(url)
         explicit_ref = src.get("ref")
         sha = src.get("sha")
-        resolved = sha or explicit_ref or "main"
+        resolved = sha or explicit_ref or "HEAD"
         return owner, repo, resolved
     raise PluginFetchError(
         f"plugin '{entry.get('name')}' uses unknown source type '{source_type}'; "

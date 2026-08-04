@@ -14,7 +14,6 @@ from typing import Any
 from ..utils import utcnow_isoformat
 from .sources import (
     MarketplaceCatalog,
-    PluginFetchError,
     _parse_github_source,
     compute_digest,
     fetch_marketplace,
@@ -92,34 +91,42 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
         try:
             marketplace_name, plugin_name = key.split("/", 1)
             marketplace_source = entry.get("marketplace_source")
-            if not isinstance(marketplace_source, str) or not marketplace_source:
-                raise PluginFetchError(f"plugin '{key}' has no marketplace provenance")
-            catalog = catalogs.get(marketplace_source)
-            if catalog is None:
-                catalog = await fetch_marketplace(
-                    marketplace_source,
-                    resolve_revision=False,
-                )
-                catalogs[marketplace_source] = catalog
-            current_entry = next(
-                (p for p in catalog.plugins if p.get("name") == plugin_name),
-                None,
-            )
             current = dict(entry)
-            if current_entry is None:
-                current["status"] = "error"
-                current["status_message"] = "No longer listed in marketplace"
-                current["last_checked"] = now
-                plugins[key] = current
-                summary["errored"].append(key)
-                changed = True
-                continue
-
-            version = resolve_plugin_version(current_entry, None)
-            if version != installed_version:
-                current["available_version"] = version
-                summary["updated_available"].append(key)
-                changed = True
+            if isinstance(marketplace_source, str) and marketplace_source:
+                catalog = catalogs.get(marketplace_source)
+                if catalog is None:
+                    catalog = await fetch_marketplace(
+                        marketplace_source,
+                        resolve_revision=False,
+                    )
+                    catalogs[marketplace_source] = catalog
+                current_entry = next(
+                    (p for p in catalog.plugins if p.get("name") == plugin_name),
+                    None,
+                )
+                if current_entry is None:
+                    current["status"] = "error"
+                    current["status_message"] = "No longer listed in marketplace"
+                    current["last_checked"] = now
+                    plugins[key] = current
+                    summary["errored"].append(key)
+                    changed = True
+                    continue
+                version = resolve_plugin_version(current_entry, None)
+                if version != installed_version:
+                    current["available_version"] = version
+                    summary["updated_available"].append(key)
+                    changed = True
+            else:
+                # No marketplace provenance (installed directly from a
+                # GitHub/git-subdir source, not via a marketplace listing):
+                # fall back to a digest comparison against upstream, same as
+                # reconcile_plugins' frozen-entry check.
+                _files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
+                if digest != current.get("installed_digest"):
+                    current["available_version"] = resolve_plugin_version(current, None)
+                    summary["updated_available"].append(key)
+                    changed = True
             current["last_checked"] = now
             current["status"] = "installed"
             current["status_message"] = ""
@@ -224,6 +231,18 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
                 current["available_version"] = None
                 summary["installed"].append(key)
                 changed = True
+            else:
+                # Frozen entry (no desired ``version`` bump pending): refresh
+                # ``available_version`` via a digest comparison against
+                # upstream, without touching installed_version or skills.
+                _files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
+                if digest != current.get("installed_digest"):
+                    current["available_version"] = resolved_version
+                    summary["updated_available"].append(key)
+                    changed = True
+                current["last_checked"] = now
+                current["status"] = "installed"
+                current["status_message"] = ""
 
             if current != entry:
                 plugins[key] = current
