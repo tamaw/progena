@@ -60,6 +60,11 @@
     "private_schema": {
       "$ref": "#/$defs/dataFieldMap",
       "description": "Flat field-name -> type-name map: these are 'data' keys internal nodes read/write that must never be projected into output_schema, even if a node happens to compute a same-named field. Declaring a field here that's also in output_schema is a compile error. Only has an observable effect together with output_schema -- without a declared output_schema there's no projection to exclude a field from, so invoke() still returns the full internal state either way. Per LangGraph's own caveat, this does not hide the field from stream_mode='values' -- only from invoke()'s return and from output_schema's projection."
+    },
+    "$defs": {
+      "type": "object",
+      "additionalProperties": { "type": "object" },
+      "description": "Named JSON Schema definitions reusable across this graph's own node configs (distinct from this meta-schema's own top-level $defs below, which describes node/edge shapes, not routine-authored content). A prompt/eval node's config.response_schema may be {\"$ref\": \"#/$defs/<name>\"} instead of repeating an inline schema; app.progenitor.routines.factory.compile_routine_graph resolves the reference against this map before binding model.with_structured_output(...)."
     }
   },
   "$defs": {
@@ -101,7 +106,7 @@
             "system_prompt": { "type": "string" },
             "response_schema": {
               "type": "object",
-              "description": "A raw JSON Schema (object-rooted, per OpenAI Structured Outputs' requirement) for the model's reply. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke -- generation is schema-constrained via the Responses API, not text-parsed after the fact. The validated result becomes data[output_key] directly (a dict, not a string), and no <output_key>_json fallback is produced."
+              "description": "A raw JSON Schema (object-rooted, per OpenAI Structured Outputs' requirement) for the model's reply, or {\"$ref\": \"#/$defs/<name>\"} pointing at a schema declared in this graph's own top-level $defs. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke -- generation is schema-constrained via the Responses API, not text-parsed after the fact. The validated result becomes data[output_key] directly (a dict, not a string), and no <output_key>_json fallback is produced."
             },
             "retry": { "$ref": "#/$defs/retryPolicy" }
           },
@@ -176,7 +181,7 @@
             },
             "response_schema": {
               "type": "object",
-              "description": "A raw JSON Schema (object-rooted) for rubric_prompt's reply, with a required boolean 'result' property. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke plus text-prefix heuristic; data[output_key] becomes bool(parsed['result'])."
+              "description": "A raw JSON Schema (object-rooted) for rubric_prompt's reply, with a required boolean 'result' property, or {\"$ref\": \"#/$defs/<name>\"} pointing at a schema declared in this graph's own top-level $defs. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke plus text-prefix heuristic; data[output_key] becomes bool(parsed['result'])."
             },
             "retry": { "$ref": "#/$defs/retryPolicy" }
           },

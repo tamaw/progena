@@ -214,6 +214,7 @@ class RoutineGraph(BaseModel):
     input_schema: dict[str, str] | None = None
     output_schema: dict[str, str] | None = None
     private_schema: dict[str, str] | None = None
+    defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
 def _node_output_key(node: RoutineNode) -> str:
