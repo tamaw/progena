@@ -213,7 +213,6 @@ class RoutineGraph(BaseModel):
     settings: dict[str, Any] = Field(default_factory=dict)
     input_schema: dict[str, str] | None = None
     output_schema: dict[str, str] | None = None
-    private_schema: dict[str, str] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 

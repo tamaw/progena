@@ -17,7 +17,7 @@ from collections.abc import Callable
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.progenitor.routines.graph import (
     ROUTINE_GRAPH_VERSION,
@@ -42,7 +42,7 @@ class AgentGraphModel(BaseModel):
     settings: dict[str, Any] = {}
     input_schema: dict[str, str] | None = None
     output_schema: dict[str, str] | None = None
-    private_schema: dict[str, str] | None = None
+    defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
 class AgentProfile(BaseModel):
@@ -88,7 +88,7 @@ class AgentGraphUpdateRequest(BaseModel):
     settings: dict[str, Any] = {}
     input_schema: dict[str, str] | None = None
     output_schema: dict[str, str] | None = None
-    private_schema: dict[str, str] | None = None
+    defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
 # Allowed node "kind" values for the editable routine graph. These are executable
@@ -129,7 +129,7 @@ def validate_agent_graph_document(
     settings: dict[str, Any] | None = None,
     input_schema: dict[str, str] | None = None,
     output_schema: dict[str, str] | None = None,
-    private_schema: dict[str, str] | None = None,
+    defs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Validate the complete routine document that the route will persist."""
     document = {
@@ -145,7 +145,7 @@ def validate_agent_graph_document(
     for key, value in (
         ("input_schema", input_schema),
         ("output_schema", output_schema),
-        ("private_schema", private_schema),
+        ("$defs", defs),
     ):
         if value is not None:
             document[key] = value
@@ -181,7 +181,7 @@ async def broadcast_agent_profiles_snapshot(
     if store is None:
         return None
     response = await asyncio.to_thread(build_agent_profiles, store)
-    broadcast_ui_event("agents.snapshot", response.model_dump(), request_id=request_id)
+    broadcast_ui_event("agents.snapshot", response.model_dump(by_alias=True), request_id=request_id)
     return response
 
 
@@ -225,7 +225,9 @@ def create_agent_profile_router(
         request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
         response = await asyncio.to_thread(build_agent_profiles, store)
-        broadcast_ui_event("agents.snapshot", response.model_dump(), request_id=request_id)
+        broadcast_ui_event(
+            "agents.snapshot", response.model_dump(by_alias=True), request_id=request_id
+        )
         return acknowledgement_response(request_id, ["agents.snapshot"])
 
     @router.get(
@@ -243,10 +245,12 @@ def create_agent_profile_router(
         if agent is None:
             raise HTTPException(status_code=404, detail="Agent not found")
         profile = AgentProfile(**agent)
-        broadcast_ui_event("agent.upserted", {"agent": profile.model_dump()}, request_id=request_id)
+        broadcast_ui_event(
+            "agent.upserted", {"agent": profile.model_dump(by_alias=True)}, request_id=request_id
+        )
         broadcast_ui_event(
             "agent.selected",
-            {"agent": profile.model_dump()},
+            {"agent": profile.model_dump(by_alias=True)},
             request_id=request_id,
         )
         return acknowledgement_response(request_id, ["agent.upserted", "agent.selected"])
@@ -279,7 +283,7 @@ def create_agent_profile_router(
                 settings=body.settings,
                 input_schema=body.input_schema,
                 output_schema=body.output_schema,
-                private_schema=body.private_schema,
+                defs=body.defs,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -293,7 +297,7 @@ def create_agent_profile_router(
                 "settings": body.settings,
                 "input_schema": body.input_schema,
                 "output_schema": body.output_schema,
-                "private_schema": body.private_schema,
+                "$defs": body.defs,
             },
             status=body.status,
             summary=body.summary,
@@ -304,7 +308,7 @@ def create_agent_profile_router(
         graph = AgentGraphModel(**updated)
         broadcast_ui_event(
             "agent.graph.updated",
-            {"agent_id": agent_id, "graph": graph.model_dump()},
+            {"agent_id": agent_id, "graph": graph.model_dump(by_alias=True)},
             request_id=request_id,
         )
         return acknowledgement_response(request_id, ["agent.graph.updated"])
