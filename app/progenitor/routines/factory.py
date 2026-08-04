@@ -707,10 +707,6 @@ def compile_routine_graph(
 
     input_fields = list(graph.input_schema or {})
     output_fields = list(graph.output_schema or {})
-    private_fields = set(graph.private_schema or {})
-    overlap = sorted(set(output_fields) & private_fields)
-    if overlap:
-        raise ValueError(f"field(s) declared in both output_schema and private_schema: {overlap}")
 
     builder = StateGraph(
         _extended_state_type(_extra_state_fields(graph.input_schema, graph.output_schema)),

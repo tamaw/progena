@@ -409,7 +409,7 @@ class AgentStore:
         document["entry"] = graph.get("entry")
         document["nodes"] = graph.get("nodes", [])
         document["edges"] = graph.get("edges", [])
-        for key in ("settings", "input_schema", "output_schema", "private_schema"):
+        for key in ("settings", "input_schema", "output_schema", "$defs"):
             if graph.get(key) is not None:
                 document[key] = graph[key]
         self._document_store.save_document(
@@ -435,7 +435,7 @@ class AgentStore:
             "settings": graph.get("settings", {}),
             "input_schema": graph.get("input_schema"),
             "output_schema": graph.get("output_schema"),
-            "private_schema": graph.get("private_schema"),
+            "$defs": graph.get("$defs"),
         }
 
 
