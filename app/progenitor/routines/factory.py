@@ -1,9 +1,12 @@
 """Compiles a validated :class:`RoutineGraph` into a runnable LangGraph ``StateGraph``.
 
-Scope note: this pass implements the ``prompt``/``code``/``eval``/``subagent``/``agent``/
-``noop`` node kinds and ``state_equals`` routing only. Retry policies, loop guards, and the
-``human``/``foreach`` node kinds are deferred follow-ups (see the plan this shipped under).
-Nothing in the live progenitor runtime invokes a compiled routine yet — ``compile_routine_graph``
+Retry (per-node ``config.retry``, or a graph-wide default from ``settings.retry`` via
+``StateGraph.set_node_defaults``), node caching, and a ``settings.recursion_limit``
+backstop are all wired here; a router edge's own branches are how a graph author
+expresses a *conditional* loop (see :func:`_build_router`) -- there is no separate
+"loop" node kind or setting, since LangGraph's conditional-edge mechanism already
+covers it and a parallel mechanism would just be a second way to say the same thing.
+Nothing in the live progenitor runtime invokes a compiled routine yet -- ``compile_routine_graph``
 produces a correct, independently testable runnable via ``.ainvoke(...)``, wiring it into
 DeepAgent subagent delegation is a separate task.
 """
@@ -25,7 +28,14 @@ from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, RetryPolicy, Send, interrupt
 
 from .expression import evaluate_expression
-from .graph import ROUTINE_SEED_NODE_ID, RoutineContext, RoutineEdge, RoutineGraph, RoutineNode
+from .graph import (
+    ROUTINE_NODE_RETRY_DEFAULTS,
+    ROUTINE_SEED_NODE_ID,
+    RoutineContext,
+    RoutineEdge,
+    RoutineGraph,
+    RoutineNode,
+)
 
 _SEED_NODE_ID = ROUTINE_SEED_NODE_ID
 
@@ -61,17 +71,23 @@ def _context_data(runtime: Runtime | None) -> dict[str, Any]:
 
 
 def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
+    """Build a RetryPolicy from a ``retry`` sub-dict.
+
+    ``config`` is either a node's own ``config`` or the graph's ``settings`` --
+    both hold their retry tuning under the same ``retry`` key, so this one
+    function builds both a per-node override and the graph-wide default passed
+    to ``StateGraph.set_node_defaults``.
+    """
     retry = config.get("retry")
-    if retry is False:
+    if not retry:
         return None
-    if retry is None:
-        return None
+    defaults = ROUTINE_NODE_RETRY_DEFAULTS
     values: dict[str, Any] = {
-        "initial_interval": float(retry.get("initial_interval", 0.1)),
-        "backoff_factor": float(retry.get("backoff_factor", 2.0)),
-        "max_interval": float(retry.get("max_interval", 5.0)),
-        "max_attempts": int(retry.get("max_attempts", 3)),
-        "jitter": bool(retry.get("jitter", False)),
+        "initial_interval": float(retry.get("initial_interval", defaults["initial_interval"])),
+        "backoff_factor": float(retry.get("backoff_factor", defaults["backoff_factor"])),
+        "max_interval": float(retry.get("max_interval", defaults["max_interval"])),
+        "max_attempts": int(retry.get("max_attempts", defaults["max_attempts"])),
+        "jitter": bool(retry.get("jitter", defaults["jitter"])),
         "retry_on": Exception,
     }
     return RetryPolicy(**values)
@@ -533,6 +549,9 @@ def compile_routine_graph(
         input_schema=_schema_type("RoutineInputState", graph.input_schema),
         output_schema=_schema_type("RoutineOutputState", graph.output_schema),
     )
+    default_retry_policy = _retry_policy(graph.settings)
+    if default_retry_policy is not None:
+        builder.set_node_defaults(retry_policy=default_retry_policy)
     builder.add_node(_SEED_NODE_ID, _seed_node())
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)

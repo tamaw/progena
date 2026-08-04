@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage
+from langgraph.errors import GraphRecursionError
 
 from app.progenitor.routines.factory import (
     compile_routine_graph,
@@ -129,7 +130,15 @@ class TestRepoSetupWorkerRouting:
         agent = FakeAgent(_assess_response())
         result = await _run(example_graph, model, agent_registry={"repo-manager": agent})
         # Every node along the up_to_date path left its output in `data`.
-        for key in ("request", "parse", "parse_json", "domain_check", "assess", "assess_json", "route_decision"):
+        for key in (
+            "request",
+            "parse",
+            "parse_json",
+            "domain_check",
+            "assess",
+            "assess_json",
+            "route_decision",
+        ):
             assert key in result["data"], key
 
 
@@ -180,7 +189,9 @@ class TestSubagentRegistry:
                 return {"messages": [*state["messages"], AIMessage(content="delegated result")]}
 
         model = FakeModel([])
-        runnable = compile_routine_graph(graph, model=model, subagent_registry={"helper": FakeSubgraph()})
+        runnable = compile_routine_graph(
+            graph, model=model, subagent_registry={"helper": FakeSubgraph()}
+        )
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
         assert result["data"]["delegate"] == "delegated result"
         assert result["messages"][-1].content == "delegated result"
@@ -226,3 +237,97 @@ class TestHelpers:
     def test_resolve_data_path_missing_raises_keyerror(self):
         with pytest.raises(KeyError, match="missing state path: a.b"):
             resolve_data_path({"a": {}}, "a.b")
+
+
+class FlakyModel:
+    """Raises for the first ``fail_times`` calls, then succeeds -- exercises RetryPolicy."""
+
+    def __init__(self, fail_times: int, response: str):
+        self.fail_times = fail_times
+        self.response = response
+        self.attempts = 0
+
+    async def ainvoke(self, messages):
+        self.attempts += 1
+        if self.attempts <= self.fail_times:
+            raise RuntimeError("simulated transient failure")
+        return AIMessage(content=self.response)
+
+
+def _single_prompt_step_payload(
+    settings: dict | None = None, node_retry: dict | None = None
+) -> dict:
+    config = {"prompt_template": "go"}
+    if node_retry is not None:
+        config["retry"] = node_retry
+    return {
+        "id": "flaky-step",
+        "name": "flaky-step",
+        "description": "",
+        "version": "1.0.0",
+        "entry": "step",
+        "nodes": [{"id": "step", "kind": "prompt", "output_key": "step", "config": config}],
+        "edges": [],
+        "settings": settings or {},
+    }
+
+
+class TestGraphWideRetryDefault:
+    """settings.retry applies via StateGraph.set_node_defaults to nodes without their own config.retry."""
+
+    async def test_settings_retry_covers_a_node_with_no_retry_of_its_own(self):
+        payload = _single_prompt_step_payload(
+            settings={"retry": {"max_attempts": 3, "initial_interval": 0}}
+        )
+        graph = validate_routine_graph_payload(payload)
+        model = FlakyModel(fail_times=2, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+        assert result["data"]["step"] == "ok"
+        assert model.attempts == 3
+
+    async def test_without_settings_retry_the_first_failure_propagates(self):
+        payload = _single_prompt_step_payload()
+        graph = validate_routine_graph_payload(payload)
+        model = FlakyModel(fail_times=2, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        with pytest.raises(RuntimeError, match="simulated transient failure"):
+            await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+        assert model.attempts == 1
+
+    async def test_node_level_retry_overrides_the_graph_default(self):
+        # Graph default allows 3 attempts, but this node opts into only 1 -- its
+        # own config.retry must win per StateGraph.set_node_defaults semantics.
+        payload = _single_prompt_step_payload(
+            settings={"retry": {"max_attempts": 3, "initial_interval": 0}},
+            node_retry={"max_attempts": 1, "initial_interval": 0},
+        )
+        graph = validate_routine_graph_payload(payload)
+        model = FlakyModel(fail_times=2, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        with pytest.raises(RuntimeError, match="simulated transient failure"):
+            await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+        assert model.attempts == 1
+
+
+class TestRecursionLimitSetting:
+    """settings.recursion_limit is the real backstop for a graph cycle that never terminates."""
+
+    async def test_settings_recursion_limit_stops_an_unconditional_cycle(self):
+        payload = {
+            "id": "cycle",
+            "name": "cycle",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}},
+                {"id": "b", "kind": "code", "output_key": "b", "config": {"expression": "1"}},
+            ],
+            "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}],
+            "settings": {"recursion_limit": 6},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        with pytest.raises(GraphRecursionError):
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
