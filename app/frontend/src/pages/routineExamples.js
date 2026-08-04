@@ -27,7 +27,6 @@ export const ROUTINE_EXAMPLES = [
       status: 'Ready', entry: 'request', settings: baseSettings,
       input_schema: { items: 'array' },
       output_schema: { respond: 'string' },
-      private_schema: { approval: 'boolean' },
       nodes: [
         node('request', 'prompt', 'Collect request', { prompt_template: 'Summarize the incoming request.' }),
         node('approval', 'human', 'Human approval', { prompt: 'Approve review of every requested item.' }),
@@ -46,7 +45,7 @@ export const ROUTINE_EXAMPLES = [
       status: 'Ready', entry: 'start',
       settings: { ...baseSettings, retry: { max_attempts: 3, initial_interval: 0.1 }, recursion_limit: 12 },
       input_schema: { candidate: 'string' },
-      output_schema: { gate: 'boolean', complete: 'string' }, private_schema: null,
+      output_schema: { gate: 'boolean', complete: 'string' },
       nodes: [
         node('start', 'prompt', 'Prepare candidate', { prompt_template: 'Prepare candidate for verification.' }),
         { ...node('seed', 'code', 'Seed attempt counter', { expression: '0' }), output_key: 'attempt' },
@@ -66,7 +65,7 @@ export const ROUTINE_EXAMPLES = [
     graph: {
       status: 'Ready', entry: 'classify', settings: baseSettings,
       input_schema: { priority: 'string' },
-      output_schema: { answer: 'string' }, private_schema: { classify: 'string' },
+      output_schema: { answer: 'string' },
       nodes: [
         node('classify', 'code', 'Classify', { expression: "'urgent'" }),
         node('urgent', 'agent', 'Urgent response', { agent_name: 'general-purpose', prompt_template: 'Handle urgent work.' }),
@@ -81,13 +80,12 @@ export const ROUTINE_EXAMPLES = [
     },
   },
   {
-    id: 'routine-private-context', kind: 'subagent', name: 'Private context handoff', role: 'Runtime context and private schema',
-    summary: 'Runtime context is injected while private state stays internal.',
+    id: 'routine-private-context', kind: 'subagent', name: 'Runtime context handoff', role: 'Runtime context injection',
+    summary: 'Runtime context is injected while an internal-only field stays out of the projected output.',
     graph: {
       status: 'Ready', entry: 'context', settings: { ...baseSettings, runtime_context: { request_id: 'demo-ctx', tenant: 'validation' } },
       input_schema: { question: 'string' },
       output_schema: { answer: 'string' },
-      private_schema: { private: 'string' },
       nodes: [
         node('context', 'prompt', 'Inject context', { prompt_template: 'Use runtime request context to answer {question}.' }),
         node('private', 'code', 'Build private trace', { expression: "'trace:' + str(request_id)" }),
@@ -102,7 +100,7 @@ export const ROUTINE_EXAMPLES = [
     summary: 'A routine delegates into a native subgraph and resumes locally.',
     graph: {
       status: 'Ready', entry: 'input', settings: baseSettings,
-      input_schema: { text: 'string' }, output_schema: { finish: 'string' }, private_schema: null,
+      input_schema: { text: 'string' }, output_schema: { finish: 'string' },
       nodes: [
         node('input', 'prompt', 'Read input', { prompt_template: 'Read the source text.' }),
         node('normalize', 'code', 'Normalize', { expression: 'str(text).strip()' }),
@@ -118,7 +116,7 @@ export const ROUTINE_EXAMPLES = [
     summary: 'Several connected steps emit observable execution events.',
     graph: {
       status: 'Ready', entry: 'load', settings: { ...baseSettings, stream_events: true }, input_schema: null,
-      output_schema: { publish: 'string' }, private_schema: { inspect: 'string' },
+      output_schema: { publish: 'string' },
       nodes: [
         node('load', 'prompt', 'Load record', { prompt_template: 'Load an audit record.' }),
         node('inspect', 'code', 'Inspect record', { expression: "'inspected'" }),
@@ -134,7 +132,7 @@ export const ROUTINE_EXAMPLES = [
     summary: 'Combines approval, fan-out, branch, retry, cache, checkpoint, and join.',
     graph: {
       status: 'Ready', entry: 'start', settings: { checkpoint: { enabled: true, namespace: 'all-controls' }, retry: { max_attempts: 2, initial_interval: 0.5 }, recursion_limit: 20, cache: true },
-      input_schema: { items: 'array', mode: 'string' }, output_schema: { finish: 'string' }, private_schema: { route: 'string' },
+      input_schema: { items: 'array', mode: 'string' }, output_schema: { finish: 'string' },
       nodes: [
         node('start', 'prompt', 'Start run', { prompt_template: 'Start the combined controls tour.' }),
         node('approve', 'human', 'Approve controls', { prompt: 'Approve the combined demonstration.' }),
@@ -160,7 +158,7 @@ export const ROUTINE_EXAMPLES = [
       status: 'Ready', entry: 'draft',
       settings: { ...baseSettings, recursion_limit: 16 },
       input_schema: { task: 'string' },
-      output_schema: { finish: 'string' }, private_schema: { grade: 'string' },
+      output_schema: { finish: 'string' },
       $defs: {
         completionGrade: {
           type: 'object',

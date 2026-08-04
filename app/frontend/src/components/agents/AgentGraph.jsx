@@ -783,7 +783,6 @@ function serializeGraph(nodes, edges, meta) {
     settings: meta.settings || {},
     input_schema: meta.input_schema || null,
     output_schema: meta.output_schema || null,
-    private_schema: meta.private_schema || null,
     $defs: meta.$defs || {},
   };
 }
@@ -798,7 +797,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     settings: graph.settings || {},
     input_schema: graph.input_schema || null,
     output_schema: graph.output_schema || null,
-    private_schema: graph.private_schema || null,
     $defs: graph.$defs || {},
   });
   const [saveState, setSaveState] = useState('idle');
@@ -1089,7 +1087,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       settings: parsed.settings || {},
       input_schema: parsed.input_schema || null,
       output_schema: parsed.output_schema || null,
-      private_schema: parsed.private_schema || null,
       $defs: parsed.$defs || {},
     };
     setMeta(nextMeta);
@@ -1242,7 +1239,6 @@ function graphToJson(graph) {
       settings: graph.settings || {},
       input_schema: graph.input_schema || null,
       output_schema: graph.output_schema || null,
-      private_schema: graph.private_schema || null,
       $defs: graph.$defs || {},
     },
     null,
