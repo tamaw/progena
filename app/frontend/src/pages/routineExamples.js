@@ -165,11 +165,15 @@ export const ROUTINE_EXAMPLES = [
         node('draft', 'prompt', 'Draft attempt', { prompt_template: 'Draft an attempt at: {task}' }),
         node('grade', 'prompt', 'Grade against rubric', {
           prompt_template:
-            'Grade the draft below against this rubric: clarity, completeness, correctness. '
-            + 'Respond with ONLY a JSON object of the form {{"completion_pct": <float 0-1>}} -- '
-            + 'no prose, no markdown fences.\n\nDraft: {draft}',
+            'Grade the draft below against this rubric: clarity, completeness, correctness.\n\nDraft: {draft}',
+          response_schema: {
+            type: 'object',
+            properties: { completion_pct: { type: 'number' } },
+            required: ['completion_pct'],
+            additionalProperties: false,
+          },
         }),
-        node('check', 'eval', 'Completion gate', { expression: 'pct >= 0.8', inputs: { pct: 'grade_json.completion_pct' } }),
+        node('check', 'eval', 'Completion gate', { expression: 'pct >= 0.8', inputs: { pct: 'grade.completion_pct' } }),
         node('finish', 'prompt', 'Report result', { prompt_template: 'Report the final draft and its completion percentage.' }),
       ],
       edges: [
