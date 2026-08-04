@@ -308,8 +308,42 @@ def _seed_node(input_fields: list[str] | None = None) -> Any:
     return seed
 
 
+_DEFS_REF_PREFIX = "#/$defs/"
+
+
+def _resolve_response_schema(
+    node_id: str, kind: str, config: dict[str, Any], defs: dict[str, dict[str, Any]] | None
+) -> dict[str, Any] | None:
+    """Resolves config.response_schema, following a ``{"$ref": "#/$defs/<name>"}``
+    indirection into the graph document's own top-level ``$defs`` -- the same reuse
+    mechanism JSON Schema itself uses, scoped to this routine graph rather than the
+    graph.routine.schema.v1.json meta-schema (which has its own, unrelated $defs)."""
+    schema: dict[str, Any] | None = config.get("response_schema")
+    if schema is None:
+        return None
+    ref = schema.get("$ref") if isinstance(schema, dict) else None
+    if ref is None:
+        return schema
+    if not ref.startswith(_DEFS_REF_PREFIX):
+        raise ValueError(
+            f"{kind} node {node_id}: response_schema.$ref must be of the form "
+            f"'#/$defs/<name>', got {ref!r}"
+        )
+    name = ref[len(_DEFS_REF_PREFIX) :]
+    resolved = (defs or {}).get(name)
+    if resolved is None:
+        raise ValueError(
+            f"{kind} node {node_id}: response_schema.$ref points at undefined '$defs.{name}'"
+        )
+    return resolved
+
+
 def _build_prompt_node(
-    node: RoutineNode, *, model: BaseChatModel, base_system_prompt: str | None
+    node: RoutineNode,
+    *,
+    model: BaseChatModel,
+    base_system_prompt: str | None,
+    defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     config = node.config
     output_key = node.output_key or node.id
@@ -318,7 +352,7 @@ def _build_prompt_node(
     if not template:
         raise ValueError(f"prompt node {node.id}: config needs 'prompt_template'")
     node_system_prompt = config.get("system_prompt")
-    response_schema = config.get("response_schema")
+    response_schema = _resolve_response_schema(node.id, "prompt", config, defs)
     structured_model = (
         model.with_structured_output(
             response_schema, method="json_schema", strict=True, include_raw=True
@@ -385,14 +419,16 @@ def _build_code_node(node: RoutineNode) -> Any:
     return run
 
 
-def _build_eval_node(node: RoutineNode, *, model: BaseChatModel) -> Any:
+def _build_eval_node(
+    node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
+) -> Any:
     config = node.config
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "eval", config, "expression_file")
     expression = config.get("expression")
     inputs_config = config.get("inputs") or {}
     rubric_prompt = config.get("rubric_prompt")
-    response_schema = config.get("response_schema")
+    response_schema = _resolve_response_schema(node.id, "eval", config, defs)
     structured_model = (
         model.with_structured_output(
             response_schema, method="json_schema", strict=True, include_raw=True
@@ -576,13 +612,16 @@ def _build_node_callable(
     subagent_registry: dict[str, Any],
     agent_registry: dict[str, Any],
     subgraph_registry: dict[str, Any],
+    defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     if node.kind == "prompt":
-        return _build_prompt_node(node, model=model, base_system_prompt=base_system_prompt)
+        return _build_prompt_node(
+            node, model=model, base_system_prompt=base_system_prompt, defs=defs
+        )
     if node.kind == "code":
         return _build_code_node(node)
     if node.kind == "eval":
-        return _build_eval_node(node, model=model)
+        return _build_eval_node(node, model=model, defs=defs)
     if node.kind == "subagent":
         return _build_subagent_node(node, subagent_registry=subagent_registry)
     if node.kind == "agent":
@@ -696,6 +735,7 @@ def compile_routine_graph(
                 subagent_registry=subagent_registry,
                 agent_registry=agent_registry,
                 subgraph_registry=subgraph_registry,
+                defs=graph.defs,
             ),
             retry_policy=_retry_policy(node.config),
             cache_policy=_cache_policy(node.config),
