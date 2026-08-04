@@ -231,7 +231,6 @@ function StepCard({ node, routerEdge }) {
         <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
         <span className="routine-step-card__copy">
           <strong className="routine-step-card__label">{node.label || node.id}</strong>
-          <span className="node-status-badge agents-node-kind-badge">{node.kind}</span>
         </span>
         {routerEdge ? <span className="routine-step-card__branches">{Object.keys(routerEdge.branches || {}).length + (routerEdge.default ? 1 : 0)} paths</span> : null}
       </div>
