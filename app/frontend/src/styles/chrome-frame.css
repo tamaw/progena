@@ -7353,10 +7353,106 @@ body,
   border-color: var(--color-error, #ef4444);
 }
 
+/* For-each action: a Logic Apps-style scope around the repeated actions,
+   making the collection and item context visible instead of leaving the
+   fan-out as another card in the main chain. */
+.routine-foreach {
+  width: min(520px, 100%);
+  margin: 8px auto 0;
+  padding: 10px;
+  background: color-mix(in oklab, #18a999 6%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in oklab, #18a999 42%, var(--color-border));
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.routine-foreach__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 2px 10px;
+}
+
+.routine-foreach__head .routine-step-card {
+  flex: 0 0 220px;
+}
+
+.routine-foreach__context {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.routine-foreach__eyebrow {
+  color: #18a999;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.routine-foreach__context strong {
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.routine-foreach__source code {
+  color: #8ee8da;
+  font-family: var(--font-family-mono);
+}
+
+.routine-foreach__mode {
+  align-self: flex-start;
+  padding: 4px 7px;
+  color: #8ee8da;
+  background: rgb(24 169 153 / 14%);
+  border: 1px solid rgb(24 169 153 / 30%);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.routine-foreach__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 78px;
+  padding: 9px 12px 12px;
+  background: color-mix(in oklab, var(--color-bg-primary) 72%, transparent);
+  border: 1px dashed color-mix(in oklab, #18a999 45%, var(--color-border));
+  border-radius: 10px;
+}
+
+.routine-foreach__body-label {
+  align-self: stretch;
+  padding-bottom: 7px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.routine-foreach__body .routine-connector {
+  min-height: 30px;
+}
+
+.routine-foreach__body > .routine-cap--end {
+  display: none;
+}
+
 /* Router fork: one swim-lane column per branch (+ optional Default),
    mirrors Azure Logic Apps'/Power Automate's Condition/Switch actions. No
    forced merge node -- a branch just ends where it ends. */
 .routine-fork {
+  position: relative;
   width: 100%;
   padding-top: 8px;
 }
@@ -7378,6 +7474,26 @@ body,
   background: color-mix(in oklab, var(--color-bg-primary) 60%, transparent);
   border: 1px dashed var(--color-border);
   border-radius: 12px;
+}
+.routine-fork__column {
+  position: relative;
+}
+
+/* Joining line for pathCount > 1 is measured and drawn as
+   .routine-fork__connector (SVG) below, since column widths vary with
+   content and a CSS percentage-based line can't track their real centers. */
+.routine-fork__connector {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.routine-fork__connector line {
+  stroke: color-mix(in oklab, var(--color-accent) 35%, var(--color-border));
+  stroke-width: 1px;
 }
 
 .routine-fork__column--empty,
@@ -7460,13 +7576,12 @@ body,
 }
 
 .routine-fork__join {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  width: 100%;
-  margin-top: 8px;
-  padding-top: 10px;
-  border-top: 1px solid color-mix(in oklab, var(--color-accent) 35%, var(--color-border));
+  width: min(720px, calc(100% - 48px));
+  margin: 18px auto 0;
 }
 
 .routine-fork__join-label {

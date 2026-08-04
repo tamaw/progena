@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -210,45 +211,21 @@ function RoutingFooter({ id, routerEdge }) {
 
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node, routerEdge }) {
-  const { selectNode, selectedNodeId, moveNode } = useContext(GraphEditContext);
-  const dragRef = useRef(null);
-  const handleKeyDown = (event) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      selectNode(node.id, event);
-    }
-  };
-  const handlePointerDown = (event) => {
-    if (event.button !== 0) return;
-    event.preventDefault();
-    event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { x: event.clientX, y: event.clientY, originX: Number(node.x) || 0, originY: Number(node.y) || 0 };
-  };
-  const handlePointerMove = (event) => {
-    if (!dragRef.current) return;
-    moveNode(node.id, {
-      x: dragRef.current.originX + event.clientX - dragRef.current.x,
-      y: dragRef.current.originY + event.clientY - dragRef.current.y,
-    });
-  };
-  const handlePointerUp = (event) => {
-    if (dragRef.current) {
-      dragRef.current = null;
-      event.currentTarget.releasePointerCapture?.(event.pointerId);
-    }
-  };
+  const { selectNode, selectedNodeId } = useContext(GraphEditContext);
   return (
     <div
       className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}`}
-      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e', transform: `translate(${Number(node.x) || 0}px, ${Number(node.y) || 0}px)` }}
+      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       role="button"
       tabIndex={0}
       aria-label={`${node.label || node.id} ${node.kind} step`}
-      onClick={(event) => { if (!dragRef.current) selectNode(node.id, event); }}
-      onKeyDown={handleKeyDown}
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
+      onClick={(event) => selectNode(node.id, event)}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          selectNode(node.id, event);
+        }
+      }}
     >
       <div className="node-title-bar routine-step-card__title">
         <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
@@ -468,6 +445,13 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
 // Renders an already-computed chain-tree run: a connector before each step,
 // the step itself, and either the next connector, a fork, or a terminus.
 // Pure -- safe to invoke from a React child any number of times.
+function splitForeachBody(tree) {
+  if (!tree || tree.type !== 'node') return [tree, null];
+  if (tree.node.kind === 'noop') return [null, tree];
+  const [bodyNext, after] = splitForeachBody(tree.next);
+  return [{ ...tree, next: bodyNext }, after];
+}
+
 function renderRun(tree, initialSlot) {
   const out = [];
   let current = tree;
@@ -491,6 +475,20 @@ function renderRun(tree, initialSlot) {
       out.push(<ChainChip key={`join-${current.id}`} kind="rejoin" label={`↳ joins at “${current.label}”`} />);
       break;
     }
+    if (current.node.kind === 'foreach') {
+      const [bodyTree, afterTree] = splitForeachBody(current.next);
+      out.push(
+        <ForeachBlock
+          key={`foreach-${current.id}`}
+          node={current.node}
+          body={renderRun(bodyTree, { sourceId: current.id, kind: 'foreach' })}
+        />,
+      );
+      slot = { sourceId: current.id, kind: 'plain' };
+      current = afterTree;
+      continue;
+    }
+
     out.push(<StepCard key={current.id} node={current.node} routerEdge={current.fork ? current.fork.edge : null} />);
     if (current.fork) {
       out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} />);
@@ -502,9 +500,35 @@ function renderRun(tree, initialSlot) {
   return out;
 }
 
+function ForeachBlock({ node, body }) {
+  const itemsPath = node.config?.items_path || 'data.items';
+  const itemKey = node.config?.item_key || 'item';
+  return (
+    <section className="routine-foreach" aria-label={`For each ${itemKey}`}>
+      <div className="routine-foreach__head">
+        <StepCard node={node} />
+        <div className="routine-foreach__context">
+          <span className="routine-foreach__eyebrow">For each item</span>
+          <strong>{itemKey}</strong>
+          <span className="routine-foreach__source">from <code>{itemsPath}</code></span>
+        </div>
+        <span className="routine-foreach__mode">Parallel</span>
+      </div>
+      <div className="routine-foreach__body">
+        <div className="routine-foreach__body-label">Actions for each item</div>
+        {body}
+      </div>
+    </section>
+  );
+}
+
 // A router node forks into one column per branch (+ optional Default), each
 // an independently rigid chain -- no forced merge node, exactly like Azure
-// Logic Apps' Condition/Switch actions.
+// Logic Apps' Condition/Switch actions. Column widths vary with content, so
+// the joining line is measured (not guessed via CSS percentages): each
+// column reports its real bottom-center, the connector drops every column
+// straight down to a shared merge line, then a single stem carries it into
+// the join box/button -- always meeting exactly, never crossing at an angle.
 function ForkBlock({ fork }) {
   const {
     onAddBranch,
@@ -516,11 +540,58 @@ function ForkBlock({ fork }) {
   } = useContext(GraphEditContext);
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
   const pathCount = branches.length + (edge.default ? 1 : 0);
+  const hasJoin = Boolean(joinTree);
+
+  const containerRef = useRef(null);
+  const columnRefs = useRef(new Map());
+  const targetRef = useRef(null);
+  const [connector, setConnector] = useState(null);
+
+  const registerColumn = useCallback((key) => (el) => {
+    if (el) columnRefs.current.set(key, el);
+    else columnRefs.current.delete(key);
+  }, []);
+
+  useLayoutEffect(() => {
+    const container = containerRef.current;
+    if (!container) return undefined;
+    const recompute = () => {
+      const containerRect = container.getBoundingClientRect();
+      const cols = Array.from(columnRefs.current.values())
+        .map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            x: r.left + r.width / 2 - containerRect.left,
+            bottom: r.bottom - containerRect.top,
+          };
+        })
+        .sort((a, b) => a.x - b.x);
+      if (cols.length < 2 || !targetRef.current) {
+        setConnector(null);
+        return;
+      }
+      const targetRect = targetRef.current.getBoundingClientRect();
+      const mergeY = Math.max(...cols.map((c) => c.bottom)) + 18;
+      const midX = (cols[0].x + cols[cols.length - 1].x) / 2;
+      setConnector({ cols, mergeY, midX, targetTop: targetRect.top - containerRect.top });
+    };
+    recompute();
+    const observed = [container, ...columnRefs.current.values()];
+    if (targetRef.current) observed.push(targetRef.current);
+    const ro = new ResizeObserver(recompute);
+    observed.forEach((el) => ro.observe(el));
+    window.addEventListener('resize', recompute);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', recompute);
+    };
+  }, [branches.length, edge.default, hasJoin]);
+
   return (
-    <div className="routine-fork">
+    <div className="routine-fork" ref={containerRef}>
       <div className="routine-fork__row">
         {branches.map(({ value, tree }) => (
-          <div key={value} className="routine-fork__column">
+          <div key={value} className="routine-fork__column" ref={registerColumn(value)}>
             <BranchHeader
               key={value}
               value={value}
@@ -531,7 +602,7 @@ function ForkBlock({ fork }) {
           </div>
         ))}
         {edge.default ? (
-          <div className="routine-fork__column routine-fork__column--default">
+          <div className="routine-fork__column routine-fork__column--default" ref={registerColumn('default')}>
             <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
             {renderRun(defaultTree, { sourceId, kind: 'default' })}
           </div>
@@ -548,13 +619,27 @@ function ForkBlock({ fork }) {
           </button>
         </div>
       </div>
+      {connector ? (
+        <svg className="routine-fork__connector" aria-hidden="true">
+          {connector.cols.map((c) => (
+            <line key={c.x} x1={c.x} y1={c.bottom} x2={c.x} y2={connector.mergeY} />
+          ))}
+          <line
+            x1={connector.cols[0].x}
+            y1={connector.mergeY}
+            x2={connector.cols[connector.cols.length - 1].x}
+            y2={connector.mergeY}
+          />
+          <line x1={connector.midX} y1={connector.mergeY} x2={connector.midX} y2={connector.targetTop} />
+        </svg>
+      ) : null}
       {joinTree ? (
-        <div className="routine-fork__join">
+        <div className="routine-fork__join" ref={targetRef}>
           <span className="routine-fork__join-label">Branches joined</span>
           {renderRun(joinTree, { sourceId, kind: 'join' })}
         </div>
       ) : pathCount > 1 ? (
-        <button type="button" className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
+        <button type="button" ref={targetRef} className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
           + Join branches
         </button>
       ) : null}
@@ -1014,8 +1099,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                   {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
                 </span>
               ) : null}
-              <button type="button" onClick={onShowProfile}>Details</button>
-              <button type="button" className="repo-btn repo-btn--primary" onClick={onRun} disabled={validationErrors.length > 0}>Run</button>
+              {onShowProfile ? <button type="button" onClick={onShowProfile}>Details</button> : null}
+              <button type="button" className="repo-btn repo-btn--primary" onClick={() => onRun(workingGraph)} disabled={validationErrors.length > 0}>Run</button>
             </div>
               <GraphEditContext.Provider value={editContext}>
               <div

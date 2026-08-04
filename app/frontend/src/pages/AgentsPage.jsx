@@ -547,6 +547,9 @@ function AgentsPage({ variant = 'agents' }) {
   const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
 
   async function handleSaveGraph(parsed) {
+    if (isRoutines && DUMMY_ROUTINES.some((routine) => routine.id === effectiveAgentId)) {
+      return parsed;
+    }
     return dispatch(updateAgentGraph({
       agentsUrl,
       agentId: effectiveAgentId,
@@ -558,13 +561,13 @@ function AgentsPage({ variant = 'agents' }) {
     })).unwrap();
   }
 
-  const handleRunRoutine = useCallback(() => {
-    const nodes = selectedGraph.nodes || [];
+  const handleRunRoutine = useCallback((workingGraph = selectedGraph) => {
+    const nodes = workingGraph.nodes || [];
     const hasSimulatedFailure = nodes.some((node) => String(node.config?.expression || '').includes('raise '));
     const result = {
       status: hasSimulatedFailure ? 'error' : 'completed',
       events: nodes.length,
-      revision: selectedGraph.settings?.checkpoint?.namespace || effectiveAgentId,
+      revision: workingGraph.settings?.checkpoint?.namespace || effectiveAgentId,
     };
     setRunResult(result);
     window.dispatchEvent(new CustomEvent('progenitor:run-routine', {
@@ -702,7 +705,7 @@ function AgentsPage({ variant = 'agents' }) {
                   onPersist={handleSaveGraph}
                   onRun={handleRunRoutine}
                   runResult={runResult}
-                  onShowProfile={showProfile}
+                  onShowProfile={isRoutines ? null : showProfile}
                   jsonOpen={graphEditorOpen}
                   onOpenJson={() => setGraphEditorOpen(true)}
                   onCloseJson={() => setGraphEditorOpen(false)}
