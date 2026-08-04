@@ -30,7 +30,25 @@
         ]
       }
     },
-    "settings": { "type": "object" },
+    "settings": {
+      "type": "object",
+      "description": "Graph-wide options read by app.progenitor.routines.factory.compile_routine_graph. Free-form (a node's own config always wins for anything it declares), but these keys are the ones the compiler actually acts on.",
+      "properties": {
+        "retry": {
+          "$ref": "#/$defs/retryPolicy",
+          "description": "Default retry policy applied to every node via StateGraph.set_node_defaults() -- a node's own config.retry overrides this for that node."
+        },
+        "recursion_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Caps LangGraph super-steps (compiled.with_config({'recursion_limit': ...})). The real backstop for a graph cycle: a router-edge loop that never reaches END would otherwise run until this raises GraphRecursionError."
+        },
+        "cache": {
+          "type": "boolean",
+          "description": "Enables an in-memory node-result cache shared by nodes that set their own config.cache."
+        }
+      }
+    },
     "input_schema": { "type": "object", "additionalProperties": { "type": "string" } },
     "output_schema": { "type": "object", "additionalProperties": { "type": "string" } },
     "private_schema": { "type": "object", "additionalProperties": { "type": "string" } }
@@ -71,7 +89,8 @@
           "properties": {
             "prompt_template": { "type": "string" },
             "prompt_file": { "type": "string" },
-            "system_prompt": { "type": "string" }
+            "system_prompt": { "type": "string" },
+            "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "oneOf": [
             { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
@@ -101,7 +120,8 @@
               "type": "object",
               "additionalProperties": { "type": "string" },
               "description": "local name -> dotted 'data' path, resolved before evaluation."
-            }
+            },
+            "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "oneOf": [
             {
@@ -140,7 +160,8 @@
             "rubric_prompt": {
               "type": "string",
               "description": "Used only when neither expression nor expression_file is set: the model is asked this and a response beginning (case-insensitively) with 'true' evaluates true."
-            }
+            },
+            "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "not": {
             "allOf": [
@@ -168,7 +189,8 @@
           "properties": {
             "subagent_name": { "type": "string", "minLength": 1 },
             "prompt_template": { "type": "string" },
-            "prompt_file": { "type": "string" }
+            "prompt_file": { "type": "string" },
+            "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "oneOf": [
             {
@@ -200,7 +222,8 @@
           "properties": {
             "agent_name": { "type": "string", "minLength": 1 },
             "prompt_template": { "type": "string" },
-            "prompt_file": { "type": "string" }
+            "prompt_file": { "type": "string" },
+            "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "oneOf": [
             {
@@ -294,6 +317,36 @@
           "additionalProperties": { "type": "string", "minLength": 1 }
         },
         "default": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retryPolicy": {
+      "type": "object",
+      "description": "Fields for langgraph.types.RetryPolicy. The compiler always retries on any exception (retry_on is not configurable here), so this only tunes attempt count and backoff.",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Total attempts including the first, before the exception propagates. Default 3."
+        },
+        "initial_interval": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Seconds before the first retry. Default 0.1."
+        },
+        "backoff_factor": {
+          "type": "number",
+          "minimum": 1,
+          "description": "Multiplier applied to the interval after each retry. Default 2.0."
+        },
+        "max_interval": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Upper bound on the backoff interval, in seconds. Default 5.0."
+        },
+        "jitter": {
+          "type": "boolean",
+          "description": "Randomize backoff timing to avoid thundering-herd retries. Default false."
+        }
       }
     }
   }
