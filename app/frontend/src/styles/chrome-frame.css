@@ -7352,7 +7352,9 @@ body,
    making the collection and item context visible instead of leaving the
    fan-out as another card in the main chain. */
 .routine-foreach {
-  width: min(520px, 100%);
+  width: max-content;
+  min-width: min(520px, 100%);
+  max-width: 100%;
   margin: 8px auto 0;
   padding: 10px;
   background: color-mix(in oklab, #18a999 6%, var(--color-bg-secondary));
