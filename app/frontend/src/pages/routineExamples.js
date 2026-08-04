@@ -12,8 +12,8 @@ const edge = (from, to) => ({ from, to });
 
 const baseSettings = {
   checkpoint: { enabled: true, namespace: 'routine-demo' },
-  retry: { max_attempts: 2, backoff_seconds: 0 },
-  loop: { max_iterations: 5 },
+  retry: { max_attempts: 2, initial_interval: 0.5 },
+  recursion_limit: 40,
 };
 
 
@@ -43,18 +43,23 @@ export const ROUTINE_EXAMPLES = [
   },
   {
     id: 'routine-retry-loop', kind: 'subagent', name: 'Retrying verifier', role: 'Retry and bounded loop',
-    summary: 'A simulated flaky check retries and loops until the limit.',
+    summary: 'A deterministic gate loops the check back until it passes, capped by recursion_limit.',
     graph: {
-      status: 'Ready', entry: 'start', settings: { ...baseSettings, retry: { max_attempts: 3, backoff_seconds: 0 }, loop: { max_iterations: 3 } },
+      status: 'Ready', entry: 'start',
+      settings: { ...baseSettings, retry: { max_attempts: 3, initial_interval: 0.1 }, recursion_limit: 12 },
       input_schema: { type: 'object', properties: { candidate: { type: 'string' } } },
       output_schema: { type: 'object', properties: { verified: { type: 'boolean' } } }, private_schema: null,
       nodes: [
         node('start', 'prompt', 'Prepare candidate', { prompt_template: 'Prepare candidate for verification.' }),
-        node('flaky', 'code', 'Simulated flaky check', { expression: "raise ValueError('simulated transient failure')" }),
-        node('gate', 'eval', 'Verification gate', { expression: 'True', inputs: { candidate: 'start' } }),
+        { ...node('seed', 'code', 'Seed attempt counter', { expression: '0' }), output_key: 'attempt' },
+        { ...node('flaky', 'code', 'Attempt candidate', { expression: 'attempt + 1', inputs: { attempt: 'attempt' } }), output_key: 'attempt' },
+        node('gate', 'eval', 'Verification gate', { expression: 'attempt >= 2', inputs: { attempt: 'attempt' } }),
         node('complete', 'prompt', 'Complete', { prompt_template: 'Report verification status.' }),
       ],
-      edges: [edge('start', 'flaky'), edge('flaky', 'gate'), edge('gate', 'complete'), edge('complete', 'flaky')],
+      edges: [
+        edge('start', 'seed'), edge('seed', 'flaky'), edge('flaky', 'gate'),
+        { from: 'gate', router: 'state_equals', state_key: 'gate', branches: { True: 'complete' }, default: 'flaky' },
+      ],
     },
   },
   {

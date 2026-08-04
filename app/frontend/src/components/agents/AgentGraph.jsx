@@ -519,13 +519,13 @@ function renderRun(tree, initialSlot) {
 // fan-out, instead of leaving just a floating "loops back to" chip.
 function LoopBlock({ targetLabel, body }) {
   const { settings } = useContext(GraphEditContext);
-  const maxIterations = settings?.loop?.max_iterations;
+  const recursionLimit = settings?.recursion_limit;
   const maxAttempts = settings?.retry?.max_attempts;
   return (
     <section className="routine-loop" aria-label={`Retry loop back to ${targetLabel}`}>
       <div className="routine-loop__head">
         <span className="routine-loop__eyebrow">↺ Retry loop</span>
-        {maxIterations ? <span className="routine-loop__badge">Up to {maxIterations} iterations</span> : null}
+        {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
         {maxAttempts ? <span className="routine-loop__badge">{maxAttempts} attempts/step</span> : null}
       </div>
       <div className="routine-loop__body">{body}</div>
