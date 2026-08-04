@@ -17,7 +17,7 @@ import json
 import re
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, cast
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
@@ -318,6 +318,14 @@ def _build_prompt_node(
     if not template:
         raise ValueError(f"prompt node {node.id}: config needs 'prompt_template'")
     node_system_prompt = config.get("system_prompt")
+    response_schema = config.get("response_schema")
+    structured_model = (
+        model.with_structured_output(
+            response_schema, method="json_schema", strict=True, include_raw=True
+        )
+        if response_schema
+        else None
+    )
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
         data = {**state.get("data", {}), **_context_data(runtime)}
@@ -334,14 +342,26 @@ def _build_prompt_node(
             messages.append(SystemMessage(content=system_prompt))
         messages.append(HumanMessage(content=rendered))
         _emit(runtime, "routine.node.started", {"node": node.id, "kind": node.kind})
+
+        if structured_model is not None:
+            outcome = cast(dict[str, Any], await structured_model.ainvoke(messages))
+            parsed = outcome["parsed"]
+            if parsed is None:
+                raise ValueError(
+                    f"prompt node {node.id}: structured response failed schema "
+                    f"validation: {outcome['parsing_error']}"
+                )
+            _emit(runtime, "routine.node.completed", {"node": node.id, "kind": node.kind})
+            return {"messages": [outcome["raw"]], "data": {output_key: parsed}}
+
         response = await model.ainvoke(messages)
         text = normalize_message_content(response.content)
         _emit(runtime, "routine.node.completed", {"node": node.id, "kind": node.kind})
 
         result: dict[str, Any] = {output_key: text}
-        parsed = extract_json_object(text)
-        if parsed is not None:
-            result[f"{output_key}_json"] = parsed
+        parsed_text = extract_json_object(text)
+        if parsed_text is not None:
+            result[f"{output_key}_json"] = parsed_text
         return {"messages": [AIMessage(content=text)], "data": result}
 
     return run
@@ -372,6 +392,14 @@ def _build_eval_node(node: RoutineNode, *, model: BaseChatModel) -> Any:
     expression = config.get("expression")
     inputs_config = config.get("inputs") or {}
     rubric_prompt = config.get("rubric_prompt")
+    response_schema = config.get("response_schema")
+    structured_model = (
+        model.with_structured_output(
+            response_schema, method="json_schema", strict=True, include_raw=True
+        )
+        if response_schema
+        else None
+    )
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
@@ -388,6 +416,19 @@ def _build_eval_node(node: RoutineNode, *, model: BaseChatModel) -> Any:
             raise KeyError(
                 f"eval node {node.id}: rubric_prompt references missing state key: {exc}"
             ) from exc
+
+        if structured_model is not None:
+            outcome = cast(
+                dict[str, Any], await structured_model.ainvoke([HumanMessage(content=rendered)])
+            )
+            parsed = outcome["parsed"]
+            if parsed is None:
+                raise ValueError(
+                    f"eval node {node.id}: structured response failed schema "
+                    f"validation: {outcome['parsing_error']}"
+                )
+            return {"data": {output_key: bool(parsed.get("result"))}}
+
         response = await model.ainvoke([HumanMessage(content=rendered)])
         text = normalize_message_content(response.content).strip()
         result = text.lower().startswith("true")
