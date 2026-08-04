@@ -3,21 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
-import logging
 import re
-import tarfile
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote, urljoin, urlparse
 
 import aiohttp
 import yaml
-
-from app.progenitor.utils import env_int
-
-logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # SSRF hardening (mirrors app/backend/attachments.py:44-63,490-493)
@@ -55,22 +48,6 @@ _EXCLUDED_FILES = {
 
 _MAX_FILE_BYTES = 1_048_576  # 1 MiB
 _MAX_FILES_PER_PLUGIN = 50
-_DEFAULT_MAX_ARCHIVE_MB = 64
-
-
-def _configured_max_archive_bytes() -> int:
-    """Return the positive archive expansion limit configured by the environment."""
-    configured_mb = env_int("PROGENITOR_PLUGIN_MAX_ARCHIVE_MB", _DEFAULT_MAX_ARCHIVE_MB)
-    if configured_mb <= 0:
-        logger.warning(
-            "PROGENITOR_PLUGIN_MAX_ARCHIVE_MB must be positive; using default %d MiB",
-            _DEFAULT_MAX_ARCHIVE_MB,
-        )
-        configured_mb = _DEFAULT_MAX_ARCHIVE_MB
-    return configured_mb * 1024 * 1024
-
-
-_MAX_ARCHIVE_BYTES = _configured_max_archive_bytes()
 
 
 class PluginFetchError(Exception):
@@ -89,7 +66,6 @@ class MarketplaceCatalog:
     metadata: dict = field(default_factory=dict)
     repository: str | None = None
     commit_sha: str | None = None
-    _archive_files: dict[str, bytes] = field(default_factory=dict, repr=False)
 
 
 # ---------------------------------------------------------------------------
@@ -168,10 +144,6 @@ def resolve_relative_plugin_source(
     elif ref:
         result["ref"] = ref
     return result
-
-
-def _build_codeload_url(owner: str, repo: str, ref: str) -> str:
-    return f"https://codeload.github.com/{owner}/{repo}/tar.gz/{ref}"
 
 
 async def _fetch_url(url: str) -> bytes:
@@ -284,50 +256,6 @@ async def _fetch_github_tree(
 
 
 # ---------------------------------------------------------------------------
-# Archive helpers
-# ---------------------------------------------------------------------------
-
-
-def _extract_archive(archive_bytes: bytes) -> dict[str, bytes]:
-    """Expand a tar.gz in-memory with path-traversal and size guards.
-
-    Returns a mapping of *stripped* relative paths -> file contents.
-    GitHub archives have a single top-level directory like
-    ``owner-repo-abcdef/``; we strip that prefix so paths are repo-relative.
-    """
-    total_size = 0
-    files: dict[str, bytes] = {}
-    with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:gz") as tf:
-        for member in tf.getmembers():
-            if not member.isfile():
-                continue
-            name = member.name
-            # Path-traversal guard on the raw member name BEFORE stripping the
-            # GitHub top-level prefix (which may itself contain slashes).
-            raw_parts = name.replace("\\", "/").split("/")
-            if any(p == ".." for p in raw_parts):
-                raise PluginFetchError(f"archive member escapes root: {member.name}")
-            if name.startswith("/"):
-                raise PluginFetchError(f"archive member has absolute path: {member.name}")
-            # GitHub archives prefix everything with ``owner-repo-ref/``.
-            # Strip the first path segment so paths are repo-relative.
-            if "/" in name:
-                _, rel = name.split("/", 1)
-            else:
-                rel = name
-            total_size += member.size
-            if total_size > _MAX_ARCHIVE_BYTES:
-                raise PluginFetchError(
-                    f"archive exceeds {_MAX_ARCHIVE_BYTES // 1024 // 1024} MiB uncompressed"
-                )
-            fobj = tf.extractfile(member)
-            if fobj is None:
-                continue
-            files[rel] = fobj.read()
-    return files
-
-
-# ---------------------------------------------------------------------------
 # Marketplace
 # ---------------------------------------------------------------------------
 _MARKETPLACE_MANIFEST_PATHS = (
@@ -387,67 +315,6 @@ async def fetch_marketplace(
 # ---------------------------------------------------------------------------
 # Plugin files
 # ---------------------------------------------------------------------------
-
-
-def _resolve_plugin_source(entry: dict, catalog: MarketplaceCatalog) -> tuple[str, str, str | None]:
-    """Resolve a plugin entry's ``source`` to an (owner, repo, ref_or_sha) triple.
-
-    Returns the resolved ref/sha to use for the codeload URL.
-    """
-    src = entry.get("source")
-    if isinstance(src, str) and src.startswith("./"):
-        # Relative path — resolved against the marketplace archive, not a remote repo.
-        # We return a sentinel that tells the caller to use the catalog archive.
-        return "__marketplace__", "__marketplace__", None
-    if not isinstance(src, dict):
-        raise PluginFetchError(
-            f"plugin '{entry.get('name')}' source must be a dict or a relative path string"
-        )
-
-    source_type = src.get("source")
-    if source_type == "npm":
-        raise PluginFetchError(
-            f"plugin '{entry.get('name')}' uses unsupported source type 'npm'; "
-            "only GitHub-based sources are supported"
-        )
-    if source_type == "url":
-        url = src.get("url", "")
-        if not url or not (
-            url.startswith("https://github.com/") or url.startswith("http://github.com/")
-        ):
-            raise PluginFetchError(
-                f"plugin '{entry.get('name')}' uses unsupported non-GitHub url source; "
-                "only GitHub-based sources are supported"
-            )
-        # Treat GitHub url like github source
-        owner, repo, ref = _parse_github_source(url)
-        sha = src.get("sha")
-        resolved = sha or ref or "HEAD"
-        return owner, repo, resolved
-    if source_type == "github":
-        repo_str = src.get("repo", "")
-        if "/" not in repo_str:
-            raise PluginFetchError(
-                f"plugin '{entry.get('name')}' github source missing valid 'repo' field"
-            )
-        owner, repo = repo_str.split("/", 1)
-        explicit_ref = src.get("ref")
-        sha = src.get("sha")
-        resolved = sha or explicit_ref or "HEAD"
-        return owner, repo, resolved
-    if source_type == "git-subdir":
-        url = src.get("url", "")
-        if not url:
-            raise PluginFetchError(f"plugin '{entry.get('name')}' git-subdir source missing 'url'")
-        owner, repo, _parsed_ref = _parse_github_source(url)
-        explicit_ref = src.get("ref")
-        sha = src.get("sha")
-        resolved = sha or explicit_ref or "HEAD"
-        return owner, repo, resolved
-    raise PluginFetchError(
-        f"plugin '{entry.get('name')}' uses unknown source type '{source_type}'; "
-        "only GitHub-based sources are supported"
-    )
 
 
 async def _fetch_plugin_archive(

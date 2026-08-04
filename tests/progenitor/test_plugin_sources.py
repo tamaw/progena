@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import io
 import json
-import tarfile
-from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -14,13 +11,9 @@ from app.progenitor.plugins.sources import (
     _MAX_FILE_BYTES,
     MarketplaceCatalog,
     PluginFetchError,
-    _build_codeload_url,
-    _configured_max_archive_bytes,
-    _extract_archive,
     _extract_skills_from_files,
     _fetch_url,
     _parse_github_source,
-    _resolve_plugin_source,
     compute_digest,
     fetch_marketplace,
     fetch_plugin_files_with_report,
@@ -118,17 +111,6 @@ def test_parse_github_source_invalid() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _build_codeload_url
-# ---------------------------------------------------------------------------
-
-
-def test_build_codeload_url() -> None:
-    assert _build_codeload_url("acme", "formatter", "v1") == (
-        "https://codeload.github.com/acme/formatter/tar.gz/v1"
-    )
-
-
-# ---------------------------------------------------------------------------
 # _fetch_url (mocked)
 # ---------------------------------------------------------------------------
 
@@ -172,76 +154,8 @@ async def test_fetch_url_rejects_redirect_to_private() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _extract_archive
-# ---------------------------------------------------------------------------
-
-
-def _make_tar_bytes(entries: dict[str, bytes]) -> bytes:
-    """Build a synthetic tar.gz in memory."""
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        for name, data in entries.items():
-            info = tarfile.TarInfo(name=name)
-            info.size = len(data)
-            tf.addfile(info, io.BytesIO(data))
-    return buf.getvalue()
-
-
-def test_extract_archive_strips_github_prefix() -> None:
-    raw = _make_tar_bytes({"owner-repo-ab12/.claude-plugin/marketplace.json": b'{"name":"x"}'})
-    files = _extract_archive(raw)
-    assert ".claude-plugin/marketplace.json" in files
-    assert files[".claude-plugin/marketplace.json"] == b'{"name":"x"}'
-
-
-def test_extract_archive_rejects_path_traversal() -> None:
-    raw = _make_tar_bytes({"owner-repo-ab12/../../etc/passwd": b"root"})
-    with pytest.raises(PluginFetchError, match="escapes root"):
-        _extract_archive(raw)
-
-
-def test_extract_archive_rejects_absolute_path() -> None:
-    raw = _make_tar_bytes({"/etc/passwd": b"root"})
-    with pytest.raises(PluginFetchError, match="absolute path"):
-        _extract_archive(raw)
-
-
-def test_archive_limit_reads_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PROGENITOR_PLUGIN_MAX_ARCHIVE_MB", "96")
-    assert _configured_max_archive_bytes() == 96 * 1024 * 1024
-
-
-def test_extract_archive_rejects_size_cap(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "app.progenitor.plugins.sources._MAX_ARCHIVE_BYTES",
-        2,
-    )
-    raw = _make_tar_bytes({"owner-repo-ab12/bigfile": b"abc"})
-    with pytest.raises(PluginFetchError, match="archive exceeds"):
-        _extract_archive(raw)
-
-
-def test_extract_archive_skips_directories() -> None:
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
-        info = tarfile.TarInfo(name="owner-repo-ab12/skills/")
-        info.type = tarfile.DIRTYPE
-        tf.addfile(info)
-    raw = buf.getvalue()
-    files = _extract_archive(raw)
-    assert "skills/" not in files
-
-
-# ---------------------------------------------------------------------------
 # fetch_marketplace (mocked archive download)
 # ---------------------------------------------------------------------------
-
-
-def _make_marketplace_archive(
-    data: dict[str, Any],
-    manifest_path: str = ".claude-plugin/marketplace.json",
-) -> bytes:
-    return _make_tar_bytes({f"owner-repo-ab12/{manifest_path}": json.dumps(data).encode()})
 
 
 @pytest.mark.asyncio
@@ -318,73 +232,6 @@ async def test_missing_skills_directory_is_empty() -> None:
         files, skipped = await fetch_plugin_files_with_report(catalog, "demo")
     assert files == {}
     assert skipped == 0
-
-
-# ---------------------------------------------------------------------------
-# _resolve_plugin_source
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_plugin_source_github() -> None:
-    entry = {"name": "fmt", "source": {"source": "github", "repo": "acme/fmt", "ref": "v1"}}
-    assert _resolve_plugin_source(entry, MarketplaceCatalog("", {}, [])) == (
-        "acme",
-        "fmt",
-        "v1",
-    )
-
-
-def test_resolve_plugin_source_sha_wins_over_ref() -> None:
-    entry = {
-        "name": "fmt",
-        "source": {"source": "github", "repo": "acme/fmt", "ref": "v1", "sha": "abcd"},
-    }
-    assert _resolve_plugin_source(entry, MarketplaceCatalog("", {}, [])) == (
-        "acme",
-        "fmt",
-        "abcd",
-    )
-
-
-def test_resolve_plugin_source_git_subdir() -> None:
-    entry = {
-        "name": "fmt",
-        "source": {
-            "source": "git-subdir",
-            "url": "acme/monorepo",
-            "path": "plugins/fmt",
-            "ref": "main",
-        },
-    }
-    assert _resolve_plugin_source(entry, MarketplaceCatalog("", {}, [])) == (
-        "acme",
-        "monorepo",
-        "main",
-    )
-
-
-def test_resolve_plugin_source_rejects_npm() -> None:
-    entry = {"name": "bad", "source": {"source": "npm", "package": "x"}}
-    with pytest.raises(PluginFetchError, match="unsupported source type 'npm'"):
-        _resolve_plugin_source(entry, MarketplaceCatalog("", {}, []))
-
-
-def test_resolve_plugin_source_rejects_non_github_url() -> None:
-    entry = {"name": "bad", "source": {"source": "url", "url": "https://evil.com/x"}}
-    with pytest.raises(PluginFetchError, match="non-GitHub url source"):
-        _resolve_plugin_source(entry, MarketplaceCatalog("", {}, []))
-
-
-def test_resolve_plugin_source_accepts_github_url() -> None:
-    entry = {
-        "name": "ok",
-        "source": {"source": "url", "url": "https://github.com/acme/fmt"},
-    }
-    assert _resolve_plugin_source(entry, MarketplaceCatalog("", {}, [])) == (
-        "acme",
-        "fmt",
-        "HEAD",
-    )
 
 
 # ---------------------------------------------------------------------------
