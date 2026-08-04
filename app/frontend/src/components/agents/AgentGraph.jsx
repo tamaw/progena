@@ -575,14 +575,13 @@ function ForeachBlock({ node, body }) {
       <div className="routine-foreach__head">
         <StepCard node={node} />
         <div className="routine-foreach__context">
-          <span className="routine-foreach__eyebrow">For each item</span>
-          <strong>{itemKey}</strong>
-          <span className="routine-foreach__source">from <code>{itemsPath}</code></span>
+          <code>{itemKey}</code>
+          <span className="routine-foreach__arrow" aria-hidden="true">←</span>
+          <code>{itemsPath}</code>
         </div>
         <span className="routine-foreach__mode">Parallel</span>
       </div>
       <div className="routine-foreach__body">
-        <div className="routine-foreach__body-label">Actions for each item</div>
         {body}
       </div>
     </section>
