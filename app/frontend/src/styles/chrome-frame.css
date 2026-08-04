@@ -7560,23 +7560,6 @@ body,
   position: relative;
 }
 
-/* Joining line for pathCount > 1 is measured and drawn as
-   .routine-fork__connector (SVG) below, since column widths vary with
-   content and a CSS percentage-based line can't track their real centers. */
-.routine-fork__connector {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-  pointer-events: none;
-}
-
-.routine-fork__connector line {
-  stroke: color-mix(in oklab, var(--color-accent) 35%, var(--color-border));
-  stroke-width: 1px;
-}
-
 .routine-fork__column--empty,
 .routine-fork__column--add {
   justify-content: center;
