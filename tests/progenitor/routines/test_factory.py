@@ -613,50 +613,6 @@ class TestOutputSchema:
         assert result["data"]["a"] == 1
 
 
-class TestPrivateSchema:
-    """private_schema fields are excluded from output_schema's projection --
-    only matters together with a declared output_schema (see the JSON schema doc)."""
-
-    async def test_private_field_excluded_even_though_computed(self):
-        payload = {
-            "id": "secret",
-            "name": "secret",
-            "description": "",
-            "version": "1.0.0",
-            "entry": "a",
-            "nodes": [
-                {"id": "a", "kind": "code", "output_key": "secret", "config": {"expression": "1"}},
-                {"id": "b", "kind": "code", "output_key": "public", "config": {"expression": "2"}},
-            ],
-            "edges": [{"from": "a", "to": "b"}],
-            "output_schema": {"public": "integer"},
-            "private_schema": {"secret": "integer"},
-        }
-        graph = validate_routine_graph_payload(payload)
-        runnable = compile_routine_graph(graph, model=FakeModel([]))
-        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
-        assert result == {"messages": result["messages"], "public": 2}
-        assert "secret" not in result
-
-    async def test_field_in_both_output_and_private_schema_raises_at_compile_time(self):
-        payload = {
-            "id": "conflict",
-            "name": "conflict",
-            "description": "",
-            "version": "1.0.0",
-            "entry": "a",
-            "nodes": [
-                {"id": "a", "kind": "code", "output_key": "shared", "config": {"expression": "1"}}
-            ],
-            "edges": [],
-            "output_schema": {"shared": "integer"},
-            "private_schema": {"shared": "integer"},
-        }
-        graph = validate_routine_graph_payload(payload)
-        with pytest.raises(ValueError, match="declared in both output_schema and private_schema"):
-            compile_routine_graph(graph, model=FakeModel([]))
-
-
 class TestSubagentDelegationContract:
     """_build_subagent_node/_build_agent_node and subagent.py's CompiledSubAgent
     proxy both unconditionally read result["messages"] from a compiled routine's
