@@ -3,7 +3,6 @@ import {
   useCallback,
   useContext,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -592,11 +591,13 @@ function ForeachBlock({ node, body }) {
 
 // A router node forks into one column per branch (+ optional Default), each
 // an independently rigid chain -- no forced merge node, exactly like Azure
-// Logic Apps' Condition/Switch actions. Column widths vary with content, so
-// the joining line is measured (not guessed via CSS percentages): each
-// column reports its real bottom-center, the connector drops every column
-// straight down to a shared merge line, then a single stem carries it into
-// the join box/button -- always meeting exactly, never crossing at an angle.
+// Logic Apps' Condition/Switch actions. No connector lines between the
+// router and its columns, or between the columns and the join box/button --
+// two rounds of measuring real DOM rects (ResizeObserver + getBoundingClientRect)
+// to draw them precisely still produced visibly misaligned lines on branch
+// add/rename, and pixel-perfect swim-lane connectors aren't worth that
+// fragility. The dashed column borders plus the "N paths" badge already
+// say "these columns come from this router" without them.
 function ForkBlock({ fork }) {
   const {
     onAddBranch,
@@ -609,92 +610,19 @@ function ForkBlock({ fork }) {
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
   // Only branches that actually reach a real END are candidates to join --
   // a branch that loops back or hits a nested fork never falls through to
-  // whatever sits below this one, so it has no business fanning into a
-  // "Join branches" connector. Mirrors `onJoinBranches`'s own terminal walk.
+  // whatever sits below this one, so it has no business offering a
+  // "Join branches" action. Mirrors `onJoinBranches`'s own terminal walk.
   const joinableValues = useMemo(() => new Set([
     ...branches.filter(({ tree }) => chainTerminus(tree) === 'end').map(({ value }) => value),
     ...(edge.default && chainTerminus(defaultTree) === 'end' ? ['default'] : []),
   ]), [branches, edge.default, defaultTree]);
   const canOfferJoin = joinableValues.size > 1;
-  const hasJoin = Boolean(joinTree);
-
-  const containerRef = useRef(null);
-  const columnRefs = useRef(new Map());
-  const targetRef = useRef(null);
-  const [fanOut, setFanOut] = useState(null);
-  const [connector, setConnector] = useState(null);
-
-  const registerColumn = useCallback((key) => (el) => {
-    if (el) columnRefs.current.set(key, el);
-    else columnRefs.current.delete(key);
-  }, []);
-
-  useLayoutEffect(() => {
-    const container = containerRef.current;
-    if (!container) return undefined;
-    const recompute = () => {
-      const containerRect = container.getBoundingClientRect();
-      const cols = Array.from(columnRefs.current.entries())
-        .map(([key, el]) => {
-          const r = el.getBoundingClientRect();
-          return {
-            key,
-            x: r.left + r.width / 2 - containerRect.left,
-            top: r.top - containerRect.top,
-            bottom: r.bottom - containerRect.top,
-          };
-        })
-        .sort((a, b) => a.x - b.x);
-
-      if (cols.length < 2) {
-        setFanOut(null);
-      } else {
-        const spreadY = Math.max(Math.min(...cols.map((c) => c.top)) - 8, 0);
-        const midX = (cols[0].x + cols[cols.length - 1].x) / 2;
-        setFanOut({ cols, spreadY, midX });
-      }
-
-      const joinCols = cols.filter((c) => hasJoin || joinableValues.has(c.key));
-      if (joinCols.length < 2 || !targetRef.current) {
-        setConnector(null);
-        return;
-      }
-      const targetRect = targetRef.current.getBoundingClientRect();
-      const mergeY = Math.max(...joinCols.map((c) => c.bottom)) + 18;
-      const joinMidX = (joinCols[0].x + joinCols[joinCols.length - 1].x) / 2;
-      setConnector({ cols: joinCols, mergeY, midX: joinMidX, targetTop: targetRect.top - containerRect.top });
-    };
-    recompute();
-    const observed = [container, ...columnRefs.current.values()];
-    if (targetRef.current) observed.push(targetRef.current);
-    const ro = new ResizeObserver(recompute);
-    observed.forEach((el) => ro.observe(el));
-    window.addEventListener('resize', recompute);
-    return () => {
-      ro.disconnect();
-      window.removeEventListener('resize', recompute);
-    };
-  }, [branches.length, edge.default, hasJoin, joinableValues]);
 
   return (
-    <div className="routine-fork" ref={containerRef}>
-      {fanOut ? (
-        <svg className="routine-fork__connector" aria-hidden="true">
-          <line x1={fanOut.midX} y1={0} x2={fanOut.midX} y2={fanOut.spreadY} />
-          <line
-            x1={fanOut.cols[0].x}
-            y1={fanOut.spreadY}
-            x2={fanOut.cols[fanOut.cols.length - 1].x}
-            y2={fanOut.spreadY}
-          />
-          {fanOut.cols.map((c) => (
-            <line key={c.key} x1={c.x} y1={fanOut.spreadY} x2={c.x} y2={c.top} />
-          ))}
-        </svg>
-      ) : null}
+    <div className="routine-fork">
       <div className="routine-fork__row">
         {branches.map(({ value, tree }) => (
-          <div key={value} className="routine-fork__column" ref={registerColumn(value)}>
+          <div key={value} className="routine-fork__column">
             <BranchHeader
               key={value}
               value={value}
@@ -705,7 +633,7 @@ function ForkBlock({ fork }) {
           </div>
         ))}
         {edge.default ? (
-          <div className="routine-fork__column routine-fork__column--default" ref={registerColumn('default')}>
+          <div className="routine-fork__column routine-fork__column--default">
             <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
             {renderRun(defaultTree, { sourceId, kind: 'default' })}
           </div>
@@ -722,27 +650,13 @@ function ForkBlock({ fork }) {
           </button>
         </div>
       </div>
-      {connector ? (
-        <svg className="routine-fork__connector" aria-hidden="true">
-          {connector.cols.map((c) => (
-            <line key={c.x} x1={c.x} y1={c.bottom} x2={c.x} y2={connector.mergeY} />
-          ))}
-          <line
-            x1={connector.cols[0].x}
-            y1={connector.mergeY}
-            x2={connector.cols[connector.cols.length - 1].x}
-            y2={connector.mergeY}
-          />
-          <line x1={connector.midX} y1={connector.mergeY} x2={connector.midX} y2={connector.targetTop} />
-        </svg>
-      ) : null}
       {joinTree ? (
-        <div className="routine-fork__join" ref={targetRef}>
+        <div className="routine-fork__join">
           <span className="routine-fork__join-label">Branches joined</span>
           {renderRun(joinTree, { sourceId, kind: 'join' })}
         </div>
       ) : canOfferJoin ? (
-        <button type="button" ref={targetRef} className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
+        <button type="button" className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
           + Join branches
         </button>
       ) : null}
