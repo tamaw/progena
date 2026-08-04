@@ -1,11 +1,13 @@
-const node = (id, kind, label, config = {}, x = 0, y = 0) => ({
+// No x/y: node position carries no meaning in the routine editor's rigid
+// top-down chain layout, and the backend schema forbids the fields outright
+// (RoutineNode* models are `extra="forbid"`) -- see AgentGraph.jsx's
+// serializeGraph comment.
+const node = (id, kind, label, config = {}) => ({
   id,
   kind,
   label,
   output_key: id,
   config,
-  x,
-  y,
 });
 
 const edge = (from, to) => ({ from, to });
@@ -31,12 +33,12 @@ export const ROUTINE_EXAMPLES = [
       output_schema: { type: 'object', properties: { result: { type: 'string' } } },
       private_schema: { type: 'object', properties: { approved: { type: 'boolean' } } },
       nodes: [
-        node('request', 'prompt', 'Collect request', { prompt_template: 'Summarize the incoming request.' }, 0, 0),
-        node('approval', 'human', 'Human approval', { prompt: 'Approve review of every requested item.' }, 220, 0),
-        node('fanout', 'foreach', 'Review each item', { items_path: 'items', target: 'review-item', item_key: 'item' }, 440, 0),
-        node('review-item', 'code', 'Review item', { expression: "'reviewed:' + str(item)" }, 660, 0),
-        node('join', 'noop', 'Join reviews', {}, 880, 0),
-        node('respond', 'prompt', 'Respond', { prompt_template: 'Return the approved review summary.' }, 1100, 0),
+        node('request', 'prompt', 'Collect request', { prompt_template: 'Summarize the incoming request.' }),
+        node('approval', 'human', 'Human approval', { prompt: 'Approve review of every requested item.' }),
+        node('fanout', 'foreach', 'Review each item', { items_path: 'items', target: 'review-item', item_key: 'item' }),
+        node('review-item', 'code', 'Review item', { expression: "'reviewed:' + str(item)" }),
+        node('join', 'noop', 'Join reviews', {}),
+        node('respond', 'prompt', 'Respond', { prompt_template: 'Return the approved review summary.' }),
       ],
       edges: [edge('request', 'approval'), edge('approval', 'fanout'), edge('fanout', 'review-item'), edge('review-item', 'join'), edge('join', 'respond')],
     },
@@ -135,7 +137,7 @@ export const ROUTINE_EXAMPLES = [
     id: 'routine-all-controls', kind: 'subagent', name: 'All controls tour', role: 'Combined routine control demonstration',
     summary: 'Combines approval, fan-out, branch, retry, cache, checkpoint, and join.',
     graph: {
-      status: 'Ready', entry: 'start', settings: { checkpoint: { enabled: true, namespace: 'all-controls' }, retry: { max_attempts: 2, backoff_seconds: 0 }, loop: { max_iterations: 4 }, cache: { enabled: true, ttl_seconds: 60 } },
+      status: 'Ready', entry: 'start', settings: { checkpoint: { enabled: true, namespace: 'all-controls' }, retry: { max_attempts: 2, initial_interval: 0.5 }, recursion_limit: 20, cache: true },
       input_schema: { type: 'object', properties: { items: { type: 'array' }, mode: { type: 'string' } } }, output_schema: { type: 'object', properties: { result: { type: 'string' } } }, private_schema: { type: 'object', properties: { attempts: { type: 'integer' } } },
       nodes: [
         node('start', 'prompt', 'Start run', { prompt_template: 'Start the combined controls tour.' }),

@@ -766,6 +766,10 @@ function validateWorkingGraph(nodes, edges, entry) {
 
 // Serialize the working nodes/edges/meta into the backend graph document
 // shape. `output_key` always mirrors `id` -- it isn't independently editable.
+// No `x`/`y`: node position carries no meaning in this rigid top-down chain
+// (see the file-header comment) and the schema forbids unknown node fields
+// (RoutineNode* models are `extra="forbid"`) -- sending them made every save
+// of a real (non-gallery) routine graph fail schema validation outright.
 function serializeGraph(nodes, edges, meta) {
   return {
     status: meta.status || 'Draft',
@@ -778,8 +782,6 @@ function serializeGraph(nodes, edges, meta) {
       description: node.description || '',
       output_key: node.id,
       config: node.config || {},
-      x: Number(node.x) || 0,
-      y: Number(node.y) || 0,
     })),
     edges,
     settings: meta.settings || {},
@@ -836,9 +838,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
   const updateNode = useCallback((id, patch) => {
     setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...patch } : node)));
-  }, []);
-  const moveNode = useCallback((id, position) => {
-    setNodes((current) => current.map((node) => (node.id === id ? { ...node, ...position } : node)));
   }, []);
 
   const deleteNode = useCallback((id) => {
@@ -1032,7 +1031,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
   const editContext = useMemo(() => ({
     updateNode,
-    moveNode,
     deleteNode,
     insertAt,
     onChangeStateKey,
@@ -1047,7 +1045,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRemoveDefault,
     onRenameBranch,
     settings: meta.settings,
-  }), [updateNode, moveNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
