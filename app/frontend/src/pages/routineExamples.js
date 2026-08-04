@@ -161,17 +161,20 @@ export const ROUTINE_EXAMPLES = [
       settings: { ...baseSettings, recursion_limit: 16 },
       input_schema: { task: 'string' },
       output_schema: { finish: 'string' }, private_schema: { grade: 'string' },
+      $defs: {
+        completionGrade: {
+          type: 'object',
+          properties: { completion_pct: { type: 'number' } },
+          required: ['completion_pct'],
+          additionalProperties: false,
+        },
+      },
       nodes: [
         node('draft', 'prompt', 'Draft attempt', { prompt_template: 'Draft an attempt at: {task}' }),
         node('grade', 'prompt', 'Grade against rubric', {
           prompt_template:
             'Grade the draft below against this rubric: clarity, completeness, correctness.\n\nDraft: {draft}',
-          response_schema: {
-            type: 'object',
-            properties: { completion_pct: { type: 'number' } },
-            required: ['completion_pct'],
-            additionalProperties: false,
-          },
+          response_schema: { $ref: '#/$defs/completionGrade' },
         }),
         node('check', 'eval', 'Completion gate', { expression: 'pct >= 0.8', inputs: { pct: 'grade.completion_pct' } }),
         node('finish', 'prompt', 'Report result', { prompt_template: 'Report the final draft and its completion percentage.' }),
