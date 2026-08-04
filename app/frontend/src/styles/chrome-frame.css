@@ -7199,6 +7199,19 @@ body,
   font-style: italic;
 }
 
+/* Not every cycle can be boxed like .routine-loop -- one reached through a
+   fork branch (the common "gate fails -> go back" shape, since a *gated*
+   loop is necessarily a router edge) falls back to this chip, since the node
+   it loops back to lives outside the branch column it's rendered in. Amber
+   ties it to the same "this is a loop" language as the boxed case. */
+.routine-chip--loop {
+  color: #f0c04b;
+  background: rgb(210 153 34 / 10%);
+  border: 1px dashed rgb(210 153 34 / 45%);
+  font-style: normal;
+  font-weight: 700;
+}
+
 /* The connector line + its `+` insert control + kind-picker menu. */
 .routine-connector {
   position: relative;
