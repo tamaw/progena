@@ -153,4 +153,29 @@ export const ROUTINE_EXAMPLES = [
       ],
     },
   },
+  {
+    id: 'routine-rubric-completion', kind: 'subagent', name: 'Rubric completion gate', role: 'LLM-graded structured output loop',
+    summary: 'A grading prompt returns a structured completion percentage; the draft loops back below 80%.',
+    graph: {
+      status: 'Ready', entry: 'draft',
+      settings: { ...baseSettings, recursion_limit: 16 },
+      input_schema: { task: 'string' },
+      output_schema: { finish: 'string' }, private_schema: { grade: 'string' },
+      nodes: [
+        node('draft', 'prompt', 'Draft attempt', { prompt_template: 'Draft an attempt at: {task}' }),
+        node('grade', 'prompt', 'Grade against rubric', {
+          prompt_template:
+            'Grade the draft below against this rubric: clarity, completeness, correctness. '
+            + 'Respond with ONLY a JSON object of the form {{"completion_pct": <float 0-1>}} -- '
+            + 'no prose, no markdown fences.\n\nDraft: {draft}',
+        }),
+        node('check', 'eval', 'Completion gate', { expression: 'pct >= 0.8', inputs: { pct: 'grade_json.completion_pct' } }),
+        node('finish', 'prompt', 'Report result', { prompt_template: 'Report the final draft and its completion percentage.' }),
+      ],
+      edges: [
+        edge('draft', 'grade'), edge('grade', 'check'),
+        { from: 'check', router: 'state_equals', state_key: 'check', branches: { True: 'finish' }, default: 'draft' },
+      ],
+    },
+  },
 ];
