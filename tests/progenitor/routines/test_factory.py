@@ -42,6 +42,37 @@ class FakeModel:
         return AIMessage(content=self._responses.pop(0))
 
 
+class FakeStructuredModel:
+    """Stands in for a BaseChatModel whose ``with_structured_output(...)`` is
+    exercised (method='json_schema', strict=True, include_raw=True) -- returns
+    queued parsed values in order, one per bound Runnable's ``.ainvoke`` call.
+    A queued ``None`` simulates a schema-validation failure."""
+
+    def __init__(self, parsed_responses: list[dict | None]):
+        self._responses = list(parsed_responses)
+        self.calls: list[list] = []
+        self.bind_calls: list[dict] = []
+
+    async def ainvoke(self, messages):
+        raise AssertionError("FakeStructuredModel.ainvoke() called without with_structured_output")
+
+    def with_structured_output(self, schema, *, method, strict, include_raw=False):
+        self.bind_calls.append(
+            {"schema": schema, "method": method, "strict": strict, "include_raw": include_raw}
+        )
+        outer = self
+
+        class _StructuredRunnable:
+            async def ainvoke(_self, messages):
+                outer.calls.append(messages)
+                parsed = outer._responses.pop(0)
+                raw = AIMessage(content=json.dumps(parsed) if parsed is not None else "")
+                error = None if parsed is not None else ValueError("simulated schema violation")
+                return {"raw": raw, "parsed": parsed, "parsing_error": error}
+
+        return _StructuredRunnable()
+
+
 class FakeAgent:
     """Stands in for the ``agent_registry["repo-manager"]`` compiled target."""
 
@@ -331,6 +362,98 @@ class TestRecursionLimitSetting:
         runnable = compile_routine_graph(graph, model=FakeModel([]))
         with pytest.raises(GraphRecursionError):
             await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+
+_COMPLETION_SCHEMA = {
+    "type": "object",
+    "properties": {"completion_pct": {"type": "number"}},
+    "required": ["completion_pct"],
+    "additionalProperties": False,
+}
+
+_RESULT_SCHEMA = {
+    "type": "object",
+    "properties": {"result": {"type": "boolean"}},
+    "required": ["result"],
+    "additionalProperties": False,
+}
+
+
+def _single_prompt_step_payload_with_schema(response_schema: dict) -> dict:
+    config = {"prompt_template": "go", "response_schema": response_schema}
+    return {
+        "id": "structured-step",
+        "name": "structured-step",
+        "description": "",
+        "version": "1.0.0",
+        "entry": "step",
+        "nodes": [{"id": "step", "kind": "prompt", "output_key": "step", "config": config}],
+        "edges": [],
+        "settings": {},
+    }
+
+
+def _single_eval_rubric_step_payload_with_schema(response_schema: dict) -> dict:
+    config = {"rubric_prompt": "grade this", "response_schema": response_schema}
+    return {
+        "id": "structured-gate",
+        "name": "structured-gate",
+        "description": "",
+        "version": "1.0.0",
+        "entry": "gate",
+        "nodes": [{"id": "gate", "kind": "eval", "output_key": "gate", "config": config}],
+        "edges": [],
+        "settings": {},
+    }
+
+
+class TestResponseSchema:
+    """config.response_schema on prompt/eval nodes binds
+    model.with_structured_output(schema, method='json_schema', strict=True) instead
+    of a plain invoke -- Responses-API schema-constrained generation, not text-parsed
+    after the fact."""
+
+    async def test_prompt_node_with_response_schema_writes_validated_dict_to_output_key(self):
+        payload = _single_prompt_step_payload_with_schema(_COMPLETION_SCHEMA)
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel([{"completion_pct": 0.62}])
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert result["data"]["step"] == {"completion_pct": 0.62}
+        assert "step_json" not in result["data"]
+        assert model.bind_calls == [
+            {
+                "schema": _COMPLETION_SCHEMA,
+                "method": "json_schema",
+                "strict": True,
+                "include_raw": True,
+            }
+        ]
+
+    async def test_prompt_node_with_response_schema_raises_on_validation_failure(self):
+        payload = _single_prompt_step_payload_with_schema(_COMPLETION_SCHEMA)
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel([None])
+        runnable = compile_routine_graph(graph, model=model)
+        with pytest.raises(ValueError, match="structured response failed schema validation"):
+            await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+    async def test_eval_node_with_response_schema_reads_the_result_field(self):
+        payload = _single_eval_rubric_step_payload_with_schema(_RESULT_SCHEMA)
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel([{"result": True}])
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result["data"]["gate"] is True
+
+    async def test_eval_node_with_response_schema_false_result(self):
+        payload = _single_eval_rubric_step_payload_with_schema(_RESULT_SCHEMA)
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel([{"result": False}])
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result["data"]["gate"] is False
 
 
 class TestInputSchema:
