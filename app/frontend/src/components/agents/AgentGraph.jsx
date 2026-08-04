@@ -441,6 +441,21 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   return { type: 'node', id: nodeId, node, next, fork };
 }
 
+// Whether a branch's chain, followed to its end, reaches a genuine graph
+// END ('end') rather than looping back ('loop'), rejoining already-rendered
+// content ('rejoin'), or hitting a nested fork ('fork') -- i.e. whether it's
+// a real candidate to feed into a join. Mirrors the terminal-node walk
+// `onJoinBranches` does over the live edge list, kept in sync deliberately:
+// a branch this says "yes" to is exactly one `onJoinBranches` can wire up.
+function chainTerminus(tree) {
+  let current = tree;
+  while (current && current.type === 'node') {
+    if (current.fork) return 'fork';
+    current = current.next;
+  }
+  return current === null ? 'end' : current.type;
+}
+
 // Renders an already-computed chain-tree run: a connector before each step,
 // the step itself, and either the next connector, a fork, or a terminus.
 // Pure -- safe to invoke from a React child any number of times.
@@ -573,7 +588,15 @@ function ForkBlock({ fork }) {
     onJoinBranches,
   } = useContext(GraphEditContext);
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
-  const pathCount = branches.length + (edge.default ? 1 : 0);
+  // Only branches that actually reach a real END are candidates to join --
+  // a branch that loops back or hits a nested fork never falls through to
+  // whatever sits below this one, so it has no business fanning into a
+  // "Join branches" connector. Mirrors `onJoinBranches`'s own terminal walk.
+  const joinableValues = new Set([
+    ...branches.filter(({ tree }) => chainTerminus(tree) === 'end').map(({ value }) => value),
+    ...(edge.default && chainTerminus(defaultTree) === 'end' ? ['default'] : []),
+  ]);
+  const canOfferJoin = joinableValues.size > 1;
   const hasJoin = Boolean(joinTree);
 
   const containerRef = useRef(null);
@@ -625,7 +648,11 @@ function ForkBlock({ fork }) {
     <div className="routine-fork" ref={containerRef}>
       <div className="routine-fork__row">
         {branches.map(({ value, tree }) => (
-          <div key={value} className="routine-fork__column" ref={registerColumn(value)}>
+          <div
+            key={value}
+            className="routine-fork__column"
+            ref={joinTree || joinableValues.has(value) ? registerColumn(value) : undefined}
+          >
             <BranchHeader
               key={value}
               value={value}
@@ -636,7 +663,10 @@ function ForkBlock({ fork }) {
           </div>
         ))}
         {edge.default ? (
-          <div className="routine-fork__column routine-fork__column--default" ref={registerColumn('default')}>
+          <div
+            className="routine-fork__column routine-fork__column--default"
+            ref={joinTree || joinableValues.has('default') ? registerColumn('default') : undefined}
+          >
             <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
             {renderRun(defaultTree, { sourceId, kind: 'default' })}
           </div>
@@ -672,7 +702,7 @@ function ForkBlock({ fork }) {
           <span className="routine-fork__join-label">Branches joined</span>
           {renderRun(joinTree, { sourceId, kind: 'join' })}
         </div>
-      ) : pathCount > 1 ? (
+      ) : canOfferJoin ? (
         <button type="button" ref={targetRef} className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
           + Join branches
         </button>
