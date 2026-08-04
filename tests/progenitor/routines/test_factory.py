@@ -331,3 +331,192 @@ class TestRecursionLimitSetting:
         runnable = compile_routine_graph(graph, model=FakeModel([]))
         with pytest.raises(GraphRecursionError):
             await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+
+class TestInputSchema:
+    """input_schema declares extra top-level channels a caller can pass alongside
+    messages; the seed node copies each into data so config.inputs paths reach them."""
+
+    async def test_declared_field_reaches_data_and_messages_survive(self):
+        payload = {
+            "id": "echo",
+            "name": "echo",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {
+                    "id": "a",
+                    "kind": "code",
+                    "output_key": "echo",
+                    "config": {"expression": "candidate", "inputs": {"candidate": "candidate"}},
+                }
+            ],
+            "edges": [],
+            "input_schema": {"candidate": "string"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke(
+            {"messages": [HumanMessage(content="go")], "candidate": "hello world"}
+        )
+        assert result["data"]["candidate"] == "hello world"
+        assert result["data"]["echo"] == "hello world"
+        assert result["messages"][0].content == "go"
+
+    async def test_undeclared_field_is_silently_dropped(self):
+        # No input_schema declared: only messages/data survive the input filter,
+        # matching every pre-existing routine's behavior (regression guard).
+        payload = {
+            "id": "echo",
+            "name": "echo",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke(
+            {"messages": [HumanMessage(content="go")], "candidate": "hello"}
+        )
+        assert "candidate" not in result
+        assert "candidate" not in result["data"]
+
+
+class TestOutputSchema:
+    """output_schema natively projects the compiled graph's invoke() result down to
+    {messages, **declared fields} via an auto-inserted terminal projector node."""
+
+    async def test_projects_only_declared_fields_plus_messages(self):
+        payload = {
+            "id": "project",
+            "name": "project",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "kept", "config": {"expression": "1"}},
+                {"id": "b", "kind": "code", "output_key": "dropped", "config": {"expression": "2"}},
+            ],
+            "edges": [{"from": "a", "to": "b"}],
+            "output_schema": {"kept": "integer"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result == {"messages": result["messages"], "kept": 1}
+        assert result["messages"][0].content == "go"
+
+    async def test_field_missing_at_end_of_run_is_omitted_not_erroring(self):
+        payload = {
+            "id": "partial",
+            "name": "partial",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+            "output_schema": {"a": "integer", "never_produced": "string"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result["a"] == 1
+        assert "never_produced" not in result
+
+    async def test_no_output_schema_returns_full_internal_state(self):
+        # Regression guard: the common case (no output_schema) is untouched --
+        # 'data' and every field it accumulated still come back whole.
+        payload = {
+            "id": "full",
+            "name": "full",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result["data"]["a"] == 1
+
+
+class TestPrivateSchema:
+    """private_schema fields are excluded from output_schema's projection --
+    only matters together with a declared output_schema (see the JSON schema doc)."""
+
+    async def test_private_field_excluded_even_though_computed(self):
+        payload = {
+            "id": "secret",
+            "name": "secret",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "secret", "config": {"expression": "1"}},
+                {"id": "b", "kind": "code", "output_key": "public", "config": {"expression": "2"}},
+            ],
+            "edges": [{"from": "a", "to": "b"}],
+            "output_schema": {"public": "integer"},
+            "private_schema": {"secret": "integer"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+        assert result == {"messages": result["messages"], "public": 2}
+        assert "secret" not in result
+
+    async def test_field_in_both_output_and_private_schema_raises_at_compile_time(self):
+        payload = {
+            "id": "conflict",
+            "name": "conflict",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "shared", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+            "output_schema": {"shared": "integer"},
+            "private_schema": {"shared": "integer"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        with pytest.raises(ValueError, match="declared in both output_schema and private_schema"):
+            compile_routine_graph(graph, model=FakeModel([]))
+
+
+class TestSubagentDelegationContract:
+    """_build_subagent_node/_build_agent_node and subagent.py's CompiledSubAgent
+    proxy both unconditionally read result["messages"] from a compiled routine's
+    invoke() -- an output_schema that dropped messages would silently break
+    delegation for any routine invoked as a subagent."""
+
+    async def test_output_schema_still_returns_messages_for_delegation(self):
+        payload = {
+            "id": "delegate-target",
+            "name": "delegate-target",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "code", "output_key": "result", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+            "output_schema": {"result": "integer"},
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="delegated call")]})
+        # Mirrors _build_subagent_node's own access pattern exactly.
+        target_messages = result.get("messages") or []
+        assert target_messages, "messages must survive output_schema projection"
+        assert target_messages[0].content == "delegated call"

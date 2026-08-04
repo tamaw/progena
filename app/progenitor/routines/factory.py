@@ -30,6 +30,7 @@ from langgraph.types import CachePolicy, RetryPolicy, Send, interrupt
 from .expression import evaluate_expression
 from .graph import (
     ROUTINE_NODE_RETRY_DEFAULTS,
+    ROUTINE_PROJECT_NODE_ID,
     ROUTINE_SEED_NODE_ID,
     RoutineContext,
     RoutineEdge,
@@ -51,12 +52,6 @@ def _merge_data(existing: dict[str, Any] | None, update: dict[str, Any] | None) 
 
 class RoutineState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
-    data: Annotated[dict[str, Any], _merge_data]
-
-
-class RoutinePrivateState(TypedDict, total=False):
-    """Private execution channels kept out of a routine's public output."""
-
     data: Annotated[dict[str, Any], _merge_data]
 
 
@@ -103,12 +98,71 @@ def _cache_policy(config: dict[str, Any]) -> CachePolicy | None:
     )
 
 
-def _schema_type(name: str, fields: dict[str, str] | None) -> Any:
-    if not fields:
-        return None
-    annotations = dict.fromkeys(fields, Any)
+_RESERVED_STATE_CHANNELS = frozenset({"messages", "data"})
+
+
+def _extra_state_fields(*schemas: dict[str, str] | None) -> list[str]:
+    """Union of declared input/output field names (order-stable, de-duplicated,
+    reserved base channel names dropped -- a graph author declaring "data" or
+    "messages" in input_schema/output_schema just means that base channel,
+    not a second one)."""
+    seen = set(_RESERVED_STATE_CHANNELS)
+    names: list[str] = []
+    for schema in schemas:
+        for name in schema or {}:
+            if name in seen:
+                continue
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _extended_state_type(extra_fields: list[str]) -> Any:
+    """RoutineState plus one extra Any-typed top-level channel per declared
+    input/output field, so the seed unpacker / output projector (and any
+    node) can read or write them like any other state key. Only built when a
+    graph actually declares extra fields -- the common (no schema) case keeps
+    using the static RoutineState untouched."""
+    if not extra_fields:
+        return RoutineState
     typed_dict_factory: Any = TypedDict
-    return typed_dict_factory(name, annotations, total=False)
+    annotations: dict[str, Any] = {
+        "messages": Annotated[list[BaseMessage], add_messages],
+        "data": Annotated[dict[str, Any], _merge_data],
+        **dict.fromkeys(extra_fields, Any),
+    }
+    return typed_dict_factory("RoutineOverallState", annotations, total=False)
+
+
+def _input_schema_type(input_fields: list[str]) -> Any:
+    """``messages`` is always accepted alongside whatever input_schema
+    declares -- every routine invocation is driven by a conversational turn,
+    input_schema only adds structured fields on top of it."""
+    if not input_fields:
+        return None
+    typed_dict_factory: Any = TypedDict
+    annotations: dict[str, Any] = {
+        "messages": Annotated[list[BaseMessage], add_messages],
+        **dict.fromkeys(input_fields, Any),
+    }
+    return typed_dict_factory("RoutineInputState", annotations, total=False)
+
+
+def _output_schema_type(output_fields: list[str]) -> Any:
+    """``messages`` is always returned alongside whatever output_schema
+    declares. Nested routine-as-subagent delegation (_build_subagent_node /
+    _build_agent_node below) and the top-level CompiledSubAgent proxy
+    (subagent.py's ``_run``) both unconditionally read ``result["messages"]``
+    -- an output_schema that dropped it would silently break delegation for
+    any routine invoked as a subagent."""
+    if not output_fields:
+        return None
+    typed_dict_factory: Any = TypedDict
+    annotations: dict[str, Any] = {
+        "messages": Annotated[list[BaseMessage], add_messages],
+        **dict.fromkeys(output_fields, Any),
+    }
+    return typed_dict_factory("RoutineOutputState", annotations, total=False)
 
 
 def _cache_key(value: Any) -> str:
@@ -237,12 +291,19 @@ def _combined_system_prompt(
     return "\n\n".join(parts) if parts else None
 
 
-def _seed_node() -> Any:
-    async def seed(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+def _seed_node(input_fields: list[str] | None = None) -> Any:
+    fields = input_fields or []
+
+    async def seed(state: dict[str, Any], runtime: Runtime | None = None) -> dict[str, Any]:
         messages = state.get("messages") or []
         request = normalize_message_content(messages[-1].content) if messages else ""
+        seeded: dict[str, Any] = {"request": request, **_context_data(runtime)}
+        for field in fields:
+            value = state.get(field)
+            if value is not None:
+                seeded[field] = value
         _emit(runtime, "routine.seed", {"request": request})
-        return {"data": {"request": request, **_context_data(runtime)}}
+        return {"data": seeded}
 
     return seed
 
@@ -518,6 +579,27 @@ def _build_router(edge: RoutineEdge) -> Callable[[RoutineState], str]:
     return route
 
 
+def _build_output_projector(output_fields: list[str]) -> Any:
+    """Copies each declared output_schema field's value out of ``data`` (via
+    the same dotted-path resolution routerEdge.state_key uses) into its own
+    top-level channel, which is what makes output_schema's projection real:
+    invoke() returns exactly {messages, **declared fields}. A field absent
+    from data at this point is silently omitted rather than erroring -- not
+    every terminal path necessarily produces every declared output field."""
+
+    async def project(state: RoutineState) -> dict[str, Any]:
+        data = state.get("data", {})
+        result: dict[str, Any] = {}
+        for field in output_fields:
+            try:
+                result[field] = resolve_data_path(data, field)
+            except KeyError:
+                continue
+        return result
+
+    return project
+
+
 def compile_routine_graph(
     graph: RoutineGraph,
     *,
@@ -543,16 +625,23 @@ def compile_routine_graph(
     if graph.entry not in node_ids:
         raise ValueError(f"entry references unknown node: {graph.entry}")
 
+    input_fields = list(graph.input_schema or {})
+    output_fields = list(graph.output_schema or {})
+    private_fields = set(graph.private_schema or {})
+    overlap = sorted(set(output_fields) & private_fields)
+    if overlap:
+        raise ValueError(f"field(s) declared in both output_schema and private_schema: {overlap}")
+
     builder = StateGraph(
-        RoutineState,
+        _extended_state_type(_extra_state_fields(graph.input_schema, graph.output_schema)),
         context_schema=RoutineContext,
-        input_schema=_schema_type("RoutineInputState", graph.input_schema),
-        output_schema=_schema_type("RoutineOutputState", graph.output_schema),
+        input_schema=_input_schema_type(input_fields),
+        output_schema=_output_schema_type(output_fields),
     )
     default_retry_policy = _retry_policy(graph.settings)
     if default_retry_policy is not None:
         builder.set_node_defaults(retry_policy=default_retry_policy)
-    builder.add_node(_SEED_NODE_ID, _seed_node())
+    builder.add_node(_SEED_NODE_ID, _seed_node(input_fields))
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
 
@@ -571,6 +660,16 @@ def compile_routine_graph(
             cache_policy=_cache_policy(node.config),
         )
 
+    # Every path that would otherwise go straight to END routes through the
+    # projector instead when output_schema is declared, so its declared
+    # fields become real top-level channels before the graph actually ends
+    # -- see _build_output_projector.
+    terminal_target = END
+    if output_fields:
+        builder.add_node(ROUTINE_PROJECT_NODE_ID, _build_output_projector(output_fields))
+        builder.add_edge(ROUTINE_PROJECT_NODE_ID, END)
+        terminal_target = ROUTINE_PROJECT_NODE_ID
+
     outgoing: dict[str, list[RoutineEdge]] = defaultdict(list)
     for edge in graph.edges:
         outgoing[edge.from_].append(edge)
@@ -581,7 +680,7 @@ def compile_routine_graph(
             builder.add_conditional_edges(node.id, _build_send_router(node))
             continue
         if not edges:
-            builder.add_edge(node.id, END)
+            builder.add_edge(node.id, terminal_target)
             continue
         router_edges = [edge for edge in edges if edge.is_router]
         if router_edges:
