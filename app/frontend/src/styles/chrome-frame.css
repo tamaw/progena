@@ -7445,6 +7445,77 @@ body,
   display: none;
 }
 
+/* Retry loop: same idea as .routine-foreach, but boxes a *cycle* -- the
+   chain segment from the node it loops back to through the back-edge --
+   instead of leaving a floating "loops back to" chip with nothing visually
+   tying it to the steps it actually repeats. Amber, not teal, so the two
+   scope kinds read as distinct at a glance. */
+.routine-loop {
+  width: max-content;
+  min-width: min(480px, 100%);
+  max-width: 100%;
+  margin: 8px auto 0;
+  padding: 10px;
+  background: color-mix(in oklab, #d29922 6%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in oklab, #d29922 42%, var(--color-border));
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+
+.routine-loop__head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 2px 2px 10px;
+}
+
+.routine-loop__eyebrow {
+  color: #d29922;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.routine-loop__badge {
+  padding: 3px 8px;
+  color: #f0c04b;
+  background: rgb(210 153 34 / 14%);
+  border: 1px solid rgb(210 153 34 / 30%);
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.routine-loop__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 78px;
+  padding: 9px 12px 4px;
+  background: color-mix(in oklab, var(--color-bg-primary) 72%, transparent);
+  border: 1px dashed color-mix(in oklab, #d29922 45%, var(--color-border));
+  border-radius: 10px;
+}
+
+.routine-loop__body .routine-connector {
+  min-height: 30px;
+}
+
+.routine-loop__body > .routine-cap--end {
+  display: none;
+}
+
+.routine-loop__back {
+  margin-top: 6px;
+  color: #f0c04b;
+  font-size: 11px;
+  font-style: italic;
+  text-align: center;
+}
+
 /* Router fork: one swim-lane column per branch (+ optional Default),
    mirrors Azure Logic Apps'/Power Automate's Condition/Switch actions. No
    forced merge node -- a branch just ends where it ends. */

@@ -453,6 +453,14 @@ function splitForeachBody(tree) {
 
 function renderRun(tree, initialSlot) {
   const out = [];
+  // nodeId -> index into `out` right before that node's own content (its
+  // StepCard/ForeachBlock) was pushed, i.e. after its incoming connector.
+  // A cycle back to an ancestor in *this same* linear pass can then splice
+  // out its whole body and box it, mirroring how a foreach gets a scope --
+  // a cycle reached through a fork branch or foreach body (a separate
+  // renderRun call, separate `positions` map) just falls back to the plain
+  // "loops back to" chip below.
+  const positions = new Map();
   let current = tree;
   let slot = initialSlot;
   let guard = 0;
@@ -463,7 +471,13 @@ function renderRun(tree, initialSlot) {
       break;
     }
     if (current.type === 'loop') {
-      out.push(<ChainChip key={`loop-${current.id}`} kind="loop" label={`↺ loops back to “${current.label}”`} />);
+      const bodyStart = positions.get(current.id);
+      if (bodyStart !== undefined) {
+        const body = out.splice(bodyStart);
+        out.push(<LoopBlock key={`loop-${current.id}`} targetLabel={current.label} body={body} />);
+      } else {
+        out.push(<ChainChip key={`loop-${current.id}`} kind="loop" label={`↺ loops back to “${current.label}”`} />);
+      }
       break;
     }
     if (current.type === 'rejoin') {
@@ -474,6 +488,7 @@ function renderRun(tree, initialSlot) {
       out.push(<ChainChip key={`join-${current.id}`} kind="rejoin" label={`↳ joins at “${current.label}”`} />);
       break;
     }
+    positions.set(current.id, out.length);
     if (current.node.kind === 'foreach') {
       const [bodyTree, afterTree] = splitForeachBody(current.next);
       out.push(
@@ -497,6 +512,26 @@ function renderRun(tree, initialSlot) {
     current = current.next;
   }
   return out;
+}
+
+// Retry loop: boxes the cycle's body -- from the node it loops back to,
+// through everything up to the back-edge -- like ForeachBlock does for a
+// fan-out, instead of leaving just a floating "loops back to" chip.
+function LoopBlock({ targetLabel, body }) {
+  const { settings } = useContext(GraphEditContext);
+  const maxIterations = settings?.loop?.max_iterations;
+  const maxAttempts = settings?.retry?.max_attempts;
+  return (
+    <section className="routine-loop" aria-label={`Retry loop back to ${targetLabel}`}>
+      <div className="routine-loop__head">
+        <span className="routine-loop__eyebrow">↺ Retry loop</span>
+        {maxIterations ? <span className="routine-loop__badge">Up to {maxIterations} iterations</span> : null}
+        {maxAttempts ? <span className="routine-loop__badge">{maxAttempts} attempts/step</span> : null}
+      </div>
+      <div className="routine-loop__body">{body}</div>
+      <div className="routine-loop__back">↺ back to “{targetLabel}”</div>
+    </section>
+  );
 }
 
 function ForeachBlock({ node, body }) {
@@ -1011,7 +1046,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
-  }), [updateNode, moveNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch]);
+    settings: meta.settings,
+  }), [updateNode, moveNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
