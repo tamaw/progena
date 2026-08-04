@@ -456,6 +456,46 @@ class TestResponseSchema:
         assert result["data"]["gate"] is False
 
 
+def _single_prompt_step_payload_with_ref(
+    ref_schema: dict, *, defs: dict[str, dict] | None = None
+) -> dict:
+    payload = _single_prompt_step_payload_with_schema(ref_schema)
+    payload["$defs"] = defs if defs is not None else {"completion": _COMPLETION_SCHEMA}
+    return payload
+
+
+class TestResponseSchemaRef:
+    """config.response_schema may be {"$ref": "#/$defs/<name>"} instead of an inline
+    schema, resolved against the routine graph document's own top-level $defs --
+    reuse across a routine's nodes without repeating the same schema."""
+
+    async def test_ref_resolves_against_graph_defs_and_reaches_the_bound_model(self):
+        payload = _single_prompt_step_payload_with_ref({"$ref": "#/$defs/completion"})
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel([{"completion_pct": 0.5}])
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert result["data"]["step"] == {"completion_pct": 0.5}
+        assert model.bind_calls[0]["schema"] == _COMPLETION_SCHEMA
+
+    async def test_ref_to_an_undefined_name_raises_valueerror(self):
+        payload = _single_prompt_step_payload_with_ref(
+            {"$ref": "#/$defs/missing"}, defs={"completion": _COMPLETION_SCHEMA}
+        )
+        graph = validate_routine_graph_payload(payload)
+        with pytest.raises(ValueError, match="undefined '\\$defs.missing'"):
+            compile_routine_graph(graph, model=FakeStructuredModel([]))
+
+    async def test_malformed_ref_shape_raises_valueerror(self):
+        payload = _single_prompt_step_payload_with_ref(
+            {"$ref": "completion"}, defs={"completion": _COMPLETION_SCHEMA}
+        )
+        graph = validate_routine_graph_payload(payload)
+        with pytest.raises(ValueError, match="must be of the form '#/\\$defs/<name>'"):
+            compile_routine_graph(graph, model=FakeStructuredModel([]))
+
+
 class TestInputSchema:
     """input_schema declares extra top-level channels a caller can pass alongside
     messages; the seed node copies each into data so config.inputs paths reach them."""
