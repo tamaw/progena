@@ -784,6 +784,7 @@ function serializeGraph(nodes, edges, meta) {
     input_schema: meta.input_schema || null,
     output_schema: meta.output_schema || null,
     private_schema: meta.private_schema || null,
+    $defs: meta.$defs || {},
   };
 }
 function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
@@ -798,6 +799,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     input_schema: graph.input_schema || null,
     output_schema: graph.output_schema || null,
     private_schema: graph.private_schema || null,
+    $defs: graph.$defs || {},
   });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
@@ -1088,6 +1090,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       input_schema: parsed.input_schema || null,
       output_schema: parsed.output_schema || null,
       private_schema: parsed.private_schema || null,
+      $defs: parsed.$defs || {},
     };
     setMeta(nextMeta);
     setNodes((parsed.nodes || []).map((node) => ({ ...node })));
@@ -1240,6 +1243,7 @@ function graphToJson(graph) {
       input_schema: graph.input_schema || null,
       output_schema: graph.output_schema || null,
       private_schema: graph.private_schema || null,
+      $defs: graph.$defs || {},
     },
     null,
     2,
