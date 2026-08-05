@@ -7407,18 +7407,6 @@ body,
   font-weight: 700;
 }
 
-.routine-foreach__mode {
-  padding: 4px 7px;
-  color: #8ee8da;
-  background: rgb(24 169 153 / 14%);
-  border: 1px solid rgb(24 169 153 / 30%);
-  border-radius: 999px;
-  font-size: 10px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .routine-foreach__body {
   display: flex;
   flex-direction: column;

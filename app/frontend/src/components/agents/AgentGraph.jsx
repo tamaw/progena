@@ -579,7 +579,6 @@ function ForeachBlock({ node, body }) {
           <span className="routine-foreach__arrow" aria-hidden="true">←</span>
           <code>{itemsPath}</code>
         </div>
-        <span className="routine-foreach__mode">Parallel</span>
       </div>
       <div className="routine-foreach__body">
         {body}
