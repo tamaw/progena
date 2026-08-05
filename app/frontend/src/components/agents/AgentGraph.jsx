@@ -322,6 +322,7 @@ function ConnectorInsert({ slot }) {
 
   return (
     <div className="routine-connector" ref={wrapRef}>
+      <span className="routine-connector__line" aria-hidden="true" />
       <button
         type="button"
         className="routine-connector__btn"
@@ -353,7 +354,7 @@ function ConnectorInsert({ slot }) {
 
 // Editable branch-case chip: the column header for one fork arm. Mirrors
 // Power Automate's per-case label -- double-click (or just focus) to rename.
-function BranchHeader({ value, isDefault, onRename, onRemove }) {
+function BranchHeader({ value, isDefault, onRename, onRemove, collapsed, onToggleCollapse }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   function commit() {
@@ -364,6 +365,16 @@ function BranchHeader({ value, isDefault, onRename, onRemove }) {
   }
   return (
     <div className={`routine-fork__header ${isDefault ? 'routine-fork__header--default' : ''}`}>
+      <button
+        type="button"
+        className="routine-fork__header-collapse"
+        onClick={onToggleCollapse}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
+        title={collapsed ? 'Expand branch' : 'Collapse branch'}
+      >
+        {collapsed ? '▸' : '▾'}
+      </button>
       {isDefault ? (
         <span className="routine-fork__header-label">Default</span>
       ) : editing ? (
@@ -474,6 +485,21 @@ function chainTerminus(tree) {
   return current === null ? 'end' : current.type;
 }
 
+function countSteps(tree) {
+  let n = 0;
+  let current = tree;
+  while (current && current.type === 'node') {
+    n += 1;
+    if (current.fork) {
+      n += current.fork.branches.reduce((sum, branch) => sum + countSteps(branch.tree), 0)
+        + countSteps(current.fork.defaultTree) + countSteps(current.fork.joinTree);
+      break;
+    }
+    current = current.next;
+  }
+  return n;
+}
+
 // Renders an already-computed chain-tree run: a connector before each step,
 // the step itself, and either the next connector, a fork, or a terminus.
 // Pure -- safe to invoke from a React child any number of times.
@@ -484,7 +510,7 @@ function splitForeachBody(tree) {
   return [{ ...tree, next: bodyNext }, after];
 }
 
-function renderRun(tree, initialSlot) {
+function renderRun(tree, initialSlot, suppressJoinChip = false) {
   const out = [];
   // nodeId -> index into `out` right before that node's own content (its
   // StepCard/ForeachBlock) was pushed, i.e. after its incoming connector.
@@ -518,7 +544,9 @@ function renderRun(tree, initialSlot) {
       break;
     }
     if (current.type === 'join') {
-      out.push(<ChainChip key={`join-${current.id}`} kind="rejoin" label={`↳ joins at “${current.label}”`} />);
+      if (!suppressJoinChip) {
+        out.push(<ChainChip key={`join-${current.id}`} kind="rejoin" label={`↳ joins at “${current.label}”`} />);
+      }
       break;
     }
     positions.set(current.id, out.length);
@@ -536,11 +564,11 @@ function renderRun(tree, initialSlot) {
       continue;
     }
 
-    out.push(<StepCard key={current.id} node={current.node} routerEdge={current.fork ? current.fork.edge : null} />);
     if (current.fork) {
-      out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} />);
+      out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} node={current.node} />);
       break;
     }
+    out.push(<StepCard key={current.id} node={current.node} routerEdge={null} />);
     slot = { sourceId: current.id, kind: 'plain' };
     current = current.next;
   }
@@ -581,16 +609,10 @@ function ForeachBlock({ node, body }) {
   );
 }
 
-// A router node forks into one column per branch (+ optional Default), each
-// an independently rigid chain -- no forced merge node, exactly like Azure
-// Logic Apps' Condition/Switch actions. No connector lines between the
-// router and its columns, or between the columns and the join box/button --
-// two rounds of measuring real DOM rects (ResizeObserver + getBoundingClientRect)
-// to draw them precisely still produced visibly misaligned lines on branch
-// add/rename, and pixel-perfect swim-lane connectors aren't worth that
-// fragility. The dashed column borders plus the "N paths" badge already
-// say "these columns come from this router" without them.
-function ForkBlock({ fork }) {
+// A router node and its branch lanes form one CSS-only switch box. Connector
+// rails are pseudo-elements, never DOM measurements: centring the box makes
+// the router stem meet the lane rail even when lanes have different widths.
+function ForkBlock({ fork, node }) {
   const {
     onAddBranch,
     onAddDefault,
@@ -599,59 +621,100 @@ function ForkBlock({ fork }) {
     onRenameBranch,
     onJoinBranches,
   } = useContext(GraphEditContext);
+  const [collapsed, setCollapsed] = useState(() => new Set());
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
-  // Only branches that actually reach a real END are candidates to join --
-  // a branch that loops back or hits a nested fork never falls through to
-  // whatever sits below this one, so it has no business offering a
-  // "Join branches" action. Mirrors `onJoinBranches`'s own terminal walk.
+  const lanes = [
+    ...branches.map(({ value, tree }) => ({
+      value,
+      tree,
+      isDefault: false,
+      slot: { sourceId, kind: 'branch', value },
+    })),
+    ...(edge.default ? [{
+      value: 'default',
+      tree: defaultTree,
+      isDefault: true,
+      slot: { sourceId, kind: 'default' },
+    }] : []),
+  ];
+  const joining = joinTree ? lanes.filter((lane) => chainTerminus(lane.tree) === 'join') : [];
+  const joiningValues = new Set(joining.map(({ value }) => value));
   const joinableValues = useMemo(() => new Set([
     ...branches.filter(({ tree }) => chainTerminus(tree) === 'end').map(({ value }) => value),
     ...(edge.default && chainTerminus(defaultTree) === 'end' ? ['default'] : []),
   ]), [branches, edge.default, defaultTree]);
   const canOfferJoin = joinableValues.size > 1;
+  const toggleCollapse = useCallback((value) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  }, []);
 
   return (
-    <div className="routine-fork">
-      <div className="routine-fork__row">
-        {branches.map(({ value, tree }) => (
-          <div key={value} className="routine-fork__column">
-            <BranchHeader
-              key={value}
-              value={value}
-              onRename={(next) => onRenameBranch(sourceId, value, next)}
-              onRemove={() => onRemoveBranch(sourceId, value)}
-            />
-            {renderRun(tree, { sourceId, kind: 'branch', value })}
-          </div>
-        ))}
-        {edge.default ? (
-          <div className="routine-fork__column routine-fork__column--default">
-            <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
-            {renderRun(defaultTree, { sourceId, kind: 'default' })}
-          </div>
-        ) : (
-          <div className="routine-fork__column routine-fork__column--empty">
-            <button type="button" className="routine-fork__add-default" onClick={() => onAddDefault(sourceId)}>
-              + Add default
-            </button>
-          </div>
-        )}
-        <div className="routine-fork__column routine-fork__column--add">
-          <button type="button" className="routine-fork__add-branch" onClick={() => onAddBranch(sourceId)}>
-            + Add branch
-          </button>
+    <section className={`routine-fork ${joining.length ? 'routine-fork--joined' : ''}`}>
+      <div className="routine-fork__head">
+        <StepCard node={node} routerEdge={edge} />
+      </div>
+      <div className="routine-fork__branches">
+        <div className="routine-fork__lanes">
+          {lanes.map((lane, index) => {
+            const isCollapsed = collapsed.has(lane.value);
+            const joiningIndex = joining.findIndex(({ value }) => value === lane.value);
+            const classes = [
+              'routine-fork__lane',
+              lane.isDefault && 'routine-fork__lane--default',
+              index === 0 && 'routine-fork__lane--fanout-first',
+              index === lanes.length - 1 && 'routine-fork__lane--fanout-last',
+              joiningValues.has(lane.value) && 'routine-fork__lane--fanin',
+              joiningIndex >= 0 && joiningIndex === 0 && 'routine-fork__lane--fanin-first',
+              joiningIndex >= 0 && joiningIndex === joining.length - 1 && 'routine-fork__lane--fanin-last',
+            ].filter(Boolean).join(' ');
+            const stepCount = countSteps(lane.tree);
+            return (
+              <div key={lane.value} className={classes}>
+                <span className="routine-fork__wire" aria-hidden="true" />
+                <BranchHeader
+                  value={lane.value}
+                  isDefault={lane.isDefault}
+                  onRename={(next) => onRenameBranch(sourceId, lane.value, next)}
+                  onRemove={() => (lane.isDefault ? onRemoveDefault(sourceId) : onRemoveBranch(sourceId, lane.value))}
+                  collapsed={isCollapsed}
+                  onToggleCollapse={() => toggleCollapse(lane.value)}
+                />
+                {isCollapsed ? (
+                  <div className="routine-fork__lane-collapsed">
+                    {stepCount} step{stepCount === 1 ? '' : 's'}
+                  </div>
+                ) : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
+              </div>
+            );
+          })}
         </div>
       </div>
       {joinTree ? (
         <div className="routine-fork__join">
           {renderRun(joinTree, { sourceId, kind: 'join' })}
         </div>
-      ) : canOfferJoin ? (
-        <button type="button" className="routine-fork__join-action" onClick={() => onJoinBranches(sourceId)}>
-          + Join branches
-        </button>
       ) : null}
-    </div>
+      <div className="routine-fork__actions">
+        <button type="button" className="routine-fork__action" onClick={() => onAddBranch(sourceId)}>
+          + Add branch
+        </button>
+        {!edge.default ? (
+          <button type="button" className="routine-fork__action" onClick={() => onAddDefault(sourceId)}>
+            + Add default
+          </button>
+        ) : null}
+        {!joinTree && canOfferJoin ? (
+          <button type="button" className="routine-fork__action" onClick={() => onJoinBranches(sourceId)}>
+            + Join branches
+          </button>
+        ) : null}
+      </div>
+    </section>
   );
 }
 
