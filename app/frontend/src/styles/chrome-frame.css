@@ -7501,20 +7501,14 @@ body,
 .routine-fork__switch {
   display: flex;
   align-items: stretch;
-  gap: 20px;
   background: color-mix(in oklab, var(--color-bg-primary) 60%, transparent);
   border: 1px solid var(--color-border);
   border-radius: 12px;
+  overflow: hidden;
 }
 
-.routine-fork__switch .routine-fork__column:not(:first-child)::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: -10px;
-  width: 1px;
-  background: var(--color-border);
+.routine-fork__switch .routine-fork__column + .routine-fork__column {
+  border-left: 1px solid var(--color-border);
 }
 
 .routine-fork__column--empty,
