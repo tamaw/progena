@@ -353,7 +353,7 @@ function ConnectorInsert({ slot }) {
 
 // Editable branch-case chip: the column header for one fork arm. Mirrors
 // Power Automate's per-case label -- double-click (or just focus) to rename.
-function BranchHeader({ value, isDefault, collapsed, onToggleCollapse, onRename, onRemove }) {
+function BranchHeader({ value, isDefault, onRename, onRemove }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   function commit() {
@@ -364,15 +364,6 @@ function BranchHeader({ value, isDefault, collapsed, onToggleCollapse, onRename,
   }
   return (
     <div className={`routine-fork__header ${isDefault ? 'routine-fork__header--default' : ''}`}>
-      <button
-        type="button"
-        className="routine-fork__header-collapse"
-        onClick={onToggleCollapse}
-        title={collapsed ? 'Expand branch' : 'Collapse branch'}
-        aria-label={collapsed ? 'Expand branch' : 'Collapse branch'}
-      >
-        {collapsed ? '\u25b8' : '\u25be'}
-      </button>
       {isDefault ? (
         <span className="routine-fork__header-label">Default</span>
       ) : editing ? (
@@ -592,15 +583,13 @@ function ForeachBlock({ node, body }) {
 
 // A router node forks into one column per branch (+ optional Default), each
 // an independently rigid chain -- no forced merge node, exactly like Azure
-// Logic Apps' Condition/Switch actions. Real branches (not the "add new"
-// affordances) share one outer box -- a single border/background says
-// "these columns come from this router" instead of a border per column, the
-// same containment Copilot Studio's switch action uses. No connector lines
-// between the router and its columns, or between the columns and the join
-// box/button -- two rounds of measuring real DOM rects (ResizeObserver +
-// getBoundingClientRect) to draw them precisely still produced visibly
-// misaligned lines on branch add/rename, and pixel-perfect swim-lane
-// connectors aren't worth that fragility.
+// Logic Apps' Condition/Switch actions. No connector lines between the
+// router and its columns, or between the columns and the join box/button --
+// two rounds of measuring real DOM rects (ResizeObserver + getBoundingClientRect)
+// to draw them precisely still produced visibly misaligned lines on branch
+// add/rename, and pixel-perfect swim-lane connectors aren't worth that
+// fragility. The dashed column borders plus the "N paths" badge already
+// say "these columns come from this router" without them.
 function ForkBlock({ fork }) {
   const {
     onAddBranch,
@@ -611,15 +600,6 @@ function ForkBlock({ fork }) {
     onJoinBranches,
   } = useContext(GraphEditContext);
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
-  // Local-only display state: which branches are folded shut. Not part of
-  // the graph document -- purely a "this branch isn't what I'm looking at
-  // right now" affordance, reset per mount like scroll position.
-  const [collapsed, setCollapsed] = useState(() => new Set());
-  const toggleCollapsed = (value) => setCollapsed((current) => {
-    const next = new Set(current);
-    if (next.has(value)) next.delete(value); else next.add(value);
-    return next;
-  });
   // Only branches that actually reach a real END are candidates to join --
   // a branch that loops back or hits a nested fork never falls through to
   // whatever sits below this one, so it has no business offering a
@@ -633,33 +613,23 @@ function ForkBlock({ fork }) {
   return (
     <div className="routine-fork">
       <div className="routine-fork__row">
-        <div className="routine-fork__switch">
-          {branches.map(({ value, tree }) => (
-            <div key={value} className="routine-fork__column">
-              <BranchHeader
-                value={value}
-                collapsed={collapsed.has(value)}
-                onToggleCollapse={() => toggleCollapsed(value)}
-                onRename={(next) => onRenameBranch(sourceId, value, next)}
-                onRemove={() => onRemoveBranch(sourceId, value)}
-              />
-              {collapsed.has(value) ? null : renderRun(tree, { sourceId, kind: 'branch', value })}
-            </div>
-          ))}
-          {edge.default ? (
-            <div className="routine-fork__column routine-fork__column--default">
-              <BranchHeader
-                value="default"
-                isDefault
-                collapsed={collapsed.has('default')}
-                onToggleCollapse={() => toggleCollapsed('default')}
-                onRemove={() => onRemoveDefault(sourceId)}
-              />
-              {collapsed.has('default') ? null : renderRun(defaultTree, { sourceId, kind: 'default' })}
-            </div>
-          ) : null}
-        </div>
-        {edge.default ? null : (
+        {branches.map(({ value, tree }) => (
+          <div key={value} className="routine-fork__column">
+            <BranchHeader
+              key={value}
+              value={value}
+              onRename={(next) => onRenameBranch(sourceId, value, next)}
+              onRemove={() => onRemoveBranch(sourceId, value)}
+            />
+            {renderRun(tree, { sourceId, kind: 'branch', value })}
+          </div>
+        ))}
+        {edge.default ? (
+          <div className="routine-fork__column routine-fork__column--default">
+            <BranchHeader value="default" isDefault onRemove={() => onRemoveDefault(sourceId)} />
+            {renderRun(defaultTree, { sourceId, kind: 'default' })}
+          </div>
+        ) : (
           <div className="routine-fork__column routine-fork__column--empty">
             <button type="button" className="routine-fork__add-default" onClick={() => onAddDefault(sourceId)}>
               + Add default
