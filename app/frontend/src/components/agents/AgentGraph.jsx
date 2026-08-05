@@ -644,7 +644,6 @@ function ForkBlock({ fork }) {
       </div>
       {joinTree ? (
         <div className="routine-fork__join">
-          <span className="routine-fork__join-label">Branches joined</span>
           {renderRun(joinTree, { sourceId, kind: 'join' })}
         </div>
       ) : canOfferJoin ? (
