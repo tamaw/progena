@@ -7232,6 +7232,7 @@ body,
   transform: translateX(-50%);
 }
 
+
 .routine-connector__btn {
   position: relative;
   z-index: 1;
@@ -7472,42 +7473,155 @@ body,
   text-align: center;
 }
 
-/* Router fork: one swim-lane column per branch (+ optional Default),
-   mirrors Azure Logic Apps'/Power Automate's Condition/Switch actions. No
-   forced merge node -- a branch just ends where it ends. */
+/* Router fork: a CSS-only switch box. Its rails rely on flex centring rather
+   than measurements, so they reflow with branch labels and lane widths. */
 .routine-fork {
-  position: relative;
-  width: 100%;
-  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: max-content;
+  max-width: 100%;
+  margin: 8px auto 0;
 }
 
-.routine-fork__row {
+.routine-fork__branches {
+  position: relative;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 0 10px 28px;
+  background: color-mix(in oklab, var(--color-bg-secondary) 85%, var(--color-bg-primary));
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+}
+.routine-fork__branches::before,
+.routine-fork__branches::after {
+  position: absolute;
+  left: 50%;
+  width: 2px;
+  background: var(--color-border);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
+/* The router enters the branch scope at its border; the inner stem then
+   reaches the fan-out rail without relying on the box's horizontal inset. */
+.routine-fork__branches::before {
+  top: -8px;
+  height: 10px;
+}
+
+.routine-fork__branches::after {
+  top: 0;
+  height: 13px;
+}
+
+
+.routine-fork__head {
   display: flex;
-  align-items: flex-start;
+  justify-content: center;
+}
+
+.routine-fork__lanes {
+  position: relative;
+  display: flex;
+  align-items: stretch;
   justify-content: center;
   gap: 20px;
+  width: 100%;
+  margin-top: 26px;
   padding: 0 8px;
 }
 
-.routine-fork__column {
+
+.routine-fork__lane {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   min-width: 220px;
+  width: 246px;
   padding: 10px 12px;
-  background: color-mix(in oklab, var(--color-bg-primary) 60%, transparent);
+  background: color-mix(in oklab, var(--color-bg-primary) 45%, transparent);
   border: 1px dashed var(--color-border);
   border-radius: 12px;
 }
-.routine-fork__column {
-  position: relative;
+
+.routine-fork__wire {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
-.routine-fork__column--empty,
-.routine-fork__column--add {
-  justify-content: center;
-  min-height: 64px;
-  background: transparent;
+.routine-fork__wire::before,
+.routine-fork__wire::after,
+.routine-fork__lane::before,
+.routine-fork__lane::after,
+.routine-fork__join::before {
+  position: absolute;
+  background: var(--color-border);
+  content: '';
+}
+
+.routine-fork__wire::before {
+  top: -14px;
+  right: -11px;
+  left: -11px;
+  height: 2px;
+}
+
+.routine-fork__lane::before {
+  top: -14px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  transform: translateX(-50%);
+}
+
+.routine-fork__lane--fanout-first .routine-fork__wire::before {
+  left: 50%;
+}
+
+.routine-fork__lane--fanout-last .routine-fork__wire::before {
+  right: 50%;
+}
+
+.routine-fork__wire::after,
+.routine-fork__lane::after {
+  display: none;
+}
+
+.routine-fork__lane--fanin .routine-fork__wire::after {
+  display: block;
+  right: -11px;
+  bottom: -14px;
+  left: -11px;
+  height: 2px;
+}
+
+.routine-fork__lane--fanin::after {
+  display: block;
+  bottom: -14px;
+  left: 50%;
+  width: 2px;
+  height: 14px;
+  transform: translateX(-50%);
+}
+
+.routine-fork__lane--fanin-first .routine-fork__wire::after {
+  left: 50%;
+}
+
+.routine-fork__lane--fanin-last .routine-fork__wire::after {
+  right: 50%;
+}
+
+.routine-fork__lane--fanin > .routine-connector:last-child {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 34px;
 }
 
 .routine-fork__header {
@@ -7515,6 +7629,32 @@ body,
   align-items: center;
   gap: 6px;
   margin-bottom: 10px;
+}
+
+.routine-fork__header-collapse,
+.routine-fork__header-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  color: var(--color-text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.routine-fork__header-collapse:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.routine-fork__header-remove:hover {
+  color: var(--color-error, #ef4444);
+  background: var(--color-bg-hover);
 }
 
 .routine-fork__header-label {
@@ -7544,42 +7684,28 @@ body,
   font-weight: 700;
 }
 
-.routine-fork__header-remove {
-  display: inline-flex;
+.routine-fork__lane-collapsed {
+  position: relative;
+  display: flex;
+  flex: 1;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  height: 18px;
+  width: 100%;
+  min-height: 68px;
   color: var(--color-text-muted);
-  background: transparent;
-  border: none;
-  border-radius: 999px;
-  font-size: 13px;
-  line-height: 1;
-  cursor: pointer;
+  font-size: 11px;
+  font-style: italic;
+  text-align: center;
 }
 
-.routine-fork__header-remove:hover {
-  color: var(--color-error, #ef4444);
-  background: var(--color-bg-hover);
-}
-
-.routine-fork__add-branch,
-.routine-fork__add-default {
-  padding: 8px 14px;
-  color: var(--color-accent);
-  background: var(--color-bg-primary);
-  border: 1px dashed var(--color-border);
-  border-radius: 8px;
-  font-size: 11.5px;
-  font-weight: 700;
-  cursor: pointer;
-}
-
-.routine-fork__add-branch:hover,
-.routine-fork__add-default:hover {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
+.routine-fork__lane-collapsed::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  border-left: 2px dashed var(--color-border);
+  content: '';
+  transform: translateX(-50%);
 }
 
 .routine-fork__join {
@@ -7589,14 +7715,31 @@ body,
   align-items: center;
   width: fit-content;
   max-width: calc(100% - 48px);
-  margin: 18px auto 0;
+  margin: 24px auto 0;
+}
+
+.routine-fork--joined .routine-fork__join::before {
+  top: -40px;
+  left: 50%;
+  width: 2px;
+  height: 40px;
+  transform: translateX(-50%);
+}
+
+.routine-fork:not(.routine-fork--joined) .routine-fork__join {
   padding-top: 14px;
   border-top: 2px solid color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
 }
 
-.routine-fork__join-action {
-  display: block;
-  margin: 12px auto 0;
+.routine-fork__actions {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.routine-fork__action {
   padding: 7px 13px;
   color: var(--color-accent);
   background: var(--color-bg-primary);
@@ -7607,7 +7750,7 @@ body,
   cursor: pointer;
 }
 
-.routine-fork__join-action:hover {
+.routine-fork__action:hover {
   border-color: var(--color-accent);
   background: var(--color-accent-soft);
 }
