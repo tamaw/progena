@@ -7379,32 +7379,7 @@ body,
 .routine-foreach__head {
   display: flex;
   align-items: center;
-  gap: 10px;
   padding: 2px 2px 10px;
-}
-
-.routine-foreach__head .routine-step-card {
-  flex: 0 0 220px;
-}
-
-.routine-foreach__context {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  font-family: var(--font-family-mono);
-}
-
-.routine-foreach__context code {
-  color: #8ee8da;
-  font-family: var(--font-family-mono);
-}
-
-.routine-foreach__arrow {
-  color: #18a999;
-  font-weight: 700;
 }
 
 .routine-foreach__body {

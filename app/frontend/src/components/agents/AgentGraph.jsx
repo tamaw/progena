@@ -568,17 +568,11 @@ function LoopBlock({ targetLabel, body }) {
 }
 
 function ForeachBlock({ node, body }) {
-  const itemsPath = node.config?.items_path || 'data.items';
   const itemKey = node.config?.item_key || 'item';
   return (
     <section className="routine-foreach" aria-label={`For each ${itemKey}`}>
       <div className="routine-foreach__head">
         <StepCard node={node} />
-        <div className="routine-foreach__context">
-          <code>{itemKey}</code>
-          <span className="routine-foreach__arrow" aria-hidden="true">←</span>
-          <code>{itemsPath}</code>
-        </div>
       </div>
       <div className="routine-foreach__body">
         {body}
