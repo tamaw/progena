@@ -36,8 +36,8 @@ import DetailHeader, {
 } from '../components/layout/DetailHeader';
 import { AgentGraphTab } from '../components/agents/AgentGraph';
 import { A2ADetailBody, ACPDetailBody, SubagentDetailBody } from '../components/agents/AgentDetailBodies';
-import { ROUTINE_EXAMPLES } from './routineExamples';
 import { formatAge } from '../components/agents/agentFormat';
+import { ROUTINE_EXAMPLES } from './routineExamples';
 
 
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
@@ -102,17 +102,6 @@ const FALLBACK_GRAPH = {
   edges: [],
 };
 
-// Seven connected examples keep the routine canvas useful as a validation
-// gallery. They intentionally cover different topology and control features.
-const DUMMY_ROUTINES = ROUTINE_EXAMPLES.map((example) => ({
-  ...example,
-  updated: new Date().toISOString(),
-  model: '',
-  tools: [],
-  repositories: [],
-  knowledge: [],
-  skills: [],
-}));
 
 function normalizeStatus(status) {
   if (!status || status === 'draft') {
@@ -394,19 +383,45 @@ function DraftAgentDetailBody({ draft, onChange }) {
   );
 }
 
-function AgentsPage({ variant = 'agents' }) {
-  const isRoutines = variant === 'routines';
-  const basePath = isRoutines ? '/routines' : '/agents';
+const AGENTS_PAGE = {
+  kind: 'agents',
+  basePath: '/agents',
+  listLabel: 'Agents',
+  searchPlaceholder: 'Search agents...',
+  sortTitle: 'Sort agents',
+  createLabel: '+ New',
+};
+
+function AgentsPage() {
+  return <AgentWorkspace page={AGENTS_PAGE} />;
+}
+
+export function AgentWorkspace({ page }) {
+  const isRoutines = page.kind === 'routines';
+  const { basePath, listLabel, searchPlaceholder, sortTitle, createLabel } = page;
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const fetchedAgents = useSelector(selectAgentProfiles);
-  // Routines shows one pretend entry for now instead of the real agent list.
-  const agents = isRoutines ? DUMMY_ROUTINES : fetchedAgents;
+  const { agentId: routeAgentId } = useParams();
+  const isExampleRoutine = isRoutines && ROUTINE_EXAMPLES.some(
+    (routine) => routine.id === routeAgentId,
+  );
+  const agents = useMemo(() => {
+    if (!isRoutines) {
+      return fetchedAgents.filter((agent) => agent.kind !== 'routine');
+    }
+    return [
+      ...ROUTINE_EXAMPLES,
+      ...fetchedAgents.filter(
+        (agent) => agent.kind === 'routine'
+          && !ROUTINE_EXAMPLES.some((routine) => routine.id === agent.id),
+      ),
+    ];
+  }, [fetchedAgents, isRoutines]);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
 
-  const { agentId: routeAgentId } = useParams();
   const navigate = useNavigate();
 
   const [activeFilter, setActiveFilter] = useState('All');
@@ -448,11 +463,10 @@ function AgentsPage({ variant = 'agents' }) {
   const agentsUrl = getApiUrl('agentProfiles');
   const requestedListRef = useRef(null);
 
-  // Load the agent list once the realtime stream is connected; the snapshot
-  // arrives on the stream (the GET just acknowledges and triggers it). Skipped
-  // on Routines, which shows a pretend entry instead of the real list.
+  // Load profiles once the realtime stream is connected. The GET acknowledges
+  // the request and the snapshot arrives on the stream.
   useEffect(() => {
-    if (isRoutines || !realtimeConnected) {
+    if (!realtimeConnected) {
       requestedListRef.current = null;
       return;
     }
@@ -461,7 +475,7 @@ function AgentsPage({ variant = 'agents' }) {
     }
     requestedListRef.current = agentsUrl;
     dispatch(fetchAgentProfiles({ agentsUrl }));
-  }, [agentsUrl, dispatch, isRoutines, realtimeConnected]);
+  }, [agentsUrl, dispatch, realtimeConnected]);
 
   // Selection defaults to the first agent without writing state in an effect.
   const effectiveAgentId = selectedAgentId ?? agents[0]?.id ?? null;
@@ -476,10 +490,9 @@ function AgentsPage({ variant = 'agents' }) {
     navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
-  // Request the full profile (incl. graph) whenever the selection changes.
-  // Skipped on Routines — the pretend entry has no real detail to fetch.
+  // Request persisted graphs only. Examples are self-contained canvas fixtures.
   useEffect(() => {
-    if (isRoutines || !effectiveAgentId) {
+    if (!effectiveAgentId || isExampleRoutine) {
       return;
     }
     dispatch(requestAgentDetail({
@@ -487,7 +500,7 @@ function AgentsPage({ variant = 'agents' }) {
       agentId: effectiveAgentId,
       requestId: `${effectiveAgentId}-${Date.now()}`,
     }));
-  }, [agentsUrl, dispatch, effectiveAgentId, isRoutines]);
+  }, [agentsUrl, dispatch, effectiveAgentId, isExampleRoutine]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -519,11 +532,8 @@ function AgentsPage({ variant = 'agents' }) {
     () => sortAgents(agents.filter((agent) => matchesAgent(agent, activeFilter, search)), sortMode),
     [activeFilter, agents, search, sortMode],
   );
-  // List sections depend on the sort: "Name" is a flat list (no headers),
-  // "Recent" uses the chat sidebar's recency buckets, and "Type" keeps the
-  // agent's own group headers.
+  // Routine graphs are a flat list; other views can group by agent type.
   const sections = useMemo(() => {
-    // Routines drops category grouping for now — a flat list, appearance-only.
     if (isRoutines || sortMode === 'Name') {
       return [{ key: 'all', title: null, agents: visibleAgents }];
     }
@@ -547,7 +557,7 @@ function AgentsPage({ variant = 'agents' }) {
   const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
 
   async function handleSaveGraph(parsed) {
-    if (isRoutines && DUMMY_ROUTINES.some((routine) => routine.id === effectiveAgentId)) {
+    if (isExampleRoutine) {
       return parsed;
     }
     return dispatch(updateAgentGraph({
@@ -580,18 +590,18 @@ function AgentsPage({ variant = 'agents' }) {
 
   return (
     <PageShell>
-      <PaneList label="Agents" className="agents-pane">
+      <PaneList label={listLabel} className="agents-pane">
         <PaneListFilters
           filters={AGENT_FILTERS}
           activeFilter={activeFilter}
           onFilterChange={setActiveFilter}
-          actionLabel="+ New"
+          actionLabel={createLabel}
           onAction={handleNewAgent}
         />
         <PaneListToolbar>
-          <PaneListSearch value={search} placeholder="Search agents..." onChange={setSearch} />
+          <PaneListSearch value={search} placeholder={searchPlaceholder} onChange={setSearch} />
           <PaneListSortButton
-            title="Sort agents"
+            title={sortTitle}
             options={SORT_MODES}
             value={sortMode}
             onSelect={setSortMode}

@@ -304,7 +304,6 @@ async def create_progenitor_agent(
     )
     subagents = create_progenitor_subagents(http_base_url, log_sink=log_sink)
     async_subagents = create_progenitor_async_subagents(http_base_url)
-
     # Routine subagent proxies: one CompiledSubAgent per stored routine graph,
     # so `task(subagent_type="<routine-id>", ...)` delegates into it. The
     # routine set is resolved once, here, at graph construction -- a routine

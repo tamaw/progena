@@ -27,6 +27,7 @@ from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, RetryPolicy, Send, interrupt
 
+from ..structured import validate_against_schema
 from .expression import evaluate_expression
 from .graph import (
     ROUTINE_NODE_RETRY_DEFAULTS,
@@ -503,7 +504,12 @@ def _build_subagent_node(node: RoutineNode, *, subagent_registry: dict[str, Any]
     return run
 
 
-def _build_agent_node(node: RoutineNode, *, agent_registry: dict[str, Any]) -> Any:
+def _build_agent_node(
+    node: RoutineNode,
+    *,
+    agent_registry: dict[str, Any],
+    defs: dict[str, dict[str, Any]] | None = None,
+) -> Any:
     config = node.config
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "agent", config, "prompt_file")
@@ -511,6 +517,7 @@ def _build_agent_node(node: RoutineNode, *, agent_registry: dict[str, Any]) -> A
     template = config.get("prompt_template")
     if not template:
         raise ValueError(f"agent node {node.id}: config needs 'prompt_template'")
+    response_schema = _resolve_response_schema(node.id, "agent", config, defs)
 
     async def run(state: RoutineState) -> dict[str, Any]:
         if agent_name not in agent_registry:
@@ -527,6 +534,18 @@ def _build_agent_node(node: RoutineNode, *, agent_registry: dict[str, Any]) -> A
         result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})
         target_messages = result.get("messages") or []
         text = normalize_message_content(target_messages[-1].content) if target_messages else ""
+
+        if response_schema is not None:
+            parsed = extract_json_object(text)
+            if parsed is None:
+                raise ValueError(f"agent node {node.id}: structured response was not a JSON object")
+            validation_error = validate_against_schema(parsed, response_schema)
+            if validation_error is not None:
+                raise ValueError(
+                    f"agent node {node.id}: structured response failed schema validation: "
+                    f"{validation_error}"
+                )
+            return {"messages": [AIMessage(content=text)], "data": {output_key: parsed}}
 
         output: dict[str, Any] = {output_key: text}
         parsed = extract_json_object(text)
@@ -625,7 +644,7 @@ def _build_node_callable(
     if node.kind == "subagent":
         return _build_subagent_node(node, subagent_registry=subagent_registry)
     if node.kind == "agent":
-        return _build_agent_node(node, agent_registry=agent_registry)
+        return _build_agent_node(node, agent_registry=agent_registry, defs=defs)
     if node.kind == "human":
         return _build_human_node(node)
     if node.kind == "foreach":
