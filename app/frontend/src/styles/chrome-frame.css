@@ -7694,11 +7694,14 @@ body,
   transform: translateX(-50%);
 }
 
-.routine-fork__lane--fanout-first .routine-fork__wire::before {
+/* `> .routine-fork__wire` throughout: a lane can contain a whole nested fork,
+   so a descendant combinator here would clip every inner lane's rail to the
+   outer lane's modifier. */
+.routine-fork__lane--fanout-first > .routine-fork__wire::before {
   left: 50%;
 }
 
-.routine-fork__lane--fanout-last .routine-fork__wire::before {
+.routine-fork__lane--fanout-last > .routine-fork__wire::before {
   right: 50%;
 }
 
@@ -7707,7 +7710,14 @@ body,
   display: none;
 }
 
-.routine-fork__lane--fanin .routine-fork__wire::after {
+/* The fan-in rail spans the whole lane row, clipped by the same first/last
+   modifiers as the fan-out rail. That is what guarantees the join stem -- which
+   sits on the fork's centre axis -- lands on it: lanes that skip the join (a
+   rejoin, a loop, a bare END) would otherwise pull the bar's end away from the
+   axis, as `Default` does in routine-branch-join. Which lanes actually feed the
+   join is carried by the per-lane stub below, not by the bar's extent. */
+.routine-fork--joined > .routine-fork__branches > .routine-fork__lanes
+  > .routine-fork__lane > .routine-fork__wire::after {
   display: block;
   right: -11px;
   bottom: -14px;
@@ -7728,11 +7738,11 @@ body,
 }
 
 
-.routine-fork__lane--fanin-first .routine-fork__wire::after {
+.routine-fork__lane--fanout-first > .routine-fork__wire::after {
   left: 50%;
 }
 
-.routine-fork__lane--fanin-last .routine-fork__wire::after {
+.routine-fork__lane--fanout-last > .routine-fork__wire::after {
   right: 50%;
 }
 
@@ -7762,7 +7772,7 @@ body,
   transform: translateX(-50%);
   white-space: nowrap;
 }
-.routine-fork__lane:not(.routine-fork__lane--collapsed) .routine-fork__header::after {
+.routine-fork__lane:not(.routine-fork__lane--collapsed) > .routine-fork__header::after {
   position: absolute;
   bottom: -13px;
   left: calc(50% + 1px);
@@ -7840,7 +7850,7 @@ body,
   margin: 24px auto 0;
 }
 
-.routine-fork--joined .routine-fork__join::before {
+.routine-fork--joined > .routine-fork__join::before {
   top: -40px;
   left: 50%;
   width: 2px;
@@ -7848,7 +7858,7 @@ body,
   transform: translateX(-50%);
 }
 
-.routine-fork:not(.routine-fork--joined) .routine-fork__join {
+.routine-fork:not(.routine-fork--joined) > .routine-fork__join {
   padding-top: 14px;
   border-top: 2px solid color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
 }
@@ -7857,13 +7867,15 @@ body,
   width: 100%;
 }
 
-.routine-fork__actions .routine-connector {
+.routine-fork__actions > .routine-connector {
   margin-top: 14px;
 }
 
-.routine-fork__actions .routine-connector__line {
+/* Nothing follows this connector -- it only offers "add a node after the
+   branches". Stop the line at the `+` instead of trailing off into space. */
+.routine-fork__actions > .routine-connector .routine-connector__line {
   top: -15px;
-  bottom: 0;
+  bottom: 50%;
 }
 
 .routine-fork__action {
