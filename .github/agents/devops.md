@@ -99,7 +99,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -e ".[dev]"
       - run: pytest --cov
-      - run: mypy app/
+      - run: pyright app/
       - run: ruff check app/
 
   build:

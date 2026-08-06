@@ -79,7 +79,7 @@ async def _open_store(
                     "autocommit": True,
                     "prepare_threshold": 0,
                     "row_factory": dict_row,
-                    **(pc.pop("kwargs", None) or {}),
+                    **pc.pop("kwargs", {}),
                 },
                 **cast(dict, pc),
             ),
