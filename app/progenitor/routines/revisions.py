@@ -15,7 +15,7 @@ import logging
 from typing import Any, Protocol, cast
 
 import psycopg
-from psycopg.rows import dict_row
+from psycopg.rows import DictRow, dict_row
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ class PostgresRoutineRevisionReader:
         self._database_url = database_url
 
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None:
-        conn = await psycopg.AsyncConnection.connect(
+        conn = await psycopg.AsyncConnection[DictRow].connect(
             self._database_url,
             autocommit=True,
             prepare_threshold=0,
@@ -61,7 +61,7 @@ class PostgresRoutineRevisionReader:
         return row["revision_id"], row["graph"]
 
     async def fetch(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
-        conn = await psycopg.AsyncConnection.connect(
+        conn = await psycopg.AsyncConnection[DictRow].connect(
             self._database_url,
             autocommit=True,
             prepare_threshold=0,
