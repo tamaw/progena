@@ -9,6 +9,7 @@ import {
   fetchAgentProfiles,
   requestAgentDetail,
   selectActiveAgentProfile,
+  selectActiveAgentProfileState,
   selectAgentProfiles,
   selectAgentProfilesState,
   updateAgentGraph,
@@ -421,6 +422,7 @@ export function AgentWorkspace({ page }) {
   }, [fetchedAgents, isRoutines]);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
+  const activeAgentState = useSelector(selectActiveAgentProfileState);
 
   const navigate = useNavigate();
 
@@ -508,6 +510,16 @@ export function AgentWorkspace({ page }) {
   );
   const selectedAgent = activeAgent && activeAgent.id === effectiveAgentId ? activeAgent : listAgent;
   const selectedGraph = selectedAgent?.graph || FALLBACK_GRAPH;
+  // The roster snapshot carries no `graph` -- only the per-agent detail does.
+  // GraphCanvas seeds its working nodes/edges once on mount, so mounting it
+  // against the roster entry would pin an empty chain that the later detail
+  // can never replace. Hold the canvas back until the detail for THIS id has
+  // landed. Examples are self-contained fixtures with no detail request.
+  // A failed detail request falls through to the roster entry rather than
+  // holding the gate shut forever.
+  const graphDetailPending = !isExampleRoutine
+    && !activeAgentState.error
+    && (!activeAgent || activeAgent.id !== effectiveAgentId);
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
   // Routines view always shows the graph; Agents view always shows Details.
@@ -707,20 +719,24 @@ export function AgentWorkspace({ page }) {
                 : <SubagentDetailBody agent={selectedAgent} />
           ) : (
             <div className="detail-pane__body detail-pane__body--graph">
-              <div className={`agents-graph-layout ${graphEditorOpen ? 'is-editing' : ''}`}>
-                <AgentGraphTab
-                  key={selectedAgent.id}
-                  agent={selectedAgent}
-                  graph={selectedGraph}
-                  onPersist={handleSaveGraph}
-                  onRun={handleRunRoutine}
-                  runResult={runResult}
-                  onShowProfile={isRoutines ? null : showProfile}
-                  jsonOpen={graphEditorOpen}
-                  onOpenJson={() => setGraphEditorOpen(true)}
-                  onCloseJson={() => setGraphEditorOpen(false)}
-                />
-              </div>
+              {graphDetailPending ? (
+                <PaneEmptyState detail>Loading graph…</PaneEmptyState>
+              ) : (
+                <div className={`agents-graph-layout ${graphEditorOpen ? 'is-editing' : ''}`}>
+                  <AgentGraphTab
+                    key={selectedAgent.id}
+                    agent={selectedAgent}
+                    graph={selectedGraph}
+                    onPersist={handleSaveGraph}
+                    onRun={handleRunRoutine}
+                    runResult={runResult}
+                    onShowProfile={isRoutines ? null : showProfile}
+                    jsonOpen={graphEditorOpen}
+                    onOpenJson={() => setGraphEditorOpen(true)}
+                    onCloseJson={() => setGraphEditorOpen(false)}
+                  />
+                </div>
+              )}
             </div>
           )}
         </DetailPane>
