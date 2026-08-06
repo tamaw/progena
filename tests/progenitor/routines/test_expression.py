@@ -47,11 +47,8 @@ class TestAllowedConstructs:
         assert evaluate_expression("'yes' if flag else 'no'", {"flag": False}) == "no"
 
     def test_repo_setup_worker_domain_check_expression(self):
-        expression = (
-            "host == 'github.com' and (org == 'acme-oss' or org == 'acme-api')"
-        )
-        assert evaluate_expression(expression, {"host": "github.com", "org": "acme-oss"}) is True
-        assert evaluate_expression(expression, {"host": "github.com", "org": "other"}) is False
+        assert evaluate_expression("host == 'github.com'", {"host": "github.com"}) is True
+        assert evaluate_expression("host == 'github.com'", {"host": "gitlab.com"}) is False
 
     def test_repo_setup_worker_route_decision_expression(self):
         expression = (
@@ -59,7 +56,13 @@ class TestAllowedConstructs:
             "(('dirty_override' if override_dirty else 'dirty') if dirty else "
             "('behind' if behind else 'up_to_date')))"
         )
-        namespace = {"accessible": True, "cloned": True, "dirty": False, "behind": False, "override_dirty": False}
+        namespace = {
+            "accessible": True,
+            "cloned": True,
+            "dirty": False,
+            "behind": False,
+            "override_dirty": False,
+        }
         assert evaluate_expression(expression, namespace) == "up_to_date"
         namespace["dirty"] = True
         assert evaluate_expression(expression, namespace) == "dirty"

@@ -17,24 +17,23 @@
     {
       "id": "domain_check",
       "kind": "code",
-      "description": "Deterministic gate: only github.com repos are supported, and only within an allowed Acme org list -- not an LLM judgment call. Even a correct github.com host is rejected if the org isn't on the allowlist.",
+      "description": "Host gate only -- whether the caller may touch a given repo is GitHub's call, and `assess` already reports it as `accessible`, so an org allowlist here would duplicate that check against a list that goes stale.",
       "output_key": "domain_check",
       "config": {
         "language": "python",
         "inputs": {
-          "host": "parse_json.host",
-          "org": "parse_json.org"
+          "host": "parse_json.host"
         },
-        "expression": "host == 'github.com' and (org == 'acme-advanced' or org == 'acme-api' or org == 'acme-fma' or org == 'acme-fs' or org == 'acme-lab' or org == 'acme-ops' or org == 'acme-oss' or org == 'acme-sme' or org == 'Acme-Technology' or org == 'acme-tw')"
+        "expression": "host == 'github.com'"
       }
     },
     {
       "id": "respond_invalid_domain",
       "kind": "prompt",
-      "description": "Terminal node: reject requests for repos outside github.com or outside the allowed Acme org list.",
+      "description": "Terminal node: reject requests for repos hosted anywhere but github.com.",
       "output_key": "respond_invalid_domain",
       "config": {
-        "prompt_template": "Only github.com repositories within an allowed Acme org are supported by this pipeline (acme-advanced, acme-api, acme-fma, acme-fs, acme-lab, acme-ops, acme-oss, acme-sme, Acme-Technology, acme-tw). The request resolved to: {parse}\n\nReply with one short sentence telling the user their repo host or org isn't supported for this request: {request}"
+        "prompt_template": "Only github.com repositories are supported by this pipeline. The request resolved to: {parse}\n\nReply with one short sentence telling the user their repo host isn't supported for this request: {request}"
       }
     },
     {
