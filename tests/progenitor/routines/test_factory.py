@@ -17,7 +17,7 @@ from app.progenitor.routines.factory import (
 )
 from app.progenitor.routines.graph import validate_routine_graph_payload
 
-_EXAMPLE_PATH = Path(__file__).parent / "fixtures" / "repo_setup_worker.json"
+_EXAMPLE_PATH = Path(__file__).parent / "fixtures" / "reference_routine.json"
 
 
 @pytest.fixture
