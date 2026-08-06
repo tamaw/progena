@@ -298,7 +298,7 @@ function ChainChip({ kind, label }) {
 // The `+` on every connector: click to open a kind picker and insert a step
 // at exactly that point in the chain.
 function ConnectorInsert({ slot }) {
-  const { insertAt } = useContext(GraphEditContext);
+  const { insertAt, onJoinBranches } = useContext(GraphEditContext);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
@@ -330,7 +330,7 @@ function ConnectorInsert({ slot }) {
         aria-label="Insert step here"
         aria-expanded={open}
       >
-        +
+        <span className="routine-connector__btn-glyph" aria-hidden="true">+</span>
       </button>
       {open ? (
         <div className="routine-connector__menu" role="menu">
@@ -340,7 +340,11 @@ function ConnectorInsert({ slot }) {
               type="button"
               role="menuitem"
               className="routine-connector__menu-item"
-              onClick={() => { insertAt(slot, item.kind); setOpen(false); }}
+              onClick={() => {
+                if (slot.kind === 'join') onJoinBranches(slot.sourceId, item.kind);
+                else insertAt(slot, item.kind);
+                setOpen(false);
+              }}
             >
               <span className={`canvas-dock-icon ${item.kind}`}>{item.icon}</span>
               {item.label}
@@ -485,20 +489,6 @@ function chainTerminus(tree) {
   return current === null ? 'end' : current.type;
 }
 
-function countSteps(tree) {
-  let n = 0;
-  let current = tree;
-  while (current && current.type === 'node') {
-    n += 1;
-    if (current.fork) {
-      n += current.fork.branches.reduce((sum, branch) => sum + countSteps(branch.tree), 0)
-        + countSteps(current.fork.defaultTree) + countSteps(current.fork.joinTree);
-      break;
-    }
-    current = current.next;
-  }
-  return n;
-}
 
 // Renders an already-computed chain-tree run: a connector before each step,
 // the step itself, and either the next connector, a fork, or a terminus.
@@ -619,7 +609,6 @@ function ForkBlock({ fork, node }) {
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
-    onJoinBranches,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
   const { sourceId, edge, branches, defaultTree, joinTree } = fork;
@@ -665,14 +654,13 @@ function ForkBlock({ fork, node }) {
             const joiningIndex = joining.findIndex(({ value }) => value === lane.value);
             const classes = [
               'routine-fork__lane',
+              isCollapsed && 'routine-fork__lane--collapsed',
               lane.isDefault && 'routine-fork__lane--default',
               index === 0 && 'routine-fork__lane--fanout-first',
-              index === lanes.length - 1 && 'routine-fork__lane--fanout-last',
               joiningValues.has(lane.value) && 'routine-fork__lane--fanin',
               joiningIndex >= 0 && joiningIndex === 0 && 'routine-fork__lane--fanin-first',
               joiningIndex >= 0 && joiningIndex === joining.length - 1 && 'routine-fork__lane--fanin-last',
             ].filter(Boolean).join(' ');
-            const stepCount = countSteps(lane.tree);
             return (
               <div key={lane.value} className={classes}>
                 <span className="routine-fork__wire" aria-hidden="true" />
@@ -684,14 +672,28 @@ function ForkBlock({ fork, node }) {
                   collapsed={isCollapsed}
                   onToggleCollapse={() => toggleCollapse(lane.value)}
                 />
-                {isCollapsed ? (
-                  <div className="routine-fork__lane-collapsed">
-                    {stepCount} step{stepCount === 1 ? '' : 's'}
-                  </div>
-                ) : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
+                {isCollapsed ? null : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
               </div>
             );
           })}
+          {!edge.default ? (
+            <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed">
+              <span className="routine-fork__wire" aria-hidden="true" />
+              <div className="routine-fork__add-slot">
+                <button type="button" className="routine-fork__add-slot-action" onClick={() => onAddDefault(sourceId)}>
+                  + Add default
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed routine-fork__lane--fanout-last">
+            <span className="routine-fork__wire" aria-hidden="true" />
+            <div className="routine-fork__add-slot">
+              <button type="button" className="routine-fork__add-slot-action" onClick={() => onAddBranch(sourceId)}>
+                + Add branch
+              </button>
+            </div>
+          </div>
         </div>
       </div>
       {joinTree ? (
@@ -700,18 +702,8 @@ function ForkBlock({ fork, node }) {
         </div>
       ) : null}
       <div className="routine-fork__actions">
-        <button type="button" className="routine-fork__action" onClick={() => onAddBranch(sourceId)}>
-          + Add branch
-        </button>
-        {!edge.default ? (
-          <button type="button" className="routine-fork__action" onClick={() => onAddDefault(sourceId)}>
-            + Add default
-          </button>
-        ) : null}
         {!joinTree && canOfferJoin ? (
-          <button type="button" className="routine-fork__action" onClick={() => onJoinBranches(sourceId)}>
-            + Join branches
-          </button>
+          <ConnectorInsert slot={{ sourceId, kind: 'join' }} />
         ) : null}
       </div>
     </section>
@@ -1001,7 +993,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     )));
     setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
   }, []);
-  const onJoinBranches = useCallback((sourceId) => {
+  const onJoinBranches = useCallback((sourceId, kind = 'noop') => {
     const router = edgesRef.current.find((edge) => edge.from === sourceId && edge.router);
     if (!router) return;
     const targets = [
@@ -1020,14 +1012,18 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       return null;
     }).filter(Boolean);
     if (terminals.length < 2 || new Set(terminals).size < 2) return;
-    const joinId = uniqueNodeId('noop', nodesRef.current);
+    const joinId = uniqueNodeId(kind, nodesRef.current);
     const nextEdges = [...edgesRef.current];
     [...new Set(terminals)].forEach((terminalId) => {
       if (!nextEdges.some((edge) => edge.from === terminalId)) {
         nextEdges.push({ from: terminalId, to: joinId });
       }
     });
-    setNodes((current) => [...current, { ...makeNode('noop'), id: joinId, label: 'Join branches' }]);
+    setNodes((current) => [...current, {
+      ...makeNode(kind),
+      id: joinId,
+      ...(kind === 'noop' ? { label: 'Join branches' } : {}),
+    }]);
     setEdges(nextEdges);
   }, []);
 
