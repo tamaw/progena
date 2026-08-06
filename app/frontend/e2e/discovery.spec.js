@@ -82,11 +82,13 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Routines renders the React Flow graph canvas for the selected agent (AgentGraph extraction)', async ({ page }) => {
+  test('Routines renders the graph canvas for the selected agent (AgentGraph extraction)', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/routines');
-    // The extracted graph module mounts React Flow for the auto-selected agent.
-    await expect(page.locator('.react-flow').first()).toBeVisible({ timeout: 20_000 });
+    // The graph is a CSS step chain, not React Flow -- `@xyflow/react` is still
+    // in package.json but no longer imported anywhere under src/.
+    await expect(page.locator('.routine-chain').first()).toBeVisible({ timeout: 20_000 });
+    await expect(page.locator('.canvas-node').first()).toBeVisible({ timeout: 20_000 });
     expect(errors).toEqual([]);
   });
 
