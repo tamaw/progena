@@ -7243,6 +7243,15 @@ body,
   bottom: 0;
 }
 
+/* The line from a branch label down to its first `+` is this same line grown
+   upwards, not a pseudo-element on the label: the label's width is its text,
+   so anything centred in it rasterises a fraction of a pixel off the `+` below.
+   It runs under the label, which is opaque and above it, exactly as the `+`
+   punches through the line. */
+.routine-fork__header + .routine-connector .routine-connector__line {
+  top: -13px;
+}
+
 
 
 
@@ -7686,9 +7695,13 @@ body,
   height: 2px;
 }
 
+/* Everything on a lane's centre axis -- this stub, the fan-in stub, the header
+   stem and `.routine-connector__line` -- must resolve to the same `left: 50%;
+   translateX(-50%)`. Nudging one of them by a pixel is what makes a stem enter
+   the `+` off-centre; the whole-pixel snap lives on `.routine-chain`. */
 .routine-fork__lane::before {
   top: -14px;
-  left: calc(50% + 1px);
+  left: 50%;
   width: 2px;
   height: 5px;
   transform: translateX(-50%);
@@ -7696,13 +7709,14 @@ body,
 
 /* `> .routine-fork__wire` throughout: a lane can contain a whole nested fork,
    so a descendant combinator here would clip every inner lane's rail to the
-   outer lane's modifier. */
+   outer lane's modifier. The clip lands on the far edge of the terminal lane's
+   stub, not its centre, so the rail covers the stub's full 2px. */
 .routine-fork__lane--fanout-first > .routine-fork__wire::before {
-  left: 50%;
+  left: calc(50% - 1px);
 }
 
 .routine-fork__lane--fanout-last > .routine-fork__wire::before {
-  right: 50%;
+  right: calc(50% - 1px);
 }
 
 .routine-fork__wire::after,
@@ -7728,7 +7742,7 @@ body,
 .routine-fork__lane--fanin::after {
   display: block;
   bottom: -14px;
-  left: calc(50% + 1px);
+  left: 50%;
   width: 2px;
   height: 14px;
   transform: translateX(-50%);
@@ -7739,11 +7753,11 @@ body,
 
 
 .routine-fork__lane--fanout-first > .routine-fork__wire::after {
-  left: 50%;
+  left: calc(50% - 1px);
 }
 
 .routine-fork__lane--fanout-last > .routine-fork__wire::after {
-  right: 50%;
+  right: calc(50% - 1px);
 }
 
 .routine-fork__lane--fanin > .routine-connector:last-child {
@@ -7772,18 +7786,6 @@ body,
   transform: translateX(-50%);
   white-space: nowrap;
 }
-.routine-fork__lane:not(.routine-fork__lane--collapsed) > .routine-fork__header::after {
-  position: absolute;
-  bottom: -13px;
-  left: calc(50% + 1px);
-  width: 2px;
-  height: 13px;
-  background: var(--color-border);
-  content: '';
-  pointer-events: none;
-  transform: translateX(-50%);
-}
-
 
 .routine-fork__header-collapse,
 .routine-fork__header-remove {
