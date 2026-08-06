@@ -863,9 +863,16 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, []);
 
   const deleteNode = useCallback((id) => {
-    setNodes((current) => current.filter((node) => node.id !== id));
     const outgoing = edgesRef.current.find((edge) => edge.from === id);
     const singleTarget = outgoing && !outgoing.router ? outgoing.to : null;
+    // A fan-out's Send target is a node id held in config rather than an edge,
+    // so splicing the edges around a deleted node is not enough to keep it
+    // pointing at whatever now starts the body.
+    setNodes((current) => current
+      .filter((node) => node.id !== id)
+      .map((node) => (node.kind === 'foreach' && node.config?.target === id
+        ? { ...node, config: { ...node.config, target: singleTarget || '' } }
+        : node)));
     setEdges((current) => {
       const next = [];
       current.forEach((edge) => {
@@ -907,9 +914,13 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
   }, []);
 
+  // A fan-out owns a scope: its body is the run between it and the first noop,
+  // and its Send dispatches to `config.target`. Both have to be established as
+  // the node is created -- with no terminator the new box swallows the rest of
+  // the chain, and with no target the compiled Send has nowhere to go.
   const insertAt = useCallback((slot, kind) => {
     const id = uniqueNodeId(kind, nodesRef.current);
-    const newNode = { ...makeNode(kind), id };
+    const added = [{ ...makeNode(kind), id }];
     let targetId = null;
     const nextEdges = edgesRef.current.map((edge) => (
       edge.branches ? { ...edge, branches: { ...edge.branches } } : { ...edge }
@@ -917,7 +928,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     if (slot.kind === 'entry') {
       targetId = metaRef.current.entry;
       setMeta((current) => ({ ...current, entry: id }));
-    } else if (slot.kind === 'plain') {
+    } else if (slot.kind === 'plain' || slot.kind === 'foreach') {
+      // `foreach` is the slot inside a fan-out's body. The edge leaving the
+      // fan-out node is that body's entry, so it splices like a plain one.
       const existing = nextEdges.find((edge) => edge.from === slot.sourceId);
       if (existing) {
         targetId = existing.to;
@@ -938,8 +951,24 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         router.default = id;
       }
     }
-    if (targetId) nextEdges.push({ from: id, to: targetId });
-    setNodes((current) => [...current, newNode]);
+    if (kind === 'foreach') {
+      const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
+      added[0] = { ...added[0], config: { ...added[0].config, target: stopId } };
+      added.push({ ...makeNode('noop'), id: stopId, label: 'Join fan-out' });
+      nextEdges.push({ from: id, to: stopId });
+      if (targetId) nextEdges.push({ from: stopId, to: targetId });
+    } else if (targetId) {
+      nextEdges.push({ from: id, to: targetId });
+    }
+    setNodes((current) => {
+      const next = [...current, ...added];
+      // A step added at the top of a body becomes what the Send dispatches to.
+      return slot.kind === 'foreach'
+        ? next.map((node) => (node.id === slot.sourceId
+          ? { ...node, config: { ...node.config, target: id } }
+          : node))
+        : next;
+    });
     setEdges(nextEdges);
   }, []);
 
