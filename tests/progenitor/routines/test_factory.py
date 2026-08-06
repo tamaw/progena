@@ -173,6 +173,70 @@ class TestRepoSetupWorkerRouting:
             assert key in result["data"], key
 
 
+class TestAgentResponseSchema:
+    @staticmethod
+    def _graph(response_schema: dict | None = None):
+        config = {"agent_name": "repo-manager", "prompt_template": "{request}"}
+        if response_schema is not None:
+            config["response_schema"] = response_schema
+        payload = {
+            "id": "agent-output",
+            "name": "Agent output",
+            "description": "",
+            "version": "1.0.0",
+            "entry": "call",
+            "nodes": [{"id": "call", "kind": "agent", "output_key": "result", "config": config}],
+            "edges": [],
+        }
+        if response_schema is not None:
+            payload["$defs"] = {
+                "repo_result": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": ["action", "clean"],
+                    "properties": {
+                        "action": {"type": "string"},
+                        "clean": {"type": "boolean"},
+                    },
+                }
+            }
+        return validate_routine_graph_payload(payload)
+
+    async def test_agent_without_response_schema_preserves_text_output(self):
+        graph = self._graph()
+        result = await _run(
+            graph,
+            FakeModel([]),
+            agent_registry={"repo-manager": FakeAgent("Repository is ready.")},
+        )
+
+        assert result["data"]["result"] == "Repository is ready."
+        assert "result_json" not in result["data"]
+
+    async def test_agent_response_schema_stores_validated_object(self):
+        graph = self._graph({"$ref": "#/$defs/repo_result"})
+        result = await _run(
+            graph,
+            FakeModel([]),
+            agent_registry={
+                "repo-manager": FakeAgent(json.dumps({"action": "pull", "clean": True}))
+            },
+        )
+
+        assert result["data"]["result"] == {"action": "pull", "clean": True}
+        assert "result_json" not in result["data"]
+
+    async def test_agent_response_schema_rejects_invalid_result(self):
+        graph = self._graph({"$ref": "#/$defs/repo_result"})
+
+        with pytest.raises(ValueError, match="structured response failed schema validation"):
+            await _run(
+                graph,
+                FakeModel([]),
+                agent_registry={"repo-manager": FakeAgent(json.dumps({"action": "pull"}))},
+            )
+
+
 class TestSubagentRegistry:
     async def test_missing_subagent_raises_keyerror(self):
         payload = {

@@ -241,6 +241,10 @@
             "agent_name": { "type": "string", "minLength": 1 },
             "prompt_template": { "type": "string" },
             "prompt_file": { "type": "string" },
+            "response_schema": {
+              "type": "object",
+              "description": "Optional JSON Schema for the agent's final response, or {\"$ref\": \"#/$defs/<name>\"} pointing at this graph's top-level $defs. When absent, the final response is stored as data[output_key] text (with a best-effort <output_key>_json object). When set, the final response must be a JSON object satisfying this schema; the validated object is stored directly in data[output_key] and no fallback is produced."
+            },
             "retry": { "$ref": "#/$defs/retryPolicy" }
           },
           "oneOf": [

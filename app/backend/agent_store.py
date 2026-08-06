@@ -493,6 +493,29 @@ def _agent_record_from_subagent(sub: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _repo_manager_object_record() -> dict[str, Any]:
+    """Return the placeholder object agent referenced by repo setup routines."""
+    agent_id = "repo-manager"
+    description = (
+        "Placeholder object agent used by the Repo Setup Worker routine during graph testing."
+    )
+    return {
+        "id": agent_id,
+        "kind": "object",
+        "name": "Repo Worker",
+        "handle": "@repo_manager",
+        "display_group": "Object agents",
+        "color": _color_for(agent_id),
+        "model": "fake",
+        "role": "Test repository-management object agent",
+        "version": "v0.1.0",
+        "summary": description,
+        "status": "running",
+        "system_prompt": "",
+        "details": _empty_details(),
+    }
+
+
 def _acp_task_view(record: dict[str, Any]) -> dict[str, Any]:
     """Shape a Progenitor ``ACPTaskRecord`` dict for the Agents-page detail pane."""
     return {
@@ -857,12 +880,14 @@ def seed_default_agents(store: AgentStore) -> int:
             records.append(_agent_record_from_subagent(dict(sub)))
     except Exception as exc:  # pragma: no cover - import/environment dependent
         logger.warning("Could not seed code subagents: %s", exc)
+    records.append(_repo_manager_object_record())
 
     inserted = 0
     for record in records:
         if store.insert_agent_if_absent(record):
             inserted += 1
-        store.ensure_graph(record["id"])
+        if record["kind"] == "routine":
+            store.ensure_graph(record["id"])
 
     if inserted:
         logger.info("Seeded %d agent(s) into the backend database", inserted)
