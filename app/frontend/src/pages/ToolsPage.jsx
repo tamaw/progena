@@ -10,7 +10,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -374,7 +374,7 @@ export default function ToolsPage() {
         ) : visibleServers.length === 0 ? (
           <PaneEmptyState>No MCP servers match this view.</PaneEmptyState>
         ) : (
-          <PaneListVirtualized
+          <PaneListRows
             groups={GROUP_ORDER
               .filter((group) => groupedServers[group]?.length)
               .map((group) => ({
@@ -383,7 +383,6 @@ export default function ToolsPage() {
                 items: groupedServers[group],
               }))}
             getItemKey={(server) => server.id}
-            estimatedItemHeight={70}
             renderItem={(server) => {
               const status = statusOf(server);
               return (

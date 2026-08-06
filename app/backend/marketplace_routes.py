@@ -35,6 +35,8 @@ def _catalog_to_dict(catalog: Any) -> dict[str, Any]:
         "description": getattr(catalog, "description", None),
         "version": getattr(catalog, "version", None),
         "metadata": getattr(catalog, "metadata", {}),
+        "repository": getattr(catalog, "repository", None),
+        "commit_sha": getattr(catalog, "commit_sha", None),
     }
 
 
@@ -90,7 +92,8 @@ async def browse_marketplace_plugins(
         try:
             catalog = await fetch_marketplace(source_url)
         except PluginFetchError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+            status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
         set_cached_catalog(name, catalog)
 
     broadcast_plugin_catalog_snapshot(name, _catalog_to_dict(catalog), request_id=request_id)

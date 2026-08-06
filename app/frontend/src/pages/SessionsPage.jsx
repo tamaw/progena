@@ -8,7 +8,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
@@ -381,14 +381,13 @@ export default function SessionsPage() {
           <PaneListSortButton title="Sort">Recent</PaneListSortButton>
         </PaneListToolbar>
 
-        <PaneListVirtualized
+        <PaneListRows
           groups={Array.from(groupedSessions.entries()).map(([group, sessions]) => ({
             key: group,
             title: group,
             items: sessions,
           }))}
           getItemKey={(session) => session.id}
-          estimatedItemHeight={92}
           renderItem={(session) => {
             const agent = AGENTS[session.agent] || AGENTS.OpenCode;
             return (

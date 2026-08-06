@@ -3525,17 +3525,6 @@ body,
   padding: 6px 6px 14px;
 }
 
-.pane-list-virtualized {
-  position: relative;
-  width: 100%;
-}
-
-.pane-list-virtualized__row {
-  position: absolute;
-  right: 0;
-  left: 0;
-  overflow: visible;
-}
 
 .chat-pane-group__head,
 .task-group__head,
