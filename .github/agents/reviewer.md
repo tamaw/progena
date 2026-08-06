@@ -147,7 +147,7 @@ Would improve readability and testability.
 
 ## Tools
 - **Linting**: `ruff check app/`
-- **Type Checking**: `mypy app/`
+- **Type Checking**: `pyright app/`
 - **Testing**: `pytest` with coverage
 - **Security**: Manual review + automated scans
 
