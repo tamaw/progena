@@ -7002,12 +7002,14 @@ body,
   padding: 56px 24px 48px;
 }
 
+/* Keep every 2px connector and insert control on whole device pixels. */
 .routine-chain {
   display: flex;
   flex-direction: column;
   align-items: center;
   width: max-content;
   min-width: 100%;
+  transform: translateX(0.5px);
 }
 
 .routine-canvas .routine-step-card {
@@ -7224,13 +7226,24 @@ body,
 
 .routine-connector__line {
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: -1px;
+  bottom: -1px;
   left: 50%;
   width: 2px;
   background: var(--color-border);
   transform: translateX(-50%);
 }
+/* Sequential lines overscan nodes by one pixel, except at terminal caps:
+   the cap's own border is the endpoint and must not be drawn through. */
+.routine-cap + .routine-connector .routine-connector__line {
+  top: 0;
+}
+
+.routine-connector:has(+ .routine-cap) .routine-connector__line {
+  bottom: 0;
+}
+
+
 
 
 .routine-connector__btn {
@@ -7249,6 +7262,37 @@ body,
   line-height: 1;
   cursor: pointer;
 }
+.routine-connector__btn-glyph {
+  position: relative;
+  display: block;
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+  font-size: 0;
+}
+
+.routine-connector__btn-glyph::before,
+.routine-connector__btn-glyph::after {
+  position: absolute;
+  background: currentColor;
+  border-radius: 1px;
+  content: '';
+}
+
+.routine-connector__btn-glyph::before {
+  top: 5px;
+  left: 0;
+  width: 12px;
+  height: 2px;
+}
+
+.routine-connector__btn-glyph::after {
+  top: 0;
+  left: 5px;
+  width: 2px;
+  height: 12px;
+}
+
 
 .routine-connector__btn:hover {
   color: var(--color-accent);
@@ -7476,6 +7520,7 @@ body,
 /* Router fork: a CSS-only switch box. Its rails rely on flex centring rather
    than measurements, so they reflow with branch labels and lane widths. */
 .routine-fork {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -7483,6 +7528,18 @@ body,
   max-width: 100%;
   margin: 8px auto 0;
 }
+.routine-fork::before {
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  width: 2px;
+  height: 9px;
+  background: var(--color-border);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
 
 .routine-fork__branches {
   position: relative;
@@ -7515,7 +7572,7 @@ body,
 
 .routine-fork__branches::after {
   top: 0;
-  height: 13px;
+  height: 16px;
 }
 
 
@@ -7531,7 +7588,7 @@ body,
   justify-content: center;
   gap: 20px;
   width: 100%;
-  margin-top: 26px;
+  margin-top: 29px;
   padding: 0 8px;
 }
 
@@ -7543,11 +7600,53 @@ body,
   align-items: center;
   min-width: 220px;
   width: 246px;
-  padding: 10px 12px;
+  padding: 34px 12px 10px;
   background: color-mix(in oklab, var(--color-bg-primary) 45%, transparent);
   border: 1px dashed var(--color-border);
   border-radius: 12px;
 }
+
+.routine-fork__lane--add {
+  min-height: 132px;
+  background: color-mix(in oklab, var(--color-bg-primary) 25%, transparent);
+}
+
+.routine-fork__add-slot {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 12%);
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.routine-fork__add-slot-action {
+  padding: 3px 4px;
+  color: var(--color-accent);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.routine-fork__add-slot-action:hover {
+  background: var(--color-bg-hover);
+}
+.routine-fork__lane--collapsed {
+  background: transparent;
+  border-color: transparent;
+}
+
 
 .routine-fork__wire {
   position: absolute;
@@ -7574,9 +7673,9 @@ body,
 
 .routine-fork__lane::before {
   top: -14px;
-  left: 50%;
+  left: calc(50% + 1px);
   width: 2px;
-  height: 14px;
+  height: 5px;
   transform: translateX(-50%);
 }
 
@@ -7604,11 +7703,15 @@ body,
 .routine-fork__lane--fanin::after {
   display: block;
   bottom: -14px;
-  left: 50%;
+  left: calc(50% + 1px);
   width: 2px;
   height: 14px;
   transform: translateX(-50%);
 }
+.routine-fork__lane--collapsed.routine-fork__lane--fanin::after {
+  height: calc(100% + 1px);
+}
+
 
 .routine-fork__lane--fanin-first .routine-fork__wire::after {
   left: 50%;
@@ -7623,13 +7726,39 @@ body,
   height: auto;
   min-height: 34px;
 }
+.routine-fork__lane--fanin > .routine-connector:last-child .routine-connector__line {
+  bottom: -12px;
+}
+
 
 .routine-fork__header {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-bottom: 10px;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  box-shadow: 0 2px 5px rgb(0 0 0 / 12%);
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
+.routine-fork__lane:not(.routine-fork__lane--collapsed) .routine-fork__header::after {
+  position: absolute;
+  bottom: -13px;
+  left: calc(50% + 1px);
+  width: 2px;
+  height: 13px;
+  background: var(--color-border);
+  content: '';
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+
 
 .routine-fork__header-collapse,
 .routine-fork__header-remove {
@@ -7658,11 +7787,11 @@ body,
 }
 
 .routine-fork__header-label {
-  padding: 3px 10px;
+  padding: 3px 4px;
   color: var(--color-text-primary);
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
-  border-radius: 999px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
   font-size: 11px;
   font-weight: 700;
   cursor: text;
@@ -7674,39 +7803,17 @@ body,
 }
 
 .routine-fork__header-input {
-  padding: 3px 10px;
+  width: 112px;
+  padding: 3px 4px;
   color: var(--color-text-primary);
   background: var(--color-bg-primary);
   border: 1px solid var(--color-accent);
-  border-radius: 999px;
+  border-radius: 4px;
   font: inherit;
   font-size: 11px;
   font-weight: 700;
 }
 
-.routine-fork__lane-collapsed {
-  position: relative;
-  display: flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  min-height: 68px;
-  color: var(--color-text-muted);
-  font-size: 11px;
-  font-style: italic;
-  text-align: center;
-}
-
-.routine-fork__lane-collapsed::before {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 50%;
-  border-left: 2px dashed var(--color-border);
-  content: '';
-  transform: translateX(-50%);
-}
 
 .routine-fork__join {
   position: relative;
@@ -7732,11 +7839,16 @@ body,
 }
 
 .routine-fork__actions {
-  display: flex;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  width: 100%;
+}
+
+.routine-fork__actions .routine-connector {
   margin-top: 14px;
+}
+
+.routine-fork__actions .routine-connector__line {
+  top: -15px;
+  bottom: 0;
 }
 
 .routine-fork__action {
