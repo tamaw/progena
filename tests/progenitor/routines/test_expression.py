@@ -37,6 +37,33 @@ class TestAllowedConstructs:
         assert evaluate_expression("a and b", {"a": True, "b": False}) is False
         assert evaluate_expression("a or b", {"a": False, "b": True}) is True
 
+    def test_boolop_returns_the_deciding_operand_not_a_bool(self):
+        # Python's `and`/`or` are value-selecting, not bool-coercing. `code` nodes
+        # store this result raw, so the distinction is observable downstream.
+        assert evaluate_expression("a and b", {"a": 0, "b": "x"}) == 0
+        assert evaluate_expression("a or b", {"a": "", "b": "fallback"}) == "fallback"
+
+    def test_boolop_and_short_circuits_past_a_failing_guard(self):
+        # The guard is the only thing standing between the divisor and zero.
+        expression = "x != 0 and 100 / x > 2"
+        assert evaluate_expression(expression, {"x": 0}) is False
+        # Same expression, guard satisfied: the right operand now really is evaluated.
+        assert evaluate_expression(expression, {"x": 1}) is True
+
+    def test_boolop_or_short_circuits_past_a_satisfied_guard(self):
+        expression = "x == 0 or 100 / x > 2"
+        assert evaluate_expression(expression, {"x": 0}) is True
+        assert evaluate_expression(expression, {"x": 1}) is True
+
+    def test_boolop_short_circuits_past_an_unbound_name(self):
+        # Optional-field checks: `org` need not be bound when the guard is false.
+        expression = "has_org and org == 'acme'"
+        assert evaluate_expression(expression, {"has_org": False}) is False
+        # But a satisfied guard must still surface the missing binding rather than
+        # silently treating it as absent.
+        with pytest.raises(KeyError):
+            evaluate_expression(expression, {"has_org": True})
+
     def test_compare_chained(self):
         assert evaluate_expression("1 < x < 10", {"x": 5}) is True
         assert evaluate_expression("x in items", {"x": 2, "items": [1, 2, 3]}) is True
