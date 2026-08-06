@@ -7649,7 +7649,7 @@ body,
   justify-content: center;
   gap: 20px;
   width: max-content;
-  margin-top: 29px;
+  margin-top: 38px;
   padding: 0 8px;
 }
 
@@ -7734,8 +7734,12 @@ body,
   content: '';
 }
 
+/* -23px, not -14px, with the extra 9px given back as `.routine-fork__lanes`
+   margin: the branch label straddles the lane's top border and so eats into
+   the gap the fan-in side gets for free. Measured from the label, not the
+   border, this leaves the same 11px of visible stub as the bottom rail. */
 .routine-fork__wire::before {
-  top: -14px;
+  top: -23px;
   right: -11px;
   left: -11px;
   height: 2px;
@@ -7746,10 +7750,10 @@ body,
    translateX(-50%)`. Nudging one of them by a pixel is what makes a stem enter
    the `+` off-centre; the whole-pixel snap lives on `.routine-chain`. */
 .routine-fork__lane::before {
-  top: -14px;
+  top: -23px;
   left: 50%;
   width: 2px;
-  height: 5px;
+  height: 14px;
   transform: translateX(-50%);
 }
 
@@ -7895,18 +7899,24 @@ body,
   align-items: center;
   width: fit-content;
   max-width: calc(100% - 48px);
-  margin: 24px auto 0;
+  margin: 0 auto;
 }
 
+/* The stem only has to cross the box's bottom padding to reach the fan-in
+   rail; the join's own connector supplies the rest. With no margin above it
+   that connector is an ordinary 34px one, so the `+` sits 17px below the box
+   and 17px above the join card, even like every other `+` in the chain. */
 .routine-fork--joined > .routine-fork__join::before {
-  top: -40px;
+  top: -16px;
   left: 50%;
   width: 2px;
-  height: 40px;
+  height: 16px;
   transform: translateX(-50%);
 }
 
+/* No fan-in rail to hang off, so this keeps the gap the stem would have left. */
 .routine-fork:not(.routine-fork--joined) > .routine-fork__join {
+  margin-top: 24px;
   padding-top: 14px;
   border-top: 2px solid color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
 }
