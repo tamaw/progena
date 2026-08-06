@@ -5,7 +5,7 @@ import {
   PaneListToolbar,
   PaneListSearch,
   PaneListSortButton,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -210,7 +210,7 @@ export default function ChannelsPage() {
           <PaneListSortButton>Category</PaneListSortButton>
         </PaneListToolbar>
         {visibleChannels.length ? (
-          <PaneListVirtualized
+          <PaneListRows
             groups={groups.order.map((category) => ({
               key: category,
               title: category,

@@ -30,7 +30,7 @@ def validate_plugins_payload(data: Any) -> dict[str, Any]:
     (the enforced floor, including ``source``'s discriminated oneOf --
     ``{"source": "github", "repo": ...}`` or ``{"source": "url"|"git-subdir",
     "url": ...}`` or a relative-path string; see
-    ``app/progenitor/plugins/sources.py:_resolve_plugin_source`` for exactly
+    ``app/progenitor/plugins/sources.py:_fetch_plugin_archive`` for exactly
     what each source_type consumes). Runtime-owned fields (installed_version,
     installed_digest, available_version, status, status_message, skills,
     installed_at, last_checked) are accepted but never required; the

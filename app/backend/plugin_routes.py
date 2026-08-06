@@ -13,7 +13,13 @@ from app.progenitor.content_documents import content_document_key
 from app.progenitor.plugins.schema import validate_plugins_payload
 
 # Imported at module level so tests can monkeypatch the fetch callable.
-from app.progenitor.plugins.sources import fetch_marketplace, resolve_relative_plugin_source
+from app.progenitor.plugins.sources import (
+    PluginFetchError,
+    fetch_marketplace,
+    fetch_plugin_skill_content,
+    list_plugin_skill_names,
+    resolve_relative_plugin_source,
+)
 
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, get_default_document_store
@@ -117,13 +123,9 @@ async def install_plugin(
         )
 
     resolved_source = plugin_entry.get("source")
-    if isinstance(resolved_source, str) and resolved_source.startswith("./"):
-        # A relative-path source is only meaningful together with the
-        # marketplace archive it was resolved against; plugins.json entries
-        # are self-sufficient and carry no reference back to their
-        # marketplace, so store an absolute git-subdir source instead of the
-        # raw relative path -- otherwise the reconciler can never re-fetch it.
-        marketplace_source_url = _marketplace_source_url(marketplace_name)
+    marketplace_source_url = _marketplace_source_url(marketplace_name)
+    marketplace_commit_sha = getattr(catalog, "commit_sha", None)
+    if isinstance(resolved_source, str) and not resolved_source.startswith(("http://", "https://")):
         if not marketplace_source_url:
             raise HTTPException(
                 status_code=400, detail=f"marketplace '{marketplace_name}' not found"
@@ -131,7 +133,10 @@ async def install_plugin(
         plugin_root = str(getattr(catalog, "metadata", {}).get("pluginRoot", "") or "")
         try:
             resolved_source = resolve_relative_plugin_source(
-                marketplace_source_url, resolved_source, plugin_root
+                marketplace_source_url,
+                resolved_source,
+                plugin_root,
+                marketplace_commit_sha,
             )
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -139,6 +144,9 @@ async def install_plugin(
     new_entry: dict[str, Any] = {
         "source": resolved_source,
         "version": plugin_entry.get("version"),
+        "marketplace_source": marketplace_source_url,
+        "marketplace_plugin_source": plugin_entry.get("source"),
+        "marketplace_commit_sha": marketplace_commit_sha,
         "status": "pending",
     }
     new_entry = {k: v for k, v in new_entry.items() if v is not None}
@@ -155,6 +163,28 @@ async def install_plugin(
 
     broadcast_plugins_snapshot(saved, request_id=request_id)
     return acknowledgement_response(request_id, ["plugins.snapshot"])
+
+
+@router.get("/{marketplace}/{plugin}/preview")
+async def preview_plugin_skills(
+    marketplace: str,
+    plugin: str,
+) -> dict[str, Any]:
+    """Return skill names discoverable from an uninstalled marketplace plugin."""
+    source = _marketplace_source_url(marketplace)
+    if not source:
+        raise HTTPException(status_code=404, detail=f"marketplace '{marketplace}' not found")
+    try:
+        catalog = await _resolve_catalog(marketplace)
+        if not any(
+            isinstance(entry, dict) and entry.get("name") == plugin for entry in catalog.plugins
+        ):
+            raise HTTPException(status_code=404, detail=f"plugin '{plugin}' not found")
+        skills = await list_plugin_skill_names(catalog, plugin)
+    except PluginFetchError as exc:
+        status_code = 429 if "rate limit exceeded" in str(exc).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    return {"marketplace": marketplace, "plugin": plugin, "skills": skills}
 
 
 @router.delete("/{marketplace}/{plugin}", status_code=202, response_model=UiRequestAcknowledgement)
@@ -212,10 +242,20 @@ async def get_plugin_skill_content(
         or not isinstance(document.payload, dict)
         or not isinstance(document.payload.get("content"), str)
     ):
-        raise HTTPException(
-            status_code=404,
-            detail=f"skill '{skill_name}' not found for plugin '{marketplace}/{plugin}'",
-        )
+        try:
+            catalog = await _resolve_catalog(marketplace)
+            content = await fetch_plugin_skill_content(catalog, plugin, skill_name)
+        except PluginFetchError as exc:
+            status_code = 429 if "rate limit exceeded" in str(exc).lower() else 404
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        payload = {
+            "marketplace": marketplace,
+            "plugin": plugin,
+            "skill": skill_name,
+            "content": content,
+        }
+        broadcast_ui_event("plugin.skill.content.updated", payload, request_id=request_id)
+        return acknowledgement_response(request_id, ["plugin.skill.content.updated"])
 
     payload = {
         "marketplace": marketplace,

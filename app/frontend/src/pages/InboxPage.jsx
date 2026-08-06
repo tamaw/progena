@@ -21,7 +21,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import { useConfig } from '../context/ConfigContext';
 import { formatStartedTime } from '../components/chat/conversationModel';
@@ -270,10 +270,9 @@ export default function InboxPage() {
         {visibleMessages.length === 0 ? (
           <PaneEmptyState>{listEmptyMessage}</PaneEmptyState>
         ) : (
-          <PaneListVirtualized
+          <PaneListRows
             items={visibleMessages}
             getItemKey={(message) => message.id}
-            estimatedItemHeight={70}
             renderItem={(message) => {
               const status = getInboxMessageStatus(message);
               const isUnread = status === 'unread';
