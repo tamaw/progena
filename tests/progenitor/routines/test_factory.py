@@ -85,9 +85,11 @@ class FakeAgent:
         return {"messages": [AIMessage(content=self._response)]}
 
 
-def _parse_response(org: str = "acme-oss", override_dirty: bool = False) -> str:
+def _parse_response(
+    org: str = "example-org", override_dirty: bool = False, host: str = "github.com"
+) -> str:
     return json.dumps(
-        {"host": "github.com", "org": org, "repo": f"{org}/foo", "override_dirty": override_dirty}
+        {"host": host, "org": org, "repo": f"{org}/foo", "override_dirty": override_dirty}
     )
 
 
@@ -97,14 +99,16 @@ def _assess_response(**overrides) -> str:
     return json.dumps(base)
 
 
-async def _run(graph, model, agent_registry, request="please set up acme-oss/foo"):
+async def _run(graph, model, agent_registry, request="please set up example-org/foo"):
     runnable = compile_routine_graph(graph, model=model, agent_registry=agent_registry)
     return await runnable.ainvoke({"messages": [HumanMessage(content=request)]})
 
 
 class TestRepoSetupWorkerRouting:
     async def test_invalid_domain_takes_router_default_branch(self, example_graph):
-        model = FakeModel([_parse_response(org="not-allowed"), "Sorry, that org isn't supported."])
+        # The gate is the host alone -- access to a given org is GitHub's call,
+        # reported downstream by `assess` as `accessible`.
+        model = FakeModel([_parse_response(host="gitlab.com"), "Sorry, that host isn't supported."])
         result = await _run(example_graph, model, agent_registry={})
         assert result["data"]["domain_check"] is False
         assert "respond_invalid_domain" in result["data"]
