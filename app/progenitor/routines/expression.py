@@ -76,19 +76,22 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         raise UnsafeExpressionError(f"unsupported unary operator: {type(node.op).__name__}")
 
     if isinstance(node, ast.BoolOp):
-        values = [_eval_node(value, namespace) for value in node.values]
+        # Operands are evaluated lazily, one at a time, so `and`/`or` short-circuit
+        # exactly like Python's. Evaluating them all up front would defeat the guard
+        # idiom every author reaches for -- `x != 0 and 100 / x > 2` must not divide,
+        # and `has_org and org == 'acme'` must not require `org` to be bound.
         if isinstance(node.op, ast.And):
-            result = True
-            for value in values:
-                result = value
-                if not value:
+            result: Any = True
+            for value_node in node.values:
+                result = _eval_node(value_node, namespace)
+                if not result:
                     break
             return result
         if isinstance(node.op, ast.Or):
             result = False
-            for value in values:
-                result = value
-                if value:
+            for value_node in node.values:
+                result = _eval_node(value_node, namespace)
+                if result:
                     break
             return result
         raise UnsafeExpressionError(f"unsupported boolean operator: {type(node.op).__name__}")
