@@ -651,15 +651,12 @@ function ForkBlock({ fork, node }) {
         <div className="routine-fork__lanes">
           {lanes.map((lane, index) => {
             const isCollapsed = collapsed.has(lane.value);
-            const joiningIndex = joining.findIndex(({ value }) => value === lane.value);
             const classes = [
               'routine-fork__lane',
               isCollapsed && 'routine-fork__lane--collapsed',
               lane.isDefault && 'routine-fork__lane--default',
               index === 0 && 'routine-fork__lane--fanout-first',
               joiningValues.has(lane.value) && 'routine-fork__lane--fanin',
-              joiningIndex >= 0 && joiningIndex === 0 && 'routine-fork__lane--fanin-first',
-              joiningIndex >= 0 && joiningIndex === joining.length - 1 && 'routine-fork__lane--fanin-last',
             ].filter(Boolean).join(' ');
             return (
               <div key={lane.value} className={classes}>
