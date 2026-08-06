@@ -7518,14 +7518,21 @@ body,
 }
 
 /* Router fork: a CSS-only switch box. Its rails rely on flex centring rather
-   than measurements, so they reflow with branch labels and lane widths. */
+   than measurements, so they reflow with branch labels and lane widths.
+
+   Every box in the fork is `max-content` with NO `max-width` cap. A cap here
+   makes a nested fork (a router inside a branch lane) wider than its own
+   box, and a centred flex row overflows *both* ways -- the left half lands at
+   a negative offset, which no scroll container can ever reach. Sizing to
+   content instead pushes the intrinsic width all the way up to
+   `.routine-chain` (itself `width: max-content`), so the canvas scroller
+   grows a horizontal scrollbar and every lane stays reachable. */
 .routine-fork {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   width: max-content;
-  max-width: 100%;
   margin: 8px auto 0;
 }
 .routine-fork::before {
@@ -7544,7 +7551,6 @@ body,
 .routine-fork__branches {
   position: relative;
   width: max-content;
-  max-width: 100%;
   margin-top: 8px;
   padding: 0 10px 28px;
   background: color-mix(in oklab, var(--color-bg-secondary) 85%, var(--color-bg-primary));
@@ -7587,9 +7593,17 @@ body,
   align-items: stretch;
   justify-content: center;
   gap: 20px;
-  width: 100%;
+  width: max-content;
   margin-top: 29px;
   padding: 0 8px;
+}
+
+/* Equal lane heights exist purely so the fan-in rail is straight. Without a
+   join there is no fan-in rail, so stretching only pads short lanes with dead
+   space -- which a nested fork makes glaring, since one lane can be ten times
+   the height of its siblings. */
+.routine-fork:not(.routine-fork--joined) > .routine-fork__branches > .routine-fork__lanes {
+  align-items: flex-start;
 }
 
 
@@ -7598,8 +7612,9 @@ body,
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-width: 220px;
-  width: 246px;
+  flex: none;
+  min-width: 246px;
+  width: max-content;
   padding: 34px 12px 10px;
   background: color-mix(in oklab, var(--color-bg-primary) 45%, transparent);
   border: 1px dashed var(--color-border);
