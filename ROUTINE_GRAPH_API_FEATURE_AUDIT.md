@@ -16,38 +16,39 @@ Legend: **[x] implemented**, **[~] partial / SDK-only**, **[ ] not implemented**
 - [x] **Async executable nodes** — prompt, code, eval, agent, subagent, no-op, human, foreach, and subgraph nodes.
 - [x] **`START` / `END` lifecycle** — compiler creates `START → __seed__ → entry`; terminal nodes route to `END`.
 - [x] **Node result caching** — node `config.cache` creates `CachePolicy`; graph `settings.cache` supplies `InMemoryCache`.
-- [x] **Per-node retries** — node `config.retry`.
-- [x] **Graph-wide retry default** — `settings.retry` through `StateGraph.set_node_defaults`.
+- [x] **Per-node retries and recovery** — node `config.retry` uses LangGraph `RetryPolicy`; `on_exhausted.route_to` records the terminal error in `data.errors` and transitions to the named recovery node.
+- [x] **Graph-wide retry default** — `settings.retry` is applied to every node without a node-specific retry policy.
 - [ ] **LangGraph task API / durable side-effect task isolation** — no `task()` usage in the routine compiler.
 
 ## Edges, routing, loops, and joins
 
-- [x] **Normal edges** — declarative `{ from, to }`.
-- [x] **Conditional edges** — `state_equals` router edges with branch and default targets.
+- [x] **Normal edges** — `{ from, to, level: "normal" }`, optionally with an expression-backed `loop_guard`.
+- [x] **Conditional edges** — `level: "route"` / `state_equals` router edges with branch and default targets; compiler path maps preserve every branch in LangGraph topology introspection.
 - [x] **Conditional entry behavior** — supported indirectly: the configured `entry` follows the compiler’s seed node, but there is no separate conditional-entry schema primitive.
-- [x] **Cycles / loopbacks** — any edge may target an earlier node.
+- [x] **Cycles / loopbacks** — normal and fan-out edges may target an earlier node; `loop_guard` can terminate or route elsewhere when false.
 - [x] **Recursion limits** — `settings.recursion_limit` becomes the compiled graph’s LangGraph recursion limit.
-- [x] **Convergent joins** — multiple upstream branches may target one downstream node; `messages` and `data` reducers merge updates.
-- [ ] **Static parallel fan-out through multiple plain edges** — schema rejects more than one plain edge from a source. Parallel fan-out is intentionally represented through `foreach` / `Send`, not multiple fixed edges.
+- [x] **Barrier fan-in** — `{ from: ["a", "b"], to: "join", level: "fan_in" }` waits for every named source.
+- [x] **Static fan-out** — `{ from: "source", to: ["a", "b"], level: "fan_out" }` schedules every target.
 
 ## Dynamic flow
 
-- [x] **Dynamic `Send` fan-out** — `foreach` resolves an item list and emits one `Send(target, state)` per item.
-- [ ] **Node-returned `Command(update=…, goto=…)`** — no routine node returns `Command`.
+- [x] **Dynamic `Send` fan-out** — `foreach` `mode: "send"` resolves `items_from`, applies `max_items`, and emits a `Send` to its one explicit normal-edge target with a copied item context.
+- [x] **Named-agent foreach** — `foreach` `mode: "agent"` concurrently invokes `agent_name` with a per-item prompt, optional cap/concurrency bound, and ordered aggregated results.
+- [x] **Retry recovery commands** — compiler-installed exhausted-retry handlers return `Command(update=…, goto=…)`; general user-authored `Command` nodes remain unsupported.
 - [ ] **`Command.PARENT` routing** — no parent-graph routing support.
-- [~] **Resume command consumption** — human nodes pause through `interrupt()`; callers can resume with LangGraph `Command(resume=...)` when a checkpointer is supplied. The routine schema itself has no command-routing primitive.
+- [~] **Resume command consumption** — human nodes pause through `interrupt()` and validate `allowed_responses`; callers can resume with LangGraph `Command(resume=...)` when a checkpointer is supplied.
 
 ## Persistence, interrupts, and revisions
 
 - [~] **Checkpointing / resumability** — compiler accepts an injected `checkpointer`; unit tests confirm interrupt + resume with `MemorySaver`. The live routine-subagent proxy invokes routines without supplying a checkpointer, so normal delegated routine runs are not currently resumable.
-- [x] **Human interrupts** — `human` node calls `interrupt({ node, prompt })` and stores the resumed answer.
-- [x] **Immutable routine revision history** — Postgres-backed routine graph revisions are stored and subagents cache compiled graphs by revision ID. This is document-version persistence, distinct from LangGraph execution checkpoints.
-- [~] **Graph migrations** — immutable revisions make definition changes traceable, but there is no explicit LangGraph checkpoint migration workflow.
+- [x] **Human interrupts** — `human` requires `message`, publishes it plus optional `allowed_responses` in the interrupt payload, validates resumed answers, and stores the answer.
+- [x] **Immutable routine revision history** — Postgres-backed routine graph revisions are stored and subagents cache compiled graphs by revision ID. Current v1 documents are atomically upgraded to v2 on store initialization, producing a new v2 revision while retaining the immutable historical snapshot.
+- [~] **Graph migrations** — definition migration from v1 to v2 is automatic for current documents; there is still no explicit LangGraph execution-checkpoint migration workflow.
 
 ## Composition and runtime
 
 - [x] **Routine-as-subagent delegation** — routines are exposed as DeepAgent `CompiledSubAgent`s.
-- [~] **Subgraph invocation** — a `subgraph` node invokes a compiled child graph from a registry. It is composition, but not LangGraph’s native “compiled graph registered directly as a graph node” form.
+- [x] **Subgraph invocation** — a `subgraph` node invokes a compiled child graph from a registry with explicit `input_map` and `output_map`. It is composition, but not LangGraph’s native “compiled graph registered directly as a graph node” form.
 - [x] **Runtime context API** — compiled graph declares `context_schema=RoutineContext`; prompt/seed nodes can use `user_id`, `workspace_id`, `request_id`, and metadata.
 - [~] **Context in live delegation** — the compiler supports invocation context, but the routine-subagent proxy currently calls `ainvoke()` without forwarding context.
 
@@ -60,8 +61,8 @@ Legend: **[x] implemented**, **[~] partial / SDK-only**, **[ ] not implemented**
 
 ## Verification
 
-- `pytest tests/progenitor/routines/test_advanced_graph.py tests/progenitor/routines/test_factory.py -q` → **43 passed**
-- `pytest tests/progenitor/routines/test_graph_schema.py tests/progenitor/routines/test_store.py tests/progenitor/routines/test_subagent.py -q` → **38 passed**
+- `pytest tests/progenitor/routines tests/backend/test_document_store.py -q` → **122 passed**
+- `pyright app/` → **0 errors**
 
 ## Primary implementation files
 

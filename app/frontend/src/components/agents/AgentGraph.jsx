@@ -75,7 +75,18 @@ function uniqueBranchValue(branches) {
 }
 
 function makeNode(kind) {
-  return { id: '', kind, label: titleCase(kind), description: '', config: {} };
+  const config = {
+    prompt: { prompt_template: '' },
+    code: { expression: '', inputs: {} },
+    eval: { expression: '', inputs: {} },
+    subagent: { subagent_name: '', prompt_template: '' },
+    agent: { agent_name: '', prompt_template: '' },
+    human: { message: '', allowed_responses: [] },
+    foreach: { mode: 'send', items_from: '', item_key: 'item' },
+    subgraph: { subgraph_name: '', input_map: {}, output_map: {} },
+    noop: {},
+  }[kind] || {};
+  return { id: '', kind, label: titleCase(kind), description: '', config };
 }
 
 // Edit callbacks shared with the card/branch renderers (avoids threading
@@ -131,10 +142,61 @@ function InputsField({ id, config, updateNodeConfig }) {
   );
 }
 
+
+function KeyValueMapField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}</span>
+      <textarea
+        className="agents-graph-node__prompt"
+        value={inputsToText(config?.[field])}
+        placeholder={placeholder}
+        onChange={(event) => updateNodeConfig(id, { [field]: textToInputs(event.target.value) })}
+      />
+    </label>
+  );
+}
+
+
+function StringListField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}</span>
+      <input
+        className="agents-graph-node__toolinput"
+        value={(config?.[field] || []).join(', ')}
+        placeholder={placeholder}
+        onChange={(event) => updateNodeConfig(id, {
+          [field]: event.target.value.split(',').map((value) => value.trim()).filter(Boolean),
+        })}
+      />
+    </label>
+  );
+}
+
+
+function NumberField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}</span>
+      <input
+        type="number"
+        min="1"
+        className="agents-graph-node__toolinput"
+        value={config?.[field] ?? ''}
+        placeholder={placeholder}
+        onChange={(event) => updateNodeConfig(id, {
+          [field]: event.target.value === '' ? undefined : Number(event.target.value),
+        })}
+      />
+    </label>
+  );
+}
+
 // Kind-specific config fields, mirroring app.progenitor.routines.graph's per-kind
 // config shape (prompt_template/system_prompt, expression/inputs/rubric_prompt,
 // subagent_name/agent_name + prompt_template). `noop` has no config.
-function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
+function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
   if (kind === 'prompt') {
     return (
       <>
@@ -148,7 +210,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
       <>
         <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
         {kind === 'eval' ? (
-          <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt (used if no expression)" placeholder="Ask the model a yes/no question…" multiline updateNodeConfig={updateNodeConfig} />
+          <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt (used instead of an expression)" placeholder="Ask the model a yes/no question…" multiline updateNodeConfig={updateNodeConfig} />
         ) : null}
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
@@ -164,19 +226,53 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig }) {
     );
   }
   if (kind === 'human') {
-    return <ConfigField id={id} config={config} field="prompt" label="Approval prompt" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />;
-  }
-  if (kind === 'foreach') {
     return (
       <>
-        <ConfigField id={id} config={config} field="items_path" label="Items path" placeholder="data.items" updateNodeConfig={updateNodeConfig} />
-        <ConfigField id={id} config={config} field="target" label="Fan-out target node" placeholder="process-item" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="message" label="Approval message" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />
+        <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'foreach') {
+    const mode = config?.mode || 'send';
+    return (
+      <>
+        <label className="agents-graph-node__field">
+          <span className="agents-graph-node__field-label">Execution mode</span>
+          <select
+            className="agents-graph-node__toolinput"
+            value={mode}
+            onChange={(event) => replaceNodeConfig(
+              event.target.value === 'agent'
+                ? { mode: 'agent', items_from: '', agent_name: '', prompt_template: '', item_key: 'item' }
+                : { mode: 'send', items_from: '', item_key: 'item' },
+            )}
+          >
+            <option value="send">Send to connected node</option>
+            <option value="agent">Invoke named agent</option>
+          </select>
+        </label>
+        <ConfigField id={id} config={config} field="items_from" label="Items from data path" placeholder="items" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="item_key" label="Item state key" placeholder="item" updateNodeConfig={updateNodeConfig} />
+        <NumberField id={id} config={config} field="max_items" label="Maximum items (optional)" placeholder="100" updateNodeConfig={updateNodeConfig} />
+        {mode === 'agent' ? (
+          <>
+            <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
+            <ConfigField id={id} config={config} field="prompt_template" label="Prompt per item" placeholder="Handle {item}" multiline updateNodeConfig={updateNodeConfig} />
+            <NumberField id={id} config={config} field="max_concurrency" label="Maximum concurrency (optional)" placeholder="4" updateNodeConfig={updateNodeConfig} />
+          </>
+        ) : null}
       </>
     );
   }
   if (kind === 'subgraph') {
-    return <ConfigField id={id} config={config} field="subgraph_name" label="Subgraph name" placeholder="shared-validation-graph" updateNodeConfig={updateNodeConfig} />;
+    return (
+      <>
+        <ConfigField id={id} config={config} field="subgraph_name" label="Subgraph name" placeholder="shared-validation-graph" updateNodeConfig={updateNodeConfig} />
+        <KeyValueMapField id={id} config={config} field="input_map" label="Input map (child field: parent data path)" placeholder="request: request" updateNodeConfig={updateNodeConfig} />
+        <KeyValueMapField id={id} config={config} field="output_map" label="Output map (parent field: child data path)" placeholder="result: answer" updateNodeConfig={updateNodeConfig} />
+      </>
+    );
   }
   return null;
 }
@@ -197,7 +293,6 @@ function RoutingFooter({ id, routerEdge }) {
     <div className="agents-graph-node__routing">
       <input
         className="agents-graph-node__toolinput"
-        value={routerEdge.state_key || ''}
         placeholder="route on data.<key>"
         onChange={(event) => onChangeStateKey(id, event.target.value)}
       />
@@ -267,7 +362,13 @@ function NodeInspector({ node, routerEdge, onClose, style }) {
             onChange={(event) => updateNode(node.id, { label: event.target.value })}
           />
         </label>
-        <NodeConfigBody id={node.id} kind={node.kind} config={node.config} updateNodeConfig={handleConfig} />
+        <NodeConfigBody
+          id={node.id}
+          kind={node.kind}
+          config={node.config}
+          updateNodeConfig={handleConfig}
+          replaceNodeConfig={(config) => updateNode(node.id, { config })}
+        />
         <RoutingFooter id={node.id} routerEdge={routerEdge} />
       </div>
       <footer className="routine-node-inspector__foot">
@@ -358,11 +459,18 @@ function ConnectorInsert({ slot }) {
 
 // Editable branch-case chip: the column header for one fork arm. Mirrors
 // Power Automate's per-case label -- double-click (or just focus) to rename.
-function BranchHeader({ value, isDefault, onRename, onRemove, collapsed, onToggleCollapse }) {
+function BranchHeader({
+  value,
+  isDefault,
+  onRename,
+  onRemove,
+  collapsed,
+  onToggleCollapse,
+  readOnly = false,
+}) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   function commit() {
-    setEditing(false);
     const trimmed = draft.trim();
     if (trimmed && trimmed !== value) onRename(trimmed);
     else setDraft(value);
@@ -379,8 +487,8 @@ function BranchHeader({ value, isDefault, onRename, onRemove, collapsed, onToggl
       >
         {collapsed ? '▸' : '▾'}
       </button>
-      {isDefault ? (
-        <span className="routine-fork__header-label">Default</span>
+      {isDefault || readOnly ? (
+        <span className="routine-fork__header-label">{isDefault ? 'Default' : value}</span>
       ) : editing ? (
         <input
           autoFocus
@@ -395,16 +503,28 @@ function BranchHeader({ value, isDefault, onRename, onRemove, collapsed, onToggl
           {value}
         </button>
       )}
-      <button type="button" className="routine-fork__header-remove" onClick={onRemove} title="Remove branch" aria-label="Remove branch">
-        ×
-      </button>
+      {!readOnly ? (
+        <button type="button" className="routine-fork__header-remove" onClick={onRemove} title="Remove branch" aria-label="Remove branch">
+          ×
+        </button>
+      ) : null}
     </div>
   );
 }
 
-// Follow a simple branch until it terminates. The optional join action creates
-// a shared plain node, so this is enough to detect the common continuation
-// without inventing another schema node kind.
+// One edge record can encode a normal transition, a static fan-out, or a
+// barrier fan-in. Indexing every listed source lets the same tree walk render
+// a fan-in's shared destination once rather than pretending each source owns
+// a separate normal edge.
+function edgeSourceIds(edge) {
+  return Array.isArray(edge?.from) ? edge.from : [edge?.from];
+}
+
+function edgeTargetIds(edge) {
+  if (!edge?.to) return [];
+  return Array.isArray(edge.to) ? edge.to : [edge.to];
+}
+
 function plainPath(startId, edgeBySource) {
   const path = [];
   const seen = new Set();
@@ -413,8 +533,8 @@ function plainPath(startId, edgeBySource) {
     path.push(current);
     seen.add(current);
     const edge = edgeBySource.get(current);
-    if (!edge || edge.router) break;
-    current = edge.to;
+    if (!edge || edge.router || edge.level === 'fan_out') break;
+    [current] = edgeTargetIds(edge);
   }
   return path;
 }
@@ -447,20 +567,24 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   const edge = edgeBySource.get(nodeId);
   let next = null;
   let fork = null;
-  if (edge && edge.router) {
-    const targetIds = [
-      ...Object.values(edge.branches || {}),
-      ...(edge.default ? [edge.default] : []),
-    ];
+  if (edge && (edge.router || edge.level === 'fan_out')) {
+    const isRouter = Boolean(edge.router);
+    const targetIds = isRouter
+      ? [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])]
+      : edgeTargetIds(edge);
     const joinId = findCommonJoin(targetIds, edgeBySource);
+    const branches = isRouter
+      ? Object.entries(edge.branches || {})
+      : targetIds.map((targetId, index) => [`path-${index + 1}`, targetId]);
     fork = {
       sourceId: nodeId,
-      edge,
-      branches: Object.entries(edge.branches || {}).map(([value, targetId]) => ({
+      edge: isRouter ? edge : { ...edge, router: 'fan_out', branches: Object.fromEntries(branches) },
+      editable: isRouter,
+      branches: branches.map(([value, targetId]) => ({
         value,
         tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, joinId),
       })),
-      defaultTree: edge.default
+      defaultTree: isRouter && edge.default
         ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered, joinId)
         : null,
       joinTree: joinId
@@ -468,7 +592,7 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
         : null,
     };
   } else {
-    next = buildChainTree(edge ? edge.to : null, nodesById, edgeBySource, visiting, rendered, stopAt);
+    next = buildChainTree(edgeTargetIds(edge)[0], nodesById, edgeBySource, visiting, rendered, stopAt);
   }
   visiting.delete(nodeId);
   return { type: 'node', id: nodeId, node, next, fork };
@@ -540,7 +664,7 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
       break;
     }
     positions.set(current.id, out.length);
-    if (current.node.kind === 'foreach') {
+    if (current.node.kind === 'foreach' && current.node.config?.mode === 'send') {
       const [bodyTree, afterTree] = splitForeachBody(current.next);
       out.push(
         <ForeachBlock
@@ -611,7 +735,7 @@ function ForkBlock({ fork, node }) {
     onRenameBranch,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
-  const { sourceId, edge, branches, defaultTree, joinTree } = fork;
+  const { sourceId, edge, branches, defaultTree, joinTree, editable = true } = fork;
   const lanes = [
     ...branches.map(({ value, tree }) => ({
       value,
@@ -656,7 +780,10 @@ function ForkBlock({ fork, node }) {
               isCollapsed && 'routine-fork__lane--collapsed',
               lane.isDefault && 'routine-fork__lane--default',
               index === 0 && 'routine-fork__lane--fanout-first',
+              index === lanes.length - 1 && 'routine-fork__lane--fanout-last',
               joiningValues.has(lane.value) && 'routine-fork__lane--fanin',
+              joiningValues.has(lane.value) && lane.value === joining[0]?.value && 'routine-fork__lane--fanin-first',
+              joiningValues.has(lane.value) && lane.value === joining.at(-1)?.value && 'routine-fork__lane--fanin-last',
             ].filter(Boolean).join(' ');
             return (
               <div key={lane.value} className={classes}>
@@ -667,13 +794,14 @@ function ForkBlock({ fork, node }) {
                   onRename={(next) => onRenameBranch(sourceId, lane.value, next)}
                   onRemove={() => (lane.isDefault ? onRemoveDefault(sourceId) : onRemoveBranch(sourceId, lane.value))}
                   collapsed={isCollapsed}
+                  readOnly={!editable}
                   onToggleCollapse={() => toggleCollapse(lane.value)}
                 />
                 {isCollapsed ? null : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
               </div>
             );
           })}
-          {!edge.default ? (
+          {editable && !edge.default ? (
             <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed">
               <span className="routine-fork__wire" aria-hidden="true" />
               <div className="routine-fork__add-slot">
@@ -683,14 +811,16 @@ function ForkBlock({ fork, node }) {
               </div>
             </div>
           ) : null}
-          <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed routine-fork__lane--fanout-last">
-            <span className="routine-fork__wire" aria-hidden="true" />
-            <div className="routine-fork__add-slot">
-              <button type="button" className="routine-fork__add-slot-action" onClick={() => onAddBranch(sourceId)}>
-                + Add branch
-              </button>
+          {editable ? (
+            <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed routine-fork__lane--fanout-last">
+              <span className="routine-fork__wire" aria-hidden="true" />
+              <div className="routine-fork__add-slot">
+                <button type="button" className="routine-fork__add-slot-action" onClick={() => onAddBranch(sourceId)}>
+                  + Add branch
+                </button>
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </div>
       {joinTree ? (
@@ -699,7 +829,7 @@ function ForkBlock({ fork, node }) {
         </div>
       ) : null}
       <div className="routine-fork__actions">
-        {!joinTree && canOfferJoin ? (
+        {editable && !joinTree && canOfferJoin ? (
           <ConnectorInsert slot={{ sourceId, kind: 'join' }} />
         ) : null}
       </div>
@@ -732,7 +862,11 @@ function UnreachableTray({ nodes }) {
 function RoutineChain({ nodes, edges, entry }) {
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const edgeBySource = useMemo(
-    () => new Map(edges.filter((edge) => edge && edge.from).map((edge) => [edge.from, edge])),
+    () => new Map(
+      edges
+        .filter((edge) => edge && edge.from)
+        .flatMap((edge) => edgeSourceIds(edge).map((source) => [source, edge])),
+    ),
     [edges],
   );
   // Build the whole reachable tree (forks included) fully, up front, in one
@@ -795,6 +929,7 @@ function validateWorkingGraph(nodes, edges, entry) {
 function serializeGraph(nodes, edges, meta) {
   return {
     status: meta.status || 'Draft',
+    version: meta.version || '2.0.0',
     summary: meta.summary || '',
     entry: meta.entry || nodes[0]?.id || null,
     nodes: nodes.map((node) => ({
@@ -818,6 +953,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
     status: graph.status || 'Draft',
+    version: graph.version || '2.0.0',
     summary: graph.summary || '',
     entry: graph.entry || (graph.nodes || [])[0]?.id || null,
     settings: graph.settings || {},
@@ -864,15 +1000,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
   const deleteNode = useCallback((id) => {
     const outgoing = edgesRef.current.find((edge) => edge.from === id);
-    const singleTarget = outgoing && !outgoing.router ? outgoing.to : null;
-    // A fan-out's Send target is a node id held in config rather than an edge,
-    // so splicing the edges around a deleted node is not enough to keep it
-    // pointing at whatever now starts the body.
-    setNodes((current) => current
-      .filter((node) => node.id !== id)
-      .map((node) => (node.kind === 'foreach' && node.config?.target === id
-        ? { ...node, config: { ...node.config, target: singleTarget || '' } }
-        : node)));
+    const singleTarget = outgoing?.level === 'normal' && typeof outgoing.to === 'string'
+      ? outgoing.to
+      : null;
+    setNodes((current) => current.filter((node) => node.id !== id));
     setEdges((current) => {
       const next = [];
       current.forEach((edge) => {
@@ -894,7 +1025,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           if (!changed) { next.push(edge); return; }
           if (!Object.keys(branches).length && !defaultTarget) return; // router now empty, drop it
           if (!Object.keys(branches).length) {
-            next.push({ from: edge.from, to: defaultTarget });
+            next.push({ from: edge.from, to: defaultTarget, level: 'normal' });
             return;
           }
           next.push({ ...edge, branches, ...(defaultTarget ? { default: defaultTarget } : { default: undefined } ) });
@@ -914,10 +1045,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
   }, []);
 
-  // A fan-out owns a scope: its body is the run between it and the first noop,
-  // and its Send dispatches to `config.target`. Both have to be established as
-  // the node is created -- with no terminator the new box swallows the rest of
-  // the chain, and with no target the compiled Send has nowhere to go.
+  // A Send foreach owns a scoped body. Its one normal outgoing edge names the
+  // first dynamic target; the companion noop marks the body boundary so the
+  // rigid chain renderer can still show the continuation after the fan-out.
   const insertAt = useCallback((slot, kind) => {
     const id = uniqueNodeId(kind, nodesRef.current);
     const added = [{ ...makeNode(kind), id }];
@@ -936,7 +1066,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         targetId = existing.to;
         existing.to = id;
       } else {
-        nextEdges.push({ from: slot.sourceId, to: id });
+        nextEdges.push({ from: slot.sourceId, to: id, level: 'normal' });
       }
     } else if (slot.kind === 'branch') {
       const router = nextEdges.find((edge) => edge.from === slot.sourceId);
@@ -953,22 +1083,13 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     }
     if (kind === 'foreach') {
       const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
-      added[0] = { ...added[0], config: { ...added[0].config, target: stopId } };
       added.push({ ...makeNode('noop'), id: stopId, label: 'Join fan-out' });
-      nextEdges.push({ from: id, to: stopId });
-      if (targetId) nextEdges.push({ from: stopId, to: targetId });
+      nextEdges.push({ from: id, to: stopId, level: 'normal' });
+      if (targetId) nextEdges.push({ from: stopId, to: targetId, level: 'normal' });
     } else if (targetId) {
-      nextEdges.push({ from: id, to: targetId });
+      nextEdges.push({ from: id, to: targetId, level: 'normal' });
     }
-    setNodes((current) => {
-      const next = [...current, ...added];
-      // A step added at the top of a body becomes what the Send dispatches to.
-      return slot.kind === 'foreach'
-        ? next.map((node) => (node.id === slot.sourceId
-          ? { ...node, config: { ...node.config, target: id } }
-          : node))
-        : next;
-    });
+    setNodes((current) => [...current, ...added]);
     setEdges(nextEdges);
   }, []);
 
@@ -986,6 +1107,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const branchId = uniqueNodeId('noop', nodesRef.current);
     const routerEdge = {
       from: sourceId,
+      level: 'route',
       router: 'state_equals',
       state_key: stateKey,
       branches: { 'case-1': branchId },
@@ -998,7 +1120,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const removeBranching = useCallback((sourceId) => {
     setEdges((current) => current.map((edge) => {
       if (edge.from !== sourceId || !edge.router) return edge;
-      return edge.default ? { from: sourceId, to: edge.default } : null;
+      return edge.default ? { from: sourceId, to: edge.default, level: 'normal' } : null;
     }).filter(Boolean));
   }, []);
 
@@ -1039,12 +1161,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     }).filter(Boolean);
     if (terminals.length < 2 || new Set(terminals).size < 2) return;
     const joinId = uniqueNodeId(kind, nodesRef.current);
-    const nextEdges = [...edgesRef.current];
-    [...new Set(terminals)].forEach((terminalId) => {
-      if (!nextEdges.some((edge) => edge.from === terminalId)) {
-        nextEdges.push({ from: terminalId, to: joinId });
-      }
-    });
+    const nextEdges = [
+      ...edgesRef.current,
+      { from: [...new Set(terminals)], to: joinId, level: 'fan_in' },
+    ];
     setNodes((current) => [...current, {
       ...makeNode(kind),
       id: joinId,
@@ -1059,7 +1179,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       const branches = { ...edge.branches };
       delete branches[value];
       if (!Object.keys(branches).length && !edge.default) return null;
-      if (!Object.keys(branches).length) return { from: edge.from, to: edge.default };
+      if (!Object.keys(branches).length) {
+        return { from: edge.from, to: edge.default, level: 'normal' };
+      }
       return { ...edge, branches };
     }).filter(Boolean));
   }, []);
@@ -1141,6 +1263,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const handleJsonApply = useCallback(async (parsed) => {
     const nextMeta = {
       status: parsed.status || 'Draft',
+      version: parsed.version || '2.0.0',
       summary: parsed.summary || '',
       entry: parsed.entry || (parsed.nodes || [])[0]?.id || null,
       settings: parsed.settings || {},
@@ -1291,6 +1414,7 @@ function graphToJson(graph) {
   return JSON.stringify(
     {
       status: graph.status || 'Draft',
+      version: graph.version || '2.0.0',
       summary: graph.summary || '',
       entry: graph.entry ?? null,
       nodes: graph.nodes || [],

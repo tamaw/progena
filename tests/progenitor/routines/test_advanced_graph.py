@@ -28,13 +28,29 @@ class FlakyModel(FakeModel):
         return AIMessage(content=str(messages[-1].content))
 
 
+class AlwaysFailModel(FakeModel):
+    async def ainvoke(self, messages: list[Any]) -> AIMessage:
+        self.calls += 1
+        raise RuntimeError("permanent")
+
+
+class FakeObjectAgent:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+        prompt = str(state["messages"][-1].content)
+        self.prompts.append(prompt)
+        return {"messages": [AIMessage(content=f"done:{prompt}")]}
+
+
 def graph(*nodes: dict[str, Any], edges: list[dict[str, Any]] | None = None, **extra: Any):
     return validate_routine_graph_payload(
         {
             "id": "advanced",
             "name": "Advanced",
             "description": "feature coverage",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": nodes[0]["id"],
             "nodes": list(nodes),
             "edges": edges or [],
@@ -86,13 +102,157 @@ async def test_retry_policy_retries_transient_node_failure() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_exhaustion_routes_to_recovery_node() -> None:
+    model = AlwaysFailModel()
+    routine = graph(
+        {
+            "id": "work",
+            "kind": "prompt",
+            "output_key": "work",
+            "config": {
+                "prompt_template": "work",
+                "retry": {
+                    "max_attempts": 2,
+                    "initial_interval": 0,
+                    "jitter": False,
+                    "on_exhausted": {"route_to": "recover"},
+                },
+            },
+        },
+        {
+            "id": "recover",
+            "kind": "code",
+            "output_key": "recover",
+            "config": {"expression": "'recovered'"},
+        },
+    )
+    result = await compile_routine_graph(routine, model=model).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    assert model.calls == 2
+    assert result["data"]["recover"] == "recovered"
+    assert result["data"]["errors"]["work"] == {
+        "type": "RuntimeError",
+        "message": "permanent",
+    }
+
+
+@pytest.mark.asyncio
+async def test_static_fanout_waits_for_every_source_at_fanin() -> None:
+    routine = graph(
+        {"id": "fan", "kind": "noop", "output_key": "fan", "config": {}},
+        {
+            "id": "left",
+            "kind": "code",
+            "output_key": "left",
+            "config": {"expression": "'left'"},
+        },
+        {
+            "id": "left_late",
+            "kind": "code",
+            "output_key": "late",
+            "config": {"expression": "left + '-late'", "inputs": {"left": "left"}},
+        },
+        {
+            "id": "right",
+            "kind": "code",
+            "output_key": "right",
+            "config": {"expression": "'right'"},
+        },
+        {
+            "id": "join",
+            "kind": "code",
+            "output_key": "join",
+            "config": {
+                "expression": "late + '-' + right",
+                "inputs": {"late": "late", "right": "right"},
+            },
+        },
+        edges=[
+            {"from": "fan", "to": ["left", "right"], "level": "fan_out"},
+            {"from": "left", "to": "left_late", "level": "normal"},
+            {"from": ["left_late", "right"], "to": "join", "level": "fan_in"},
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    assert result["data"]["join"] == "left-late-right"
+
+
+@pytest.mark.asyncio
+async def test_loop_guard_routes_false_result_without_running_guarded_target() -> None:
+    routine = graph(
+        {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
+        {
+            "id": "loop",
+            "kind": "code",
+            "output_key": "loop",
+            "config": {"expression": "'unexpected'"},
+        },
+        {
+            "id": "fallback",
+            "kind": "code",
+            "output_key": "fallback",
+            "config": {"expression": "'finished'"},
+        },
+        edges=[
+            {
+                "from": "start",
+                "to": "loop",
+                "level": "normal",
+                "loop_guard": {
+                    "expression": "count < 2",
+                    "inputs": {"count": "count"},
+                    "on_false": "fallback",
+                },
+            }
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")], "data": {"count": 2}}
+    )
+
+    assert result["data"]["fallback"] == "finished"
+    assert "loop" not in result["data"]
+
+
+@pytest.mark.asyncio
+async def test_foreach_agent_caps_items_and_collects_ordered_results() -> None:
+    worker = FakeObjectAgent()
+    routine = graph(
+        {
+            "id": "fan",
+            "kind": "foreach",
+            "output_key": "results",
+            "config": {
+                "mode": "agent",
+                "items_from": "items",
+                "agent_name": "worker",
+                "prompt_template": "Review {item}",
+                "max_items": 2,
+                "max_concurrency": 1,
+            },
+        },
+    )
+    result = await compile_routine_graph(
+        routine, model=FakeModel(), agent_registry={"worker": worker}
+    ).ainvoke({"messages": [HumanMessage("go")], "data": {"items": ["a", "b", "c"]}})
+
+    assert worker.prompts == ["Review a", "Review b"]
+    assert result["data"]["results"] == ["done:Review a", "done:Review b"]
+
+
+@pytest.mark.asyncio
 async def test_human_interrupt_can_resume_with_checkpoint() -> None:
     routine = graph(
         {
             "id": "approve",
             "kind": "human",
             "output_key": "approved",
-            "config": {"prompt": "Approve?"},
+            "config": {"message": "Approve?", "allowed_responses": ["yes", "no"]},
         },
     )
     compiled = compile_routine_graph(routine, model=FakeModel(), checkpointer=MemorySaver())
@@ -118,15 +278,18 @@ async def test_send_fanout_and_native_subgraph() -> None:
             "id": "fan",
             "kind": "foreach",
             "output_key": "fan",
-            "config": {"items_path": "items", "target": "child", "item_key": "item"},
+            "config": {"mode": "send", "items_from": "items", "item_key": "item"},
         },
         {
             "id": "child",
             "kind": "subgraph",
             "output_key": "result",
-            "config": {"subgraph_name": "child"},
+            "config": {
+                "subgraph_name": "child",
+                "output_map": {"child_result": "child"},
+            },
         },
-        edges=[{"from": "fan", "to": "child"}],
+        edges=[{"from": "fan", "to": "child", "level": "normal"}],
     )
     child_compiled = compile_routine_graph(child, model=FakeModel())
     parent_compiled = compile_routine_graph(
@@ -135,7 +298,8 @@ async def test_send_fanout_and_native_subgraph() -> None:
     result = await parent_compiled.ainvoke(
         {"messages": [HumanMessage("go")], "data": {"items": [1, 2]}}
     )
-    assert result["data"]["item"] in (1, 2)
+    assert result["data"]["fan"] == [1, 2]
+    assert result["data"]["child_result"] in (2, 3)
 
 
 @pytest.mark.asyncio

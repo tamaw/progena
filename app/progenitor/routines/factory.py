@@ -13,19 +13,20 @@ DeepAgent subagent delegation is a separate task.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
-from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypedDict, cast
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.cache.memory import InMemoryCache
+from langgraph.errors import NodeError
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.runtime import Runtime
-from langgraph.types import CachePolicy, RetryPolicy, Send, interrupt
+from langgraph.types import CachePolicy, Command, RetryPolicy, Send, interrupt
 
 from ..structured import validate_against_schema
 from .expression import evaluate_expression
@@ -54,6 +55,11 @@ def _merge_data(existing: dict[str, Any] | None, update: dict[str, Any] | None) 
 class RoutineState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     data: Annotated[dict[str, Any], _merge_data]
+
+
+def _node_config(node: RoutineNode) -> dict[str, Any]:
+    """Present strict Pydantic config models to compiler helpers as plain data."""
+    return node.config.model_dump(exclude_none=True)
 
 
 def _emit(runtime: Runtime | None, event: str, payload: dict[str, Any]) -> None:
@@ -346,7 +352,7 @@ def _build_prompt_node(
     base_system_prompt: str | None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "prompt", config, "prompt_file")
     template = config.get("prompt_template")
@@ -403,7 +409,7 @@ def _build_prompt_node(
 
 
 def _build_code_node(node: RoutineNode) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "code", config, "expression_file")
     expression = config.get("expression")
@@ -423,7 +429,7 @@ def _build_code_node(node: RoutineNode) -> Any:
 def _build_eval_node(
     node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
 ) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "eval", config, "expression_file")
     expression = config.get("expression")
@@ -475,7 +481,7 @@ def _build_eval_node(
 
 
 def _build_subagent_node(node: RoutineNode, *, subagent_registry: dict[str, Any]) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "subagent", config, "prompt_file")
     subagent_name = config["subagent_name"]
@@ -510,7 +516,7 @@ def _build_agent_node(
     agent_registry: dict[str, Any],
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "agent", config, "prompt_file")
     agent_name = config["agent_name"]
@@ -565,58 +571,128 @@ def _build_noop_node(node: RoutineNode) -> Any:
 
 
 def _build_human_node(node: RoutineNode) -> Any:
-    config = node.config
+    config = _node_config(node)
     output_key = node.output_key or node.id
-    prompt = str(config.get("prompt") or node.description or f"Input for {node.id}")
+    message = config["message"]
+    allowed_responses = config.get("allowed_responses")
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
-        answer = interrupt({"node": node.id, "prompt": prompt})
+        answer = interrupt(
+            {
+                "node": node.id,
+                "message": message,
+                **(
+                    {"allowed_responses": allowed_responses}
+                    if allowed_responses is not None
+                    else {}
+                ),
+            }
+        )
+        if allowed_responses is not None and answer not in allowed_responses:
+            raise ValueError(
+                f"human node {node.id}: response must be one of {allowed_responses!r}, got {answer!r}"
+            )
         _emit(runtime, "routine.human.resumed", {"node": node.id})
         return {"data": {output_key: answer}}
 
     return run
 
 
-def _build_foreach_node(node: RoutineNode) -> Any:
-    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
-        items_path = str(node.config.get("items_path") or "")
-        items = resolve_data_path(state.get("data", {}), items_path)
-        if not isinstance(items, list):
-            raise ValueError(f"foreach node {node.id}: items_path must resolve to a list")
-        _emit(runtime, "routine.foreach.expanded", {"node": node.id, "count": len(items)})
-        return {"data": {f"{node.id}_items": items}}
+def _foreach_items(node: RoutineNode, state: RoutineState) -> list[Any]:
+    config = _node_config(node)
+    items_from = config["items_from"]
+    items = resolve_data_path(state.get("data", {}), items_from)
+    if not isinstance(items, list):
+        raise ValueError(f"foreach node {node.id}: items_from must resolve to a list")
+    max_items = config.get("max_items")
+    return items[:max_items] if max_items is not None else items
 
-    return run
+
+def _build_foreach_node(node: RoutineNode, *, agent_registry: dict[str, Any]) -> Any:
+    config = _node_config(node)
+    output_key = node.output_key or node.id
+
+    if config["mode"] == "send":
+
+        async def run_send(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+            items = _foreach_items(node, state)
+            _emit(runtime, "routine.foreach.expanded", {"node": node.id, "count": len(items)})
+            return {"data": {output_key: items}}
+
+        return run_send
+
+    agent_name = config["agent_name"]
+    template = config["prompt_template"]
+    item_key = config["item_key"]
+    max_concurrency = config.get("max_concurrency") or 4
+
+    async def run_agent(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        target = agent_registry.get(agent_name)
+        if target is None:
+            raise KeyError(f"foreach node {node.id}: unknown agent '{agent_name}'")
+        items = _foreach_items(node, state)
+        data = state.get("data", {})
+        semaphore = asyncio.Semaphore(max_concurrency)
+
+        async def invoke(item: Any) -> str:
+            try:
+                rendered = template.format(**data, **{item_key: item})
+            except KeyError as exc:
+                raise KeyError(
+                    f"foreach node {node.id}: template references missing state key: {exc}"
+                ) from exc
+            async with semaphore:
+                result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})
+            messages = result.get("messages") or []
+            return normalize_message_content(messages[-1].content) if messages else ""
+
+        results = await asyncio.gather(*(invoke(item) for item in items))
+        _emit(runtime, "routine.foreach.completed", {"node": node.id, "count": len(results)})
+        return {"data": {output_key: results}}
+
+    return run_agent
 
 
 def _build_subgraph_node(node: RoutineNode, *, subgraph_registry: dict[str, Any]) -> Any:
+    config = _node_config(node)
     output_key = node.output_key or node.id
-    name = str(node.config.get("subgraph_name") or "")
+    name = config["subgraph_name"]
+    input_map = config.get("input_map") or {}
+    output_map = config.get("output_map") or {}
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
         target = subgraph_registry.get(name)
         if target is None:
             raise KeyError(f"node {node.id}: unknown subgraph '{name}'")
-        result = await target.ainvoke(state)
+        parent_data = state.get("data", {})
+        child_data = (
+            _resolve_inputs(node.id, input_map, parent_data) if input_map else dict(parent_data)
+        )
+        child_state = {"messages": state.get("messages") or [], "data": child_data}
+        if runtime is None:
+            result = await target.ainvoke(child_state)
+        else:
+            result = await target.ainvoke(child_state, context=runtime.context)
         messages = result.get("messages") or []
         text = normalize_message_content(messages[-1].content) if messages else ""
-        child_data = result.get("data") or {}
-        return {"messages": [AIMessage(content=text)], "data": {**child_data, output_key: text}}
+        result_data = result.get("data") or {}
+        mapped_output = _resolve_inputs(node.id, output_map, result_data) if output_map else {}
+        return {"messages": [AIMessage(content=text)], "data": {**mapped_output, output_key: text}}
 
     return run
 
 
-def _build_send_router(node: RoutineNode) -> Callable[[RoutineState], list[Send]]:
-    items_path = str(node.config.get("items_path") or "")
-    target = str(node.config.get("target") or "")
-    item_key = str(node.config.get("item_key") or "item")
+def _build_send_router(node: RoutineNode, target: str) -> Callable[[RoutineState], list[Send]]:
+    config = _node_config(node)
+    item_key = config["item_key"]
 
     def route(state: RoutineState) -> list[Send]:
-        items = resolve_data_path(state.get("data", {}), items_path)
-        if not isinstance(items, list):
-            raise ValueError(f"foreach node {node.id}: items_path must resolve to a list")
+        items = _foreach_items(node, state)
+        data = state.get("data", {})
         return [
-            Send(target, {"messages": state.get("messages") or [], "data": {item_key: item}})
+            Send(
+                target, {"messages": state.get("messages") or [], "data": {**data, item_key: item}}
+            )
             for item in items
         ]
 
@@ -645,10 +721,10 @@ def _build_node_callable(
         return _build_subagent_node(node, subagent_registry=subagent_registry)
     if node.kind == "agent":
         return _build_agent_node(node, agent_registry=agent_registry, defs=defs)
+    if node.kind == "foreach":
+        return _build_foreach_node(node, agent_registry=agent_registry)
     if node.kind == "human":
         return _build_human_node(node)
-    if node.kind == "foreach":
-        return _build_foreach_node(node)
     if node.kind == "subgraph":
         return _build_subgraph_node(node, subgraph_registry=subgraph_registry)
     if node.kind == "noop":
@@ -674,6 +750,44 @@ def _build_router(edge: RoutineEdge) -> Callable[[RoutineState], str]:
         raise ValueError(
             f"router from {edge.from_}: no branch for state '{edge.state_key}'={key!r} and no default"
         )
+
+    return route
+
+
+def _build_retry_exhausted_handler(
+    node_id: str, route_to: str
+) -> Callable[[RoutineState, NodeError], Command]:
+    """Turn an exhausted LangGraph retry into an explicit recovery transition."""
+
+    def recover(state: RoutineState, error: NodeError) -> Command:
+        data = state.get("data", {})
+        errors = dict(data.get("errors") or {})
+        errors[node_id] = {
+            "type": type(error.error).__name__,
+            "message": str(error.error),
+        }
+        return Command(update={"data": {"errors": errors}}, goto=route_to)
+
+    return recover
+
+
+def _build_loop_guard(
+    edge: RoutineEdge, terminal_target: str
+) -> Callable[[RoutineState], str | list[str]]:
+    guard = edge.loop_guard
+    if guard is None:
+        raise ValueError(f"edge from {edge.from_} has no loop_guard")
+    targets = edge.target_ids
+    false_target = guard.on_false or terminal_target
+
+    def route(state: RoutineState) -> str | list[str]:
+        namespace = _resolve_inputs(f"edge {edge.from_}", guard.inputs, state.get("data", {}))
+        allowed = evaluate_expression(guard.expression, namespace)
+        if not isinstance(allowed, bool):
+            raise ValueError(f"loop_guard from {edge.from_} must evaluate to a boolean")
+        if not allowed:
+            return false_target
+        return targets[0] if len(targets) == 1 else targets
 
     return route
 
@@ -733,14 +847,23 @@ def compile_routine_graph(
         input_schema=_input_schema_type(input_fields),
         output_schema=_output_schema_type(output_fields),
     )
-    default_retry_policy = _retry_policy(graph.settings)
-    if default_retry_policy is not None:
-        builder.set_node_defaults(retry_policy=default_retry_policy)
+    settings = graph.settings.model_dump(exclude_none=True)
     builder.add_node(_SEED_NODE_ID, _seed_node(input_fields))
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
 
     for node in graph.nodes:
+        config = _node_config(node)
+        retry_config = config if "retry" in config else settings
+        exhausted = (retry_config.get("retry") or {}).get("on_exhausted")
+        recovery_target = exhausted.get("route_to") if exhausted else None
+        node_options: dict[str, Any] = {
+            "retry_policy": _retry_policy(retry_config),
+            "cache_policy": _cache_policy(config),
+        }
+        if recovery_target is not None:
+            node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)
+            node_options["destinations"] = (recovery_target,)
         builder.add_node(
             node.id,
             _build_node_callable(
@@ -752,8 +875,7 @@ def compile_routine_graph(
                 subgraph_registry=subgraph_registry,
                 defs=graph.defs,
             ),
-            retry_policy=_retry_policy(node.config),
-            cache_policy=_cache_policy(node.config),
+            **node_options,
         )
 
     # Every path that would otherwise go straight to END routes through the
@@ -766,31 +888,70 @@ def compile_routine_graph(
         builder.add_edge(ROUTINE_PROJECT_NODE_ID, END)
         terminal_target = ROUTINE_PROJECT_NODE_ID
 
-    outgoing: dict[str, list[RoutineEdge]] = defaultdict(list)
+    outgoing: dict[str, RoutineEdge] = {}
     for edge in graph.edges:
-        outgoing[edge.from_].append(edge)
+        for source in edge.source_ids:
+            if source in outgoing:
+                raise ValueError(f"node has more than one outgoing edge declaration: {source}")
+            outgoing[source] = edge
 
+    foreach_send_ids = {
+        node.id
+        for node in graph.nodes
+        if node.kind == "foreach" and _node_config(node)["mode"] == "send"
+    }
     for node in graph.nodes:
-        edges = outgoing.get(node.id, [])
-        if node.kind == "foreach":
-            builder.add_conditional_edges(node.id, _build_send_router(node))
-            continue
-        if not edges:
+        if node.id not in outgoing:
             builder.add_edge(node.id, terminal_target)
-            continue
-        router_edges = [edge for edge in edges if edge.is_router]
-        if router_edges:
-            builder.add_conditional_edges(node.id, _build_router(router_edges[0]))
-        else:
-            for edge in edges:
-                if edge.to is None:
-                    raise ValueError(f"edge from {edge.from_} has no target")
-                builder.add_edge(node.id, edge.to)
 
-    if graph.settings.get("cache") and cache is None:
+    for edge in graph.edges:
+        if edge.level == "route":
+            targets = list((edge.branches or {}).values())
+            if edge.default is not None:
+                targets.append(edge.default)
+            builder.add_conditional_edges(
+                edge.source_ids[0],
+                _build_router(edge),
+                path_map={target: target for target in targets},
+            )
+            continue
+
+        if edge.level == "fan_in":
+            builder.add_edge(edge.source_ids, edge.target_ids[0])
+            continue
+
+        source = edge.source_ids[0]
+        targets = edge.target_ids
+        if source in foreach_send_ids:
+            if edge.level != "normal" or len(targets) != 1 or edge.loop_guard is not None:
+                raise ValueError(
+                    f"foreach Send node {source} requires one unguarded normal outgoing edge"
+                )
+            builder.add_conditional_edges(
+                source,
+                _build_send_router(
+                    next(node for node in graph.nodes if node.id == source), targets[0]
+                ),
+                path_map={targets[0]: targets[0]},
+            )
+            continue
+
+        if edge.loop_guard is not None:
+            false_target = edge.loop_guard.on_false or terminal_target
+            builder.add_conditional_edges(
+                source,
+                _build_loop_guard(edge, terminal_target),
+                path_map={target: target for target in [*targets, false_target]},
+            )
+            continue
+
+        for target in targets:
+            builder.add_edge(source, target)
+
+    if settings.get("cache") and cache is None:
         cache = InMemoryCache()
     compiled = builder.compile(checkpointer=checkpointer, cache=cache)
-    limit = graph.settings.get("recursion_limit")
+    limit = settings.get("recursion_limit")
     if limit is not None:
         compiled = compiled.with_config({"recursion_limit": int(limit)})
     return compiled

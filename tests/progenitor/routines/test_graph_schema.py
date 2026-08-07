@@ -44,7 +44,8 @@ class TestValidateRoutineGraphPayload:
 
     def test_rejects_dangling_edge(self, example_payload):
         payload = copy.deepcopy(example_payload)
-        payload["edges"].append({"from": "parse", "to": "does-not-exist"})
+        edge = next(edge for edge in payload["edges"] if edge["from"] == "parse")
+        edge["to"] = "does-not-exist"
         with pytest.raises(ValueError, match="unknown target node"):
             validate_routine_graph_payload(payload)
 
@@ -90,9 +91,10 @@ class TestValidateRoutineGraphStructural:
                 {"id": "d", "kind": "noop"},
             ],
             [
-                {"from": "a", "to": "b"},
+                {"from": "a", "to": "b", "level": "normal"},
                 {
                     "from": "b",
+                    "level": "route",
                     "router": "state_equals",
                     "state_key": "b",
                     "branches": {"True": "c"},
@@ -102,7 +104,7 @@ class TestValidateRoutineGraphStructural:
         )
 
     def test_rejects_multiple_plain_edges_from_same_source(self):
-        with pytest.raises(ValueError, match="more than one plain edge"):
+        with pytest.raises(ValueError, match="more than one outgoing edge declaration"):
             validate_routine_graph(
                 [
                     {"id": "a", "kind": "prompt"},
@@ -110,8 +112,8 @@ class TestValidateRoutineGraphStructural:
                     {"id": "c", "kind": "noop"},
                 ],
                 [
-                    {"from": "a", "to": "b"},
-                    {"from": "a", "to": "c"},
+                    {"from": "a", "to": "b", "level": "normal"},
+                    {"from": "a", "to": "c", "level": "normal"},
                 ],
             )
 
@@ -127,16 +129,25 @@ class TestValidateRoutineGraphStructural:
         with pytest.raises(ValueError, match="unsupported router kind"):
             validate_routine_graph(
                 [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}],
-                [{"from": "a", "router": "regex_match", "state_key": "a", "branches": {"x": "b"}}],
+                [
+                    {
+                        "from": "a",
+                        "level": "route",
+                        "router": "regex_match",
+                        "state_key": "a",
+                        "branches": {"x": "b"},
+                    }
+                ],
             )
 
     def test_rejects_router_default_to_unknown_node(self):
-        with pytest.raises(ValueError, match="defaults to unknown node"):
+        with pytest.raises(ValueError, match="unknown target node"):
             validate_routine_graph(
                 [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}],
                 [
                     {
                         "from": "a",
+                        "level": "route",
                         "router": "state_equals",
                         "state_key": "a",
                         "branches": {"True": "b"},
@@ -146,7 +157,7 @@ class TestValidateRoutineGraphStructural:
             )
 
     def test_rejects_second_router_edge_from_same_source(self):
-        with pytest.raises(ValueError, match="more than one router edge"):
+        with pytest.raises(ValueError, match="more than one outgoing edge declaration"):
             validate_routine_graph(
                 [
                     {"id": "a", "kind": "code"},
@@ -156,15 +167,91 @@ class TestValidateRoutineGraphStructural:
                 [
                     {
                         "from": "a",
+                        "level": "route",
                         "router": "state_equals",
                         "state_key": "a",
                         "branches": {"True": "b"},
                     },
                     {
                         "from": "a",
+                        "level": "route",
                         "router": "state_equals",
                         "state_key": "a",
                         "branches": {"False": "c"},
                     },
                 ],
             )
+
+
+@pytest.mark.parametrize(
+    "node",
+    [
+        {
+            "id": "prompt",
+            "kind": "prompt",
+            "output_key": "prompt",
+            "config": {"prompt_template": "ok", "promtp_template": "typo"},
+        },
+        {
+            "id": "human",
+            "kind": "human",
+            "output_key": "human",
+            "config": {"allowed_responses": ["yes", "no"]},
+        },
+    ],
+)
+def test_rejects_unknown_or_incomplete_strict_node_config(node: dict[str, object]) -> None:
+    payload = {
+        "id": "strict",
+        "name": "Strict",
+        "description": "",
+        "version": "2.0.0",
+        "entry": node["id"],
+        "nodes": [node],
+        "edges": [],
+    }
+
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(payload)
+
+
+def test_rejects_unknown_foreach_send_config_field() -> None:
+    payload = {
+        "id": "strict-foreach",
+        "name": "Strict foreach",
+        "description": "",
+        "version": "2.0.0",
+        "entry": "fan",
+        "nodes": [
+            {
+                "id": "fan",
+                "kind": "foreach",
+                "output_key": "fan",
+                "config": {"mode": "send", "items_from": "items", "agent_name": "wrong"},
+            },
+            {"id": "worker", "kind": "noop", "output_key": "worker", "config": {}},
+        ],
+        "edges": [{"from": "fan", "to": "worker", "level": "normal"}],
+    }
+
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(payload)
+
+
+def test_rejects_loop_guard_on_barrier_fanin() -> None:
+    with pytest.raises(ValueError, match="loop_guard"):
+        validate_routine_graph(
+            [
+                {"id": "left", "kind": "noop"},
+                {"id": "right", "kind": "noop"},
+                {"id": "join", "kind": "noop"},
+            ],
+            [
+                {
+                    "from": ["left", "right"],
+                    "to": "join",
+                    "level": "fan_in",
+                    "loop_guard": {"expression": "True"},
+                }
+            ],
+        )

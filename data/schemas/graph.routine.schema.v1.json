@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Routine Graph",
-  "description": "A declarative graph agent compiled into a LangGraph runnable by app.progenitor.routines.factory. Backs the Routines page's per-agent execution graph, stored as the agent's 'graph' document (see app/backend/agent_store.py).",
+  "description": "A declarative graph compiled by app.progenitor.routines.factory. Version 2 makes every executable node configuration and edge shape explicit; unknown fields are rejected rather than silently ignored.",
   "type": "object",
   "additionalProperties": false,
   "required": ["id", "name", "description", "version", "entry", "nodes", "edges"],
@@ -9,66 +9,24 @@
     "id": { "type": "string", "minLength": 1 },
     "name": { "type": "string", "minLength": 1 },
     "description": { "type": "string" },
-    "version": { "type": "string", "minLength": 1 },
-    "entry": {
-      "type": "string",
-      "minLength": 1,
-      "not": { "enum": ["__seed__", "__project_output__"] },
-      "description": "Node id the compiled graph enters after its private seed node. __seed__ and __project_output__ are reserved for the compiler."
-    },
-    "nodes": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/node" }
-    },
-    "edges": {
-      "type": "array",
-      "items": {
-        "oneOf": [
-          { "$ref": "#/$defs/plainEdge" },
-          { "$ref": "#/$defs/routerEdge" }
-        ]
-      }
-    },
-    "settings": {
-      "type": "object",
-      "description": "Graph-wide options read by app.progenitor.routines.factory.compile_routine_graph. Free-form (a node's own config always wins for anything it declares), but these keys are the ones the compiler actually acts on.",
-      "properties": {
-        "retry": {
-          "$ref": "#/$defs/retryPolicy",
-          "description": "Default retry policy applied to every node via StateGraph.set_node_defaults() -- a node's own config.retry overrides this for that node."
-        },
-        "recursion_limit": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Caps LangGraph super-steps (compiled.with_config({'recursion_limit': ...})). The real backstop for a graph cycle: a router-edge loop that never reaches END would otherwise run until this raises GraphRecursionError."
-        },
-        "cache": {
-          "type": "boolean",
-          "description": "Enables an in-memory node-result cache shared by nodes that set their own config.cache."
-        }
-      }
-    },
-    "input_schema": {
-      "$ref": "#/$defs/dataFieldMap",
-      "description": "Flat field-name -> type-name map (the type name is documentation only, never enforced). Each field becomes a real top-level graph input channel alongside 'messages': a caller can invoke with {\"messages\": [...], \"<field>\": <value>}, and the compiler copies each declared field's value into data.<field> before the graph runs, so node config.inputs paths and prompt templates can reference it. 'messages' is always accepted regardless of what's declared here."
-    },
-    "output_schema": {
-      "$ref": "#/$defs/dataFieldMap",
-      "description": "Flat field-name -> type-name map. Each field is resolved as a dotted path against the final 'data' (see routerEdge.state_key for the same dotted-path convention) and returned as a top-level output channel; fields absent from 'data' at the end of the run are silently omitted rather than erroring. Declaring this makes the compiled graph's invoke() return ONLY {\"messages\": [...], <declared fields>} instead of the full internal state -- everything else (including 'data' itself) is dropped, matching LangGraph's own output_schema projection. 'messages' is always included regardless of what's declared here."
-    },
+    "version": { "const": "2.0.0" },
+    "entry": { "$ref": "#/$defs/nodeId" },
+    "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
+    "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
+    "settings": { "$ref": "#/$defs/settings" },
+    "input_schema": { "$ref": "#/$defs/dataFieldMap" },
+    "output_schema": { "$ref": "#/$defs/dataFieldMap" },
     "$defs": {
       "type": "object",
       "additionalProperties": { "type": "object" },
-      "description": "Named JSON Schema definitions reusable across this graph's own node configs (distinct from this meta-schema's own top-level $defs below, which describes node/edge shapes, not routine-authored content). A prompt/eval node's config.response_schema may be {\"$ref\": \"#/$defs/<name>\"} instead of repeating an inline schema; app.progenitor.routines.factory.compile_routine_graph resolves the reference against this map before binding model.with_structured_output(...)."
+      "description": "Routine-authored JSON Schema definitions reusable from response_schema with a #/$defs/<name> reference."
     }
   },
   "$defs": {
     "nodeId": {
       "type": "string",
       "minLength": 1,
-      "not": { "enum": ["__seed__", "__project_output__"] },
-      "description": "User-defined node id. __seed__ and __project_output__ are reserved for the compiler's private seed/output-projection nodes."
+      "not": { "enum": ["__seed__", "__project_output__", "__start__", "__end__"] }
     },
     "node": {
       "oneOf": [
@@ -83,297 +41,318 @@
         { "$ref": "#/$defs/nodeSubgraph" }
       ]
     },
-    "nodePrompt": {
+    "nodeBase": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
       "properties": {
         "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "prompt" },
         "description": { "type": "string" },
         "output_key": { "type": "string", "minLength": 1 },
         "label": { "type": ["string", "null"] },
-        "config": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "prompt_template": { "type": "string" },
-            "prompt_file": { "type": "string" },
-            "system_prompt": { "type": "string" },
-            "response_schema": {
-              "type": "object",
-              "description": "A raw JSON Schema (object-rooted, per OpenAI Structured Outputs' requirement) for the model's reply, or {\"$ref\": \"#/$defs/<name>\"} pointing at a schema declared in this graph's own top-level $defs. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke -- generation is schema-constrained via the Responses API, not text-parsed after the fact. The validated result becomes data[output_key] directly (a dict, not a string), and no <output_key>_json fallback is produced."
-            },
-            "retry": { "$ref": "#/$defs/retryPolicy" }
-          },
-          "oneOf": [
-            { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
-            { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
-          ]
-        }
+        "x": { "type": "number" },
+        "y": { "type": "number" }
       }
+    },
+    "nodePrompt": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "prompt" }, "config": { "$ref": "#/$defs/promptConfig" } } }
+      ],
+      "unevaluatedProperties": false
     },
     "nodeCode": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
-      "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "code" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "language": { "const": "python" },
-            "expression": { "type": "string" },
-            "expression_file": { "type": "string" },
-            "inputs": {
-              "type": "object",
-              "additionalProperties": { "type": "string" },
-              "description": "local name -> dotted 'data' path, resolved before evaluation."
-            },
-            "retry": { "$ref": "#/$defs/retryPolicy" }
-          },
-          "oneOf": [
-            {
-              "required": ["expression"],
-              "not": { "required": ["expression_file"] }
-            },
-            {
-              "required": ["expression_file"],
-              "not": { "required": ["expression"] }
-            }
-          ]
-        }
-      }
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "code" }, "config": { "$ref": "#/$defs/codeConfig" } } }
+      ],
+      "unevaluatedProperties": false
     },
     "nodeEval": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
-      "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "eval" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "language": { "const": "python" },
-            "expression": { "type": "string" },
-            "expression_file": { "type": "string" },
-            "inputs": {
-              "type": "object",
-              "additionalProperties": { "type": "string" }
-            },
-            "rubric_prompt": {
-              "type": "string",
-              "description": "Used only when neither expression nor expression_file is set: the model is asked this. Without response_schema, a reply beginning (case-insensitively) with 'true' evaluates true. With response_schema, the parsed reply's 'result' field (must be boolean) is used instead."
-            },
-            "response_schema": {
-              "type": "object",
-              "description": "A raw JSON Schema (object-rooted) for rubric_prompt's reply, with a required boolean 'result' property, or {\"$ref\": \"#/$defs/<name>\"} pointing at a schema declared in this graph's own top-level $defs. When set, the node calls model.with_structured_output(response_schema, method='json_schema', strict=True) instead of a plain invoke plus text-prefix heuristic; data[output_key] becomes bool(parsed['result'])."
-            },
-            "retry": { "$ref": "#/$defs/retryPolicy" }
-          },
-          "not": {
-            "allOf": [
-              { "required": ["expression"] },
-              { "required": ["expression_file"] }
-            ]
-          }
-        }
-      }
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "eval" }, "config": { "$ref": "#/$defs/evalConfig" } } }
+      ],
+      "unevaluatedProperties": false
     },
     "nodeSubagent": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
-      "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "subagent" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": {
-          "type": "object",
-          "additionalProperties": true,
-          "required": ["subagent_name"],
-          "properties": {
-            "subagent_name": { "type": "string", "minLength": 1 },
-            "prompt_template": { "type": "string" },
-            "prompt_file": { "type": "string" },
-            "retry": { "$ref": "#/$defs/retryPolicy" }
-          },
-          "oneOf": [
-            {
-              "required": ["prompt_template"],
-              "not": { "required": ["prompt_file"] }
-            },
-            {
-              "required": ["prompt_file"],
-              "not": { "required": ["prompt_template"] }
-            }
-          ]
-        }
-      }
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "subagent" }, "config": { "$ref": "#/$defs/subagentConfig" } } }
+      ],
+      "unevaluatedProperties": false
     },
     "nodeAgent": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "agent" }, "config": { "$ref": "#/$defs/agentConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeNoop": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key"], "properties": { "kind": { "const": "noop" }, "config": { "$ref": "#/$defs/noopConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeHuman": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "human" }, "config": { "$ref": "#/$defs/humanConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeForeach": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "foreach" }, "config": { "$ref": "#/$defs/foreachConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeSubgraph": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "subgraph" }, "config": { "$ref": "#/$defs/subgraphConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "promptConfig": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
       "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "agent" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": {
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "system_prompt": { "type": "string" },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
+      ]
+    },
+    "codeConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "evalConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "rubric_prompt": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "anyOf": [{ "required": ["expression_file"] }, { "required": ["rubric_prompt"] }] } },
+        { "required": ["expression_file"], "not": { "anyOf": [{ "required": ["expression"] }, { "required": ["rubric_prompt"] }] } },
+        { "required": ["rubric_prompt"], "not": { "anyOf": [{ "required": ["expression"] }, { "required": ["expression_file"] }] } }
+      ]
+    },
+    "subagentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subagent_name"],
+      "properties": {
+        "subagent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
+      ]
+    },
+    "agentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_name"],
+      "properties": {
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
+        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
+      ]
+    },
+    "noopConfig": { "type": "object", "additionalProperties": false },
+    "humanConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string", "minLength": 1 },
+        "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
+        "retry": { "$ref": "#/$defs/retryPolicy" }
+      }
+    },
+    "foreachConfig": {
+      "oneOf": [
+        { "$ref": "#/$defs/foreachSendConfig" },
+        { "$ref": "#/$defs/foreachAgentConfig" }
+      ]
+    },
+    "foreachSendConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "items_from"],
+      "properties": {
+        "mode": { "const": "send" },
+        "items_from": { "type": "string", "minLength": 1 },
+        "item_key": { "type": "string", "minLength": 1 },
+        "max_items": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "foreachAgentConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "items_from", "agent_name", "prompt_template"],
+      "properties": {
+        "mode": { "const": "agent" },
+        "items_from": { "type": "string", "minLength": 1 },
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "item_key": { "type": "string", "minLength": 1 },
+        "max_items": { "type": "integer", "minimum": 1 },
+        "max_concurrency": { "type": "integer", "minimum": 1 },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      }
+    },
+    "subgraphConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["subgraph_name"],
+      "properties": {
+        "subgraph_name": { "type": "string", "minLength": 1 },
+        "input_map": { "$ref": "#/$defs/inputMap" },
+        "output_map": { "$ref": "#/$defs/inputMap" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      }
+    },
+    "inputMap": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 } },
+    "responseSchema": { "type": "object" },
+    "cachePolicy": {
+      "oneOf": [
+        { "type": "boolean" },
+        { "type": "object", "additionalProperties": false, "properties": { "ttl": { "type": "integer", "minimum": 0 } } }
+      ]
+    },
+    "retryPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "max_attempts": { "type": "integer", "minimum": 1 },
+        "initial_interval": { "type": "number", "minimum": 0 },
+        "backoff_factor": { "type": "number", "minimum": 1 },
+        "max_interval": { "type": "number", "minimum": 0 },
+        "jitter": { "type": "boolean" },
+        "on_exhausted": {
           "type": "object",
-          "additionalProperties": true,
-          "required": ["agent_name"],
-          "properties": {
-            "agent_name": { "type": "string", "minLength": 1 },
-            "prompt_template": { "type": "string" },
-            "prompt_file": { "type": "string" },
-            "response_schema": {
-              "type": "object",
-              "description": "Optional JSON Schema for the agent's final response, or {\"$ref\": \"#/$defs/<name>\"} pointing at this graph's top-level $defs. When absent, the final response is stored as data[output_key] text (with a best-effort <output_key>_json object). When set, the final response must be a JSON object satisfying this schema; the validated object is stored directly in data[output_key] and no fallback is produced."
-            },
-            "retry": { "$ref": "#/$defs/retryPolicy" }
-          },
-          "oneOf": [
-            {
-              "required": ["prompt_template"],
-              "not": { "required": ["prompt_file"] }
-            },
-            {
-              "required": ["prompt_file"],
-              "not": { "required": ["prompt_template"] }
-            }
-          ]
+          "additionalProperties": false,
+          "required": ["route_to"],
+          "properties": { "route_to": { "$ref": "#/$defs/nodeId" } }
         }
       }
     },
-    "nodeNoop": {
+    "loopGuard": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "output_key"],
+      "required": ["expression"],
       "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "noop" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": { "type": "object", "additionalProperties": true }
+        "expression": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "on_false": { "anyOf": [{ "$ref": "#/$defs/nodeId" }, { "type": "null" }] }
       }
     },
-    "nodeHuman": {
+    "edge": {
+      "oneOf": [
+        { "$ref": "#/$defs/normalEdge" },
+        { "$ref": "#/$defs/fanOutEdge" },
+        { "$ref": "#/$defs/fanInEdge" },
+        { "$ref": "#/$defs/routerEdge" }
+      ]
+    },
+    "normalEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
+      "required": ["from", "to", "level"],
       "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "human" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string", "minLength": 1 },
-        "label": { "type": ["string", "null"] },
-        "config": { "type": "object" }
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "normal" },
+        "loop_guard": { "$ref": "#/$defs/loopGuard" }
       }
     },
-    "nodeForeach": {
+    "fanOutEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
+      "required": ["from", "to", "level"],
       "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "foreach" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string" },
-        "label": { "type": ["string", "null"] },
-        "config": { "type": "object" }
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
+        "level": { "const": "fan_out" },
+        "loop_guard": { "$ref": "#/$defs/loopGuard" }
       }
     },
-    "nodeSubgraph": {
+    "fanInEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "output_key", "config"],
+      "required": ["from", "to", "level"],
       "properties": {
-        "id": { "$ref": "#/$defs/nodeId" },
-        "kind": { "const": "subgraph" },
-        "description": { "type": "string" },
-        "output_key": { "type": "string" },
-        "label": { "type": ["string", "null"] },
-        "config": { "type": "object" }
-      }
-    },
-    "plainEdge": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["from", "to"],
-      "properties": {
-        "from": { "type": "string", "minLength": 1 },
-        "to": { "type": "string", "minLength": 1 }
+        "from": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "fan_in" }
       }
     },
     "routerEdge": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["from", "router", "state_key", "branches"],
+      "required": ["from", "level", "router", "state_key", "branches"],
       "properties": {
-        "from": { "type": "string", "minLength": 1 },
+        "from": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "route" },
         "router": { "const": "state_equals" },
-        "state_key": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Dotted path read from 'data' after the source node's update is merged."
-        },
-        "branches": {
-          "type": "object",
-          "minProperties": 1,
-          "additionalProperties": { "type": "string", "minLength": 1 }
-        },
-        "default": { "type": "string", "minLength": 1 }
+        "state_key": { "type": "string", "minLength": 1 },
+        "branches": { "type": "object", "minProperties": 1, "additionalProperties": { "$ref": "#/$defs/nodeId" } },
+        "default": { "$ref": "#/$defs/nodeId" }
       }
     },
-    "dataFieldMap": {
-      "type": ["object", "null"],
-      "additionalProperties": { "type": "string" }
-    },
-    "retryPolicy": {
+    "settings": {
       "type": "object",
-      "description": "Fields for langgraph.types.RetryPolicy. The compiler always retries on any exception (retry_on is not configurable here), so this only tunes attempt count and backoff.",
+      "additionalProperties": false,
       "properties": {
-        "max_attempts": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "Total attempts including the first, before the exception propagates. Default 3."
-        },
-        "initial_interval": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Seconds before the first retry. Default 0.1."
-        },
-        "backoff_factor": {
-          "type": "number",
-          "minimum": 1,
-          "description": "Multiplier applied to the interval after each retry. Default 2.0."
-        },
-        "max_interval": {
-          "type": "number",
-          "minimum": 0,
-          "description": "Upper bound on the backoff interval, in seconds. Default 5.0."
-        },
-        "jitter": {
-          "type": "boolean",
-          "description": "Randomize backoff timing to avoid thundering-herd retries. Default false."
-        }
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "recursion_limit": { "type": "integer", "minimum": 1 },
+        "cache": { "type": "boolean" }
       }
-    }
+    },
+    "dataFieldMap": { "type": ["object", "null"], "additionalProperties": { "type": "string" } }
   }
 }

@@ -67,11 +67,11 @@ def test_parse_routine_graph_document_preserves_edge_aliases():
             "config": {},
         }
     )
-    graph["edges"] = [{"from": "prompt", "to": "done"}]
+    graph["edges"] = [{"from": "prompt", "to": "done", "level": "normal"}]
 
     parsed = parse_routine_graph_document(json.dumps(graph))
 
-    assert parsed["edges"] == [{"from": "prompt", "to": "done"}]
+    assert parsed["edges"] == [{"from": "prompt", "to": "done", "level": "normal"}]
 
 
 def test_default_routine_graph_falls_back_name_to_id():
