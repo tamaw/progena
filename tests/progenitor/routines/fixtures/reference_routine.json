@@ -2,7 +2,7 @@
   "id": "reference-routine",
   "name": "reference-routine",
   "description": "Validates a repo request (github.com host, deterministic) and access/local-clone state in a single repo-manager call, then takes only the safe action for that state -- clone, fast-forward pull, nothing, or a hard stop on uncommitted changes. Routing is deterministic; no LLM call is spent grading pass/fail.",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "entry": "parse",
   "nodes": [
     {
@@ -141,10 +141,12 @@
   "edges": [
     {
       "from": "parse",
-      "to": "domain_check"
+      "to": "domain_check",
+      "level": "normal"
     },
     {
       "from": "domain_check",
+      "level": "route",
       "router": "state_equals",
       "state_key": "domain_check",
       "branches": {
@@ -154,10 +156,12 @@
     },
     {
       "from": "assess",
-      "to": "route_decision"
+      "to": "route_decision",
+      "level": "normal"
     },
     {
       "from": "route_decision",
+      "level": "route",
       "router": "state_equals",
       "state_key": "route_decision",
       "branches": {
@@ -172,11 +176,13 @@
     },
     {
       "from": "clone",
-      "to": "respond_cloned"
+      "to": "respond_cloned",
+      "level": "normal"
     },
     {
       "from": "pull",
-      "to": "respond_pulled"
+      "to": "respond_pulled",
+      "level": "normal"
     }
   ]
 }

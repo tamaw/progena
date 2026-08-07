@@ -24,7 +24,7 @@ def _graph_doc(text: str) -> dict[str, Any]:
         "id": ROUTINE_ID,
         "name": "Routine Demo",
         "description": "test routine",
-        "version": "1",
+        "version": "2.0.0",
         "entry": "say",
         "nodes": [
             {

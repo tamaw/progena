@@ -187,7 +187,7 @@ class TestAgentResponseSchema:
             "id": "agent-output",
             "name": "Agent output",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "call",
             "nodes": [{"id": "call", "kind": "agent", "output_key": "result", "config": config}],
             "edges": [],
@@ -247,7 +247,7 @@ class TestSubagentRegistry:
             "id": "g",
             "name": "g",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "delegate",
             "nodes": [
                 {
@@ -269,7 +269,7 @@ class TestSubagentRegistry:
             "id": "g",
             "name": "g",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "delegate",
             "nodes": [
                 {
@@ -363,7 +363,7 @@ def _single_prompt_step_payload(
         "id": "flaky-step",
         "name": "flaky-step",
         "description": "",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "entry": "step",
         "nodes": [{"id": "step", "kind": "prompt", "output_key": "step", "config": config}],
         "edges": [],
@@ -417,13 +417,16 @@ class TestRecursionLimitSetting:
             "id": "cycle",
             "name": "cycle",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}},
                 {"id": "b", "kind": "code", "output_key": "b", "config": {"expression": "1"}},
             ],
-            "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}],
+            "edges": [
+                {"from": "a", "to": "b", "level": "normal"},
+                {"from": "b", "to": "a", "level": "normal"},
+            ],
             "settings": {"recursion_limit": 6},
         }
         graph = validate_routine_graph_payload(payload)
@@ -453,7 +456,7 @@ def _single_prompt_step_payload_with_schema(response_schema: dict) -> dict:
         "id": "structured-step",
         "name": "structured-step",
         "description": "",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "entry": "step",
         "nodes": [{"id": "step", "kind": "prompt", "output_key": "step", "config": config}],
         "edges": [],
@@ -467,7 +470,7 @@ def _single_eval_rubric_step_payload_with_schema(response_schema: dict) -> dict:
         "id": "structured-gate",
         "name": "structured-gate",
         "description": "",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "entry": "gate",
         "nodes": [{"id": "gate", "kind": "eval", "output_key": "gate", "config": config}],
         "edges": [],
@@ -573,7 +576,7 @@ class TestInputSchema:
             "id": "echo",
             "name": "echo",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {
@@ -602,7 +605,7 @@ class TestInputSchema:
             "id": "echo",
             "name": "echo",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
@@ -627,13 +630,13 @@ class TestOutputSchema:
             "id": "project",
             "name": "project",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "kept", "config": {"expression": "1"}},
                 {"id": "b", "kind": "code", "output_key": "dropped", "config": {"expression": "2"}},
             ],
-            "edges": [{"from": "a", "to": "b"}],
+            "edges": [{"from": "a", "to": "b", "level": "normal"}],
             "output_schema": {"kept": "integer"},
         }
         graph = validate_routine_graph_payload(payload)
@@ -647,7 +650,7 @@ class TestOutputSchema:
             "id": "partial",
             "name": "partial",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
@@ -668,7 +671,7 @@ class TestOutputSchema:
             "id": "full",
             "name": "full",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
@@ -692,7 +695,7 @@ class TestSubagentDelegationContract:
             "id": "delegate-target",
             "name": "delegate-target",
             "description": "",
-            "version": "1.0.0",
+            "version": "2.0.0",
             "entry": "a",
             "nodes": [
                 {"id": "a", "kind": "code", "output_key": "result", "config": {"expression": "1"}}

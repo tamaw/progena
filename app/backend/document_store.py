@@ -269,6 +269,7 @@ class PostgresDocumentStore:
         self._ensure_store_table()
         self._ensure_change_trigger()
         self._ensure_routine_revision_history()
+        self._migrate_routine_graphs_to_v2()
 
     def close(self) -> None:
         self._pool.close()
@@ -407,8 +408,7 @@ class PostgresDocumentStore:
                     ON routine_graph_revisions (routine_id, captured_at DESC, revision_id DESC)
                 """
             )
-            capture_sql = (  # nosec B608 - fixed internal namespace placeholders
-                """
+            capture_sql = """
                 CREATE OR REPLACE FUNCTION progenitor_capture_routine_revision()
                 RETURNS trigger AS $$
                 DECLARE
@@ -427,8 +427,7 @@ class PostgresDocumentStore:
                     RETURN NULL;
                 END;
                 $$ LANGUAGE plpgsql;
-                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)
-            )
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(capture_sql)
             cur.execute("DROP TRIGGER IF EXISTS progenitor_capture_routine_revision ON store")
             cur.execute(
@@ -459,8 +458,7 @@ class PostgresDocumentStore:
                 FOR EACH ROW EXECUTE FUNCTION progenitor_routine_revisions_immutable()
                 """
             )
-            backfill_sql = (  # nosec B608 - fixed internal namespace placeholders
-                """
+            backfill_sql = """
                 INSERT INTO routine_graph_revisions (routine_id, graph)
                 SELECT substring(key from length('__KEY_PREFIX__') + 1), value -> 'payload'
                 FROM store
@@ -469,9 +467,53 @@ class PostgresDocumentStore:
                   AND length(key) > length('__KEY_PREFIX__')
                   AND jsonb_typeof(value -> 'payload') = 'object'
                 ON CONFLICT (routine_id, revision_id) DO NOTHING
-                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)
-            )
+                """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
+
+    def _migrate_routine_graphs_to_v2(self) -> None:
+        """Atomically upgrade current routine documents before graph readers run.
+
+        Revision rows are deliberately immutable. Updating the current document
+        after `_ensure_routine_revision_history` therefore creates one new v2
+        revision through the existing capture trigger while retaining historical
+        v1 snapshots as an accurate audit record.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                WITH migrated AS (
+                    SELECT
+                        prefix,
+                        key,
+                        jsonb_set(
+                            jsonb_set(value -> 'payload', '{version}', to_jsonb('2.0.0'::text)),
+                            '{edges}',
+                            COALESCE(
+                                (
+                                    SELECT jsonb_agg(
+                                        CASE
+                                            WHEN edge ? 'router' THEN edge || '{"level":"route"}'::jsonb
+                                            ELSE edge || '{"level":"normal"}'::jsonb
+                                        END
+                                    )
+                                    FROM jsonb_array_elements(value -> 'payload' -> 'edges') AS edge
+                                ),
+                                '[]'::jsonb
+                            )
+                        ) AS payload
+                    FROM store
+                    WHERE prefix = %s
+                      AND key LIKE %s
+                      AND value -> 'payload' ->> 'version' = '1.0.0'
+                )
+                UPDATE store AS current
+                SET value = jsonb_set(current.value, '{payload}', migrated.payload),
+                    updated_at = now()
+                FROM migrated
+                WHERE (current.prefix, current.key) = (migrated.prefix, migrated.key)
+                """,
+                (PROGENITOR_STATE_PREFIX, f"{ROUTINE_GRAPH_KEY_PREFIX}%"),
+            )
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None

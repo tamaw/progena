@@ -129,6 +129,21 @@ def test_ensure_change_trigger_notifies_state_only():
     assert "progenitor.logs" not in emitted
 
 
+def test_routine_graph_v2_migration_distinguishes_router_and_normal_edges():
+    store = PostgresDocumentStore("postgresql://example")
+    pool = _HealthyPool(None)
+    store._pool = pool
+
+    store._migrate_routine_graphs_to_v2()
+
+    query, params = pool._cursor.executed[-1]
+    normalized = " ".join(str(query).split())
+    assert "value -> 'payload' ->> 'version' = '1.0.0'" in normalized
+    assert "WHEN edge ? 'router' THEN edge || '{\"level\":\"route\"}'::jsonb" in normalized
+    assert 'ELSE edge || \'{"level":"normal"}\'::jsonb' in normalized
+    assert params == ("progenitor.state", "routine:%")
+
+
 class _FakeNotify:
     def __init__(self, payload: str) -> None:
         self.payload = payload

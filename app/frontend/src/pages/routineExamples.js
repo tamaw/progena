@@ -6,10 +6,9 @@ const node = (id, kind, label, config = {}) => ({
   config,
 });
 
-const edge = (from, to) => ({ from, to });
+const edge = (from, to) => ({ from, to, level: 'normal' });
 
 const baseSettings = {
-  checkpoint: { enabled: true, namespace: 'routine-demo' },
   retry: { max_attempts: 2, initial_interval: 0.5 },
   recursion_limit: 40,
 };
@@ -29,9 +28,9 @@ export const ROUTINE_EXAMPLES = [
       output_schema: { respond: 'string' },
       nodes: [
         node('request', 'prompt', 'Collect request', { prompt_template: 'Summarize the incoming request.' }),
-        node('approval', 'human', 'Human approval', { prompt: 'Approve review of every requested item.' }),
-        node('fanout', 'foreach', 'Review each item', { items_path: 'items', target: 'review-item', item_key: 'item' }),
-        node('review-item', 'code', 'Review item', { expression: "'reviewed:' + str(item)" }),
+        node('approval', 'human', 'Human approval', { message: 'Approve review of every requested item.', allowed_responses: ['approve', 'reject'] }),
+        node('fanout', 'foreach', 'Review each item', { mode: 'send', items_from: 'items', item_key: 'item' }),
+        node('review-item', 'code', 'Review item', { expression: "'reviewed:' + item", inputs: { item: 'item' } }),
         node('join', 'noop', 'Join reviews', {}),
         node('respond', 'prompt', 'Respond', { prompt_template: 'Return the approved review summary.' }),
       ],
@@ -55,7 +54,7 @@ export const ROUTINE_EXAMPLES = [
       ],
       edges: [
         edge('start', 'seed'), edge('seed', 'flaky'), edge('flaky', 'gate'),
-        { from: 'gate', router: 'state_equals', state_key: 'gate', branches: { True: 'complete' }, default: 'flaky' },
+        { from: 'gate', level: 'route', router: 'state_equals', state_key: 'gate', branches: { True: 'complete' }, default: 'flaky' },
       ],
     },
   },
@@ -74,7 +73,7 @@ export const ROUTINE_EXAMPLES = [
         node('answer', 'prompt', 'Answer', { prompt_template: 'Format the merged response.' }),
       ],
       edges: [
-        { from: 'classify', router: 'state_equals', state_key: 'classify', branches: { urgent: 'urgent', normal: 'normal' }, default: 'normal' },
+        { from: 'classify', level: 'route', router: 'state_equals', state_key: 'classify', branches: { urgent: 'urgent', normal: 'normal' }, default: 'normal' },
         edge('urgent', 'merge'), edge('normal', 'merge'), edge('merge', 'answer'),
       ],
     },
@@ -83,13 +82,13 @@ export const ROUTINE_EXAMPLES = [
     id: 'routine-private-context', kind: 'subagent', name: 'Runtime context handoff', role: 'Runtime context injection',
     summary: 'Runtime context is injected while an internal-only field stays out of the projected output.',
     graph: {
-      status: 'Ready', entry: 'context', settings: { ...baseSettings, runtime_context: { request_id: 'demo-ctx', tenant: 'validation' } },
+      status: 'Ready', entry: 'context', settings: baseSettings,
       input_schema: { question: 'string' },
       output_schema: { answer: 'string' },
       nodes: [
         node('context', 'prompt', 'Inject context', { prompt_template: 'Use runtime request context to answer {question}.' }),
-        node('private', 'code', 'Build private trace', { expression: "'trace:' + str(request_id)" }),
-        node('delegate', 'subgraph', 'Run shared subgraph', { subgraph_name: 'shared-validation-graph' }),
+        node('private', 'code', 'Build private trace', { expression: "'trace'" }),
+        node('delegate', 'subgraph', 'Run shared subgraph', { subgraph_name: 'shared-validation-graph', input_map: {}, output_map: {} }),
         node('answer', 'prompt', 'Return public answer', { prompt_template: 'Return only the public answer.' }),
       ],
       edges: [edge('context', 'private'), edge('private', 'delegate'), edge('delegate', 'answer')],
@@ -103,9 +102,9 @@ export const ROUTINE_EXAMPLES = [
       input_schema: { text: 'string' }, output_schema: { finish: 'string' },
       nodes: [
         node('input', 'prompt', 'Read input', { prompt_template: 'Read the source text.' }),
-        node('normalize', 'code', 'Normalize', { expression: 'str(text).strip()' }),
+        node('normalize', 'code', 'Normalize', { expression: 'text', inputs: { text: 'text' } }),
         node('child', 'subgraph', 'Enrichment subgraph', { subgraph_name: 'enrichment-child' }),
-        node('score', 'eval', 'Score output', { expression: 'True', rubric_prompt: 'Is the enrichment complete?' }),
+        node('score', 'eval', 'Score output', { expression: 'True' }),
         node('finish', 'prompt', 'Finish', { prompt_template: 'Return the enriched result.' }),
       ],
       edges: [edge('input', 'normalize'), edge('normalize', 'child'), edge('child', 'score'), edge('score', 'finish')],
@@ -115,7 +114,7 @@ export const ROUTINE_EXAMPLES = [
     id: 'routine-streaming-audit', kind: 'subagent', name: 'Streaming audit', role: 'Streaming execution events',
     summary: 'Several connected steps emit observable execution events.',
     graph: {
-      status: 'Ready', entry: 'load', settings: { ...baseSettings, stream_events: true }, input_schema: null,
+      status: 'Ready', entry: 'load', settings: baseSettings, input_schema: null,
       output_schema: { publish: 'string' },
       nodes: [
         node('load', 'prompt', 'Load record', { prompt_template: 'Load an audit record.' }),
@@ -131,13 +130,13 @@ export const ROUTINE_EXAMPLES = [
     id: 'routine-all-controls', kind: 'subagent', name: 'All controls tour', role: 'Combined routine control demonstration',
     summary: 'Combines approval, fan-out, branch, retry, cache, checkpoint, and join.',
     graph: {
-      status: 'Ready', entry: 'start', settings: { checkpoint: { enabled: true, namespace: 'all-controls' }, retry: { max_attempts: 2, initial_interval: 0.5 }, recursion_limit: 20, cache: true },
+      status: 'Ready', entry: 'start', settings: { retry: { max_attempts: 2, initial_interval: 0.5 }, recursion_limit: 20, cache: true },
       input_schema: { items: 'array', mode: 'string' }, output_schema: { finish: 'string' },
       nodes: [
         node('start', 'prompt', 'Start run', { prompt_template: 'Start the combined controls tour.' }),
-        node('approve', 'human', 'Approve controls', { prompt: 'Approve the combined demonstration.' }),
-        node('fanout', 'foreach', 'Fan out', { items_path: 'items', target: 'item', item_key: 'item' }),
-        node('item', 'code', 'Process item', { expression: "'processed:' + str(item)" }),
+        node('approve', 'human', 'Approve controls', { message: 'Approve the combined demonstration.', allowed_responses: ['approve', 'reject'] }),
+        node('fanout', 'foreach', 'Fan out', { mode: 'send', items_from: 'items', item_key: 'item' }),
+        node('item', 'code', 'Process item', { expression: "'processed:' + item", inputs: { item: 'item' } }),
         node('route', 'code', 'Choose path', { expression: "'safe'" }),
         node('safe', 'subgraph', 'Safe subgraph', { subgraph_name: 'safe-path' }),
         node('fallback', 'prompt', 'Fallback path', { prompt_template: 'Handle fallback safely.' }),
@@ -146,7 +145,7 @@ export const ROUTINE_EXAMPLES = [
       ],
       edges: [
         edge('start', 'approve'), edge('approve', 'fanout'), edge('fanout', 'item'), edge('item', 'route'),
-        { from: 'route', router: 'state_equals', state_key: 'route', branches: { safe: 'safe' }, default: 'fallback' },
+        { from: 'route', level: 'route', router: 'state_equals', state_key: 'route', branches: { safe: 'safe' }, default: 'fallback' },
         edge('safe', 'join'), edge('fallback', 'join'), edge('join', 'finish'),
       ],
     },
@@ -179,8 +178,12 @@ export const ROUTINE_EXAMPLES = [
       ],
       edges: [
         edge('draft', 'grade'), edge('grade', 'check'),
-        { from: 'check', router: 'state_equals', state_key: 'check', branches: { True: 'finish' }, default: 'draft' },
+        { from: 'check', level: 'route', router: 'state_equals', state_key: 'check', branches: { True: 'finish' }, default: 'draft' },
       ],
     },
   },
-];
+].map((example) => {
+  const graph = { ...example.graph };
+  delete graph.status;
+  return { ...example, graph: { version: '2.0.0', ...graph } };
+});
