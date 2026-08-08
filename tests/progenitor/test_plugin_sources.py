@@ -224,6 +224,23 @@ def test_extract_archive_skips_directories() -> None:
     assert "skills/" not in files
 
 
+def test_extracts_object_agent_system_files_alongside_skills():
+    from app.progenitor.plugins.sources import extract_plugin_content_files
+
+    content = extract_plugin_content_files(
+        {
+            "skills/review/SKILL.md": b"# Review",
+            "agents/objects/reviewer/SYSTEM.md": (
+                b"---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\nkind: object\n---\nReview."
+            ),
+        },
+        "demo",
+    )
+
+    assert content.skills == {"review/SKILL.md": "# Review"}
+    assert "reviewer/SYSTEM.md" in content.agents
+
+
 # ---------------------------------------------------------------------------
 # fetch_marketplace (mocked archive download)
 # ---------------------------------------------------------------------------

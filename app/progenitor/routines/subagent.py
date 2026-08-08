@@ -37,6 +37,7 @@ def create_routine_subagent(
     state_manager: Any,
     revision_reader: RoutineRevisionReader,
     subagent_registry: dict[str, Any],
+    agent_registry: dict[str, Any],
 ) -> CompiledSubAgent:
     """Build a ``CompiledSubAgent``-shaped dict that proxies to routine ``routine_id``."""
 
@@ -83,7 +84,7 @@ def create_routine_subagent(
                     graph,
                     model=model,
                     subagent_registry=subagent_registry,
-                    agent_registry={},
+                    agent_registry=agent_registry,
                     base_system_prompt=None,
                 )
                 if revision_id is not None:

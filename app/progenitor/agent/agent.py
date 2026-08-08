@@ -16,7 +16,7 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.middleware.async_subagents import AsyncSubAgent
-from deepagents.middleware.subagents import CompiledSubAgent, SubAgent
+from deepagents.middleware.subagents import CompiledSubAgent
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph.state import CompiledStateGraph
 
@@ -42,11 +42,9 @@ from .middleware import (
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
+from .object_agents import create_object_agent_proxy, discover_object_agents
 from .state import ProgenitorAgentState
-from .subagents import (
-    create_progenitor_async_subagents,
-    create_progenitor_subagents,
-)
+from .subagents import create_progenitor_async_subagents
 
 logger = logging.getLogger(__name__)
 
@@ -219,10 +217,18 @@ async def create_progenitor_agent(
     # /skills/<segment>/ route per plugin. The skills_dirs auto-discovery below
     # reuses these same rows -- only one query.
     skill_rows = await state_manager.list_content_documents("skill")
+    agent_rows = await state_manager.list_content_documents("agent")
     plugin_segments = sorted(
         {
             rel.split("/", 1)[0]
             for rel, _content in skill_rows
+            if "/" in rel and "__" in rel.split("/", 1)[0]
+        }
+    )
+    plugin_agent_segments = sorted(
+        {
+            rel.split("/", 1)[0]
+            for rel, _content in agent_rows
             if "/" in rel and "__" in rel.split("/", 1)[0]
         }
     )
@@ -235,10 +241,12 @@ async def create_progenitor_agent(
     backend = create_progenitor_backend(
         project_root=project_root,
         skills_dir=skills_dir,
+        agents_dir=data_dir / "agents",
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=database_url,
         plugin_skill_segments=plugin_segments,
+        plugin_agent_segments=plugin_agent_segments,
     )
 
     # Wrap Progenitor's system tools as DeepAgent-compatible tools
@@ -302,19 +310,53 @@ async def create_progenitor_agent(
     http_base_url = (
         getattr(runtime_config, "http_public_base_url", None) or f"http://{http_host}:{http_port}"
     )
-    subagents = create_progenitor_subagents(http_base_url, log_sink=log_sink)
     async_subagents = create_progenitor_async_subagents(http_base_url)
-    # Routine subagent proxies: one CompiledSubAgent per stored routine graph,
-    # so `task(subagent_type="<routine-id>", ...)` delegates into it. The
-    # routine set is resolved once, here, at graph construction -- a routine
-    # created after startup needs a runtime restart before its `task` target
-    # exists; editing an already-registered routine works live via revision
-    # pinning (see app.progenitor.routines.subagent).
     revision_reader = (
         PostgresRoutineRevisionReader(database_url) if database_url else NullRoutineRevisionReader()
     )
+
+    # Object agents and routine graphs share one lazy runnable registry. This
+    # lets graph `agent` nodes invoke either kind, while object agents receive
+    # the same set through their own `task` middleware. Every proxy is installed
+    # before any invocation compiles a graph, so declaration order cannot make a
+    # valid forward reference unavailable.
+    object_sources = await discover_object_agents(
+        state_manager,
+        native_root=data_dir / "agents" / "objects",
+    )
+    agent_specs_by_name: dict[str, CompiledSubAgent] = {}
+    agent_registry: dict[str, Any] = {}
+    reserved_names = {spec["name"] for spec in async_subagents}
+
+    def delegated_agent_specs(caller: str) -> list[CompiledSubAgent]:
+        return [spec for name, spec in agent_specs_by_name.items() if name != caller]
+
+    object_subagents: list[CompiledSubAgent] = []
+    for source in object_sources:
+        if source.name in reserved_names:
+            logger.warning(
+                "Skipping object agent %r: name collides with a native agent",
+                source.name,
+            )
+            continue
+        object_spec = create_object_agent_proxy(
+            source,
+            state_manager=state_manager,
+            model=model,
+            tools=tools,
+            backend=backend,
+            checkpointer=checkpointer,
+            agent_specs=delegated_agent_specs,
+            log_sink=log_sink,
+        )
+        object_subagents.append(object_spec)
+        agent_specs_by_name[source.name] = object_spec
+        agent_registry[source.name] = object_spec["runnable"]
+        reserved_names.add(source.name)
+
+    # A routine's graph is still revision-pinned, but its agent nodes now
+    # resolve through the same object/graph registry as the parent task tool.
     routine_registry: dict[str, Any] = {}
-    reserved_names = {spec["name"] for spec in subagents}
     routine_subagents: list[CompiledSubAgent] = []
     for graph_doc in await state_manager.list_routine_graphs():
         routine_id = str(graph_doc.get("id") or "").strip()
@@ -322,7 +364,7 @@ async def create_progenitor_agent(
             logger.warning("Skipping routine graph document with no id: %r", graph_doc)
             continue
         if routine_id in reserved_names:
-            logger.warning("Skipping routine %r: name collides with a native subagent", routine_id)
+            logger.warning("Skipping routine %r: name collides with an existing agent", routine_id)
             continue
         try:
             validate_routine_graph_payload(graph_doc)
@@ -339,12 +381,17 @@ async def create_progenitor_agent(
             state_manager=state_manager,
             revision_reader=revision_reader,
             subagent_registry=routine_registry,
+            agent_registry=agent_registry,
         )
         routine_subagents.append(routine_spec)
-        reserved_names.add(routine_id)
+        agent_specs_by_name[routine_id] = routine_spec
         routine_registry[routine_id] = routine_spec["runnable"]
-    all_subagents: list[SubAgent | AsyncSubAgent | CompiledSubAgent] = [
-        *subagents,
+        agent_registry[routine_id] = routine_spec["runnable"]
+        reserved_names.add(routine_id)
+
+    all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
+        *async_subagents,
+        *object_subagents,
         *routine_subagents,
     ]
 
@@ -373,9 +420,10 @@ async def create_progenitor_agent(
     )
 
     logger.info(
-        "Created Progenitor DeepAgent: model=%s subagents=%s routine_subagents=%d",
+        "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",
         config.llm.model_default,
         [subagent["name"] for subagent in all_subagents],
+        len(object_subagents),
         len(routine_subagents),
     )
     return agent

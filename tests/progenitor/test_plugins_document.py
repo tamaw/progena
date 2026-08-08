@@ -55,6 +55,31 @@ def test_validate_plugins_document_accepts_valid_with_runtime_fields():
     assert doc["plugins"]["acme-tools/formatter"]["skills"] == ["quality-review", "lint-fix"]
 
 
+def test_validate_plugins_document_accepts_agents_field():
+    """Regression: reconcile_plugins() always writes an "agents" key on every
+    successful install (app/progenitor/plugins/install.py), even for
+    skills-only plugins (as an empty list) -- the schema must accept it or
+    every real reconcile's save_plugins_config() call fails post-install."""
+    doc = validate_plugins_document(
+        json.dumps(
+            {
+                "plugins": {
+                    "acme-tools/pr-summarizer": {
+                        "source": {
+                            "source": "github",
+                            "repo": "acme/pr-summarizer-plugin",
+                        },
+                        "status": "installed",
+                        "skills": [],
+                        "agents": ["pr-summarizer"],
+                    }
+                }
+            }
+        )
+    )
+    assert doc["plugins"]["acme-tools/pr-summarizer"]["agents"] == ["pr-summarizer"]
+
+
 def test_validate_plugins_document_accepts_source_string():
     doc = validate_plugins_document(
         '{"plugins": {"acme-tools/formatter": {"source": "./formatter"}}}'

@@ -80,7 +80,7 @@ main.py
           -> agent/langchain_adapter.py::create_langchain_model()
           -> agent/backends.py::create_progenitor_backend()
           -> agent/tools_adapter.py::create_deepagent_tools()
-          -> agent/subagents.py::create_progenitor_subagents()
+          -> agent/subagents.py::create_progenitor_async_subagents()
           -> agent/middleware.py middleware classes
           -> deepagents.create_deep_agent()
 ```
@@ -116,7 +116,7 @@ create_progenitor_agent()  # async; requires state_manager
   -> _ensure_default_runtime_memory(state_manager)
   -> _resolve_runtime_memory_paths(state_manager, memory_paths)
   -> state_manager.get_content_document("prompt", "progenitor/genesis.md")
-  -> create_progenitor_subagents()
+  -> create_progenitor_async_subagents()
   -> create_deep_agent(...)
 ```
 

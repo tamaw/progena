@@ -157,7 +157,7 @@ async def test_fetch_error_sets_error_status(state_manager, fake_files, fake_dig
         }
     }
 
-    async def side_effect(catalog, plugin_name):
+    async def side_effect(catalog, plugin_name, **_kwargs):
         if plugin_name == "bad-plugin":
             raise PluginFetchError("npm sources are not supported")
         return (fake_files, 0)

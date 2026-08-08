@@ -89,10 +89,12 @@ def create_progenitor_backend(
     log_dir: str | Path | None = None,
     schemas_dir: str | Path | None = None,
     skills_dir: str | Path | None = None,
+    agents_dir: str | Path | None = None,
     worktree_dir: str | Path | None = None,
     state_manager: Any | None = None,
     database_url: str | None = None,
     plugin_skill_segments: list[str] | None = None,
+    plugin_agent_segments: list[str] | None = None,
 ) -> Any:
     """Create a backend instance for the Progenitor DeepAgent.
 
@@ -120,6 +122,7 @@ def create_progenitor_backend(
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
     resolved_skills_dir = Path(skills_dir) if skills_dir else root / "data" / "skills"
+    resolved_agents_dir = Path(agents_dir) if agents_dir else root / "data" / "agents"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "data" / "repos"
 
     def _route_backend(
@@ -146,6 +149,7 @@ def create_progenitor_backend(
         ("/logs/", resolved_log_dir, True),
         ("/schemas/", resolved_schemas_dir, True),
         ("/skills/", resolved_skills_dir, True),
+        ("/agents/", resolved_agents_dir, True),
     ]
     for route, mount_path, ro in mounts:
         backend = _route_backend(mount_path, read_only=ro)
@@ -160,6 +164,10 @@ def create_progenitor_backend(
         for segment in plugin_skill_segments or []:
             routes[f"/skills/{segment}/"] = ReadOnlyBackend(
                 ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=segment)
+            )
+        for segment in plugin_agent_segments or []:
+            routes[f"/agents/{segment}/"] = ReadOnlyBackend(
+                ContentDocumentDirectoryBackend(state_manager, "agent", path_prefix=segment)
             )
 
         # State documents surfaced as virtual files (e.g. /config/mcp.json,

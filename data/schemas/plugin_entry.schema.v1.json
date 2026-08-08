@@ -69,6 +69,11 @@
       "items": { "type": "string" },
       "description": "Skill names provided by this plugin."
     },
+    "agents": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Object agent names provided by this plugin."
+    },
     "installed_at": {
       "type": ["string", "null"],
       "description": "ISO 8601 timestamp of installation."

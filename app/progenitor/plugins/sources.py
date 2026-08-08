@@ -451,6 +451,92 @@ def _extract_frontmatter_name(raw: bytes, fallback: str) -> str:
     return fallback
 
 
+@dataclass(frozen=True)
+class PluginContentFiles:
+    """Installable marketplace files, partitioned by runtime document kind."""
+
+    skills: dict[str, str]
+    agents: dict[str, str]
+    skipped_count: int
+
+
+class InstallablePluginFiles(dict[str, str]):
+    """Skill files plus optional object-agent files for plugin installation."""
+
+    def __init__(self, skills: dict[str, str], *, agents: dict[str, str]) -> None:
+        super().__init__(skills)
+        self.agents = agents
+
+
+def _extract_object_agents_from_files(
+    files: dict[str, bytes],
+) -> tuple[dict[str, str], int]:
+    """Extract ``agents/objects/<name>/SYSTEM.md`` directories from a plugin."""
+    agent_names = {
+        parts[2]
+        for path in files
+        if (parts := path.split("/"))
+        and len(parts) == 4
+        and parts[0:2] == ["agents", "objects"]
+        and parts[3] == "SYSTEM.md"
+        and parts[2]
+    }
+    if not agent_names:
+        return {}, 0
+
+    result: dict[str, str] = {}
+    skipped = 0
+    file_count = 0
+    for path, content in files.items():
+        for agent_name in agent_names:
+            prefix = f"agents/objects/{agent_name}/"
+            if not path.startswith(prefix):
+                continue
+            if file_count >= _MAX_FILES_PER_PLUGIN or len(content) > _MAX_FILE_BYTES:
+                skipped += 1
+                break
+            try:
+                result[f"{agent_name}/{path[len(prefix) :]}"] = content.decode("utf-8")
+                file_count += 1
+            except UnicodeDecodeError:
+                skipped += 1
+            break
+    return result, skipped
+
+
+def extract_plugin_content_files(files: dict[str, bytes], plugin_name: str) -> PluginContentFiles:
+    """Extract skills and object agents while preserving skill-only compatibility."""
+    try:
+        skills, skipped_skills = _extract_skills_from_files(files, plugin_name)
+    except PluginFetchError as exc:
+        if str(exc) != "plugin ships no skills":
+            raise
+        skills, skipped_skills = {}, 0
+    agents, skipped_agents = _extract_object_agents_from_files(files)
+    if not skills and not agents:
+        raise PluginFetchError("plugin ships no installable skills or object agents")
+    return PluginContentFiles(
+        skills=skills,
+        agents=agents,
+        skipped_count=skipped_skills + skipped_agents,
+    )
+
+
+async def fetch_plugin_content_files_with_report(
+    catalog: MarketplaceCatalog,
+    plugin_name: str,
+) -> PluginContentFiles:
+    """Fetch a plugin archive and split installable skills from object agents."""
+    entry: dict[str, Any] | None = None
+    for plugin in catalog.plugins:
+        if plugin.get("name") == plugin_name:
+            entry = plugin
+            break
+    if entry is None:
+        raise PluginFetchError(f"plugin '{plugin_name}' not found in marketplace catalog")
+    return extract_plugin_content_files(await _fetch_plugin_archive(entry, catalog), plugin_name)
+
+
 def _extract_skills_from_files(
     files: dict[str, bytes], plugin_name: str
 ) -> tuple[dict[str, str], int]:
@@ -544,13 +630,16 @@ def _extract_skills_from_files(
 
 
 async def fetch_plugin_files_with_report(
-    catalog: MarketplaceCatalog, plugin_name: str
+    catalog: MarketplaceCatalog,
+    plugin_name: str,
+    *,
+    include_agents: bool = False,
 ) -> tuple[dict[str, str], int]:
-    """Fetch the named plugin's skill files and return them together with a
-    count of files that were skipped (too large, non-UTF-8, or past the 50-file
-    cap).
+    """Fetch installable plugin files.
 
-    The returned dict keys are ``<skill-name>/<filename>`` relative paths.
+    The default retains the public skill-only contract. Installation passes
+    ``include_agents=True`` and receives an ``InstallablePluginFiles`` mapping
+    whose ``agents`` attribute is keyed as ``<agent-name>/<filename>``.
     """
     entry: dict[str, Any] | None = None
     for p in catalog.plugins:
@@ -561,7 +650,10 @@ async def fetch_plugin_files_with_report(
         raise PluginFetchError(f"plugin '{plugin_name}' not found in marketplace catalog")
 
     raw_files = await _fetch_plugin_archive(entry, catalog)
-    return _extract_skills_from_files(raw_files, plugin_name)
+    if not include_agents:
+        return _extract_skills_from_files(raw_files, plugin_name)
+    content = extract_plugin_content_files(raw_files, plugin_name)
+    return InstallablePluginFiles(content.skills, agents=content.agents), content.skipped_count
 
 
 async def fetch_plugin_files(catalog: MarketplaceCatalog, plugin_name: str) -> dict[str, str]:
