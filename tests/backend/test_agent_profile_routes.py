@@ -45,10 +45,10 @@ _DEFAULT_GRAPH = {
 def _agent(agent_id: str, **overrides: Any) -> dict[str, Any]:
     base = {
         "id": agent_id,
-        "kind": "subagent",
+        "kind": "routine",
         "name": agent_id.title(),
         "handle": f"@{agent_id}",
-        "group": "Subagents",
+        "group": "Routines",
         "color": "#2f6ff6",
         "model": "inherit",
         "role": "Test agent",
