@@ -2453,6 +2453,17 @@ body,
   border: 1px solid var(--color-border);
   border-radius: 12px;
 }
+.chrome-search-panel__input > span {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+}
+
+.chrome-search-panel__input input {
+  padding-left: 2px;
+}
 
 .chrome-search-panel__input:focus-within {
   border-color: var(--color-accent);
