@@ -409,6 +409,7 @@ class TestMiddlewareIntegration:
                         self._docs = {
                             "prompt": {"progenitor/genesis.md": "Genesis"},
                             "skill": {},
+                            "agent": {},
                             "memory": {},
                         }
 

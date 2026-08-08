@@ -34,11 +34,21 @@ logger = logging.getLogger(__name__)
 PROMPT_DOCUMENT_KEY_PREFIX = "prompt:"
 SKILL_DOCUMENT_KEY_PREFIX = "skill:"
 MEMORY_DOCUMENT_KEY_PREFIX = "memory:"
+AGENT_DOCUMENT_KEY_PREFIX = "agent:"
+
+# Not a content-document kind itself -- a lightweight marker key an object
+# agent's self-edit touches purely to trigger the shared `store` table's
+# Postgres NOTIFY trigger. Needed because a *native* agent's SYSTEM.md lives
+# on disk (see `SelfManifestBackend`), so unlike a marketplace/user agent's
+# `agent:`-prefixed document write, the disk write alone never touches
+# Postgres and the backend process would otherwise never learn about it.
+AGENT_SELF_EDIT_TOUCH_KEY_PREFIX = "agent-touch:"
 
 _KIND_PREFIXES: dict[str, str] = {
     "prompt": PROMPT_DOCUMENT_KEY_PREFIX,
     "skill": SKILL_DOCUMENT_KEY_PREFIX,
     "memory": MEMORY_DOCUMENT_KEY_PREFIX,
+    "agent": AGENT_DOCUMENT_KEY_PREFIX,
 }
 
 

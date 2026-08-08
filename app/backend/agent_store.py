@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
+from pathlib import Path
 from typing import Any, cast
 
 import psycopg
@@ -31,12 +33,19 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
+from app.progenitor.agent.object_agents import (
+    discover_native_object_agents,
+    parse_front_matter,
+    parse_object_agent_manifest,
+)
+from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
 from app.progenitor.routines.graph import VALID_ROUTINE_NODE_KINDS
 from app.progenitor.routines.store import (
     ROUTINE_GRAPH_KEY_PREFIX,
     default_routine_graph,
     routine_graph_key,
 )
+from app.progenitor.utils import utcnow_isoformat
 
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 
@@ -70,14 +79,14 @@ DEFAULT_AGENT_GRAPH_STATUS: dict[str, Any] = {
     "summary": "A single step. Edit this graph to build out the routine.",
 }
 
+# Progenitor's own skills live on disk at ``data/skills/<name>/SKILL.md``,
+# read-only and baked into the image (see ``app.progenitor.content_documents``).
+_NATIVE_SKILLS_ROOT = Path(__file__).resolve().parents[2] / "data" / "skills"
+
 
 def _slug(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
     return slug or "agent"
-
-
-def _title(value: str) -> str:
-    return " ".join(part.capitalize() for part in re.split(r"[-_\s]+", value.strip()) if part)
 
 
 def _first_sentence(text: str) -> str:
@@ -108,10 +117,6 @@ def _is_acp_registry_entry(info: Any) -> bool:
 def _empty_details(extra: dict[str, Any] | None = None) -> dict[str, Any]:
     details: dict[str, Any] = {
         "tools": [],
-        "repositories": [],
-        "knowledge": [],
-        "memories": [],
-        "sessions": [],
         "tasks": [],
         "metrics": dict(_EMPTY_METRICS),
     }
@@ -251,6 +256,220 @@ class AgentStore:
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
         return [_row_to_agent(row) for row in rows]
+
+    def _iter_object_agent_locations(
+        self,
+    ) -> list[tuple[str, str, Path | str, Any, str | None]]:
+        """Yield ``(source, name, location, manifest, raw_content)`` for every
+        manifest-backed object agent, native-first so a native manifest always
+        wins a name collision (mirrors the old ``list_object_agents`` dedup
+        rule). ``location`` is the native ``SYSTEM.md`` path for
+        ``source="native"``, or the document-store relative path
+        (``<owner>/<slug>/SYSTEM.md``) for ``source in ("user", "marketplace")``.
+        """
+        native_root = Path(__file__).resolve().parents[2] / "data" / "agents" / "objects"
+        entries: list[tuple[str, str, Path | str, Any, str | None]] = []
+        known_names: set[str] = set()
+        for native_source in discover_native_object_agents(native_root):
+            known_names.add(native_source.name)
+            if native_source.native_path is None:
+                continue
+            raw_content = native_source.native_path.read_text(encoding="utf-8")
+            entries.append(
+                (
+                    "native",
+                    native_source.name,
+                    native_source.native_path,
+                    native_source.manifest,
+                    raw_content,
+                )
+            )
+        for key, document in self._document_store.list_documents(
+            PROGENITOR_STATE_PREFIX,
+            AGENT_DOCUMENT_KEY_PREFIX,
+        ):
+            relative_path = key.removeprefix(AGENT_DOCUMENT_KEY_PREFIX)
+            parts = relative_path.split("/")
+            if len(parts) != 3 or parts[-1] != "SYSTEM.md":
+                continue
+            payload = document.payload
+            if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+                logger.warning("Skipping malformed object agent document %s", relative_path)
+                continue
+            try:
+                manifest = parse_object_agent_manifest(
+                    payload["content"], source=f"agent:{relative_path}"
+                )
+            except ValueError as exc:
+                logger.warning("Skipping invalid object agent document %s: %s", relative_path, exc)
+                continue
+            if manifest.name in known_names:
+                logger.warning(
+                    "Skipping object agent %r from %s because a native agent owns the name",
+                    manifest.name,
+                    relative_path,
+                )
+                continue
+            known_names.add(manifest.name)
+            source = "marketplace" if "__" in parts[0] else "user"
+            entries.append((source, manifest.name, relative_path, manifest, payload["content"]))
+        return entries
+
+    def list_object_agents(self) -> list[dict[str, Any]]:
+        """Read manifest-backed object agents without copying them into this DB."""
+        records = [
+            _object_agent_profile(manifest, source=source, raw_content=raw_content)
+            for source, _name, _location, manifest, raw_content in self._iter_object_agent_locations()
+        ]
+        return sorted(records, key=lambda record: str(record["name"]).lower())
+
+    def get_object_agent(self, agent_id: str) -> dict[str, Any] | None:
+        return next(
+            (record for record in self.list_object_agents() if record["id"] == agent_id),
+            None,
+        )
+
+    def save_user_object_agent(self, content: str) -> dict[str, Any]:
+        """Persist one author-created ``SYSTEM.md`` as an agent content document."""
+        manifest = parse_object_agent_manifest(content, source="user object agent")
+        for record in self.list_object_agents():
+            if record["name"] == manifest.name and record["card"].get("source") != "user":
+                raise ValueError(
+                    f"object agent name {manifest.name!r} is already owned by {record['card']['source']}"
+                )
+        relative_path = f"user/{_slug(manifest.name)}/SYSTEM.md"
+        self._document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("agent", relative_path),
+            {"content": content, "updated_at": utcnow_isoformat()},
+        )
+        return _object_agent_profile(manifest, source="user", raw_content=content)
+
+    def update_object_agent(self, agent_id: str, content: str) -> dict[str, Any]:
+        """Update any manifest-backed object agent's literal ``SYSTEM.md`` text.
+
+        All three sources are editable in place: ``native`` manifests are repo
+        files under ``data/agents/objects/<name>/SYSTEM.md`` and are rewritten
+        on disk; ``user`` and ``marketplace`` manifests are document-store
+        entries and are rewritten there. Renaming (which changes the derived
+        ``agent_id``) moves the document so no stale copy is left behind --
+        except for ``native`` agents, where renaming would require renaming
+        their directory on disk, which this method deliberately refuses.
+        """
+        entries = self._iter_object_agent_locations()
+        match = next((entry for entry in entries if f"object-{_slug(entry[1])}" == agent_id), None)
+        if match is None:
+            raise LookupError(f"object agent {agent_id!r} not found")
+        source, _old_name, location, _old_manifest, _old_raw = match
+        manifest = parse_object_agent_manifest(content, source="object agent")
+        new_id = f"object-{_slug(manifest.name)}"
+        if new_id != agent_id:
+            if source == "native":
+                raise ValueError(
+                    "renaming a native object agent is not supported; "
+                    "edit its name directly in the repo instead"
+                )
+            if any(f"object-{_slug(entry[1])}" == new_id for entry in entries):
+                raise ValueError(f"object agent name {manifest.name!r} is already in use")
+        if source == "native":
+            cast(Path, location).write_text(content, encoding="utf-8")
+        else:
+            old_relative_path = cast(str, location)
+            parts = old_relative_path.split("/")
+            new_relative_path = f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
+            if new_relative_path != old_relative_path:
+                self._document_store.delete_document(
+                    PROGENITOR_STATE_PREFIX, content_document_key("agent", old_relative_path)
+                )
+            self._document_store.save_document(
+                PROGENITOR_STATE_PREFIX,
+                content_document_key("agent", new_relative_path),
+                {"content": content, "updated_at": utcnow_isoformat()},
+            )
+        return _object_agent_profile(manifest, source=source, raw_content=content)
+
+    def resolve_skill(self, skill_path: str) -> dict[str, Any] | None:
+        """Resolve one skill's ``SKILL.md`` by its manifest ``skills:`` entry.
+
+        ``skill_path`` is the same absolute virtual-mount path stored in a
+        manifest's ``skills`` list and read by the DeepAgent runtime (see
+        ``app.progenitor.agent.backends``): ``/skills/<name>`` for one of
+        Progenitor's own native skills (``data/skills/<name>/SKILL.md``,
+        read-only, baked into the image), or
+        ``/skills/<marketplace>__<plugin>/<name>`` for an installed
+        marketplace-plugin skill (Postgres document store).
+        """
+        segments = skill_path.removeprefix("/skills/").split("/")
+        if len(segments) == 1:
+            name = segments[0]
+            native_path = _NATIVE_SKILLS_ROOT / name / "SKILL.md"
+            if not native_path.is_file():
+                return None
+            return _skill_profile(
+                skill_path,
+                name=name,
+                source="native",
+                location=None,
+                content=native_path.read_text(encoding="utf-8"),
+            )
+        if len(segments) == 2:
+            plugin_segment, name = segments
+            relative_path = f"{plugin_segment}/{name}/SKILL.md"
+            document = self._document_store.get_document(
+                PROGENITOR_STATE_PREFIX, content_document_key("skill", relative_path)
+            )
+            payload = document.payload if document is not None else None
+            if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
+                return None
+            return _skill_profile(
+                skill_path,
+                name=name,
+                source="marketplace",
+                location=relative_path,
+                content=payload["content"],
+            )
+        return None
+
+    def update_skill(self, skill_path: str, content: str) -> dict[str, Any]:
+        """Update one skill's ``SKILL.md`` text, matching ``update_object_agent``.
+
+        ``native`` skills are repo files under ``data/skills/<name>/SKILL.md``
+        and are rewritten on disk; ``marketplace`` skills are document-store
+        entries and are rewritten there. Renaming a skill (changing its
+        front-matter ``name``) is refused for both sources: the skill's
+        identity is its virtual mount path (``skill_path``), which callers
+        reference from an agent manifest's ``skills:`` list, so silently
+        changing it would orphan that reference.
+        """
+        existing = self.resolve_skill(skill_path)
+        if existing is None:
+            raise LookupError(f"skill {skill_path!r} not found")
+        try:
+            front_matter = parse_front_matter(content, source=f"skill:{skill_path}")
+        except ValueError as exc:
+            raise ValueError(f"invalid SKILL.md front matter: {exc}") from exc
+        new_name = front_matter.get("name") if isinstance(front_matter, Mapping) else None
+        if isinstance(new_name, str) and new_name.strip() and new_name.strip() != existing["name"]:
+            raise ValueError(
+                f"renaming skill {skill_path!r} is not supported; "
+                "its mount path is referenced by agent manifests"
+            )
+        if existing["source"] == "native":
+            name = cast(str, existing["name"])
+            (_NATIVE_SKILLS_ROOT / name / "SKILL.md").write_text(content, encoding="utf-8")
+        else:
+            self._document_store.save_document(
+                PROGENITOR_STATE_PREFIX,
+                content_document_key("skill", cast(str, existing["location"])),
+                {"content": content, "updated_at": utcnow_isoformat()},
+            )
+        return _skill_profile(
+            skill_path,
+            name=cast(str, existing["name"]),
+            source=existing["source"],
+            location=existing["location"],
+            content=content,
+        )
 
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         with self._pool.connection() as conn, conn.cursor() as cur:
@@ -439,6 +658,85 @@ class AgentStore:
         }
 
 
+def _skill_profile(
+    path: str, *, name: str, source: str, location: str | None, content: str
+) -> dict[str, Any]:
+    """Serialize one resolved ``SKILL.md`` for the Agents page skill-preview endpoint."""
+    try:
+        front_matter = parse_front_matter(content, source=f"skill:{path}")
+    except ValueError:
+        front_matter = None
+    return {
+        "path": path,
+        "name": name,
+        "source": source,
+        "editable": True,
+        "location": location,
+        "raw_content": content,
+        "front_matter": front_matter,
+    }
+
+
+def _front_matter_str(front_matter: Mapping[str, Any], key: str) -> str | None:
+    value = front_matter.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _front_matter_color(front_matter: Mapping[str, Any]) -> str | None:
+    value = _front_matter_str(front_matter, "color")
+    return value if value and value.startswith("#") else None
+
+
+def _object_agent_profile(
+    manifest: Any, *, source: str, raw_content: str | None = None
+) -> dict[str, Any]:
+    """Serialize a manifest source into the existing agent-profile wire shape."""
+    card: dict[str, Any] = {
+        "source": source,
+        "permissions": [
+            {
+                "operations": permission.operations,
+                "paths": permission.paths,
+                "mode": permission.mode,
+            }
+            for permission in manifest.permissions
+        ],
+        "interrupt_on": manifest.interrupt_on,
+    }
+    front_matter: Mapping[str, Any] = {}
+    if raw_content is not None:
+        card["raw_content"] = raw_content
+        try:
+            front_matter = parse_front_matter(raw_content, source=f"object-{_slug(manifest.name)}")
+            card["front_matter"] = front_matter
+        except ValueError:
+            logger.warning("Failed to re-parse front matter for object agent %r", manifest.name)
+    return {
+        "id": f"object-{_slug(manifest.name)}",
+        "kind": "object",
+        "name": manifest.name,
+        # ``handle``/``group``/``color`` are UI-only presentation fields with no
+        # dedicated manifest schema field (unlike name/description/tools/skills,
+        # which are validated ``ObjectAgentManifest`` attributes). They read
+        # straight from arbitrary front-matter keys when authored, so editing
+        # the SYSTEM.md YAML can change them like any other field; absent keys
+        # keep the prior deterministic defaults.
+        "handle": _front_matter_str(front_matter, "handle") or manifest.name,
+        "group": _front_matter_str(front_matter, "group") or "Agents",
+        "color": _front_matter_color(front_matter) or _color_for(manifest.name),
+        "model": manifest.model,
+        "role": manifest.description or None,
+        "version": manifest.version,
+        "summary": manifest.description,
+        "prompt": manifest.system_prompt,
+        "skills": [{"name": skill} for skill in manifest.skills],
+        "tools": [{"name": tool} for tool in manifest.tools],
+        "tasks": [],
+        "metrics": dict(_EMPTY_METRICS),
+        "card": card,
+    }
+
+
 def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
     details = row.get("details")
     if not isinstance(details, dict):
@@ -459,60 +757,12 @@ def _row_to_agent(row: dict[str, Any]) -> dict[str, Any]:
         "prompt": row.get("system_prompt") or "",
         "skills": details.get("skills", []),
         "tools": details.get("tools", []),
-        "repositories": details.get("repositories", []),
-        "knowledge": details.get("knowledge", []),
-        "memories": details.get("memories", []),
-        "sessions": details.get("sessions", []),
         "tasks": details.get("tasks", []),
         "metrics": details.get("metrics", dict(_EMPTY_METRICS)),
         "transport": details.get("transport"),
         "url": details.get("url"),
         "card": details.get("card") or {},
         "updated": updated_at.isoformat() if updated_at else None,
-    }
-
-
-def _agent_record_from_subagent(sub: dict[str, Any]) -> dict[str, Any]:
-    raw_name = str(sub.get("name") or "subagent")
-    agent_id = f"subagent-{_slug(raw_name)}"
-    description = str(sub.get("description") or "")
-    return {
-        "id": agent_id,
-        "kind": "subagent",
-        "name": _title(raw_name),
-        "handle": f"@{_slug(raw_name).replace('-', '_')}",
-        "display_group": "Subagents",
-        "color": _color_for(agent_id),
-        "model": "inherit",
-        "role": _first_sentence(description) or "DeepAgent subagent",
-        "version": "v0.1.0",
-        "summary": description,
-        "status": "running",
-        "system_prompt": str(sub.get("system_prompt") or ""),
-        "details": _empty_details(),
-    }
-
-
-def _repo_manager_object_record() -> dict[str, Any]:
-    """Return the placeholder object agent referenced by repo setup routines."""
-    agent_id = "repo-manager"
-    description = (
-        "Placeholder object agent used by the Repo Setup Worker routine during graph testing."
-    )
-    return {
-        "id": agent_id,
-        "kind": "object",
-        "name": "Repo Worker",
-        "handle": "@repo_manager",
-        "display_group": "Object agents",
-        "color": _color_for(agent_id),
-        "model": "fake",
-        "role": "Test repository-management object agent",
-        "version": "v0.1.0",
-        "summary": description,
-        "status": "running",
-        "system_prompt": "",
-        "details": _empty_details(),
     }
 
 
@@ -614,16 +864,16 @@ def acp_profile_from_info(
         "group": "ACP agents",
         "color": _color_for(agent_id),
         "model": model or command,
-        "role": _first_sentence(description) or "ACP agent",
+        "role": _first_sentence(description) or None,
         "version": str(getattr(info, "version", "") or "v0.1.0"),
         "summary": description,
         "status": str(getattr(info, "status", "") or "unknown"),
         "prompt": "",
         "skills": [],
         "tools": [
-            {"name": "terminal", "type": "acp", "calls": 0, "enabled": True},
-            {"name": "read_text_file", "type": "acp", "calls": 0, "enabled": True},
-            {"name": "write_text_file", "type": "acp", "calls": 0, "enabled": True},
+            {"name": "terminal", "type": "acp"},
+            {"name": "read_text_file", "type": "acp"},
+            {"name": "write_text_file", "type": "acp"},
         ],
         "tasks": tasks,
         "transport": transport,
@@ -828,8 +1078,8 @@ def a2a_profile_from_info(
         "handle": f"@{_slug(name).replace('-', '_')}",
         "group": "A2A agents",
         "color": _color_for(agent_id),
-        "model": str(getattr(info, "kind", "") or "a2a"),
-        "role": _first_sentence(description) or "A2A agent",
+        "model": None,
+        "role": _first_sentence(description) or None,
         "version": version,
         "summary": description,
         "status": str(getattr(info, "status", "") or "unknown"),
@@ -863,37 +1113,6 @@ def a2a_profiles_from_registry() -> list[dict[str, Any]]:
     ]
 
 
-def seed_default_agents(store: AgentStore) -> int:
-    """Seed backend-owned subagents from code. Idempotent.
-
-    Only DeepAgent subagents are backend-owned (editable). A2A agents are not
-    stored here — they are read through from Progenitor's registry at request time.
-    Existing rows are never overwritten (ON CONFLICT DO NOTHING), so user edits
-    survive restarts. Returns the number of agents newly inserted.
-    """
-    records: list[dict[str, Any]] = []
-
-    try:
-        from ..progenitor.agent.subagents import create_progenitor_sync_subagents
-
-        for sub in create_progenitor_sync_subagents():
-            records.append(_agent_record_from_subagent(dict(sub)))
-    except Exception as exc:  # pragma: no cover - import/environment dependent
-        logger.warning("Could not seed code subagents: %s", exc)
-    records.append(_repo_manager_object_record())
-
-    inserted = 0
-    for record in records:
-        if store.insert_agent_if_absent(record):
-            inserted += 1
-        if record["kind"] == "routine":
-            store.ensure_graph(record["id"])
-
-    if inserted:
-        logger.info("Seeded %d agent(s) into the backend database", inserted)
-    return inserted
-
-
 _default_store: AgentStore | None = None
 
 
@@ -918,13 +1137,20 @@ def configure_agent_store(
 
     store = AgentStore(backend_url, document_store)
     store.open()
-    # A2A and ACP agents are read through from Progenitor's registry; drop any
-    # legacy rows left in the backend DB (A2A from the old sync architecture, ACP
-    # from the earlier hardcoded preview seed).
-    purged = store.delete_agents_by_kind("a2a") + store.delete_agents_by_kind("acp")
+    # A2A, ACP, and legacy subagent/object placeholder rows are all read
+    # through live (A2A/ACP from Progenitor's registry, subagents/object
+    # agents wired in exclusively via manifests and routine graphs). Drop
+    # any rows left in the backend DB from earlier architectures.
+    purged = (
+        store.delete_agents_by_kind("a2a")
+        + store.delete_agents_by_kind("acp")
+        + store.delete_agents_by_kind("subagent")
+        + store.delete_agents_by_kind("object")
+    )
     if purged:
-        logger.info("Purged %d legacy A2A/ACP agent row(s) from the backend database", purged)
-    seed_default_agents(store)
+        logger.info(
+            "Purged %d legacy A2A/ACP/subagent/object row(s) from the backend database", purged
+        )
     # Refresh any graphs still using the legacy decorative node kinds so the dev
     # database reflects the executable workflow schema.
     from .agent_profile_routes import VALID_NODE_KINDS

@@ -175,10 +175,14 @@ export {
   fetchAgentProfiles,
   requestAgentDetail,
   updateAgentGraph,
+  updateObjectAgentProfile,
+  fetchAgentSkillContent,
+  updateAgentSkillContent,
   selectAgentProfiles,
   selectAgentProfilesState,
   selectActiveAgentProfile,
   selectActiveAgentProfileState,
+  selectAgentSkillContent,
 } from './uiData/agents';
 
 export {

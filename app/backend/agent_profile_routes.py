@@ -16,6 +16,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
+import yaml
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
@@ -61,10 +62,6 @@ class AgentProfile(BaseModel):
     prompt: str = ""
     skills: list[dict[str, Any]] = []
     tools: list[dict[str, Any]] = []
-    repositories: list[dict[str, Any]] = []
-    knowledge: list[dict[str, Any]] = []
-    memories: list[dict[str, Any]] = []
-    sessions: list[dict[str, Any]] = []
     tasks: list[dict[str, Any]] = []
     metrics: dict[str, Any] = {}
     transport: str | None = None
@@ -77,6 +74,43 @@ class AgentProfile(BaseModel):
 class AgentProfilesResponse(BaseModel):
     agents: list[AgentProfile]
     total: int
+
+
+class ObjectAgentCreateRequest(BaseModel):
+    name: str
+    description: str
+    system_prompt: str
+    version: str = "1.0.0"
+    model: str | None = None
+    tools: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    permissions: list[dict[str, Any]] = Field(default_factory=list)
+    interrupt_on: dict[str, bool | dict[str, Any]] = Field(default_factory=dict)
+
+
+class ObjectAgentManifestUpdateRequest(BaseModel):
+    """Raw ``SYSTEM.md`` text (YAML front matter + markdown body).
+
+    Unlike ``ObjectAgentCreateRequest``, this is not shaped to a fixed set of
+    known fields -- the editor page sends back the literal file content so an
+    author can add, rename, or remove any front-matter key, not just the ones
+    the runtime happens to interpret. ``AgentStore.update_object_agent``
+    persists it verbatim and only rejects it if it fails to parse as a valid
+    manifest (missing ``name``/``description``/``version``, bad YAML, etc.),
+    or renames a ``native`` (repo-shipped) agent, which is not supported.
+    """
+
+    content: str
+
+
+class AgentSkillUpdateRequest(BaseModel):
+    """Raw ``SKILL.md`` text (front matter + body) for any skill, native or
+    marketplace-installed. ``AgentStore.update_skill`` writes native skills
+    to disk and marketplace skills to the document store; only a rename
+    (front-matter ``name`` mismatch) is rejected.
+    """
+
+    content: str
 
 
 class AgentGraphUpdateRequest(BaseModel):
@@ -153,13 +187,33 @@ def validate_agent_graph_document(
 
 
 def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
-    """Backend-owned subagents (editable) + A2A and ACP agents read through from
-    Progenitor's registry document (live status + card, no backend rows)."""
-    records = (
-        list(store.list_agents()) + a2a_profiles_from_registry() + acp_profiles_from_registry()
-    )
+    """Build the internal-agent catalog from backend graph and manifest sources."""
+    records = list(store.list_agents()) + store.list_object_agents()
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
+
+
+def object_agent_system_markdown(payload: ObjectAgentCreateRequest) -> str:
+    """Render the portable manifest file stored for a user-created object agent."""
+    manifest: dict[str, Any] = {
+        "name": payload.name.strip(),
+        "description": payload.description.strip(),
+        "version": payload.version.strip(),
+        "kind": "object",
+    }
+    for key, value in (
+        ("model", payload.model.strip() if payload.model else None),
+        ("tools", payload.tools),
+        ("skills", payload.skills),
+        ("permissions", payload.permissions),
+        ("interrupt_on", payload.interrupt_on),
+    ):
+        if value:
+            manifest[key] = value
+    return (
+        f"---\n{yaml.safe_dump(manifest, allow_unicode=True, sort_keys=False)}"
+        f"---\n{payload.system_prompt.strip()}\n"
+    )
 
 
 async def broadcast_agent_profiles_snapshot(
@@ -209,6 +263,8 @@ def create_agent_profile_router(
                 if profile["id"] == agent_id:
                     return profile
             return None
+        if agent_id.startswith("object-"):
+            return store.get_object_agent(agent_id)
         return store.get_agent(agent_id)
 
     @router.get("/agent-profiles", status_code=202, response_model=UiRequestAcknowledgement)
@@ -229,6 +285,118 @@ def create_agent_profile_router(
             "agents.snapshot", response.model_dump(by_alias=True), request_id=request_id
         )
         return acknowledgement_response(request_id, ["agents.snapshot"])
+
+    @router.post("/agent-profiles/object", status_code=202, response_model=UiRequestAcknowledgement)
+    async def create_object_agent_profile(
+        payload: ObjectAgentCreateRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Persist an author-created object agent as a portable SYSTEM.md document."""
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        try:
+            await asyncio.to_thread(
+                store.save_user_object_agent,
+                object_agent_system_markdown(payload),
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response = await asyncio.to_thread(build_agent_profiles, store)
+        broadcast_ui_event(
+            "agents.snapshot",
+            response.model_dump(by_alias=True),
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agents.snapshot"])
+
+    @router.patch(
+        "/agent-profiles/object/{agent_id}",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def update_object_agent_profile(
+        agent_id: str,
+        payload: ObjectAgentManifestUpdateRequest,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Update any manifest-backed object agent's SYSTEM.md manifest.
+
+        Works for every source -- ``native`` agents are rewritten on disk
+        under ``data/agents/objects/<name>/SYSTEM.md``, ``user`` and
+        ``marketplace`` agents in the document store. The request carries the
+        literal ``SYSTEM.md`` text, so any front-matter key can be added,
+        renamed, or removed, not just the runtime-known ones.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        try:
+            await asyncio.to_thread(
+                store.update_object_agent,
+                agent_id,
+                payload.content,
+            )
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        response = await asyncio.to_thread(build_agent_profiles, store)
+        broadcast_ui_event(
+            "agents.snapshot",
+            response.model_dump(by_alias=True),
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agents.snapshot"])
+
+    @router.get("/agent-profiles/skills", status_code=202, response_model=UiRequestAcknowledgement)
+    async def get_agent_skill_content(
+        request: Request,
+        path: str,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Publish one skill's ``SKILL.md`` body (front matter + prompt).
+
+        ``path`` is the absolute ``/skills/...`` virtual-mount path stored in
+        an object agent's manifest ``skills`` list. Resolves the same way the
+        DeepAgent runtime's ``/skills`` mount does: a native skill
+        (``data/skills/``) at ``/skills/<name>`` or an installed
+        marketplace-plugin skill at ``/skills/<marketplace>__<plugin>/<name>``.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        skill = await asyncio.to_thread(store.resolve_skill, path)
+        if skill is None:
+            raise HTTPException(status_code=404, detail=f"skill {path!r} not found")
+        broadcast_ui_event("agent.skill.content.updated", skill, request_id=request_id)
+        return acknowledgement_response(request_id, ["agent.skill.content.updated"])
+
+    @router.patch(
+        "/agent-profiles/skills", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def update_agent_skill_content(
+        payload: AgentSkillUpdateRequest,
+        request: Request,
+        path: str,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Update one skill's ``SKILL.md`` text.
+
+        Both native (rewritten on disk) and marketplace-installed (rewritten
+        in the document store) skills are editable; only renaming a skill
+        (changing its front-matter ``name``) is refused, since the mount
+        path is referenced by agent manifests' ``skills:`` lists.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        try:
+            skill = await asyncio.to_thread(store.update_skill, path, payload.content)
+        except LookupError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        broadcast_ui_event("agent.skill.content.updated", skill, request_id=request_id)
+        return acknowledgement_response(request_id, ["agent.skill.content.updated"])
 
     @router.get(
         "/agent-profiles/{agent_id}", status_code=202, response_model=UiRequestAcknowledgement

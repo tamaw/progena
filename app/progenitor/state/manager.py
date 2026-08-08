@@ -6,7 +6,11 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ..content_documents import content_document_key, content_document_prefix
+from ..content_documents import (
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    content_document_key,
+    content_document_prefix,
+)
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -652,6 +656,21 @@ class StateManager:
         """Remove one content document."""
         key = content_document_key(kind, relative_path)
         await self._runtime_store.delete_document(key)
+
+    async def touch_object_agent(self, name: str) -> None:
+        """Record a marker so the backend's Postgres LISTEN/NOTIFY watcher
+        rebroadcasts this agent's profile to the Agents page.
+
+        Only needed for *native* agents, whose ``SelfManifestBackend`` writes
+        land on disk and never touch the ``store`` table on their own (unlike
+        a marketplace/user agent's ``save_content_document`` call, which
+        already produces a NOTIFY via its own row write). Called
+        unconditionally after every self-edit so the propagation path is one
+        mechanism regardless of source.
+        """
+        await self._save_runtime_document(
+            f"{AGENT_SELF_EDIT_TOUCH_KEY_PREFIX}{name}", {"at": utcnow_isoformat()}
+        )
 
     async def list_content_documents(self, kind: str) -> list[tuple[str, str]]:
         """Return ``(relative_path, content)`` for every document of one kind."""

@@ -3,6 +3,7 @@ import { useDispatch, useSelector } from 'react-redux';
 import { useNavigate, useParams } from 'react-router-dom';
 import { getTimeBucket } from '../components/chat/conversationModel';
 import Select from '../components/common/Select';
+import { DraftField } from '../components/common/DetailCards';
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
@@ -13,6 +14,7 @@ import {
   selectAgentProfiles,
   selectAgentProfilesState,
   updateAgentGraph,
+  updateObjectAgentProfile,
 } from '../store/uiDataSlice';
 import {
   PaneEmptyState,
@@ -27,62 +29,43 @@ import {
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import DetailHeader, {
-  ConfigureActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
-  DuplicateActionIcon,
-  PlayActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { AgentGraphTab } from '../components/agents/AgentGraph';
-import { A2ADetailBody, ACPDetailBody, SubagentDetailBody } from '../components/agents/AgentDetailBodies';
+import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
-import { ROUTINE_EXAMPLES } from './routineExamples';
-
 
 const AGENT_FILTERS = ['All', 'Running', 'Failed', 'Stopped', 'Disabled'];
-// the read-only detail bodies above (subagent / a2a / acp) and its own draft
-// field set. Blurbs explain the distinction in the type-picker modal.
+// Object agents are portable SYSTEM.md manifests. A2A and ACP are protocol
+// integrations, not internal agents, and are intentionally absent here.
 const AGENT_TYPES = [
   {
-    kind: 'subagent',
-    label: 'Subagent',
-    blurb: 'In-process DeepAgent persona with a system prompt, tools, repositories and knowledge.',
-  },
-  {
-    kind: 'a2a',
-    label: 'A2A agent',
-    blurb: 'Remote agent reached over the Agent-to-Agent protocol via its published agent card.',
-  },
-  {
-    kind: 'acp',
-    label: 'ACP agent',
-    blurb: 'Local agent driven over the Agent Client Protocol (stdio/TCP), e.g. a CLI coding agent.',
+    kind: 'object',
+    label: 'Object agent',
+    blurb: 'Manifest-backed internal agent with a Markdown system prompt and selected tools.',
   },
 ];
 
 const AGENT_TYPE_LABELS = Object.fromEntries(AGENT_TYPES.map((type) => [type.kind, type.label]));
 
-// Seed a blank draft for the picked kind. The editable form binds to these
-// fields; everything is mocked client-side until a real register_*_agent call
-// exists, so creating an agent just clears the draft for now.
 function makeDraftAgent(kind) {
-  const base = { kind, name: '', role: '', model: '', summary: '' };
-  if (kind === 'a2a') {
-    return { ...base, url: '', transport: 'jsonrpc', skills: '' };
-  }
-  if (kind === 'acp') {
-    return { ...base, command: '', transport: 'stdio', permissionMode: 'prompt', timeoutSeconds: '120' };
-  }
-  return { ...base, prompt: '', tools: '', repositories: '' };
+  return {
+    kind,
+    name: '',
+    model: '',
+    summary: '',
+    version: '1.0.0',
+    prompt: '',
+    tools: '',
+    skills: '',
+  };
 }
 
-// Sort modes offered by the toolbar sort menu. Each re-orders the visible list
-// (and, since group order is derived from list order, the groups too).
 const SORT_MODES = ['Type', 'Name', 'Recent'];
-// Lower rank sorts first under "Type" so kinds cluster in a stable order.
-const TYPE_RANK = { subagent: 0, a2a: 1, acp: 2 };
+const TYPE_RANK = { object: 0, routine: 2 };
 // Recency buckets for the "Recent" sort, mirroring the chat sidebar's headers.
 const RECENCY_BUCKETS = [
   ['today', 'Today'],
@@ -112,7 +95,10 @@ function normalizeStatus(status) {
 }
 
 function matchesAgent(agent, filter, search) {
-  const matchesFilter = filter === 'All' || normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter;
+  // Object agents have no runtime status/enabled concept (see AgentRow);
+  // they only ever match the unfiltered "All" view.
+  const matchesFilter = filter === 'All'
+    || (agent.kind !== 'object' && normalizeStatus(agent.enabled === false ? 'disabled' : agent.status) === filter);
   if (!matchesFilter) {
     return false;
   }
@@ -127,8 +113,6 @@ function matchesAgent(agent, filter, search) {
     agent.summary,
     ...(agent.skills || []).map((skill) => skill.name),
     ...(agent.tools || []).map((tool) => tool.name),
-    ...(agent.repositories || []).map((repo) => repo.name),
-    ...(agent.knowledge || []).map((item) => item.name),
   ]
     .filter(Boolean)
     .join(' ')
@@ -178,15 +162,18 @@ function StatusPill({ status }) {
 }
 
 function AgentRow({ agent, selected, onSelect }) {
-  const status = agent.enabled === false ? 'disabled' : (agent.status || 'draft');
+  // Object agents have no runtime status/enabled concept (see DetailHeader);
+  // showing a status dot for them would fabricate a "draft"/"disabled" state
+  // that doesn't exist in the manifest.
+  const status = agent.kind === 'object' ? null : (agent.enabled === false ? 'disabled' : (agent.status || 'draft'));
   return (
     <button
       type="button"
-      className={`sess-row agents-agent-row agents-agent-row--${status} ${selected ? 'is-selected' : ''}`}
+      className={`sess-row agents-agent-row ${status ? `agents-agent-row--${status}` : ''} ${selected ? 'is-selected' : ''}`}
       onClick={() => onSelect(agent.id)}
     >
       <span className="sess-row__top">
-        <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} />
+        {status ? <span className={`sess-row__dot agents-agent-row__status agents-agent-row__status--${status}`} /> : null}
         <span className="sess-row__agent agents-agent-row__name">{agent.name}</span>
         <span className="sess-row__project">{agent.model}</span>
       </span>
@@ -194,8 +181,7 @@ function AgentRow({ agent, selected, onSelect }) {
       <span className="sess-row__title">{agent.role}</span>
       <span className="sess-row__msgs">
         <span><span className="num">{(agent.tools || []).length}</span> tools</span>
-        <span><span className="num">{(agent.repositories || []).length}</span> repos</span>
-        <span><span className="num">{(agent.knowledge || []).length}</span> knowledge</span>
+        <span><span className="num">{(agent.skills || []).length}</span> skills</span>
       </span>
     </button>
   );
@@ -228,7 +214,6 @@ function RoutineRow({ agent, selected, onSelect }) {
   );
 }
 
-// Detail pane for A2A agents: everything shown is sourced from the live agent
 // Compact type-picker shown by "+ New": choose what kind of agent to scaffold.
 // Picking a type opens the editable draft in the detail pane.
 function NewAgentModal({ onPick, onClose }) {
@@ -264,34 +249,10 @@ function NewAgentModal({ onPick, onClose }) {
   );
 }
 
-function DraftField({ label, hint, children }) {
-  return (
-    <label className="agents-draft-field">
-      <span className="agents-draft-field__label">{label}</span>
-      {children}
-      {hint ? <span className="agents-draft-field__hint">{hint}</span> : null}
-    </label>
-  );
-}
-
-const A2A_TRANSPORT_OPTIONS = [
-  { value: 'jsonrpc', label: 'JSON-RPC' },
-  { value: 'grpc', label: 'gRPC' },
-  { value: 'http', label: 'HTTP+JSON' },
-];
-const ACP_TRANSPORT_OPTIONS = [
-  { value: 'stdio', label: 'stdio' },
-  { value: 'tcp', label: 'TCP' },
-];
-const ACP_PERMISSION_OPTIONS = [
-  { value: 'prompt', label: 'Prompt' },
-  { value: 'auto', label: 'Auto-approve' },
-  { value: 'readonly', label: 'Read-only' },
-];
-
-// Editable body for a not-yet-created agent. Mirrors the read-only detail bodies
-// per kind, but every fact is an input. Values are mocked client-side; nothing
-// persists until the (future) register_*_agent call is wired up.
+// Editable body for a new manifest-backed object agent — the only creatable
+// kind (A2A/ACP are protocol integrations wired via config, not created here).
+// Fields serialize to YAML front matter plus the Markdown system prompt in
+// SYSTEM.md.
 function DraftAgentDetailBody({ draft, onChange }) {
   const set = (field) => (event) => onChange(field, event.target.value);
   return (
@@ -302,84 +263,29 @@ function DraftAgentDetailBody({ draft, onChange }) {
 
       <section className="agents-section">
         <header className="agents-section__head"><h2>Identity</h2></header>
-        <div className="agents-draft-grid">
-          <DraftField label="Role"><input value={draft.role} onChange={set('role')} placeholder="e.g. Code reviewer" /></DraftField>
-          <DraftField label="Model"><input value={draft.model} onChange={set('model')} placeholder="e.g. gpt-5" /></DraftField>
-        </div>
+        <DraftField label="Model"><input value={draft.model} onChange={set('model')} placeholder="e.g. gpt-5" /></DraftField>
         <DraftField label="Description">
           <textarea rows="3" value={draft.summary} onChange={set('summary')} placeholder="What this agent is for…" />
         </DraftField>
       </section>
 
-      {draft.kind === 'subagent' ? (
-        <>
-          <section className="agents-section agents-section--prompt">
-            <header className="agents-section__head"><h2>System prompt</h2></header>
-            <DraftField label="Prompt" hint="The persona and instructions the subagent runs with.">
-              <textarea rows="8" value={draft.prompt} onChange={set('prompt')} placeholder="You are…" />
-            </DraftField>
-          </section>
-          <section className="agents-section">
-            <header className="agents-section__head"><h2>Connections</h2></header>
-            <div className="agents-draft-grid">
-              <DraftField label="Tools" hint="Comma-separated tool names.">
-                <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, call_agent" />
-              </DraftField>
-              <DraftField label="Repositories" hint="Comma-separated repo names.">
-                <input value={draft.repositories} onChange={set('repositories')} placeholder="progenitor, docs" />
-              </DraftField>
-            </div>
-          </section>
-        </>
-      ) : draft.kind === 'a2a' ? (
-        <section className="agents-section">
-          <header className="agents-section__head"><h2>Connection</h2></header>
-          <DraftField label="Endpoint" hint="Base URL of the remote A2A server.">
-            <input value={draft.url} onChange={set('url')} placeholder="https://host:8107" />
+      <section className="agents-section agents-section--prompt">
+        <header className="agents-section__head"><h2>System prompt</h2></header>
+        <DraftField label="Prompt" hint="The persona and instructions the subagent runs with.">
+          <textarea rows="8" value={draft.prompt} onChange={set('prompt')} placeholder="You are…" />
+        </DraftField>
+      </section>
+      <section className="agents-section">
+        <header className="agents-section__head"><h2>Connections</h2></header>
+        <div className="agents-draft-grid">
+          <DraftField label="Tools" hint="Comma-separated tool names.">
+            <input value={draft.tools} onChange={set('tools')} placeholder="shell, mcp, call_agent" />
           </DraftField>
-          <div className="agents-draft-grid">
-            <DraftField label="Transport">
-              <Select
-                value={draft.transport}
-                onChange={(next) => onChange('transport', next)}
-                options={A2A_TRANSPORT_OPTIONS}
-                ariaLabel="Transport"
-              />
-            </DraftField>
-            <DraftField label="Skills" hint="Comma-separated skill ids.">
-              <input value={draft.skills} onChange={set('skills')} placeholder="build_agent, build_mcp" />
-            </DraftField>
-          </div>
-        </section>
-      ) : (
-        <section className="agents-section">
-          <header className="agents-section__head"><h2>Connection</h2></header>
-          <DraftField label="Command" hint="Process Progenitor spawns to speak ACP.">
-            <input value={draft.command} onChange={set('command')} placeholder="copilot --acp" />
+          <DraftField label="Skills" hint="Comma-separated /skills/ source paths.">
+            <input value={draft.skills} onChange={set('skills')} placeholder="/skills/review/" />
           </DraftField>
-          <div className="agents-draft-grid">
-            <DraftField label="Transport">
-              <Select
-                value={draft.transport}
-                onChange={(next) => onChange('transport', next)}
-                options={ACP_TRANSPORT_OPTIONS}
-                ariaLabel="Transport"
-              />
-            </DraftField>
-            <DraftField label="Permissions">
-              <Select
-                value={draft.permissionMode}
-                onChange={(next) => onChange('permissionMode', next)}
-                options={ACP_PERMISSION_OPTIONS}
-                ariaLabel="Permissions"
-              />
-            </DraftField>
-            <DraftField label="Timeout" hint="Seconds before a run is abandoned.">
-              <input value={draft.timeoutSeconds} onChange={set('timeoutSeconds')} inputMode="numeric" placeholder="120" />
-            </DraftField>
-          </div>
-        </section>
-      )}
+        </div>
+      </section>
     </div>
   );
 }
@@ -405,20 +311,11 @@ export function AgentWorkspace({ page }) {
   const realtimeConnected = useSelector(selectRealtimeConnected);
   const fetchedAgents = useSelector(selectAgentProfiles);
   const { agentId: routeAgentId } = useParams();
-  const isExampleRoutine = isRoutines && ROUTINE_EXAMPLES.some(
-    (routine) => routine.id === routeAgentId,
-  );
   const agents = useMemo(() => {
     if (!isRoutines) {
       return fetchedAgents.filter((agent) => agent.kind !== 'routine');
     }
-    return [
-      ...ROUTINE_EXAMPLES,
-      ...fetchedAgents.filter(
-        (agent) => agent.kind === 'routine'
-          && !ROUTINE_EXAMPLES.some((routine) => routine.id === agent.id),
-      ),
-    ];
+    return fetchedAgents.filter((agent) => agent.kind === 'routine');
   }, [fetchedAgents, isRoutines]);
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
@@ -430,10 +327,11 @@ export function AgentWorkspace({ page }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  // "+ New" opens a small type-picker; choosing a type scaffolds an editable
-  // draft in the detail pane (mocked client-side until registration is wired up).
+  // "+ New" creates a portable SYSTEM.md manifest through the profile API.
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [draftAgent, setDraftAgent] = useState(null);
+  const [draftError, setDraftError] = useState('');
+  const agentsUrl = getApiUrl('agentProfiles');
 
   const handleNewAgent = useCallback(() => {
     setNewAgentOpen(true);
@@ -452,17 +350,39 @@ export function AgentWorkspace({ page }) {
     setDraftAgent(null);
   }, []);
 
-  // Mocked create: real agents register through Progenitor's register_*_agent
-  // tools, so for now creating just clears the draft.
-  const createDraft = useCallback(() => {
-    setDraftAgent(null);
-  }, []);
+  const createDraft = useCallback(async () => {
+    if (!draftAgent) return;
+    const list = (value) => value.split(',').map((item) => item.trim()).filter(Boolean);
+    try {
+      setDraftError('');
+      const response = await fetch(`${agentsUrl}/object`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: draftAgent.name,
+          description: draftAgent.summary,
+          version: draftAgent.version,
+          model: draftAgent.model || null,
+          system_prompt: draftAgent.prompt,
+          tools: list(draftAgent.tools),
+          skills: list(draftAgent.skills),
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || 'Unable to create object agent.');
+      }
+      setDraftAgent(null);
+      dispatch(fetchAgentProfiles({ agentsUrl }));
+    } catch (error) {
+      setDraftError(error instanceof Error ? error.message : 'Unable to create object agent.');
+    }
+  }, [agentsUrl, dispatch, draftAgent]);
 
   // Selection is derived from the URL (/agents/<id> or /routines/<id>) so the
   // view is refreshable and shareable; user actions navigate rather than setState.
   const selectedAgentId = routeAgentId ?? null;
 
-  const agentsUrl = getApiUrl('agentProfiles');
   const requestedListRef = useRef(null);
 
   // Load profiles once the realtime stream is connected. The GET acknowledges
@@ -492,9 +412,8 @@ export function AgentWorkspace({ page }) {
     navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
-  // Request persisted graphs only. Examples are self-contained canvas fixtures.
   useEffect(() => {
-    if (!effectiveAgentId || isExampleRoutine) {
+    if (!effectiveAgentId) {
       return;
     }
     dispatch(requestAgentDetail({
@@ -502,7 +421,7 @@ export function AgentWorkspace({ page }) {
       agentId: effectiveAgentId,
       requestId: `${effectiveAgentId}-${Date.now()}`,
     }));
-  }, [agentsUrl, dispatch, effectiveAgentId, isExampleRoutine]);
+  }, [agentsUrl, dispatch, effectiveAgentId]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -514,11 +433,9 @@ export function AgentWorkspace({ page }) {
   // GraphCanvas seeds its working nodes/edges once on mount, so mounting it
   // against the roster entry would pin an empty chain that the later detail
   // can never replace. Hold the canvas back until the detail for THIS id has
-  // landed. Examples are self-contained fixtures with no detail request.
-  // A failed detail request falls through to the roster entry rather than
-  // holding the gate shut forever.
-  const graphDetailPending = !isExampleRoutine
-    && !activeAgentState.error
+  // landed. A failed detail request falls through to the roster entry rather
+  // than holding the gate shut forever.
+  const graphDetailPending = !activeAgentState.error
     && (!activeAgent || activeAgent.id !== effectiveAgentId);
   const isA2A = selectedAgent?.kind === 'a2a';
   const isACP = selectedAgent?.kind === 'acp';
@@ -566,12 +483,8 @@ export function AgentWorkspace({ page }) {
   }, [isRoutines, sortMode, visibleAgents]);
   const runningCount = agents.filter((agent) => agent.status === 'running').length;
   const taskCount = agents.reduce((total, agent) => total + (agent.tasks?.length || 0), 0);
-  const memoryCount = agents.reduce((total, agent) => total + (agent.memories?.length || 0), 0);
 
   async function handleSaveGraph(parsed) {
-    if (isExampleRoutine) {
-      return parsed;
-    }
     return dispatch(updateAgentGraph({
       agentsUrl,
       agentId: effectiveAgentId,
@@ -581,6 +494,34 @@ export function AgentWorkspace({ page }) {
       status: parsed.status,
       summary: parsed.summary,
     })).unwrap();
+  }
+
+  function slugifyAgentName(value) {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'agent';
+  }
+
+  function extractManifestName(content) {
+    const frontMatter = content.match(/^---\s*\n([\s\S]*?)\n---/);
+    if (!frontMatter) return null;
+    const nameLine = frontMatter[1].split('\n').find((line) => /^name:\s*/.test(line));
+    if (!nameLine) return null;
+    return nameLine.replace(/^name:\s*/, '').trim().replace(/^['"]|['"]$/g, '') || null;
+  }
+
+  async function handleSaveObjectAgent(manifest) {
+    if (!effectiveAgentId) return;
+    await dispatch(updateObjectAgentProfile({
+      agentsUrl,
+      agentId: effectiveAgentId,
+      manifest,
+    })).unwrap();
+    const name = extractManifestName(manifest.content);
+    if (name) {
+      const newId = `object-${slugifyAgentName(name)}`;
+      if (newId !== effectiveAgentId) {
+        selectAgent(newId);
+      }
+    }
   }
 
   const handleRunRoutine = useCallback((workingGraph = selectedGraph) => {
@@ -640,12 +581,11 @@ export function AgentWorkspace({ page }) {
             )}
           />
         ) : (
-          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'No agents match this view.'}</PaneEmptyState>
+          <PaneEmptyState>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `No ${listLabel.toLowerCase()} match this view.`}</PaneEmptyState>
         )}
         <PaneListFooter>
           <span><span className="num">{runningCount}</span> running</span>
           <span><span className="num">{taskCount}</span> tasks</span>
-          <span><span className="num">{memoryCount}</span> memories</span>
         </PaneListFooter>
       </PaneList>
 
@@ -672,6 +612,7 @@ export function AgentWorkspace({ page }) {
               <span key="hint" className="muted">Unsaved draft</span>,
             ]}
           />
+          {draftError ? <p className="agents-draft__note agents-draft__note--error">{draftError}</p> : null}
           <DraftAgentDetailBody draft={draftAgent} onChange={updateDraft} />
         </DetailPane>
       ) : selectedAgent ? (
@@ -681,29 +622,27 @@ export function AgentWorkspace({ page }) {
           {effectiveDetailTab !== 'Graph' ? (
             <DetailHeader
               title={selectedAgent.name}
-              actions={(
-                <DetailHeaderActions>
-                  <DetailHeaderAction icon={<ConfigureActionIcon />} label="Configure" tooltip="Configure agent" ariaLabel="Configure agent" />
-                  <DetailHeaderAction icon={<DuplicateActionIcon />} label="Duplicate" tooltip="Duplicate agent" ariaLabel="Duplicate agent" />
-                  <DetailHeaderAction
-                    icon={<PlayActionIcon />}
-                    label="Run"
-                    tooltip="Run agent"
-                    ariaLabel="Run agent"
-                    variant="primary"
-                  />
-                </DetailHeaderActions>
-              )}
               meta={[
-                <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} />,
-                <span key="model" className="sess-detail__model">{selectedAgent.model}</span>,
-                <span key="role" className="muted">{selectedAgent.role}</span>,
+                // Object agents have no schema-backed status/enabled concept
+                // (no runtime process, no manifest field) -- showing a pill
+                // here would fabricate a value the backend doesn't have.
+                selectedAgent.kind !== 'object'
+                  ? <StatusPill key="status" status={selectedAgent.enabled === false ? 'disabled' : selectedAgent.status} /> : null,
+                // Object agents show Model in the Manifest section and
+                // Tools/Skills counts in their own MiniListSection headers
+                // below -- repeating them here would be a literal duplicate
+                // of data already on the page. A2A/ACP have no such section,
+                // so the header remains their only place to show these.
+                selectedAgent.kind !== 'object' && selectedAgent.model
+                  ? <span key="model" className="sess-detail__model">{selectedAgent.model}</span> : null,
                 selectedAgent.url ? (
                   <a key="url" className="muted agents-agent-url" href={selectedAgent.url} target="_blank" rel="noreferrer">
                     {selectedAgent.transport ? `${selectedAgent.transport} · ` : ''}{selectedAgent.url}
                   </a>
                 ) : null,
-                <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools · {(selectedAgent.repositories || []).length} repos · {(selectedAgent.knowledge || []).length} knowledge</span>,
+                selectedAgent.kind !== 'object' ? (
+                  <span key="links" className="muted">{(selectedAgent.skills || []).length ? `${selectedAgent.skills.length} skills · ` : ''}{(selectedAgent.tools || []).length} tools</span>
+                ) : null,
               ]}
               tabs={detailTabs}
               activeTab={effectiveDetailTab}
@@ -716,7 +655,7 @@ export function AgentWorkspace({ page }) {
               ? <A2ADetailBody agent={selectedAgent} />
               : isACP
                 ? <ACPDetailBody agent={selectedAgent} />
-                : <SubagentDetailBody agent={selectedAgent} />
+                : <ObjectAgentDetailBody agent={selectedAgent} agentsUrl={agentsUrl} onSave={handleSaveObjectAgent} />
           ) : (
             <div className="detail-pane__body detail-pane__body--graph">
               {graphDetailPending ? (
@@ -741,8 +680,8 @@ export function AgentWorkspace({ page }) {
           )}
         </DetailPane>
       ) : (
-        <DetailPane className="detail-pane--dense agents-detail" label="Agent profile">
-          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? 'Loading agents…' : 'Select an agent to view its profile.'}</PaneEmptyState>
+        <DetailPane className="detail-pane--dense agents-detail" label={`${listLabel.slice(0, -1)} profile`}>
+          <PaneEmptyState detail>{agentsState.loading || !agentsState.loaded ? `Loading ${listLabel.toLowerCase()}…` : `Select a${isRoutines ? '' : 'n'} ${listLabel.toLowerCase().slice(0, -1)} to view its profile.`}</PaneEmptyState>
         </DetailPane>
       )}
 

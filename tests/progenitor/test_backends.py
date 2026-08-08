@@ -18,7 +18,12 @@ class FakeContentStateManager(MagicMock):
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
-        self._docs: dict[str, dict[str, str]] = {"prompt": {}, "skill": {}, "memory": {}}
+        self._docs: dict[str, dict[str, str]] = {
+            "prompt": {},
+            "skill": {},
+            "memory": {},
+            "agent": {},
+        }
 
     async def get_content_document(self, kind: str, relative_path: str) -> str | None:
         return self._docs[kind].get(relative_path)

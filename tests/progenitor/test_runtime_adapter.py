@@ -18,6 +18,7 @@ class FakeContentStateManager:
         self._docs: dict[str, dict[str, str]] = {
             "prompt": {"progenitor/genesis.md": prompt},
             "skill": {},
+            "agent": {},
             "memory": {},
         }
 

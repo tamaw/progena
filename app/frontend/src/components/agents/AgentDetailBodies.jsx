@@ -1,5 +1,8 @@
+import { useState } from 'react';
+import { useDispatch, useSelector } from 'react-redux';
 import { PaneEmptyState } from '../layout/PaneList';
-import { MetricCard, CardFact, CapabilityChip } from '../common/DetailCards';
+import { MetricCard, CardFact, CapabilityChip, DraftField } from '../common/DetailCards';
+import { fetchAgentSkillContent, selectAgentSkillContent, updateAgentSkillContent } from '../../store/uiDataSlice';
 import { formatAge } from './agentFormat';
 
 // Chip tone per A2A task status (matches Progenitor's A2ATaskStatus enum).
@@ -214,9 +217,7 @@ export function ACPDetailBody({ agent }) {
               key={tool.name}
               icon={(tool.name || '').slice(0, 2)}
               title={tool.name}
-              detail={`${tool.type} - ${tool.calls} calls`}
-              meta={tool.enabled ? 'on' : 'off'}
-              tone={tool.enabled ? 'ok' : 'muted'}
+              detail={tool.type}
             />
           )) : <PaneEmptyState>No tools exposed.</PaneEmptyState>}
         </div>
@@ -242,120 +243,264 @@ export function ACPDetailBody({ agent }) {
   );
 }
 
-// Detail pane for DeepAgent subagents: definition-centric (system prompt, tools,
-// repositories, knowledge, and activity), reflecting their in-process nature.
-export function SubagentDetailBody({ agent }) {
+// Detail pane for object agents: represents exactly the YAML front matter +
+// Markdown body of the underlying SYSTEM.md (identity, system prompt, tools,
+// skills, permissions, interrupt_on) -- no invented metrics/repositories/
+// knowledge/activity sections, since object agents have no backing data for
+// those. Editable regardless of source: native (repo-checked-out) manifests
+// are rewritten on disk, user/marketplace manifests in the document store;
+// AgentStore.update_object_agent only refuses a rename of a native agent
+// (its slug is tied to a directory path).
+//
+// Editing works on the literal SYSTEM.md text (front matter + body), not a
+// fixed set of known fields, so an author can add, rename, or remove any
+// front-matter key -- the backend persists it verbatim and only rejects it
+// if it fails to parse as a valid manifest.
+//
+// The read-only Manifest section mirrors this: it renders every key present
+// in `card.front_matter` (the backend's re-parsed dict of the raw YAML), not
+// a hardcoded field list, so custom keys stay visible without opening Edit.
+// Keys with their own dedicated section below (tools/skills/permissions/
+// interrupt_on) are skipped here to avoid showing the same data twice, as
+// is `name`, which is already the page's detail-header title above this
+// card.
+const FRONT_MATTER_DEDICATED_KEYS = new Set(['name', 'tools', 'skills', 'permissions', 'interrupt_on']);
+
+function humanizeKey(key) {
+  return key.replace(/_/g, ' ').replace(/^./, (char) => char.toUpperCase());
+}
+
+function formatFrontMatterValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+// One skill an object agent's SYSTEM.md `skills:` list references. The bare
+// name alone doesn't say much, so this lazily fetches and represents the
+// skill's own SKILL.md front matter (the same architecture as SYSTEM.md:
+// YAML front matter + a markdown body) when expanded, and edited in place --
+// native skills are rewritten on disk, marketplace skills in the document
+// store, mirroring ObjectAgentDetailBody below.
+function AgentSkillRow({ skillPath, agentsUrl }) {
+  const dispatch = useDispatch();
+  const skill = useSelector((state) => selectAgentSkillContent(state, skillPath));
+  const [expanded, setExpanded] = useState(false);
+  const [draftContent, setDraftContent] = useState(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const toggle = () => {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !skill) {
+      dispatch(fetchAgentSkillContent({ agentsUrl, skillPath }));
+    }
+  };
+
+  const startEdit = () => {
+    setDraftContent(skill?.raw_content ?? '');
+    setError('');
+  };
+
+  const cancelEdit = () => {
+    setDraftContent(null);
+    setError('');
+  };
+
+  const save = async () => {
+    if (draftContent === null) return;
+    setSaving(true);
+    setError('');
+    try {
+      await dispatch(updateAgentSkillContent({ agentsUrl, skillPath, content: draftContent })).unwrap();
+      setDraftContent(null);
+    } catch (saveError) {
+      setError(saveError.message || 'Failed to save skill.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const frontMatterEntries = skill?.front_matter
+    ? Object.entries(skill.front_matter).filter(([key]) => key !== 'name')
+    : null;
+  const label = skill?.name || skillPath.split('/').filter(Boolean).pop() || skillPath;
+
+  return (
+    <article className="agents-skill-card">
+      <header className="agents-skill-card__head">
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={toggle}>{label}</button>
+        {skill ? (
+          <span className="agents-chip agents-chip--info">
+            {skill.source === 'native' ? 'native' : 'marketplace'}
+          </span>
+        ) : null}
+      </header>
+      {!expanded ? null : draftContent !== null ? (
+        <div className="agents-draft">
+          {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
+          <DraftField label="Front matter + body" hint="The literal SKILL.md file: YAML front matter between --- fences, then the markdown body. Any front-matter key can be added, renamed, or removed.">
+            <textarea
+              rows="14"
+              className="agents-json-field"
+              value={draftContent}
+              onChange={(event) => setDraftContent(event.target.value)}
+              spellCheck={false}
+            />
+          </DraftField>
+          <div className="agents-graph-editor__actions">
+            <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
+            <button type="button" className="repo-btn repo-btn--primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      ) : skill === undefined ? (
+        <p className="agents-skill-card__desc">Loading…</p>
+      ) : (
+        <div className="agents-card-facts">
+          {frontMatterEntries
+            ? frontMatterEntries.map(([key, value]) => (
+                <CardFact key={key} label={humanizeKey(key)}>{formatFrontMatterValue(value)}</CardFact>
+              ))
+            : <PaneEmptyState>SKILL.md front matter could not be parsed.</PaneEmptyState>}
+          {skill.editable ? (
+            <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit}>Edit</button>
+          ) : null}
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function ObjectAgentDetailBody({ agent, agentsUrl, onSave }) {
+  const rawContent = agent.card?.raw_content;
+  const [draftContent, setDraftContent] = useState(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const startEdit = () => {
+    setDraftContent(rawContent ?? '');
+    setError('');
+  };
+
+  const cancelEdit = () => {
+    setDraftContent(null);
+    setError('');
+  };
+
+  const save = async () => {
+    if (draftContent === null) return;
+    setSaving(true);
+    setError('');
+    try {
+      await onSave({ content: draftContent });
+      setDraftContent(null);
+    } catch (saveError) {
+      setError(saveError.message || 'Failed to save agent.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (draftContent !== null) {
+    return (
+      <div className="detail-pane__body agents-draft">
+        {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
+        <section className="agents-section agents-section--prompt">
+          <header className="agents-section__head"><h2>SYSTEM.md</h2></header>
+          <DraftField label="Front matter + prompt" hint="The literal file: YAML front matter between --- fences, then the markdown system prompt. Any front-matter key can be added, renamed, or removed.">
+            <textarea
+              rows="24"
+              className="agents-json-field"
+              value={draftContent}
+              onChange={(event) => setDraftContent(event.target.value)}
+              spellCheck={false}
+            />
+          </DraftField>
+        </section>
+        <div className="agents-graph-editor__actions">
+          <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
+          <button type="button" className="repo-btn repo-btn--primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+        </div>
+      </div>
+    );
+  }
+
+  const tools = agent.tools || [];
+  const skills = agent.skills || [];
+  const permissions = agent.card?.permissions || [];
+  const interruptOn = agent.card?.interrupt_on || {};
+  const frontMatter = agent.card?.front_matter;
+  const frontMatterEntries = frontMatter
+    ? Object.entries(frontMatter).filter(([key]) => !FRONT_MATTER_DEDICATED_KEYS.has(key))
+    : null;
+
+  const isObjectAgent = agent.kind === 'object';
+
   return (
     <div className="detail-pane__body">
-      <div className="agents-metrics">
-        <MetricCard label="Invocations" value={agent.metrics?.invocations ?? '0'} detail="last 30 days" />
-        <MetricCard label="Sessions" value={agent.metrics?.sessions ?? '0'} detail="linked conversations" />
-        <MetricCard label="Tasks" value={agent.metrics?.tasks ?? '0'} detail="open and completed" />
-        <MetricCard label="Memories" value={agent.metrics?.memories ?? '0'} detail="available context" />
-      </div>
+      {isObjectAgent ? (
+        <section className="agents-section">
+          <header className="agents-section__head">
+            <h2>Manifest</h2>
+            <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit}>Edit</button>
+          </header>
+          <div className="agents-card-facts">
+            {frontMatterEntries
+              ? frontMatterEntries.map(([key, value]) => (
+                  <CardFact key={key} label={humanizeKey(key)}>{formatFrontMatterValue(value)}</CardFact>
+                ))
+              : <PaneEmptyState>Manifest front matter could not be parsed.</PaneEmptyState>}
+          </div>
+        </section>
+      ) : null}
 
       <section className="agents-section agents-section--prompt">
         <header className="agents-section__head">
           <h2>System prompt <span>{(agent.prompt || '').length} chars</span></h2>
-          <div>
-            <button type="button" className="repo-btn repo-btn--ghost">Edit</button>
-            <button type="button" className="repo-btn repo-btn--ghost">Diff</button>
-          </div>
         </header>
         <pre className="agents-prompt"><code>{agent.prompt || 'No system prompt set.'}</code></pre>
       </section>
 
-      <div className="agents-detail-grid">
-        <MiniListSection title="Connected tools" count={`${(agent.tools || []).length} attached`} action="+ Add tool">
-          <div className="agents-connection-list">
-            {(agent.tools || []).length ? agent.tools.map((tool) => (
-              <ConnectionRow
-                key={tool.name}
-                icon={(tool.name || '').slice(0, 2)}
-                title={tool.name}
-                detail={`${tool.type} - ${tool.calls} calls`}
-                meta={tool.enabled ? 'on' : 'off'}
-                tone={tool.enabled ? 'ok' : 'muted'}
-              />
-            )) : <PaneEmptyState>No tools connected.</PaneEmptyState>}
-          </div>
-        </MiniListSection>
+      <MiniListSection title="Tools" count={`${tools.length} attached`}>
+        <div className="agents-chip-row">
+          {tools.length
+            ? tools.map((tool) => <span key={tool.name} className="agents-chip agents-chip--info">{tool.name}</span>)
+            : <PaneEmptyState>No tools attached.</PaneEmptyState>}
+        </div>
+      </MiniListSection>
 
-        <MiniListSection title="Repositories" count={`${(agent.repositories || []).length} connected`} action="+ Attach repo">
-          <div className="agents-connection-list">
-            {(agent.repositories || []).length ? agent.repositories.map((repo) => (
-              <ConnectionRow
-                key={`${repo.name}-${repo.branch}`}
-                icon="repo"
-                title={repo.name}
-                detail={`branch ${repo.branch}`}
-                meta={repo.access}
-                tone={repo.access === 'write' ? 'ok' : 'info'}
-              />
-            )) : <PaneEmptyState>No repositories connected.</PaneEmptyState>}
-          </div>
-        </MiniListSection>
+      <MiniListSection title="Skills" count={`${skills.length} attached`}>
+        <div className="agents-skill-list">
+          {skills.length
+            ? skills.map((skill) => {
+                const skillPath = skill.name || skill;
+                return <AgentSkillRow key={skillPath} skillPath={skillPath} agentsUrl={agentsUrl} />;
+              })
+            : <PaneEmptyState>No skills attached.</PaneEmptyState>}
+        </div>
+      </MiniListSection>
 
-        <MiniListSection title="Knowledge" count={`${(agent.knowledge || []).length} sources`} action="+ Link source">
-          <div className="agents-connection-list">
-            {(agent.knowledge || []).length ? agent.knowledge.map((item) => (
-              <ConnectionRow
-                key={item.name}
-                icon="kb"
-                title={item.name}
-                detail={`${item.records} records`}
-                meta={item.freshness}
-                tone="info"
-              />
-            )) : <PaneEmptyState>No knowledge linked.</PaneEmptyState>}
+      {permissions.length ? (
+        <section className="agents-section">
+          <header className="agents-section__head"><h2>Permissions</h2></header>
+          <div className="agents-card-facts">
+            {permissions.map((perm, index) => (
+              <CardFact key={`${perm.mode || 'allow'}-${index}`} label={perm.mode || 'allow'}>
+                {(perm.operations || []).join('/')} — {(perm.paths || []).join(', ')}
+              </CardFact>
+            ))}
           </div>
-        </MiniListSection>
-      </div>
+        </section>
+      ) : null}
 
-      <div className="agents-activity-grid">
-        <MiniListSection title="Memories" count={`${(agent.memories || []).length} pinned`}>
-          <div className="agents-mini-list">
-            {(agent.memories || []).length ? agent.memories.map((memory) => (
-              <div key={memory.title} className="agents-mini-row">
-                <span className="agents-mini-row__icon">mem</span>
-                <div>
-                  <strong>{memory.title}</strong>
-                  <p>{memory.scope} - {memory.age}</p>
-                </div>
-              </div>
-            )) : <PaneEmptyState>No memories yet.</PaneEmptyState>}
-          </div>
-        </MiniListSection>
-
-        <MiniListSection title="Sessions" count={`${(agent.sessions || []).length} recent`}>
-          <div className="agents-mini-list">
-            {(agent.sessions || []).length ? agent.sessions.map((session) => (
-              <div key={session.title} className="agents-mini-row">
-                <span className="agents-mini-row__icon">ses</span>
-                <div>
-                  <strong>{session.title}</strong>
-                  <p>{session.outcome} - {session.age}</p>
-                </div>
-              </div>
-            )) : <PaneEmptyState>No sessions yet.</PaneEmptyState>}
-          </div>
-        </MiniListSection>
-
-        <MiniListSection title="Tasks" count={`${(agent.tasks || []).length} tracked`}>
-          <div className="agents-mini-list">
-            {(agent.tasks || []).length ? agent.tasks.map((task) => (
-              <div key={task.title} className="agents-mini-row">
-                <span className="agents-mini-row__icon">tsk</span>
-                <div>
-                  <strong>{task.title}</strong>
-                  <p>{task.state} - {task.age}</p>
-                </div>
-                <span className={`agents-chip agents-chip--${task.state === 'active' ? 'ok' : 'info'}`}>{task.state}</span>
-              </div>
-            )) : <PaneEmptyState>No tasks tracked.</PaneEmptyState>}
-          </div>
-        </MiniListSection>
-      </div>
+      {Object.keys(interruptOn).length ? (
+        <section className="agents-section">
+          <header className="agents-section__head"><h2>Interrupt on</h2></header>
+          <pre className="agents-prompt"><code>{JSON.stringify(interruptOn, null, 2)}</code></pre>
+        </section>
+      ) : null}
     </div>
   );
 }

@@ -74,12 +74,8 @@ class _FakeStateManager:
         self._graph_doc = graph_doc
         self.calls = 0
 
-    async def get_routine_graph(self, routine_id: str) -> dict[str, Any] | None:
-        self.calls += 1
-        return self._graph_doc
 
-
-def _spec(reader, state_manager=None, model=None):
+def _spec(reader, state_manager=None, model=None, agent_registry=None):
     return create_routine_subagent(
         routine_id=ROUTINE_ID,
         description="test routine",
@@ -87,6 +83,7 @@ def _spec(reader, state_manager=None, model=None):
         state_manager=state_manager or _FakeStateManager(),
         revision_reader=reader,
         subagent_registry={},
+        agent_registry=agent_registry or {},
     )
 
 

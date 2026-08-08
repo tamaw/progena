@@ -6176,10 +6176,6 @@ body,
   background: var(--color-text-muted);
 }
 
-.agents-agent-row__status--running {
-  background: var(--color-success);
-}
-
 .agents-agent-row__status--paused {
   background: var(--color-warning);
 }
@@ -6471,7 +6467,11 @@ body,
   border: 0;
 }
 
-.agents-status-pill--running,
+.agents-status-pill--running {
+  color: var(--color-text-muted);
+  background: var(--color-bg-tertiary);
+}
+
 .agents-chip--ok {
   color: var(--color-success);
   background: color-mix(in oklab, var(--color-success) 13%, transparent);
@@ -6709,6 +6709,24 @@ body,
   gap: 5px;
 }
 
+/* On the Agents/Routines detail pane, drop the outer .agents-section card
+   chrome so each section's heading sits as plain text above its content --
+   the content itself (.agents-card-facts, .agents-prompt, individual
+   .agents-skill-card/.agents-chip rows) already carries its own box, so no
+   double border remains. Scoped to .agents-detail: .agents-section is a
+   shared class also used unboxed-header-inside on Channels/Knowledge/
+   Models/Tasks, which keep their current look. */
+.agents-detail .agents-section {
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+
+.agents-detail .agents-section__head {
+  margin-bottom: 10px;
+}
+
 .agents-prompt {
   max-height: 220px;
   margin: 0;
@@ -6722,6 +6740,12 @@ body,
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.agents-json-field {
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .agents-graph-panel {

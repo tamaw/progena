@@ -26,6 +26,11 @@ from pathlib import Path
 from typing import Any, cast
 
 from app.progenitor.config import default_mcp_config_payload
+from app.progenitor.content_documents import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
 from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
@@ -1854,16 +1859,26 @@ class StateReader:
             logger.error("Failed to read state snapshot: %s", e)
             return
         if not self._state_changed(snapshot):
-            workflow_change = bool(
+            # These key families carry no signal in the tracked session-state
+            # fields `_state_changed` diffs (cycle_count, agents/tools counts,
+            # etc.), so a write to them would otherwise never reach any
+            # watcher. Bypassing the diff for them mirrors the workflow
+            # carve-out below -- both exist because "this changed_key was
+            # written" is itself the notification, independent of whether the
+            # coarse snapshot moved.
+            key_bypasses_state_diff = bool(
                 changed_key
                 and (
                     changed_key.startswith(WORKFLOW_DEFINITION_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_RUN_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_QUEUE_KEY_PREFIX)
                     or changed_key.startswith(WORKFLOW_INVOKE_REQUEST_KEY_PREFIX)
+                    or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
+                    or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
                 )
             )
-            if not workflow_change:
+            if not key_bypasses_state_diff:
                 return
         self._last_snapshot = snapshot
         for watcher in list(self._watchers):

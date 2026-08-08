@@ -36,6 +36,11 @@ from fastapi.sse import EventSourceResponse, ServerSentEvent
 from pydantic import BaseModel, Field
 
 from app.progenitor.config import default_plugins_config_payload
+from app.progenitor.content_documents import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -4178,7 +4183,13 @@ def _queue_state_watch_status(snapshot, changed_key: str | None = None) -> None:
             broadcast_marketplaces_snapshot()
         if changed_key in (None, "plugins"):
             broadcast_plugins_snapshot()
-        if changed_key in (None, "registry"):
+        if (
+            changed_key is None
+            or changed_key == "registry"
+            or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
+            or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
+        ):
             profile_task = asyncio.create_task(_broadcast_agent_profiles_safe())
             _active_agent_profile_broadcast_tasks.add(profile_task)
             profile_task.add_done_callback(_active_agent_profile_broadcast_tasks.discard)

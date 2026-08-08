@@ -21,6 +21,11 @@ export const initialState = {
       error: null,
       requestId: null,
     },
+    // SKILL.md content (front matter + body) for skills attached to an object
+    // agent, fetched lazily on demand and cached by the manifest's absolute
+    // `/skills/...` path (see `fetchAgentSkillContent` /
+    // `agent.skill.content.updated`).
+    skillsByPath: {},
   },
 };
 
@@ -74,6 +79,29 @@ export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph
   },
 ));
 
+export const updateObjectAgentProfile = createAcknowledgedThunk('uiData/updateObjectAgentProfile', ({ agentsUrl, agentId, manifest }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/object/${encodeURIComponent(agentId)}`,
+  {
+    method: 'PATCH',
+    body: manifest,
+    requestId,
+  },
+));
+
+export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgentSkillContent', ({ agentsUrl, skillPath }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
+  { requestId },
+));
+
+export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
+  {
+    method: 'PATCH',
+    body: { content },
+    requestId,
+  },
+));
+
 export const eventHandlers = {
   'agents.snapshot': (state, payload) => {
     replaceAgentList(state.agents, payload.agents);
@@ -106,6 +134,11 @@ export const eventHandlers = {
       state.agents.active.detail = { ...state.agents.active.detail, graph };
     }
   },
+  'agent.skill.content.updated': (state, payload) => {
+    if (typeof payload?.path === 'string' && payload.path) {
+      state.agents.skillsByPath[payload.path] = payload;
+    }
+  },
 };
 
 export function buildExtraReducers(builder) {
@@ -129,3 +162,4 @@ export const selectAgentProfiles = createSelector(
 export const selectAgentProfilesState = (state) => state.uiData.agents;
 export const selectActiveAgentProfile = (state) => state.uiData.agents.active.detail;
 export const selectActiveAgentProfileState = (state) => state.uiData.agents.active;
+export const selectAgentSkillContent = (state, skillPath) => state.uiData.agents.skillsByPath[skillPath];

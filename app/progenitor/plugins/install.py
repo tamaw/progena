@@ -46,15 +46,23 @@ def _build_synthetic_catalog(
 
 async def _fetch_and_digest(
     entry: dict, plugin_name: str, marketplace_name: str
-) -> tuple[dict[str, str], str]:
-    """Fetch a plugin's skill files and compute their digest.
-
-    Returns ``(files, digest)``.  ``files`` keys are ``<skill>/<filename>``.
-    """
+) -> tuple[dict[str, str], dict[str, str], str]:
+    """Fetch a plugin's skills and object agents and compute one digest."""
     catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
-    files, _skipped = await fetch_plugin_files_with_report(catalog, plugin_name)
-    digest = compute_digest(files)
-    return files, digest
+    files, _skipped = await fetch_plugin_files_with_report(
+        catalog,
+        plugin_name,
+        include_agents=True,
+    )
+    skills = dict(files)
+    agents = dict(getattr(files, "agents", {}))
+    digest = compute_digest(
+        {
+            **{f"skills/{path}": content for path, content in skills.items()},
+            **{f"agents/{path}": content for path, content in agents.items()},
+        }
+    )
+    return skills, agents, digest
 
 
 async def check_plugin_updates(state_manager) -> dict[str, Any]:
@@ -77,7 +85,7 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
 
         try:
             marketplace_name, plugin_name = key.split("/", 1)
-            files, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
+            _skills, _agents, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
 
             current = dict(entry)
             if digest != current.get("installed_digest"):
@@ -129,11 +137,14 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     desired = await state_manager.get_plugins_config()
     plugins = desired.get("plugins", {})
 
-    actual_rows = await state_manager.list_content_documents("skill")
-    actual_by_segment: dict[str, list[str]] = {}
-    for rel, _content in actual_rows:
-        seg = rel.split("/", 1)[0] if "/" in rel else rel
-        actual_by_segment.setdefault(seg, []).append(rel)
+    actual_by_kind_segment: dict[str, dict[str, list[str]]] = {}
+    for kind in ("skill", "agent"):
+        rows = await state_manager.list_content_documents(kind)
+        segments: dict[str, list[str]] = {}
+        for rel, _content in rows:
+            seg = rel.split("/", 1)[0] if "/" in rel else rel
+            segments.setdefault(seg, []).append(rel)
+        actual_by_kind_segment[kind] = segments
 
     summary: dict[str, list[str]] = {
         "installed": [],
@@ -144,18 +155,19 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     changed = False
     now = utcnow_isoformat()
 
-    # --- 1. Remove skill documents for plugins no longer in desired state ---
-    # Progenitor's own native skills are disk-only now (never seeded into
-    # Postgres, see agent.py) -- any unsegmented ("no __") row still in the
-    # store is leftover from before that change and is safe to delete too.
-    desired_segments = {_plugin_segment(k) for k in plugins}
-    for seg, rels in list(actual_by_segment.items()):
-        if seg in desired_segments:
-            continue
-        for rel in rels:
-            await state_manager.delete_content_document("skill", rel)
-        summary["removed"].append(seg)
-        changed = True
+    # Native skills and agents are disk-only. Remove every persisted segment
+    # that no longer belongs to a desired marketplace plugin.
+    desired_segments = {_plugin_segment(k) for k in plugins} | {"user"}
+    removed_segments: set[str] = set()
+    for kind, segments in actual_by_kind_segment.items():
+        for seg, rels in list(segments.items()):
+            if seg in desired_segments:
+                continue
+            for rel in rels:
+                await state_manager.delete_content_document(kind, rel)
+            removed_segments.add(seg)
+            changed = True
+    summary["removed"].extend(sorted(removed_segments))
 
     # --- 2. Process each desired plugin entry ---
     for key, entry in list(plugins.items()):
@@ -173,19 +185,30 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
             needs_install = installed_version is None or (
                 desired_version is not None and desired_version != installed_version
             )
-            files, digest = await _fetch_and_digest(current, plugin_name, marketplace_name)
+            skills_files, agent_files, digest = await _fetch_and_digest(
+                current,
+                plugin_name,
+                marketplace_name,
+            )
             resolved_version = resolve_plugin_version(current, None)
 
             if needs_install:
-                # Write skill documents
-                for path, content in files.items():
-                    # path is like "skill-name/SKILL.md"
+                # Replace this plugin's content as a unit, so removed companion
+                # files cannot survive an upgrade.
+                for kind in ("skill", "agent"):
+                    for rel in actual_by_kind_segment[kind].get(seg, []):
+                        await state_manager.delete_content_document(kind, rel)
+                for path, content in skills_files.items():
                     await state_manager.save_content_document("skill", f"{seg}/{path}", content)
+                for path, content in agent_files.items():
+                    await state_manager.save_content_document("agent", f"{seg}/{path}", content)
 
-                skills = sorted({p.split("/", 1)[0] for p in files if "/" in p})
+                skills = sorted({p.split("/", 1)[0] for p in skills_files if "/" in p})
+                agents = sorted({p.split("/", 1)[0] for p in agent_files if "/" in p})
                 current["installed_version"] = desired_version or resolved_version
                 current["installed_digest"] = digest
                 current["skills"] = skills
+                current["agents"] = agents
                 current["status"] = "installed"
                 current["status_message"] = ""
                 current["installed_at"] = current.get("installed_at") or now

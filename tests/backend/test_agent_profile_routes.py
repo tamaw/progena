@@ -38,7 +38,7 @@ _DEFAULT_GRAPH = {
             "config": {"expression": "True"},
         },
     ],
-    "edges": [{"from": "greet", "to": "gate"}],
+    "edges": [{"from": "greet", "to": "gate", "level": "normal"}],
 }
 
 
@@ -77,6 +77,12 @@ class FakeAgentStore:
 
     def list_agents(self) -> list[dict[str, Any]]:
         return list(self._agents.values())
+
+    def list_object_agents(self) -> list[dict[str, Any]]:
+        return []
+
+    def get_object_agent(self, agent_id: str) -> dict[str, Any] | None:
+        return None
 
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         agent = self._agents.get(agent_id)
@@ -210,7 +216,7 @@ def test_graph_update_persists_and_broadcasts(harness):
             },
             {"id": "b", "kind": "noop", "output_key": "b"},
         ],
-        "edges": [{"from": "a", "to": "b"}],
+        "edges": [{"from": "a", "to": "b", "level": "normal"}],
         "entry": "a",
         "status": "Designed",
     }
@@ -234,7 +240,7 @@ def test_graph_update_invalid_returns_422(harness):
         "nodes": [
             {"id": "a", "kind": "prompt", "output_key": "a", "config": {"prompt_template": "hi"}}
         ],
-        "edges": [{"from": "a", "to": "ghost"}],
+        "edges": [{"from": "a", "to": "ghost", "level": "normal"}],
     }
     assert client.patch("/api/ui/agent-profiles/alpha/graph", json=bad).status_code == 422
 
@@ -292,21 +298,21 @@ def _a2a_profile(agent_id: str = "a2a-observe") -> dict[str, Any]:
     }
 
 
-def test_list_merges_subagents_and_read_through_a2a(harness, monkeypatch):
+def test_list_excludes_protocol_agents_from_internal_catalog(harness, monkeypatch):
     client, events = harness
     import app.backend.agent_profile_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles")
     assert_acknowledged(response, ["agents.snapshot"])
-    snapshot_events = [(t, p) for t, p, _ in events if t == "agents.snapshot"]
+    snapshot_events = [
+        (event_type, payload)
+        for event_type, payload, _ in events
+        if event_type == "agents.snapshot"
+    ]
     assert len(snapshot_events) == 1
     snapshot = snapshot_events[0][1]
-    assert {a["id"] for a in snapshot["agents"]} == {"alpha", "beta", "a2a-observe"}
-    observe = next(a for a in snapshot["agents"] if a["id"] == "a2a-observe")
-    assert observe["kind"] == "a2a"
-    assert observe["graph"] is None
-    assert observe["card"]["protocolVersion"] == "0.3.0"
+    assert {agent["id"] for agent in snapshot["agents"]} == {"alpha", "beta"}
 
 
 def test_detail_a2a_reads_through_registry(harness, monkeypatch):
@@ -388,15 +394,16 @@ class TestValidateAgentGraph:
                 {"id": "done", "kind": "noop"},
             ],
             [
-                {"from": "parse", "to": "gate"},
+                {"from": "parse", "to": "gate", "level": "normal"},
                 {
                     "from": "gate",
+                    "level": "route",
                     "router": "state_equals",
                     "state_key": "gate",
                     "branches": {"True": "handoff"},
                     "default": "done",
                 },
-                {"from": "handoff", "to": "done"},
+                {"from": "handoff", "to": "done", "level": "normal"},
             ],
             "parse",
         )
@@ -411,7 +418,10 @@ class TestValidateAgentGraph:
 
     def test_rejects_edge_to_unknown_node(self):
         with pytest.raises(ValueError, match="unknown target node"):
-            validate_agent_graph([{"id": "a", "kind": "noop"}], [{"from": "a", "to": "b"}])
+            validate_agent_graph(
+                [{"id": "a", "kind": "noop"}],
+                [{"from": "a", "to": "b", "level": "normal"}],
+            )
 
     def test_rejects_missing_node_id(self):
         with pytest.raises(ValueError, match="non-empty string id"):
@@ -422,12 +432,13 @@ class TestValidateAgentGraph:
             validate_agent_graph([{"id": "a", "kind": "noop"}], [], "ghost")
 
     def test_router_rejects_branch_to_unknown_node(self):
-        with pytest.raises(ValueError, match="unknown node"):
+        with pytest.raises(ValueError, match="unknown target node"):
             validate_agent_graph(
                 [{"id": "a", "kind": "code"}],
                 [
                     {
                         "from": "a",
+                        "level": "route",
                         "router": "state_equals",
                         "state_key": "a",
                         "branches": {"True": "ghost"},
@@ -439,11 +450,19 @@ class TestValidateAgentGraph:
         with pytest.raises(ValueError, match="at least one branch"):
             validate_agent_graph(
                 [{"id": "a", "kind": "code"}],
-                [{"from": "a", "router": "state_equals", "state_key": "a", "branches": {}}],
+                [
+                    {
+                        "from": "a",
+                        "level": "route",
+                        "router": "state_equals",
+                        "state_key": "a",
+                        "branches": {},
+                    }
+                ],
             )
 
     def test_router_rejects_mixing_with_plain_edge(self):
-        with pytest.raises(ValueError, match="mixes a router edge"):
+        with pytest.raises(ValueError, match="more than one outgoing"):
             validate_agent_graph(
                 [
                     {"id": "a", "kind": "code"},
@@ -453,10 +472,11 @@ class TestValidateAgentGraph:
                 [
                     {
                         "from": "a",
+                        "level": "route",
                         "router": "state_equals",
                         "state_key": "a",
                         "branches": {"True": "b"},
                     },
-                    {"from": "a", "to": "c"},
+                    {"from": "a", "to": "c", "level": "normal"},
                 ],
             )
