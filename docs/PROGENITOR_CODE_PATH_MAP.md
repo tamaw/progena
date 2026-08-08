@@ -206,13 +206,20 @@ Middleware stack created by `create_progenitor_agent()`:
 
 ### `agent/subagents.py`
 
-Status: active for code-review and research helper delegation.
+Status: minimal -- regular (synchronous) subagent delegation is no longer
+code-defined here. `create_progenitor_agent()` (`agent/agent.py`) now builds
+its full subagent menu from `discover_object_agents()` (manifest-backed
+object agents, `agent/object_agents.py`) plus routine-graph subagents, and
+passes `[*async_subagents, *object_subagents, *routine_subagents]` to
+`create_deep_agent(subagents=...)`. The only thing `agent/subagents.py`
+still defines is `create_hello_world_async_subagent()`, the deterministic
+`AsyncSubAgent` used for background-delegation smoke tests.
 
 | Subagent | Current use | Notes |
 | --- | --- | --- |
+| `hello-world-async` | Registered | Deterministic async smoke-test subagent, returns `HELLO_FROM_ASYNC_SUBAGENT`. |
 | ~~Build subagent~~ | Removed | Legacy inner-loop graph wrapper was deleted. |
-| Code reviewer | Registered | Always created as a DeepAgent subagent. Actual use depends on model delegation. |
-| Researcher | Registered | Always created as a DeepAgent subagent. Actual use depends on model delegation. |
+| ~~Code reviewer~~ / ~~Researcher~~ | Removed | Migrated to manifest-backed object agents (`data/agents/objects/`); no longer code-defined. |
 
 ## Runtime loop path
 
@@ -655,7 +662,7 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Code-review/research subagents | `agent/subagents.py` | Registered, actual use depends on model delegation. |
+| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Manifest-backed (`data/agents/objects/`) or persisted routine graph exists; actual use depends on model delegation. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/agent.py` | Postgres `skill:` content documents under `progenitor/` exist. |
 | Runtime memories | `agent/agent.py` | Postgres `memory:` content documents; default `AGENTS.md` is seeded. |
