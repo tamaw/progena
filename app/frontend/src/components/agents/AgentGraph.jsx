@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -387,12 +388,13 @@ function StepCard({ node, routerEdge }) {
 
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
-function NodeInspector({ node, routerEdge, onClose, style }) {
+function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
   const { updateNode, deleteNode } = useContext(GraphEditContext);
   if (!node) return null;
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
   return (
     <aside
+      ref={panelRef}
       className="routine-node-inspector"
       style={{ ...style, '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       aria-label={`${node.label || node.id} details`}
@@ -1037,6 +1039,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [inspectorPosition, setInspectorPosition] = useState(null);
   const canvasRef = useRef(null);
+  const panelRef = useRef(null);
 
   useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
 
@@ -1054,27 +1057,53 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const canvasRect = canvas.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const panelWidth = 340;
-    // Mirrors the CSS default budget (max-height: calc(100% - 92px)) -- the
-    // natural amount of room a node's config fields expect. Shrinking below
-    // this (e.g. a fixed small floor) forces heavy internal scrolling that
-    // hides fields below the fold; a scrolled-out field's own
-    // getBoundingClientRect() still reports its unclipped layout position,
-    // so clicks/typing land on whatever renders at that screen point next
-    // (the footer) instead of the field.
-    const naturalMaxHeight = canvasRect.height - 92;
     const left = Math.max(16, Math.min(
       targetRect.right - canvasRect.left + 14,
       canvasRect.width - panelWidth - 16,
     ));
-    const desiredTop = Math.max(72, targetRect.top - canvasRect.top);
-    // Prefer sliding the panel up to keep its full natural height rather
-    // than shrinking it -- only once the canvas itself is too short for
-    // that does the panel actually get shorter than natural.
-    const top = Math.max(16, Math.min(desiredTop, canvasRect.height - naturalMaxHeight - 16));
-    const maxHeight = Math.min(naturalMaxHeight, canvasRect.height - top - 16);
+    const top = Math.max(72, targetRect.top - canvasRect.top);
+    // Placed right next to the clicked node first; a node's config fields
+    // vary a lot by kind (a bare noop vs. a prompt's two textareas), so
+    // there's no single safe height to assume up front. The layout effect
+    // below measures the panel's real content once it's mounted and, ONLY
+    // if that overflows the canvas, slides the panel up just enough to
+    // fit -- rather than guessing a generic budget that either strands the
+    // panel far from a small node (too generous) or clips a tall node's
+    // fields out of the clickable area (too tight, see prior regressions).
     setSelectedNodeId(id);
-    setInspectorPosition({ left, top, maxHeight });
+    setInspectorPosition({ left, top, maxHeight: canvasRect.height - top - 16 });
   }, []);
+  // One-shot correction per selection: measures the panel's actual
+  // (unclamped) content height once it's mounted, and only then decides
+  // whether it needs to slide up to fit -- see selectNode above for why
+  // this can't be guessed ahead of render.
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const canvas = canvasRef.current;
+    if (!selectedNodeId || !panel || !canvas) return;
+    const head = panel.querySelector('.routine-node-inspector__head');
+    const body = panel.querySelector('.routine-node-inspector__body');
+    const foot = panel.querySelector('.routine-node-inspector__foot');
+    if (!head || !body || !foot) return;
+    const canvasRect = canvas.getBoundingClientRect();
+    const bottomLimit = canvasRect.height - 16;
+    // body has its own overflow:auto, so its scrollHeight is the field
+    // content's true extent regardless of how clamped the panel currently
+    // renders it -- unlike the outer panel, which is overflow:hidden and
+    // would just report back whatever height it's already been clamped to.
+    const naturalHeight = head.offsetHeight + body.scrollHeight + foot.offsetHeight;
+    setInspectorPosition((current) => {
+      if (!current) return current;
+      if (current.top + naturalHeight <= bottomLimit) {
+        // Fits as placed -- just stop clamping height below what it needs.
+        return current.maxHeight >= naturalHeight ? current : { ...current, maxHeight: naturalHeight };
+      }
+      const top = Math.max(16, bottomLimit - naturalHeight);
+      const maxHeight = Math.min(naturalHeight, bottomLimit - top);
+      if (top === current.top && maxHeight === current.maxHeight) return current;
+      return { ...current, top, maxHeight };
+    });
+  }, [selectedNodeId]);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
   useEffect(() => { metaRef.current = meta; }, [meta]);
 
@@ -1452,6 +1481,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                   routerEdge={selectedRouterEdge}
                   onClose={() => { setSelectedNodeId(null); setInspectorPosition(null); }}
                   style={inspectorPosition}
+                  panelRef={panelRef}
                 />
               ) : null}
             </GraphEditContext.Provider>
