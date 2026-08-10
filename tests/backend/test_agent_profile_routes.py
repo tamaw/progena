@@ -33,7 +33,7 @@ _DEFAULT_GRAPH = {
         {
             "id": "gate",
             "label": "Gate",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "gate",
             "config": {"expression": "True"},
         },
@@ -389,8 +389,8 @@ class TestValidateAgentGraph:
         validate_agent_graph(
             [
                 {"id": "parse", "kind": "prompt"},
-                {"id": "gate", "kind": "code"},
-                {"id": "handoff", "kind": "subagent"},
+                {"id": "gate", "kind": "eval"},
+                {"id": "handoff", "kind": "routine"},
                 {"id": "done", "kind": "noop"},
             ],
             [
@@ -434,7 +434,7 @@ class TestValidateAgentGraph:
     def test_router_rejects_branch_to_unknown_node(self):
         with pytest.raises(ValueError, match="unknown target node"):
             validate_agent_graph(
-                [{"id": "a", "kind": "code"}],
+                [{"id": "a", "kind": "eval"}],
                 [
                     {
                         "from": "a",
@@ -449,7 +449,7 @@ class TestValidateAgentGraph:
     def test_router_rejects_empty_branches(self):
         with pytest.raises(ValueError, match="at least one branch"):
             validate_agent_graph(
-                [{"id": "a", "kind": "code"}],
+                [{"id": "a", "kind": "eval"}],
                 [
                     {
                         "from": "a",
@@ -465,7 +465,7 @@ class TestValidateAgentGraph:
         with pytest.raises(ValueError, match="more than one outgoing"):
             validate_agent_graph(
                 [
-                    {"id": "a", "kind": "code"},
+                    {"id": "a", "kind": "eval"},
                     {"id": "b", "kind": "noop"},
                     {"id": "c", "kind": "noop"},
                 ],

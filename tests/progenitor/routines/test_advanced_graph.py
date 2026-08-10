@@ -171,7 +171,7 @@ async def test_router_branch_join_via_deferred_fan_in() -> None:
                 "level": "route",
                 "router": "state_equals",
                 "state_key": "gate",
-                "branches": {"True": "left", "False": "right"},
+                "branches": {"true": "left", "false": "right"},
             },
             {"from": ["left", "right"], "to": "join", "level": "fan_in"},
         ],
@@ -183,6 +183,44 @@ async def test_router_branch_join_via_deferred_fan_in() -> None:
     assert result["data"]["left"] == "L"
     assert result["data"]["join"] == "joined"
     assert "right" not in result["data"]
+
+
+@pytest.mark.parametrize(
+    ("expression", "taken", "untaken"),
+    [("1 == 1", "yes", "no"), ("1 == 2", "no", "yes")],
+)
+@pytest.mark.asyncio
+async def test_condition_routes_on_json_cased_boolean_branches(
+    expression: str, taken: str, untaken: str
+) -> None:
+    """A condition coerces its expression to a bool, and a routine document is
+    JSON -- so its two arms are keyed `true`/`false`, not Python's `str(True)`
+    -> `"True"`. Regression guard for the router silently finding no branch."""
+    routine = graph(
+        {
+            "id": "gate",
+            "kind": "condition",
+            "output_key": "gate",
+            "config": {"expression": expression},
+        },
+        {"id": "yes", "kind": "eval", "output_key": "yes", "config": {"expression": "'Y'"}},
+        {"id": "no", "kind": "eval", "output_key": "no", "config": {"expression": "'N'"}},
+        edges=[
+            {
+                "from": "gate",
+                "level": "route",
+                "router": "state_equals",
+                "state_key": "gate",
+                "branches": {"true": "yes", "false": "no"},
+            },
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    assert taken in result["data"]
+    assert untaken not in result["data"]
 
 
 @pytest.mark.asyncio

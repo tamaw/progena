@@ -35,6 +35,10 @@ VALID_ROUTINE_NODE_KINDS = {
     "routine",
 }
 
+# A `condition` node is a two-way gate: its expression is coerced to a bool, so
+# its router's branch set is fixed rather than author-defined.
+CONDITION_BRANCH_VALUES = frozenset({"true", "false"})
+
 ROUTINE_NODE_RETRY_DEFAULTS = {
     "initial_interval": 0.1,
     "backoff_factor": 2.0,
@@ -541,6 +545,19 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
             edge = outgoing.get(node_id)
             if edge is None or edge.get("level") != "normal":
                 raise ValueError(f"foreach Send node {node_id} needs one normal outgoing edge")
+        # A `condition` node coerces its expression to a bool, so the only two
+        # values it can ever route on are JSON's `true`/`false` (see
+        # factory._branch_key). Both must be wired -- a default would be
+        # unreachable, and a missing arm would be a runtime dead end.
+        if node.get("kind") == "condition":
+            edge = outgoing.get(node_id)
+            if edge is not None and edge.get("level") == "route":
+                if set(edge.get("branches") or {}) != CONDITION_BRANCH_VALUES:
+                    raise ValueError(
+                        f"condition node {node_id} needs exactly 'true' and 'false' branches"
+                    )
+                if edge.get("default") is not None:
+                    raise ValueError(f"condition node {node_id} cannot have a default branch")
 
 
 def validate_routine_graph_payload(payload: dict[str, Any]) -> RoutineGraph:

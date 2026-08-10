@@ -798,6 +798,16 @@ def _build_node_callable(
     raise ValueError(f"unknown node kind: {node.kind}")
 
 
+def _branch_key(value: Any) -> str:
+    """Branch keys are authored in a JSON document, so a boolean routes on
+    JSON's ``true``/``false`` rather than Python's ``str(True)`` -> ``"True"``.
+    A ``condition`` node's gate is always a bool, so this is the casing its
+    two mandatory branches use (see ``validate_routine_graph``)."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
 def _build_router(edge: RoutineEdge) -> Callable[[RoutineState], str]:
     branches = edge.branches or {}
 
@@ -808,7 +818,7 @@ def _build_router(edge: RoutineEdge) -> Callable[[RoutineState], str]:
         except KeyError as exc:
             raise ValueError(f"router from {edge.from_}: {exc}") from exc
 
-        key = str(value)
+        key = _branch_key(value)
         if key in branches:
             return branches[key]
         if edge.default is not None:

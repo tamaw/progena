@@ -167,8 +167,10 @@ function expectMeets(prev, next, what) {
 }
 
 test.describe('routine graph connectors', () => {
-  // A fork with a real join, and a for-each whose body contains a whole fork.
-  const ROUTINES = ['routine-branch-join', 'routine-all-controls'];
+  // A fork with a real join, a for-each whose body contains a whole fork, and
+  // a condition's fixed true/false fork (the only fork that renders no
+  // "+ Add …" slot, so the right rail terminator lands on a real lane).
+  const ROUTINES = ['routine-branch-join', 'routine-all-controls', 'routine-condition-gate'];
 
   for (const routineId of ROUTINES) {
     test(`${routineId}: every scope wires its card to its box without a gap`, async ({ page }) => {
@@ -487,6 +489,36 @@ test.describe('routine graph connectors', () => {
       result.railRight,
       `real last lane's fan-in rail ends at ${result.railRight.toFixed(1)}, ${(result.joinCx - result.railRight).toFixed(1)}px short of the join's centre (${result.joinCx.toFixed(1)})`,
     ).toBeCloseTo(result.joinCx, 0);
+  });
+
+  test("a condition's fork is fixed to true/false, with no add-branch, add-default or rename", async ({ page }) => {
+    // A condition coerces its expression to a bool, so its two arms are
+    // structural rather than author-defined: unlike a state_equals router
+    // over free-form cases, there is nothing to add, remove or rename, and a
+    // default would be unreachable. Guards both the lane set and the fact
+    // that an ordinary router on the same page keeps all of those controls.
+    await page.goto('/routines/routine-condition-gate');
+    await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 20_000 });
+
+    const fork = await page.evaluate(() => {
+      const f = document.querySelector('.routine-fork');
+      const lanes = [...f.querySelectorAll(':scope > .routine-fork__branches > .routine-fork__lanes > .routine-fork__lane')];
+      return {
+        labels: lanes.map((l) => l.querySelector('.routine-fork__header-label')?.textContent),
+        addSlots: lanes.filter((l) => l.className.includes('--add')).length,
+        removeButtons: f.querySelectorAll('.routine-fork__header-remove').length,
+        // A renameable case header is a <button>; a fixed one is a <span>.
+        renameable: lanes.filter((l) => l.querySelector('button.routine-fork__header-label')).length,
+        // The rightmost real lane owns the rail terminator when nothing follows it.
+        lastIsTerminator: lanes.at(-1).className.includes('--fanout-last'),
+      };
+    });
+
+    expect(fork.labels).toEqual(['true', 'false']);
+    expect(fork.addSlots, 'a condition fork offered an "+ Add …" slot').toBe(0);
+    expect(fork.removeButtons, 'a condition arm offered a remove control').toBe(0);
+    expect(fork.renameable, 'a condition arm offered a rename control').toBe(0);
+    expect(fork.lastIsTerminator, 'the last real lane must own --fanout-last with no add slot').toBe(true);
   });
 
   test('a graph wider than the canvas overflows rightward only', async ({ page }) => {
