@@ -588,6 +588,18 @@ function edgeTargetIds(edge) {
   return Array.isArray(edge.to) ? edge.to : [edge.to];
 }
 
+function edgeBySourceMap(edges) {
+  return new Map(
+    edges
+      .filter((edge) => edge && edge.from)
+      .flatMap((edge) => edgeSourceIds(edge).map((source) => [source, edge])),
+  );
+}
+
+function routerTargets(edge) {
+  return [...Object.values(edge?.branches || {}), ...(edge?.default ? [edge.default] : [])];
+}
+
 function plainPath(startId, edgeBySource) {
   const path = [];
   const seen = new Set();
@@ -606,6 +618,100 @@ function findCommonJoin(targetIds, edgeBySource) {
   if (targetIds.length < 2) return null;
   const paths = targetIds.map((targetId) => plainPath(targetId, edgeBySource));
   return paths[0].find((candidate) => paths.every((path) => path.includes(candidate))) || null;
+}
+
+// The fan_in a fork's lanes already converge on, if any. `findCommonJoin`
+// only accepts a node every lane reaches, so adding or dropping a lane has to
+// keep that edge in step: one unjoined lane drops the common node to null and
+// the join stops rendering below the fork at all. At runtime it is worse than
+// cosmetic -- the factory gives any node with no outgoing edge an edge
+// straight to the terminal, so taking that branch ends the routine early
+// instead of continuing past the fork.
+// eslint-disable-next-line react-refresh/only-export-components
+export function forkJoin(edges, router) {
+  const edgeBySource = edgeBySourceMap(edges);
+  const joinId = findCommonJoin(routerTargets(router), edgeBySource);
+  if (!joinId) return null;
+  const edge = edges.find((candidate) => candidate.level === 'fan_in' && candidate.to === joinId);
+  return edge ? { joinId, edge, edgeBySource } : null;
+}
+
+// Every step a lane owns, from its head down to (but not including) the join.
+// A lane can be a multi-step chain, and it is its *last* step that feeds the
+// join, so dropping the lane means dropping whichever of these appears in the
+// join's source list.
+// eslint-disable-next-line react-refresh/only-export-components
+export function laneNodes(headId, joinId, edgeBySource) {
+  const path = plainPath(headId, edgeBySource);
+  const stop = path.indexOf(joinId);
+  return stop === -1 ? path : path.slice(0, stop);
+}
+
+// Mirrors deleteNode's fan_in bookkeeping: a join stays a fan_in while two or
+// more sources remain, collapses to a plain edge at one, and goes away at none.
+function withoutJoinSources(edge, drop) {
+  const sources = edgeSourceIds(edge).filter((source) => !drop.has(source));
+  if (sources.length === edgeSourceIds(edge).length) return edge;
+  if (sources.length >= 2) return { ...edge, from: sources };
+  if (sources.length === 1) return { from: sources[0], to: edge.to, level: 'normal' };
+  return null;
+}
+
+// A new lane joins wherever its siblings already join, so it comes out shaped
+// like one that existed when the join was built. Routing it through the
+// existing fan_in is also what earns the join `defer=True` at compile time
+// (the factory derives that from being a fan_in target), so the join still
+// fires on whichever single branch actually ran.
+// eslint-disable-next-line react-refresh/only-export-components
+export function addForkLane(edges, sourceId, laneId, isDefault = false) {
+  const router = edges.find((edge) => edge.from === sourceId && edge.router);
+  if (!router) return edges;
+  const join = forkJoin(edges, router);
+  return edges.map((edge) => {
+    if (edge === router) {
+      return isDefault
+        ? { ...edge, default: laneId }
+        : { ...edge, branches: { ...edge.branches, [uniqueBranchValue(edge.branches)]: laneId } };
+    }
+    if (join && edge === join.edge) return { ...edge, from: [...edgeSourceIds(edge), laneId] };
+    return edge;
+  });
+}
+
+// Dropping a lane takes its steps off the join's source list too: left behind,
+// a now-unreachable branch would still be declared as feeding the join.
+function dropForkLane(edges, sourceId, pickHead, strip) {
+  const router = edges.find((edge) => edge.from === sourceId && edge.router);
+  if (!router) return edges;
+  const join = forkJoin(edges, router);
+  const dropped = join
+    ? new Set(laneNodes(pickHead(router), join.joinId, join.edgeBySource))
+    : null;
+  return edges.map((edge) => {
+    if (edge === router) return strip(edge);
+    if (join && edge === join.edge) return withoutJoinSources(edge, dropped);
+    return edge;
+  }).filter(Boolean);
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function removeForkBranch(edges, sourceId, value) {
+  return dropForkLane(edges, sourceId, (router) => router.branches?.[value], (edge) => {
+    const branches = { ...edge.branches };
+    delete branches[value];
+    if (!Object.keys(branches).length && !edge.default) return null;
+    if (!Object.keys(branches).length) return { from: edge.from, to: edge.default, level: 'normal' };
+    return { ...edge, branches };
+  });
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function removeForkDefault(edges, sourceId) {
+  return dropForkLane(edges, sourceId, (router) => router.default, (edge) => {
+    const { default: _drop, ...rest } = edge;
+    if (!Object.keys(rest.branches || {}).length) return null;
+    return rest;
+  });
 }
 
 // Builds the whole reachable chain as a plain data tree in one synchronous,
@@ -631,7 +737,7 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   let next = null;
   let fork = null;
   if (edge && edge.router) {
-    const targetIds = [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])];
+    const targetIds = routerTargets(edge);
     const joinId = findCommonJoin(targetIds, edgeBySource);
     // A condition's two arms are fixed, so render them in a stable
     // true-then-false order rather than whatever key order the document
@@ -949,14 +1055,7 @@ function UnreachableTray({ nodes }) {
 
 function RoutineChain({ nodes, edges, entry }) {
   const nodesById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
-  const edgeBySource = useMemo(
-    () => new Map(
-      edges
-        .filter((edge) => edge && edge.from)
-        .flatMap((edge) => edgeSourceIds(edge).map((source) => [source, edge])),
-    ),
-    [edges],
-  );
+  const edgeBySource = useMemo(() => edgeBySourceMap(edges), [edges]);
   // Build the whole reachable tree (forks included) fully, up front, in one
   // pure pass -- see buildChainTree's comment for why this can't be deferred
   // into lazily-invoked React children. Memoized: without this, every
@@ -991,13 +1090,23 @@ export function validateWorkingGraph(nodes, edges, entry) {
     if (node.id === '__seed__') errors.push('__seed__ is reserved.');
   });
   edges.forEach((edge) => {
-    const targets = edge.router
-      ? [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])]
-      : [edge.to];
+    const targets = edge.router ? routerTargets(edge) : [edge.to];
     edgeSourceIds(edge).forEach((source) => { if (!ids.has(source)) errors.push(`Edge source "${source}" is missing.`); });
     targets.forEach((target) => {
       if (!ids.has(target)) errors.push(`Edge target "${target}" is missing.`);
     });
+  });
+  // Mirrors the backend's one-outgoing-edge-declaration rule. A step that
+  // feeds a join is named as a source *by* the join, so anything that also
+  // hands it a plain edge (splicing a step in after it, say) leaves it with
+  // two ways out. Checking it here surfaces the break in the editor instead
+  // of only as a rejected save.
+  const outgoingCount = new Map();
+  edges.forEach((edge) => edgeSourceIds(edge).forEach((source) => {
+    outgoingCount.set(source, (outgoingCount.get(source) || 0) + 1);
+  }));
+  outgoingCount.forEach((count, source) => {
+    if (count > 1) errors.push(`"${source}" has more than one outgoing edge.`);
   });
   const reachable = new Set();
   const visit = (id) => {
@@ -1231,6 +1340,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const id = uniqueNodeId(kind, nodesRef.current);
     const added = [{ ...makeNode(kind), id }];
     let targetId = null;
+    let joinEdge = null;
     const nextEdges = edgesRef.current.map((edge) => (
       edge.branches ? { ...edge, branches: { ...edge.branches } } : { ...edge }
     ));
@@ -1240,8 +1350,16 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     } else if (slot.kind === 'plain' || slot.kind === 'foreach') {
       // `foreach` is the slot inside a fan-out's body. The edge leaving the
       // fan-out node is that body's entry, so it splices like a plain one.
-      const existing = nextEdges.find((edge) => edge.from === slot.sourceId);
-      if (existing) {
+      const existing = nextEdges.find((edge) => edgeSourceIds(edge).includes(slot.sourceId));
+      if (existing?.level === 'fan_in') {
+        // The step feeds a join, and a join names its sources rather than
+        // being pointed at, so there is no `to` here to steal. Splice by
+        // handing this lane's slot in the join over to the new step: pushing
+        // a second outgoing edge instead leaves the old step with two edge
+        // declarations, which the backend rejects outright.
+        joinEdge = existing;
+        nextEdges.push({ from: slot.sourceId, to: id, level: 'normal' });
+      } else if (existing) {
         targetId = existing.to;
         existing.to = id;
       } else {
@@ -1260,11 +1378,15 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         router.default = id;
       }
     }
+    // Whatever the new step ends on is the lane's terminal from here: a
+    // fan-out's companion stop, a condition's two arms, or the step itself.
+    let terminalIds = [id];
     if (kind === 'foreach') {
       const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
       added.push({ ...makeNode('noop'), id: stopId, label: 'Join fan-out' });
       nextEdges.push({ from: id, to: stopId, level: 'normal' });
       if (targetId) nextEdges.push({ from: stopId, to: targetId, level: 'normal' });
+      terminalIds = [stopId];
     } else if (kind === 'condition') {
       // Both arms get their own placeholder step. Whatever the condition was
       // spliced in front of stays reachable as a fan_in join below the fork
@@ -1281,11 +1403,18 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         state_key: id,
         branches: Object.fromEntries(arms),
       });
+      terminalIds = arms.map(([, armId]) => armId);
       if (targetId) {
-        nextEdges.push({ from: arms.map(([, armId]) => armId), to: targetId, level: 'fan_in' });
+        nextEdges.push({ from: terminalIds, to: targetId, level: 'fan_in' });
       }
     } else if (targetId) {
       nextEdges.push({ from: id, to: targetId, level: 'normal' });
+    }
+    if (joinEdge) {
+      joinEdge.from = [
+        ...edgeSourceIds(joinEdge).filter((source) => source !== slot.sourceId),
+        ...terminalIds,
+      ];
     }
     setNodes((current) => [...current, ...added]);
     setEdges(nextEdges);
@@ -1322,30 +1451,21 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     }).filter(Boolean));
   }, []);
 
-  const onAddBranch = useCallback((sourceId) => {
-    const branchId = uniqueNodeId('noop', nodesRef.current);
-    setEdges((current) => current.map((edge) => {
-      if (edge.from !== sourceId || !edge.router) return edge;
-      const value = uniqueBranchValue(edge.branches);
-      return { ...edge, branches: { ...edge.branches, [value]: branchId } };
-    }));
-    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
+  const addLane = useCallback((sourceId, isDefault) => {
+    const laneId = uniqueNodeId('noop', nodesRef.current);
+    setEdges((current) => addForkLane(current, sourceId, laneId, isDefault));
+    setNodes((current) => [...current, { ...makeNode('noop'), id: laneId }]);
   }, []);
 
-  const onAddDefault = useCallback((sourceId) => {
-    const branchId = uniqueNodeId('noop', nodesRef.current);
-    setEdges((current) => current.map((edge) => (
-      edge.from === sourceId && edge.router ? { ...edge, default: branchId } : edge
-    )));
-    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
-  }, []);
+  const onAddBranch = useCallback((sourceId) => addLane(sourceId, false), [addLane]);
+
+  const onAddDefault = useCallback((sourceId) => addLane(sourceId, true), [addLane]);
+
+
   const onJoinBranches = useCallback((sourceId, kind = 'noop') => {
     const router = edgesRef.current.find((edge) => edge.from === sourceId && edge.router);
     if (!router) return;
-    const targets = [
-      ...Object.values(router.branches || {}),
-      ...(router.default ? [router.default] : []),
-    ];
+    const targets = routerTargets(router);
     const terminals = targets.map((targetId) => {
       let current = targetId;
       const seen = new Set();
@@ -1372,25 +1492,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, []);
 
   const onRemoveBranch = useCallback((sourceId, value) => {
-    setEdges((current) => current.map((edge) => {
-      if (edge.from !== sourceId || !edge.router) return edge;
-      const branches = { ...edge.branches };
-      delete branches[value];
-      if (!Object.keys(branches).length && !edge.default) return null;
-      if (!Object.keys(branches).length) {
-        return { from: edge.from, to: edge.default, level: 'normal' };
-      }
-      return { ...edge, branches };
-    }).filter(Boolean));
+    setEdges((current) => removeForkBranch(current, sourceId, value));
   }, []);
 
   const onRemoveDefault = useCallback((sourceId) => {
-    setEdges((current) => current.map((edge) => {
-      if (edge.from !== sourceId || !edge.router) return edge;
-      const { default: _drop, ...rest } = edge;
-      if (!Object.keys(rest.branches || {}).length) return null;
-      return rest;
-    }).filter(Boolean));
+    setEdges((current) => removeForkDefault(current, sourceId));
   }, []);
 
   const onRenameBranch = useCallback((sourceId, oldValue, newValue) => {
