@@ -437,17 +437,18 @@ test.describe('routine graph connectors', () => {
     ).toBeGreaterThanOrEqual(geometry.laneCx - AXIS_EPSILON - 1);
   });
 
-  test('neither rail extends into an unclicked "+ Add …" slot, and the real lane still meets the join', async ({ page }) => {
-    // "+ Add default" / "+ Add branch" are editor affordances a user hasn't
-    // turned into a real branch yet -- neither the fan-out (top, router down
-    // into each lane) nor the fan-in (bottom, lane up into the join) bar may
-    // visually claim a connection to one. This is NOT done by reassigning
-    // --fanout-last onto the real last lane (its clip formula, "stop at the
-    // clipped lane's own centre", is calibrated for the add-slot's position,
-    // not the real lane's -- moving it strands the join's stem short of the
-    // bar). Add-slot lanes instead render no bar segment at all, and the
-    // real last lane's own unclipped overhang -- unchanged -- keeps meeting
-    // the join exactly as before.
+  test('the fan-in (flow) bar skips an unclicked "+ Add …" slot but the fan-out (selection) bar does not', async ({ page }) => {
+    // The top bar (router down into each lane) is a selection strip -- it
+    // shows every outcome the router could take, including an unclicked
+    // "+ Add …" affordance, so it spans the whole row uninterrupted. The
+    // bottom bar (lane up into the join) is a flow indicator -- an unclicked
+    // slot carries no data, so it draws no fan-in segment there. Regression
+    // coverage for both halves of that split, and for the real last lane's
+    // rail still landing exactly on the join's centre: --fanout-last's clip
+    // formula ("stop at the clipped lane's own centre") is calibrated for
+    // the add-slot's position, not the real lane's, so reassigning it onto
+    // the real last lane (rather than suppressing the add-slot's own bar)
+    // strands the join's stem short of the bar.
     await page.goto('/routines/feedback-categoriser');
     const rendered = await page.locator('.routine-fork--joined').first()
       .waitFor({ state: 'visible', timeout: 15_000 })
@@ -477,14 +478,14 @@ test.describe('routine graph connectors', () => {
 
     expect(result.addLaneCount, 'expected at least one "+ Add …" slot').toBeGreaterThan(0);
     for (const display of result.before) {
-      expect(display, 'an "+ Add …" slot rendered a fan-out bar segment').toBe('none');
+      expect(display, 'an "+ Add …" slot rendered no fan-out (selection) bar segment').toBe('block');
     }
     for (const display of result.after) {
-      expect(display, 'an "+ Add …" slot rendered a fan-in bar segment').toBe('none');
+      expect(display, 'an "+ Add …" slot rendered a fan-in (flow) bar segment').toBe('none');
     }
     expect(
       result.railRight,
-      `real last lane's rail ends at ${result.railRight.toFixed(1)}, ${(result.joinCx - result.railRight).toFixed(1)}px short of the join's centre (${result.joinCx.toFixed(1)})`,
+      `real last lane's fan-in rail ends at ${result.railRight.toFixed(1)}, ${(result.joinCx - result.railRight).toFixed(1)}px short of the join's centre (${result.joinCx.toFixed(1)})`,
     ).toBeCloseTo(result.joinCx, 0);
   });
 
