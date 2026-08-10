@@ -4,7 +4,6 @@ import {
   addForkLane,
   forkJoin,
   forkLaneEdgePosition,
-  laneNodes,
   removeForkBranch,
   removeForkDefault,
   validateWorkingGraph,
@@ -145,39 +144,82 @@ describe('fork lanes and their join', () => {
     expect(Object.values(routerOf(next).branches)).toContain('noop-1');
   });
 
-  it('takes a dropped branch lane back off the join', () => {
+  it('deletes a dropped branch lane outright and takes it off the join', () => {
     const grown = addForkLane(edges, 'gate', 'noop-1');
     const value = Object.keys(routerOf(grown).branches).find((key) => routerOf(grown).branches[key] === 'noop-1');
-    const next = removeForkBranch(grown, 'gate', value);
+    const { edges: next, removedNodeIds } = removeForkBranch(grown, 'gate', 'gate', value);
+    expect(removedNodeIds).toEqual(['noop-1']);
     expect(joinOf(next).from).toEqual(['left', 'right']);
     expect(routerOf(next).branches).toEqual(router.branches);
   });
 
-  it('takes a dropped default lane back off the join', () => {
-    const next = removeForkDefault(addForkLane(edges, 'gate', 'noop-1', true), 'gate');
+  it('deletes a dropped default lane too', () => {
+    const grown = addForkLane(edges, 'gate', 'noop-1', true);
+    const { edges: next, removedNodeIds } = removeForkDefault(grown, 'gate', 'gate');
+    expect(removedNodeIds).toEqual(['noop-1']);
     expect(joinOf(next).from).toEqual(['left', 'right']);
     expect(routerOf(next).default).toBeUndefined();
   });
 
-  // A lane is a chain, and it is its *last* step that feeds the join, so
-  // dropping the lane has to strip the terminal rather than the head.
-  it('strips a multi-step lane by its terminal, not its head', () => {
+  // A lane is a chain, and it is its *last* step that feeds the join, so a
+  // drop has to take every step the lane owned and strip the terminal -- not
+  // just unhook the head and leave the rest floating.
+  it('deletes every step of a multi-step lane, stripping its terminal from the join', () => {
     const chained = [
       { ...router, branches: { happy: 'left', unhappy: 'right', other: 'third' } },
       { from: 'left', to: 'left-2', level: 'normal' },
       { from: ['left-2', 'right', 'third'], to: 'reply', level: 'fan_in' },
       tail,
     ];
-    const { joinId, edgeBySource } = forkJoin(chained, chained[0]);
-    expect(laneNodes('left', joinId, edgeBySource)).toEqual(['left', 'left-2']);
-    // 'left-2' is what fed the join, so that is what has to come off it.
-    expect(joinOf(removeForkBranch(chained, 'gate', 'happy')).from).toEqual(['right', 'third']);
+    const { edges: next, removedNodeIds } = removeForkBranch(chained, 'gate', 'gate', 'happy');
+    expect(removedNodeIds.sort()).toEqual(['left', 'left-2']);
+    expect(joinOf(next).from).toEqual(['right', 'third']);
+    // The lane's own internal edge goes with it.
+    expect(next.some((edge) => edge.to === 'left-2')).toBe(false);
+  });
+
+  // A lane holding a nested fork is still one lane: it leaves as a unit.
+  it('deletes a lane that holds a nested fork, nested steps and all', () => {
+    const nested = [
+      { ...router, branches: { happy: 'left', unhappy: 'right', other: 'third' } },
+      { from: 'left', level: 'route', router: 'state_equals', state_key: 'k', branches: { a: 'n-a', b: 'n-b' } },
+      { from: ['n-a', 'n-b'], to: 'left-end', level: 'fan_in' },
+      { from: ['left-end', 'right', 'third'], to: 'reply', level: 'fan_in' },
+      tail,
+    ];
+    const { edges: next, removedNodeIds } = removeForkBranch(nested, 'gate', 'gate', 'happy');
+    expect(removedNodeIds.sort()).toEqual(['left', 'left-end', 'n-a', 'n-b']);
+    expect(joinOf(next).from).toEqual(['right', 'third']);
+    expect(next.some((edge) => edge.router && edge.from === 'left')).toBe(false);
+  });
+
+  // Reachability decides ownership, so a step another lane also points at is
+  // not the dropped lane's to take.
+  it('keeps a step the dropped lane shared with a surviving one', () => {
+    const shared = [
+      { ...router, branches: { happy: 'shared', unhappy: 'right', other: 'shared' } },
+      { from: ['shared', 'right'], to: 'reply', level: 'fan_in' },
+      tail,
+    ];
+    const { edges: next, removedNodeIds } = removeForkBranch(shared, 'gate', 'gate', 'happy');
+    expect(removedNodeIds).toEqual([]);
+    expect(joinOf(next).from).toEqual(['shared', 'right']);
   });
 
   it('collapses the join to a plain edge once a single source is left', () => {
-    const next = removeForkBranch(edges, 'gate', 'happy');
+    const { edges: next, removedNodeIds } = removeForkBranch(edges, 'gate', 'gate', 'happy');
+    expect(removedNodeIds).toEqual(['left']);
     expect(joinOf(next)).toBeUndefined();
     expect(next).toContainEqual({ from: 'right', to: 'reply', level: 'normal' });
+  });
+
+  it('leaves no unreachable steps behind after a drop', () => {
+    const grown = addForkLane(edges, 'gate', 'noop-1');
+    const { edges: next, removedNodeIds } = removeForkBranch(grown, 'gate', 'gate', 'case-1');
+    const nodes = ['gate', 'left', 'right', 'noop-1', 'reply', 'done']
+      .filter((id) => !removedNodeIds.includes(id))
+      .map((id) => ({ id, kind: 'eval' }));
+    expect(validateWorkingGraph(nodes, next, 'gate')).toEqual([]);
   });
 
   it('keeps a grown fork valid as a whole graph', () => {

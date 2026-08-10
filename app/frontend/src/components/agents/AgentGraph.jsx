@@ -636,15 +636,38 @@ export function forkJoin(edges, router) {
   return edge ? { joinId, edge, edgeBySource } : null;
 }
 
-// Every step a lane owns, from its head down to (but not including) the join.
-// A lane can be a multi-step chain, and it is its *last* step that feeds the
-// join, so dropping the lane means dropping whichever of these appears in the
-// join's source list.
+// Every node the graph can still get to from `entry`. Shared by validation and
+// by lane removal, which decides what a dropped lane owned by diffing this
+// before and after the drop.
 // eslint-disable-next-line react-refresh/only-export-components
-export function laneNodes(headId, joinId, edgeBySource) {
-  const path = plainPath(headId, edgeBySource);
-  const stop = path.indexOf(joinId);
-  return stop === -1 ? path : path.slice(0, stop);
+export function reachableFrom(entry, edges) {
+  const reachable = new Set();
+  const visit = (id) => {
+    if (!id || reachable.has(id)) return;
+    reachable.add(id);
+    edges.filter((edge) => edgeSourceIds(edge).includes(id)).forEach((edge) => {
+      if (edge.router) {
+        Object.values(edge.branches || {}).forEach(visit);
+        visit(edge.default);
+      } else visit(edge.to);
+    });
+  };
+  visit(entry);
+  return reachable;
+}
+
+// Drop every trace of `removed`: edges into them go, edges out of them go, and
+// a join that loses a source follows the same fan_in bookkeeping as anywhere
+// else. A router whose own source is gone disappears with it.
+function pruneRemovedNodes(edges, removed) {
+  if (!removed.size) return edges;
+  return edges.map((edge) => {
+    const sources = edgeSourceIds(edge).filter((source) => !removed.has(source));
+    if (!sources.length) return null;
+    if (edge.router) return edge;
+    if (removed.has(edge.to)) return null;
+    return withoutJoinSources(edge, removed);
+  }).filter(Boolean);
 }
 
 // Mirrors deleteNode's fan_in bookkeeping: a join stays a fan_in while two or
@@ -678,25 +701,25 @@ export function addForkLane(edges, sourceId, laneId, isDefault = false) {
   });
 }
 
-// Dropping a lane takes its steps off the join's source list too: left behind,
-// a now-unreachable branch would still be declared as feeding the join.
-function dropForkLane(edges, sourceId, pickHead, strip) {
+// Dropping a lane takes the whole lane with it: the steps it owned are deleted
+// outright rather than left floating in "Unreachable steps", and they come off
+// the join's source list on the way out. Ownership is decided by reachability
+// -- whatever the graph could reach before the branch was cut and cannot reach
+// after -- so a lane holding a nested fork goes as a unit, while a step some
+// other lane also points at correctly stays.
+function dropForkLane(edges, entry, sourceId, strip) {
   const router = edges.find((edge) => edge.from === sourceId && edge.router);
-  if (!router) return edges;
-  const join = forkJoin(edges, router);
-  const dropped = join
-    ? new Set(laneNodes(pickHead(router), join.joinId, join.edgeBySource))
-    : null;
-  return edges.map((edge) => {
-    if (edge === router) return strip(edge);
-    if (join && edge === join.edge) return withoutJoinSources(edge, dropped);
-    return edge;
-  }).filter(Boolean);
+  if (!router) return { edges, removedNodeIds: [] };
+  const cut = edges.map((edge) => (edge === router ? strip(edge) : edge)).filter(Boolean);
+  const before = reachableFrom(entry, edges);
+  const after = reachableFrom(entry, cut);
+  const removed = new Set([...before].filter((id) => !after.has(id)));
+  return { edges: pruneRemovedNodes(cut, removed), removedNodeIds: [...removed] };
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function removeForkBranch(edges, sourceId, value) {
-  return dropForkLane(edges, sourceId, (router) => router.branches?.[value], (edge) => {
+export function removeForkBranch(edges, entry, sourceId, value) {
+  return dropForkLane(edges, entry, sourceId, (edge) => {
     const branches = { ...edge.branches };
     delete branches[value];
     if (!Object.keys(branches).length && !edge.default) return null;
@@ -706,8 +729,8 @@ export function removeForkBranch(edges, sourceId, value) {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components
-export function removeForkDefault(edges, sourceId) {
-  return dropForkLane(edges, sourceId, (router) => router.default, (edge) => {
+export function removeForkDefault(edges, entry, sourceId) {
+  return dropForkLane(edges, entry, sourceId, (edge) => {
     const { default: _drop, ...rest } = edge;
     if (!Object.keys(rest.branches || {}).length) return null;
     return rest;
@@ -1108,19 +1131,7 @@ export function validateWorkingGraph(nodes, edges, entry) {
   outgoingCount.forEach((count, source) => {
     if (count > 1) errors.push(`"${source}" has more than one outgoing edge.`);
   });
-  const reachable = new Set();
-  const visit = (id) => {
-    if (!id || reachable.has(id)) return;
-    reachable.add(id);
-    const outgoing = edges.filter((edge) => edgeSourceIds(edge).includes(id));
-    outgoing.forEach((edge) => {
-      if (edge.router) {
-        Object.values(edge.branches || {}).forEach(visit);
-        visit(edge.default);
-      } else visit(edge.to);
-    });
-  };
-  visit(entry);
+  const reachable = reachableFrom(entry, edges);
   nodes.filter((node) => !reachable.has(node.id)).forEach((node) => errors.push(`"${node.id}" is unreachable.`));
   return errors;
 }
@@ -1491,13 +1502,25 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setEdges(nextEdges);
   }, []);
 
-  const onRemoveBranch = useCallback((sourceId, value) => {
-    setEdges((current) => removeForkBranch(current, sourceId, value));
+  // Both halves of a lane drop have to land together: the edge rewrite decides
+  // which steps the lane owned, and those steps are then deleted rather than
+  // left behind as unreachable clutter.
+  const dropLane = useCallback((drop) => {
+    const { edges: nextEdges, removedNodeIds } = drop(edgesRef.current, metaRef.current.entry);
+    setEdges(nextEdges);
+    if (removedNodeIds.length) {
+      const removed = new Set(removedNodeIds);
+      setNodes((current) => current.filter((node) => !removed.has(node.id)));
+    }
   }, []);
 
+  const onRemoveBranch = useCallback((sourceId, value) => {
+    dropLane((edges, entry) => removeForkBranch(edges, entry, sourceId, value));
+  }, [dropLane]);
+
   const onRemoveDefault = useCallback((sourceId) => {
-    setEdges((current) => removeForkDefault(current, sourceId));
-  }, []);
+    dropLane((edges, entry) => removeForkDefault(edges, entry, sourceId));
+  }, [dropLane]);
 
   const onRenameBranch = useCallback((sourceId, oldValue, newValue) => {
     setEdges((current) => current.map((edge) => {
