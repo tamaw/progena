@@ -1054,13 +1054,18 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const canvasRect = canvas.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const panelWidth = 340;
+    const minPanelHeight = 220;
     const left = Math.max(16, Math.min(
       targetRect.right - canvasRect.left + 14,
       canvasRect.width - panelWidth - 16,
     ));
-    const top = Math.max(72, targetRect.top - canvasRect.top);
+    const top = Math.max(72, Math.min(
+      targetRect.top - canvasRect.top,
+      canvasRect.height - minPanelHeight - 16,
+    ));
+    const maxHeight = Math.max(minPanelHeight, canvasRect.height - top - 16);
     setSelectedNodeId(id);
-    setInspectorPosition({ left, top });
+    setInspectorPosition({ left, top, maxHeight });
   }, []);
   useEffect(() => { edgesRef.current = edges; }, [edges]);
   useEffect(() => { metaRef.current = meta; }, [meta]);
