@@ -390,7 +390,7 @@ function StepCard({ node, routerEdge }) {
 function NodeInspector({ node, routerEdge, onClose, style }) {
   const { updateNode, deleteNode } = useContext(GraphEditContext);
   if (!node) return null;
-  const handleConfig = (patch) => updateNode(node.id, { config: { ...node.config, ...patch } });
+  const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
   return (
     <aside
       className="routine-node-inspector"
