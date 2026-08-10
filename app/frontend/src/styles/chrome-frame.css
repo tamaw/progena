@@ -7816,21 +7816,12 @@ body,
   right: calc(50% - 1px);
 }
 
-/* An unclicked "+ Add …" affordance is not a branch the router routes to,
-   so it must never visually claim a rail segment -- neither this fan-out
-   (top) bar nor the fan-in (bottom) bar below. This is deliberately NOT
-   done by reassigning --fanout-last onto the real last lane: that class's
-   clip formula (`calc(50% - 1px)`, i.e. stop at the clipped lane's OWN
-   centre) is calibrated for the add-slot's position. The real last lane
-   carries no fanout-first/last class at all, so its bar stays fully
-   unclipped and overhangs 11px past its own edge -- which, by the same
-   layout math that centres the join over the whole fork (lanes + add
-   slots), already lands exactly on the join's centre axis. Moving the
-   class here instead would clip that bar ~140px short of the join,
-   stranding its stem with no rail to meet. */
-.routine-fork__lane--add > .routine-fork__wire::before {
-  display: none;
-}
+/* Unlike the fan-in bar below, this top bar is a selection strip, not a
+   flow indicator: it shows the router's whole set of outcomes -- real
+   branches AND the "+ Add …" affordances that would become one -- so it
+   spans the entire row uninterrupted, edge to edge, with no add-slot
+   exclusion. (The fan-in bar below IS a flow indicator: an unclicked
+   "+ Add …" slot carries no data, so it draws no fan-in segment.) */
 
 .routine-fork__wire::after,
 .routine-fork__lane::after {
