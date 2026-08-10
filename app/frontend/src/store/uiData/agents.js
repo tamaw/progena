@@ -121,7 +121,16 @@ export const eventHandlers = {
     upsertAgent(state.agents, payload.agent);
   },
   'agent.selected': (state, payload) => {
-    if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {
+    // Guard against a superseded *selection*, not a superseded request. More
+    // than one request for the same agent is normal -- a stream reconnect
+    // re-asks -- and keying this on request_id made each new ask invalidate
+    // the previous one's answer, so a run of reconnects could reject every
+    // reply in turn and leave the detail pane loading forever. What actually
+    // must not land is another agent's detail after the selection moved on.
+    const incoming = payload.agent?.id || null;
+    if (incoming) {
+      if (state.agents.active.agentId && incoming !== state.agents.active.agentId) return;
+    } else if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {
       return;
     }
     state.agents.active.detail = payload.agent || null;
