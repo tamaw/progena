@@ -10,10 +10,12 @@ more permissive for forward compatibility.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Final, cast
 
 import yaml
 from deepagents import create_deep_agent
@@ -39,6 +41,7 @@ from langchain.agents.middleware import InterruptOnConfig
 from langchain_core.runnables import RunnableLambda
 
 from .middleware import AuditLoggingMiddleware
+from .shell_backend import ProgenitorShellBackend, ShellPaths, agent_home_slug
 from .state_backend import _AsyncOnlyFileBackendMixin
 
 logger = logging.getLogger(__name__)
@@ -47,6 +50,22 @@ OBJECT_AGENT_KIND = "object"
 OBJECT_AGENT_SYSTEM_FILE = "SYSTEM.md"
 OBJECT_AGENT_DOCUMENT_KIND = "agent"
 NATIVE_OBJECT_AGENT_SOURCE = "native"
+
+
+DEFAULT_SHELL_MAX_OUTPUT_BYTES: Final = 100_000
+DEFAULT_SHELL_SYSTEM_PATH: Final = "/usr/bin:/bin"
+
+
+@dataclass(frozen=True)
+class ObjectAgentShellConfig:
+    """Runtime shell settings parsed from flat manifest front matter."""
+
+    max_output_bytes: int
+    env_passthrough: tuple[str, ...]
+    system_path: str
+
+
+_SHELL_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
 
 
 @dataclass(frozen=True)
@@ -62,6 +81,7 @@ class ObjectAgentManifest:
     skills: tuple[str, ...]
     permissions: tuple[FilesystemPermission, ...]
     interrupt_on: dict[str, bool | dict[str, Any]]
+    shell: ObjectAgentShellConfig | None = None
 
 
 @dataclass(frozen=True)
@@ -133,6 +153,37 @@ def _parse_permissions(value: Any, *, source: str) -> tuple[FilesystemPermission
     return tuple(result)
 
 
+def _parse_shell(
+    value: Any,
+    *,
+    env_passthrough_value: Any,
+    has_env_passthrough: bool,
+    source: str,
+) -> ObjectAgentShellConfig | None:
+    if value is None:
+        enabled = False
+    elif isinstance(value, bool):
+        enabled = value
+    else:
+        raise ValueError(f"{source}: 'shell' must be a boolean")
+
+    env_passthrough = _string_list(env_passthrough_value, field="env_passthrough", source=source)
+    if any(_SHELL_ENV_NAME.fullmatch(name) is None for name in env_passthrough):
+        raise ValueError(
+            f"{source}: env_passthrough entries must be upper-case environment variable names"
+        )
+    if not enabled:
+        if has_env_passthrough:
+            raise ValueError(f"{source}: env_passthrough requires shell: true")
+        return None
+
+    return ObjectAgentShellConfig(
+        max_output_bytes=DEFAULT_SHELL_MAX_OUTPUT_BYTES,
+        env_passthrough=env_passthrough,
+        system_path=DEFAULT_SHELL_SYSTEM_PATH,
+    )
+
+
 def _parse_interrupt_on(value: Any, *, source: str) -> dict[str, bool | dict[str, Any]]:
     if value is None:
         return {}
@@ -201,6 +252,12 @@ def parse_object_agent_manifest(content: str, *, source: str) -> ObjectAgentMani
         skills=skills,
         permissions=_parse_permissions(raw.get("permissions"), source=source),
         interrupt_on=_parse_interrupt_on(raw.get("interrupt_on"), source=source),
+        shell=_parse_shell(  # nosec B604 - `shell` here is the ObjectAgentManifest field name, not subprocess.run's shell= kwarg
+            raw.get("shell"),
+            env_passthrough_value=raw.get("env_passthrough"),
+            has_env_passthrough="env_passthrough" in raw,
+            source=source,
+        ),
     )
 
 
@@ -393,6 +450,69 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):
         return GrepResult(matches=[])
 
 
+SHELL_PROMPT_NOTE = (
+    "\n\nYou have an `execute` tool running a real shell with its working "
+    "directory at {workspace}. Paths from the file tools are host paths — use "
+    "them directly in shell commands. `git` and `gh` are available but wrapped: "
+    "read-only subcommands succeed, mutating ones are refused with exit code 2. "
+    "Report what the commands actually returned; never claim a repository state "
+    "you did not observe."
+)
+
+
+def _build_shell_backend(
+    manifest: ObjectAgentManifest,
+    *,
+    parent: Any,
+    self_routes: Mapping[str, Any],
+    worktree_dir: Path | None,
+    shell_paths: ShellPaths | None,
+) -> tuple[CompositeBackend, Path]:
+    """Flatten object-agent routes around a shell-capable default backend."""
+    config = manifest.shell
+    assert config is not None
+    if shell_paths is None:
+        raise ValueError(
+            f"object agent {manifest.name!r} enables shell but the runtime supplied no shell paths"
+        )
+
+    workspace = worktree_dir
+    if workspace is None:
+        raise ValueError(
+            f"object agent {manifest.name!r} enables shell but the runtime has no "
+            "PROGENITOR_WORKTREE_DIR configured"
+        )
+
+    routes = {**dict(getattr(parent, "routes", {})), **self_routes}
+    parent_default = getattr(parent, "default", None)
+    if parent_default is not None:
+        routes.setdefault("/large_tool_results/", parent_default)
+        routes.setdefault("/conversation_history/", parent_default)
+
+    for rule in manifest.permissions:
+        for path in rule.paths:
+            if not any(path.startswith(prefix) for prefix in routes):
+                raise ValueError(
+                    f"object agent {manifest.name!r} enables shell, so every permissions "
+                    f"path must start with a mounted route prefix; {path!r} does not"
+                )
+
+    return (
+        CompositeBackend(
+            default=ProgenitorShellBackend(
+                workspace=workspace,
+                timeout=shell_paths.timeout_seconds,
+                config=config,
+                shim_bin=shell_paths.shim_bin,
+                agent_home=shell_paths.agent_home / agent_home_slug(manifest.name),
+                parent_env=os.environ,
+            ),
+            routes=routes,
+        ),
+        workspace,
+    )
+
+
 SELF_MANIFEST_PROMPT_NOTE = (
     "\n\nYour own manifest is mounted read-write at /agent/SYSTEM.md -- the exact "
     "YAML front matter + Markdown body that defines you. Edit it with your file "
@@ -412,6 +532,8 @@ def create_object_agent_proxy(
     checkpointer: Any,
     agent_specs: Callable[[str], list[CompiledSubAgent]],
     log_sink: Any | None = None,
+    worktree_dir: Path | None = None,
+    shell_paths: ShellPaths | None = None,
 ) -> CompiledSubAgent:
     """Return a lazy proxy that compiles the manifest only when invoked."""
 
@@ -433,11 +555,26 @@ def create_object_agent_proxy(
         self_routes: dict[str, Any] = {
             "/agent/": SelfManifestBackend(source, state_manager=state_manager)
         }
-        self_backend = CompositeBackend(default=backend, routes=self_routes)
+        if manifest.shell is None:
+            self_backend = CompositeBackend(default=backend, routes=self_routes)
+            system_prompt = manifest.system_prompt + SELF_MANIFEST_PROMPT_NOTE
+        else:
+            self_backend, workspace = _build_shell_backend(
+                manifest,
+                parent=backend,
+                self_routes=self_routes,
+                worktree_dir=worktree_dir,
+                shell_paths=shell_paths,
+            )
+            system_prompt = (
+                manifest.system_prompt
+                + SELF_MANIFEST_PROMPT_NOTE
+                + SHELL_PROMPT_NOTE.format(workspace=workspace)
+            )
         agent = create_deep_agent(
             name=manifest.name,
             model=manifest.model or model,
-            system_prompt=manifest.system_prompt + SELF_MANIFEST_PROMPT_NOTE,
+            system_prompt=system_prompt,
             tools=selected_tools,
             backend=self_backend,
             skills=list(manifest.skills) or None,

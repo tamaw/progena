@@ -43,6 +43,7 @@ from .middleware import (
     SecretRedactionMiddleware,
 )
 from .object_agents import create_object_agent_proxy, discover_object_agents
+from .shell_backend import ShellPaths
 from .state import ProgenitorAgentState
 from .subagents import create_progenitor_async_subagents
 
@@ -348,14 +349,21 @@ async def create_progenitor_agent(
             checkpointer=checkpointer,
             agent_specs=delegated_agent_specs,
             log_sink=log_sink,
+            worktree_dir=worktree_dir,
+            shell_paths=ShellPaths(
+                shim_bin=Path(config.storage.shim_bin_dir),
+                agent_home=Path(config.storage.shell_home_dir),
+                timeout_seconds=config.runtime.shell_timeout_seconds,
+            ),
         )
         object_subagents.append(object_spec)
         agent_specs_by_name[source.name] = object_spec
         agent_registry[source.name] = object_spec["runnable"]
         reserved_names.add(source.name)
 
-    # A routine's graph is still revision-pinned, but its agent nodes now
-    # resolve through the same object/graph registry as the parent task tool.
+    # A routine's graph is still revision-pinned. Its in-graph `agent` nodes
+    # resolve against agent_registry (object agents only); `routine` nodes
+    # resolve against routine_registry (other routines) below.
     routine_registry: dict[str, Any] = {}
     routine_subagents: list[CompiledSubAgent] = []
     for graph_doc in await state_manager.list_routine_graphs():
@@ -380,13 +388,13 @@ async def create_progenitor_agent(
             model=model,
             state_manager=state_manager,
             revision_reader=revision_reader,
-            subagent_registry=routine_registry,
             agent_registry=agent_registry,
+            routine_registry=routine_registry,
+            tool_registry=tool_registry,
         )
         routine_subagents.append(routine_spec)
         agent_specs_by_name[routine_id] = routine_spec
         routine_registry[routine_id] = routine_spec["runnable"]
-        agent_registry[routine_id] = routine_spec["runnable"]
         reserved_names.add(routine_id)
 
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [

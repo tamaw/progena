@@ -4,6 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getTimeBucket } from '../components/chat/conversationModel';
 import Select from '../components/common/Select';
 import { DraftField } from '../components/common/DetailCards';
+import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
 import { selectRealtimeConnected } from '../store/realtimeSlice';
 import {
@@ -14,6 +15,7 @@ import {
   selectAgentProfiles,
   selectAgentProfilesState,
   updateAgentGraph,
+  deleteAgentProfile,
   updateObjectAgentProfile,
 } from '../store/uiDataSlice';
 import {
@@ -32,6 +34,7 @@ import DetailHeader, {
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
+  EditActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { AgentGraphTab } from '../components/agents/AgentGraph';
@@ -327,6 +330,16 @@ export function AgentWorkspace({ page }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
+  const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  // Object agents only -- `null` means read-only, a string is the in-progress
+  // manifest draft. Lifted out of ObjectAgentDetailBody so the DetailHeader's
+  // top-level Edit action (detail-header__actions) and the inline "Edit"
+  // button inside the Manifest section drive the same state.
+  const [objectAgentDraft, setObjectAgentDraft] = useState(null);
+  const [objectAgentSaving, setObjectAgentSaving] = useState(false);
+  const [objectAgentError, setObjectAgentError] = useState('');
   // "+ New" creates a portable SYSTEM.md manifest through the profile API.
   const [newAgentOpen, setNewAgentOpen] = useState(false);
   const [draftAgent, setDraftAgent] = useState(null);
@@ -412,6 +425,36 @@ export function AgentWorkspace({ page }) {
     navigate(`/agents/${encodeURIComponent(effectiveAgentId)}/details`);
   }, [navigate, effectiveAgentId]);
 
+  // Routines and author-created ("source: user") object agents only --
+  // native object agents are repo files, marketplace ones are plugin-managed
+  // (Plugins > Uninstall), and A2A/ACP are read through external registries.
+  // The eligibility check lives at each call site (button visibility); this
+  // handler just needs an id. Mirrors Workflows' delete flow (PopupModal
+  // confirm -> DELETE -> navigate back to the list).
+  const handleDeleteAgent = useCallback(() => {
+    if (effectiveAgentId) {
+      setDeleteError('');
+      setDeleteConfirmationOpen(true);
+    }
+  }, [effectiveAgentId]);
+
+  const confirmDeleteAgent = useCallback(async () => {
+    if (!effectiveAgentId) {
+      setDeleteConfirmationOpen(false);
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      await dispatch(deleteAgentProfile({ agentsUrl, agentId: effectiveAgentId })).unwrap();
+      setDeleteConfirmationOpen(false);
+      navigate(basePath, { replace: true });
+    } catch (error) {
+      setDeleteError(error.message || 'Failed to delete.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [agentsUrl, basePath, dispatch, effectiveAgentId, navigate]);
+
   useEffect(() => {
     if (!effectiveAgentId) {
       return;
@@ -422,6 +465,13 @@ export function AgentWorkspace({ page }) {
       requestId: `${effectiveAgentId}-${Date.now()}`,
     }));
   }, [agentsUrl, dispatch, effectiveAgentId]);
+
+  // Object agents only. Switching agents mid-edit must never leave a draft
+  // bound to the wrong one underneath the newly-selected agent's page.
+  useEffect(() => {
+    setObjectAgentDraft(null);
+    setObjectAgentError('');
+  }, [effectiveAgentId]);
 
   const listAgent = useMemo(
     () => agents.find((agent) => agent.id === effectiveAgentId) || null,
@@ -524,6 +574,30 @@ export function AgentWorkspace({ page }) {
     }
   }
 
+  function startEditObjectAgent() {
+    setObjectAgentDraft(selectedAgent?.card?.raw_content ?? '');
+    setObjectAgentError('');
+  }
+
+  function cancelEditObjectAgent() {
+    setObjectAgentDraft(null);
+    setObjectAgentError('');
+  }
+
+  async function saveObjectAgentDraft() {
+    if (objectAgentDraft === null) return;
+    setObjectAgentSaving(true);
+    setObjectAgentError('');
+    try {
+      await handleSaveObjectAgent({ content: objectAgentDraft });
+      setObjectAgentDraft(null);
+    } catch (error) {
+      setObjectAgentError(error.message || 'Failed to save agent.');
+    } finally {
+      setObjectAgentSaving(false);
+    }
+  }
+
   const handleRunRoutine = useCallback((workingGraph = selectedGraph) => {
     const nodes = workingGraph.nodes || [];
     const hasSimulatedFailure = nodes.some((node) => String(node.config?.expression || '').includes('raise '));
@@ -622,6 +696,27 @@ export function AgentWorkspace({ page }) {
           {effectiveDetailTab !== 'Graph' ? (
             <DetailHeader
               title={selectedAgent.name}
+              actions={selectedAgent.kind === 'object' ? (
+                <DetailHeaderActions menuLabel="Agent actions">
+                  <DetailHeaderAction
+                    icon={<EditActionIcon />}
+                    label="Edit"
+                    tooltip="Edit manifest"
+                    ariaLabel="Edit manifest"
+                    onClick={startEditObjectAgent}
+                  />
+                  {selectedAgent.card?.source === 'user' ? (
+                    <DetailHeaderAction
+                      icon={<DeleteActionIcon />}
+                      label="Delete"
+                      tooltip="Delete agent"
+                      ariaLabel="Delete agent"
+                      variant="danger"
+                      onClick={handleDeleteAgent}
+                    />
+                  ) : null}
+                </DetailHeaderActions>
+              ) : null}
               meta={[
                 // Object agents have no schema-backed status/enabled concept
                 // (no runtime process, no manifest field) -- showing a pill
@@ -655,7 +750,20 @@ export function AgentWorkspace({ page }) {
               ? <A2ADetailBody agent={selectedAgent} />
               : isACP
                 ? <ACPDetailBody agent={selectedAgent} />
-                : <ObjectAgentDetailBody agent={selectedAgent} agentsUrl={agentsUrl} onSave={handleSaveObjectAgent} />
+                : (
+                  <ObjectAgentDetailBody
+                    agent={selectedAgent}
+                    agentsUrl={agentsUrl}
+                    editing={objectAgentDraft !== null}
+                    draft={objectAgentDraft}
+                    onDraftChange={setObjectAgentDraft}
+                    onStartEdit={startEditObjectAgent}
+                    onCancelEdit={cancelEditObjectAgent}
+                    onSaveEdit={saveObjectAgentDraft}
+                    saving={objectAgentSaving}
+                    error={objectAgentError}
+                  />
+                )
           ) : (
             <div className="detail-pane__body detail-pane__body--graph">
               {graphDetailPending ? (
@@ -670,6 +778,7 @@ export function AgentWorkspace({ page }) {
                     onRun={handleRunRoutine}
                     runResult={runResult}
                     onShowProfile={isRoutines ? null : showProfile}
+                    onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
                     onOpenJson={() => setGraphEditorOpen(true)}
                     onCloseJson={() => setGraphEditorOpen(false)}
@@ -686,6 +795,18 @@ export function AgentWorkspace({ page }) {
       )}
 
       {newAgentOpen ? <NewAgentModal onPick={handlePickType} onClose={() => setNewAgentOpen(false)} /> : null}
+      {deleteConfirmationOpen && selectedAgent ? (
+        <PopupModal
+          eyebrow={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          title={`Delete “${selectedAgent.name}”?`}
+          message={deleteError || `This ${selectedAgent.kind === 'routine' ? 'routine and its graph' : 'agent and its manifest'} will be permanently deleted.`}
+          confirmLabel={selectedAgent.kind === 'routine' ? 'Delete routine' : 'Delete agent'}
+          busyLabel="Deleting…"
+          onClose={() => setDeleteConfirmationOpen(false)}
+          onConfirm={confirmDeleteAgent}
+          busy={deleteBusy}
+        />
+      ) : null}
     </PageShell>
   );
 }

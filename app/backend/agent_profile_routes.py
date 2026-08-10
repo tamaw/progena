@@ -481,4 +481,41 @@ def create_agent_profile_router(
         )
         return acknowledgement_response(request_id, ["agent.graph.updated"])
 
+    @router.delete(
+        "/agent-profiles/{agent_id}", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def delete_agent_profile(
+        agent_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Delete a routine or an author-created ("source: user") object agent.
+
+        Native object agents are repo files (edit the repo instead) and
+        marketplace agents are plugin-managed (Plugins > Uninstall) -- neither
+        is deletable here, nor are A2A/ACP agents (external registries, no
+        row to delete).
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        if agent_id.startswith("object-"):
+            try:
+                deleted = await asyncio.to_thread(store.delete_user_object_agent, agent_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            if not deleted:
+                raise HTTPException(status_code=404, detail="Object agent not found")
+        else:
+            agent = await asyncio.to_thread(store.get_agent, agent_id)
+            if agent is None or agent.get("kind") != "routine":
+                raise HTTPException(status_code=404, detail="Agent not found")
+            await asyncio.to_thread(store.delete_routine_agent, agent_id)
+        response = await asyncio.to_thread(build_agent_profiles, store)
+        broadcast_ui_event(
+            "agents.snapshot",
+            response.model_dump(by_alias=True),
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agents.snapshot"])
+
     return router

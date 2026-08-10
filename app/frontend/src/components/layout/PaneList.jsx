@@ -267,6 +267,14 @@ function PaneListSortMenu({ title, options, value, onSelect }) {
 const DEFAULT_VIRTUAL_ITEM_HEIGHT = 72;
 const DEFAULT_VIRTUAL_GROUP_HEIGHT = 30;
 const DEFAULT_VIRTUAL_OVERSCAN = 8;
+// Vertical breathing room between rows. Rows are absolutely positioned from
+// JS-accumulated offsets (see `layout` below), so this can't be a plain CSS
+// `margin`/`gap` on `.pane-list-virtualized__row` — margins/padding on an
+// absolutely positioned row are invisible to the next row's `top`, which
+// would just overlap into them. Baking the gap into the accumulated offset
+// here is the one place that fixes spacing for every `PaneListVirtualized`
+// consumer (Agents/Routines, Workflows, Sessions, Repositories, etc.) at once.
+const PANE_ROW_GAP = 8;
 
 function VirtualGroupHeader({ title, count }) {
   return (
@@ -353,7 +361,7 @@ export function PaneListVirtualized({
     const positioned = rows.map((row) => {
       const height = heightsRef.current.get(row.key) || row.estimatedHeight;
       const positionedRow = { ...row, top, height };
-      top += height;
+      top += height + PANE_ROW_GAP;
       return positionedRow;
     });
     return { rows: positioned, totalHeight: top };

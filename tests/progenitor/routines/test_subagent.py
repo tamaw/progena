@@ -82,8 +82,8 @@ def _spec(reader, state_manager=None, model=None, agent_registry=None):
         model=model or _EchoModel(),
         state_manager=state_manager or _FakeStateManager(),
         revision_reader=reader,
-        subagent_registry={},
         agent_registry=agent_registry or {},
+        routine_registry={},
     )
 
 

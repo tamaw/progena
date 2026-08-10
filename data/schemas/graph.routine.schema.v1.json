@@ -31,14 +31,15 @@
     "node": {
       "oneOf": [
         { "$ref": "#/$defs/nodePrompt" },
-        { "$ref": "#/$defs/nodeCode" },
         { "$ref": "#/$defs/nodeEval" },
-        { "$ref": "#/$defs/nodeSubagent" },
+        { "$ref": "#/$defs/nodeCondition" },
+        { "$ref": "#/$defs/nodeClassify" },
         { "$ref": "#/$defs/nodeAgent" },
+        { "$ref": "#/$defs/nodeA2A" },
         { "$ref": "#/$defs/nodeNoop" },
         { "$ref": "#/$defs/nodeHuman" },
         { "$ref": "#/$defs/nodeForeach" },
-        { "$ref": "#/$defs/nodeSubgraph" }
+        { "$ref": "#/$defs/nodeRoutine" }
       ]
     },
     "nodeBase": {
@@ -59,13 +60,6 @@
       ],
       "unevaluatedProperties": false
     },
-    "nodeCode": {
-      "allOf": [
-        { "$ref": "#/$defs/nodeBase" },
-        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "code" }, "config": { "$ref": "#/$defs/codeConfig" } } }
-      ],
-      "unevaluatedProperties": false
-    },
     "nodeEval": {
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
@@ -73,10 +67,17 @@
       ],
       "unevaluatedProperties": false
     },
-    "nodeSubagent": {
+    "nodeCondition": {
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
-        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "subagent" }, "config": { "$ref": "#/$defs/subagentConfig" } } }
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "condition" }, "config": { "$ref": "#/$defs/conditionConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeClassify": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "classify" }, "config": { "$ref": "#/$defs/classifyConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -84,6 +85,13 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "agent" }, "config": { "$ref": "#/$defs/agentConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeA2A": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "a2a" }, "config": { "$ref": "#/$defs/a2aConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -108,10 +116,10 @@
       ],
       "unevaluatedProperties": false
     },
-    "nodeSubgraph": {
+    "nodeRoutine": {
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
-        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "subgraph" }, "config": { "$ref": "#/$defs/subgraphConfig" } } }
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "routine" }, "config": { "$ref": "#/$defs/routineConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -131,7 +139,7 @@
         { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
       ]
     },
-    "codeConfig": {
+    "evalConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -147,7 +155,7 @@
         { "required": ["expression_file"], "not": { "required": ["expression"] } }
       ]
     },
-    "evalConfig": {
+    "conditionConfig": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
@@ -155,32 +163,25 @@
         "expression": { "type": "string", "minLength": 1 },
         "expression_file": { "type": "string", "minLength": 1 },
         "inputs": { "$ref": "#/$defs/inputMap" },
-        "rubric_prompt": { "type": "string", "minLength": 1 },
-        "response_schema": { "$ref": "#/$defs/responseSchema" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
-        { "required": ["expression"], "not": { "anyOf": [{ "required": ["expression_file"] }, { "required": ["rubric_prompt"] }] } },
-        { "required": ["expression_file"], "not": { "anyOf": [{ "required": ["expression"] }, { "required": ["rubric_prompt"] }] } },
-        { "required": ["rubric_prompt"], "not": { "anyOf": [{ "required": ["expression"] }, { "required": ["expression_file"] }] } }
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
       ]
     },
-    "subagentConfig": {
+    "classifyConfig": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["subagent_name"],
+      "required": ["rubric_prompt", "response_schema"],
       "properties": {
-        "subagent_name": { "type": "string", "minLength": 1 },
-        "prompt_template": { "type": "string", "minLength": 1 },
-        "prompt_file": { "type": "string", "minLength": 1 },
+        "rubric_prompt": { "type": "string", "minLength": 1 },
+        "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "inputs": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "cache": { "$ref": "#/$defs/cachePolicy" }
-      },
-      "oneOf": [
-        { "required": ["prompt_template"], "not": { "required": ["prompt_file"] } },
-        { "required": ["prompt_file"], "not": { "required": ["prompt_template"] } }
-      ]
+      }
     },
     "agentConfig": {
       "type": "object",
@@ -190,7 +191,26 @@
         "agent_name": { "type": "string", "minLength": 1 },
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
+        "continue_thread": { "type": "boolean" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["prompt_template"], "not": { "anyOf": [{ "required": ["prompt_file"] }, { "required": ["inputs"] }] } },
+        { "required": ["prompt_file"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["inputs"] }] } },
+        { "required": ["inputs"], "not": { "anyOf": [{ "required": ["prompt_template"] }, { "required": ["prompt_file"] }] } }
+      ]
+    },
+    "a2aConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent_name"],
+      "properties": {
+        "agent_name": { "type": "string", "minLength": 1 },
+        "prompt_template": { "type": "string", "minLength": 1 },
+        "prompt_file": { "type": "string", "minLength": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
@@ -243,12 +263,12 @@
         "cache": { "$ref": "#/$defs/cachePolicy" }
       }
     },
-    "subgraphConfig": {
+    "routineConfig": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["subgraph_name"],
+      "required": ["routine_name"],
       "properties": {
-        "subgraph_name": { "type": "string", "minLength": 1 },
+        "routine_name": { "type": "string", "minLength": 1 },
         "input_map": { "$ref": "#/$defs/inputMap" },
         "output_map": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },

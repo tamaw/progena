@@ -16,7 +16,7 @@
     },
     {
       "id": "domain_check",
-      "kind": "code",
+      "kind": "condition",
       "description": "Host gate only -- whether the caller may touch a given repo is GitHub's call, and `assess` already reports it as `accessible`, so an org allowlist here would duplicate that check against a list that goes stale.",
       "output_key": "domain_check",
       "config": {
@@ -48,7 +48,7 @@
     },
     {
       "id": "route_decision",
-      "kind": "code",
+      "kind": "eval",
       "description": "Deterministic classification of assess's JSON result into exactly one safe action. Not an LLM judgment call -- no_access wins over everything, then not_cloned, then dirty always wins over behind unless the user already explicitly authorized an override in this same request.",
       "output_key": "route_decision",
       "config": {

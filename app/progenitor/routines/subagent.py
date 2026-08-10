@@ -36,8 +36,9 @@ def create_routine_subagent(
     model: BaseChatModel,
     state_manager: Any,
     revision_reader: RoutineRevisionReader,
-    subagent_registry: dict[str, Any],
     agent_registry: dict[str, Any],
+    routine_registry: dict[str, Any],
+    tool_registry: Any = None,
 ) -> CompiledSubAgent:
     """Build a ``CompiledSubAgent``-shaped dict that proxies to routine ``routine_id``."""
 
@@ -83,8 +84,9 @@ def create_routine_subagent(
                 compiled = compile_routine_graph(
                     graph,
                     model=model,
-                    subagent_registry=subagent_registry,
                     agent_registry=agent_registry,
+                    routine_registry=routine_registry,
+                    tool_registry=tool_registry,
                     base_system_prompt=None,
                 )
                 if revision_id is not None:

@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
 // The Routines graph itself is NOT a free canvas though (see rationale below),
@@ -31,25 +32,27 @@ import hljs from 'highlight.js/lib/common';
 // app.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
 const GRAPH_NODE_KINDS = [
   { kind: 'prompt', label: 'Prompt', icon: '?' },
-  { kind: 'code', label: 'Code', icon: '⚙' },
-  { kind: 'eval', label: 'Eval', icon: '✓' },
-  { kind: 'subagent', label: 'Subagent', icon: '⇢' },
-  { kind: 'agent', label: 'Agent', icon: '◆' },
-  { kind: 'human', label: 'Human approval', icon: '!' },
-  { kind: 'foreach', label: 'Send fan-out', icon: '↗' },
-  { kind: 'subgraph', label: 'Subgraph', icon: '◈' },
+  { kind: 'eval', label: 'Eval', icon: '<>' },
+  { kind: 'condition', label: 'Condition', icon: '◇' },
+  { kind: 'classify', label: 'Classify', icon: '⚖' },
+  { kind: 'agent', label: 'Agent', icon: '✦' },
+  { kind: 'a2a', label: 'A2A', icon: '⇄' },
+  { kind: 'human', label: 'Human approval', icon: '⚑' },
+  { kind: 'foreach', label: 'Send fan-out', icon: '⇉' },
+  { kind: 'routine', label: 'Routine', icon: '⧉' },
   { kind: 'noop', label: 'Noop', icon: '·' },
 ];
 
 const GRAPH_KIND_COLORS = {
-  prompt: '#2f6ff6',
-  code: '#b06ef6',
-  eval: '#e0a23a',
-  subagent: '#2f9e6f',
-  agent: '#ef6c2a',
-  human: '#df4f74',
-  foreach: '#18a999',
-  subgraph: '#8b5cf6',
+  prompt: '#3b82f6',
+  eval: '#6366f1',
+  condition: '#f59e0b',
+  classify: '#d946ef',
+  agent: '#10b981',
+  a2a: '#f97316',
+  human: '#f43f5e',
+  foreach: '#06b6d4',
+  routine: '#8b5cf6',
   noop: '#6b7280',
 };
 
@@ -77,13 +80,14 @@ function uniqueBranchValue(branches) {
 function makeNode(kind) {
   const config = {
     prompt: { prompt_template: '' },
-    code: { expression: '', inputs: {} },
     eval: { expression: '', inputs: {} },
-    subagent: { subagent_name: '', prompt_template: '' },
+    condition: { expression: '', inputs: {} },
+    classify: { rubric_prompt: '', response_schema: {} },
     agent: { agent_name: '', prompt_template: '' },
+    a2a: { agent_name: '', prompt_template: '' },
     human: { message: '', allowed_responses: [] },
     foreach: { mode: 'send', items_from: '', item_key: 'item' },
-    subgraph: { subgraph_name: '', input_map: {}, output_map: {} },
+    routine: { routine_name: '', input_map: {}, output_map: {} },
     noop: {},
   }[kind] || {};
   return { id: '', kind, label: titleCase(kind), description: '', config };
@@ -109,7 +113,7 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
   );
 }
 
-// `code`/`eval` nodes resolve named inputs from dotted `data` paths before
+// `eval`/`condition` nodes resolve named inputs from dotted `data` paths before
 // evaluation (config.inputs, an object). Edited as one "name: path" per line so
 // authors don't have to hand-write JSON for a small map.
 function inputsToText(inputs) {
@@ -193,9 +197,43 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig }
   );
 }
 
+function JsonConfigField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  const [text, setText] = useState(() => JSON.stringify(config?.[field] ?? {}, null, 2));
+  const [error, setError] = useState(null);
+  const onChange = (event) => {
+    const value = event.target.value;
+    setText(value);
+    try {
+      const parsed = JSON.parse(value || '{}');
+      setError(null);
+      updateNodeConfig(id, { [field]: parsed });
+    } catch {
+      setError('invalid JSON');
+    }
+  };
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}{error ? ` — ${error}` : ''}</span>
+      <textarea className="agents-graph-node__prompt" value={text} placeholder={placeholder} onChange={onChange} />
+    </label>
+  );
+}
+
+function BooleanField({ id, config, field, label, updateNodeConfig, defaultValue = true }) {
+  const checked = config?.[field] ?? defaultValue;
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">
+        <input type="checkbox" checked={checked} onChange={(event) => updateNodeConfig(id, { [field]: event.target.checked })} />
+        {' '}{label}
+      </span>
+    </label>
+  );
+}
+
 // Kind-specific config fields, mirroring app.progenitor.routines.graph's per-kind
-// config shape (prompt_template/system_prompt, expression/inputs/rubric_prompt,
-// subagent_name/agent_name + prompt_template). `noop` has no config.
+// config shape (prompt_template/system_prompt, expression/inputs, rubric_prompt/
+// response_schema, agent_name + prompt_template/inputs). `noop` has no config.
 function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
   if (kind === 'prompt') {
     return (
@@ -205,23 +243,38 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       </>
     );
   }
-  if (kind === 'code' || kind === 'eval') {
+  if (kind === 'eval' || kind === 'condition') {
     return (
       <>
         <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
-        {kind === 'eval' ? (
-          <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt (used instead of an expression)" placeholder="Ask the model a yes/no question…" multiline updateNodeConfig={updateNodeConfig} />
-        ) : null}
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
-  if (kind === 'subagent' || kind === 'agent') {
-    const nameField = kind === 'subagent' ? 'subagent_name' : 'agent_name';
+  if (kind === 'classify') {
     return (
       <>
-        <ConfigField id={id} config={config} field={nameField} label={kind === 'subagent' ? 'Subagent name' : 'Agent name'} placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
-        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the target…" multiline updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt" placeholder="Ask the model a judged question…" multiline updateNodeConfig={updateNodeConfig} />
+        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <JsonConfigField key={id} id={id} config={config} field="response_schema" label="Response schema (required JSON Schema)" placeholder='{"type":"object","required":["result"],"properties":{"result":{"type":"boolean"}}}' updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'agent') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
+        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <BooleanField id={id} config={config} field="continue_thread" label="Continue conversation across calls" updateNodeConfig={updateNodeConfig} />
+      </>
+    );
+  }
+  if (kind === 'a2a') {
+    return (
+      <>
+        <ConfigField id={id} config={config} field="agent_name" label="A2A agent name" placeholder="registered-a2a-agent" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the peer…" multiline updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -265,10 +318,10 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       </>
     );
   }
-  if (kind === 'subgraph') {
+  if (kind === 'routine') {
     return (
       <>
-        <ConfigField id={id} config={config} field="subgraph_name" label="Subgraph name" placeholder="shared-validation-graph" updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="routine_name" label="Routine name" placeholder="shared-validation-routine" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="input_map" label="Input map (child field: parent data path)" placeholder="request: request" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="output_map" label="Output map (parent field: child data path)" placeholder="result: answer" updateNodeConfig={updateNodeConfig} />
       </>
@@ -723,6 +776,23 @@ function ForeachBlock({ node, body }) {
   );
 }
 
+// Which lane owns the left/right rail terminator (`--fanout-first` /
+// `--fanout-last`, chrome-frame.css) that clips the horizontal connector
+// stub to the lane's own centre instead of running off the fork's edge.
+// The "+ Add branch" slot is always appended after every real lane when
+// `editable` (see the unconditional block below the lanes.map call), so it
+// -- not the last real lane -- owns the right terminator in that case;
+// otherwise the last real lane is genuinely the rightmost rendered lane.
+// Exported for unit coverage: a fork with N branches plus an editable
+// "+ Add branch" slot must clip the rail at the slot, not one lane early.
+// eslint-disable-next-line react-refresh/only-export-components
+export function forkLaneEdgePosition(index, lanesLength, editable) {
+  return {
+    isFirst: index === 0,
+    isLast: index === lanesLength - 1 && !editable,
+  };
+}
+
 // A router node and its branch lanes form one CSS-only switch box. Connector
 // rails are pseudo-elements, never DOM measurements: centring the box makes
 // the router stem meet the lane rail even when lanes have different widths.
@@ -775,12 +845,13 @@ function ForkBlock({ fork, node }) {
         <div className="routine-fork__lanes">
           {lanes.map((lane, index) => {
             const isCollapsed = collapsed.has(lane.value);
+            const { isFirst, isLast } = forkLaneEdgePosition(index, lanes.length, editable);
             const classes = [
               'routine-fork__lane',
               isCollapsed && 'routine-fork__lane--collapsed',
               lane.isDefault && 'routine-fork__lane--default',
-              index === 0 && 'routine-fork__lane--fanout-first',
-              index === lanes.length - 1 && 'routine-fork__lane--fanout-last',
+              isFirst && 'routine-fork__lane--fanout-first',
+              isLast && 'routine-fork__lane--fanout-last',
               joiningValues.has(lane.value) && 'routine-fork__lane--fanin',
               joiningValues.has(lane.value) && lane.value === joining[0]?.value && 'routine-fork__lane--fanin-first',
               joiningValues.has(lane.value) && lane.value === joining.at(-1)?.value && 'routine-fork__lane--fanin-last',
@@ -947,7 +1018,7 @@ function serializeGraph(nodes, edges, meta) {
     $defs: meta.$defs || {},
   };
 }
-function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -1287,8 +1358,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         <div className="agents-graph-shell">
           <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
-              <span>{agent.name}</span>
-              <span>{nodes.length} step{nodes.length === 1 ? '' : 's'}</span>
               {saveState !== 'idle' ? (
                 <span className={`agents-graph-save agents-graph-save--${saveState}`}>
                   {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
@@ -1310,8 +1379,35 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                   {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
                 </span>
               ) : null}
-              {onShowProfile ? <button type="button" onClick={onShowProfile}>Details</button> : null}
-              <button type="button" className="repo-btn repo-btn--primary" onClick={() => onRun(workingGraph)} disabled={validationErrors.length > 0}>Run</button>
+              <DetailHeaderActions menuLabel="Routine actions">
+                {onShowProfile ? (
+                  <DetailHeaderAction
+                    icon={<OpenActionIcon />}
+                    label="Details"
+                    tooltip="View agent details"
+                    ariaLabel="View agent details"
+                    onClick={onShowProfile}
+                  />
+                ) : null}
+                <DetailHeaderAction
+                  icon={<PlayActionIcon />}
+                  label="Run"
+                  tooltip="Run routine"
+                  ariaLabel="Run routine"
+                  onClick={() => onRun(workingGraph)}
+                  disabled={validationErrors.length > 0}
+                />
+                {onDelete ? (
+                  <DetailHeaderAction
+                    icon={<DeleteActionIcon />}
+                    label="Delete"
+                    tooltip="Delete routine"
+                    ariaLabel="Delete routine"
+                    variant="danger"
+                    onClick={onDelete}
+                  />
+                ) : null}
+              </DetailHeaderActions>
             </div>
               <GraphEditContext.Provider value={editContext}>
               <div
@@ -1395,7 +1491,7 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, jsonOpen, onOpenJson, onCloseJson }) {
+export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -1404,6 +1500,7 @@ export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onSho
       onRun={onRun}
       runResult={runResult}
       onShowProfile={onShowProfile}
+      onDelete={onDelete}
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}
       onCloseJson={onCloseJson}

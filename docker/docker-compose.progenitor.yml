@@ -49,6 +49,10 @@ services:
         GIT_COMMIT: ${GIT_COMMIT:-}
     container_name: progenitor
     restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,12 +64,19 @@ services:
       TZ: ${PROGENITOR_TIMEZONE:-UTC}
       # Bind the runtime HTTP server on all interfaces so other containers (backend) can connect.
       PROGENITOR_HTTP_HOST: 0.0.0.0
+      GH_TOKEN: ${GH_TOKEN:-}
+      PROGENITOR_SHELL_HOME: /app/agent-home
+      PROGENITOR_SHELL_SHIM_BIN: /app/data/shims/bin
+      PROGENITOR_SHELL_TIMEOUT_SECONDS: ${PROGENITOR_SHELL_TIMEOUT_SECONDS:-120}
+      # State is transient in the hardened read-only runtime image.
+      PROGENITOR_STATE_DIR: /app/tmp/state
     volumes:
       - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=1g
+      - /app/agent-home:rw,nosuid,size=64m
     stdin_open: true
     tty: true
     networks:
@@ -82,6 +93,7 @@ services:
         limits:
           memory: 2G
           cpus: '2.0'
+          pids: 512
         reservations:
           memory: 512M
 

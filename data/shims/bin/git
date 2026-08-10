@@ -1,0 +1,90 @@
+#!/usr/bin/env bash
+# Guardrail only: absolute paths can bypass this shim; the container is the boundary.
+set -euo pipefail
+
+REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
+deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
+
+args=("$@")
+index=0
+while (( index < ${#args[@]} )); do
+  arg=${args[index]}
+  case "$arg" in
+    -C)
+      (( index + 1 < ${#args[@]} )) || deny "global option: -C requires a directory"
+      ((index += 2))
+      ;;
+    --no-pager)
+      ((index += 1))
+      ;;
+    -*)
+      deny "global option: $arg"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+(( index < ${#args[@]} )) || deny "missing subcommand"
+sub=${args[index]}
+remaining=("${args[@]:index + 1}")
+
+case "$sub" in
+  status|log|show|diff|rev-parse|rev-list|ls-files|ls-tree|describe|blame|shortlog|cat-file|symbolic-ref|for-each-ref|count-objects|name-rev|merge-base|grep|whatchanged)
+    ;;
+  branch)
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -d|-D|-m|-M|-c|-C|-f|--delete|--move|--copy|--force|--set-upstream|--set-upstream-to|--unset-upstream|--edit-description)
+          deny "branch option: $arg"
+          ;;
+        -*)
+          ;;
+        *)
+          deny "branch argument: $arg"
+          ;;
+      esac
+    done
+    ;;
+  tag)
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -d|-D|-f|--delete|--force|-a|-s|-m|-F)
+          deny "tag option: $arg"
+          ;;
+        -*)
+          ;;
+        *)
+          deny "tag argument: $arg"
+          ;;
+      esac
+    done
+    ;;
+  remote)
+    case "${remaining[0]:-}" in
+      -v|--verbose|show|get-url) ;;
+      *) deny "remote command: ${remaining[0]:-}" ;;
+    esac
+    ;;
+  config)
+    case "${remaining[0]:-}" in
+      --get|--get-all|--get-regexp|--list|-l) ;;
+      *) deny "config option: ${remaining[0]:-}" ;;
+    esac
+    ;;
+  stash)
+    case "${remaining[0]:-}" in
+      list|show) ;;
+      *) deny "stash command: ${remaining[0]:-}" ;;
+    esac
+    ;;
+  worktree)
+    [[ "${remaining[0]:-}" == "list" ]] || deny "worktree command: ${remaining[0]:-}"
+    ;;
+  *)
+    deny "subcommand: $sub"
+    ;;
+esac
+
+exec /usr/bin/env PATH="$REAL_PATH" git "${args[@]}"

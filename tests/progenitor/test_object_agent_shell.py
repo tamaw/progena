@@ -1,0 +1,182 @@
+from pathlib import Path
+
+import pytest
+from deepagents.backends import CompositeBackend
+from deepagents.middleware.filesystem import supports_execution
+
+from app.progenitor.agent.object_agents import (
+    ObjectAgentSource,
+    create_object_agent_proxy,
+    parse_object_agent_manifest,
+)
+from app.progenitor.agent.shell_backend import ShellPaths, build_shell_env
+from app.progenitor.config import RuntimeConfig
+
+SHELL_SYSTEM = """---
+name: shell-reviewer
+description: Reviews a repository.
+version: 1.0.0
+kind: object
+tools: []
+shell: true
+env_passthrough: []
+---
+Use observed command output.
+"""
+
+
+class _StateManager:
+    async def get_content_document(self, _kind, _relative_path):
+        return None
+
+
+class _Compiled:
+    async def ainvoke(self, _state):
+        return {"messages": []}
+
+
+def _source(tmp_path: Path, content: str) -> ObjectAgentSource:
+    agent_dir = tmp_path / "shell-reviewer"
+    agent_dir.mkdir()
+    system_path = agent_dir / "SYSTEM.md"
+    system_path.write_text(content, encoding="utf-8")
+    return ObjectAgentSource(
+        manifest=parse_object_agent_manifest(content, source=str(system_path)),
+        source="native",
+        native_path=system_path,
+    )
+
+
+async def _compiled_backend(monkeypatch, source, tmp_path: Path):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return _Compiled()
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", create)
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=_StateManager(),
+        model="model",
+        tools=[],
+        backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
+        checkpointer=object(),
+        agent_specs=lambda _caller: [],
+        worktree_dir=tmp_path / "repos",
+        shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
+    )
+    await proxy["runnable"].ainvoke({"messages": []})
+    return calls[0]["backend"]
+
+
+def test_shell_manifest_defaults():
+    manifest = parse_object_agent_manifest(SHELL_SYSTEM, source="test")
+
+    assert manifest.shell is not None
+    assert manifest.shell.max_output_bytes == 100_000
+    assert manifest.shell.system_path == "/usr/bin:/bin"
+
+
+@pytest.mark.parametrize("shell", ["", "shell: false\n"])
+def test_absent_or_disabled_shell_is_not_enabled(shell: str):
+    content = SHELL_SYSTEM.replace("shell: true\nenv_passthrough: []\n", shell)
+    assert parse_object_agent_manifest(content, source="test").shell is None
+
+
+@pytest.mark.parametrize(
+    ("shell_block", "match"),
+    [
+        ("shell:\n  enabled: true\nenv_passthrough: []\n", "shell.*boolean"),
+        ("shell: false\nenv_passthrough: []\n", "env_passthrough requires shell"),
+    ],
+)
+def test_shell_rejects_nested_or_disabled_environment_settings(shell_block: str, match: str):
+    content = SHELL_SYSTEM.replace("shell: true\nenv_passthrough: []\n", shell_block)
+
+    with pytest.raises(ValueError, match=match):
+        parse_object_agent_manifest(content, source="test")
+
+
+@pytest.mark.asyncio
+async def test_shell_proxy_exposes_execute_capability(monkeypatch, tmp_path: Path):
+    backend = await _compiled_backend(monkeypatch, _source(tmp_path, SHELL_SYSTEM), tmp_path)
+
+    assert supports_execution(backend)
+    assert backend.default.cwd == tmp_path / "repos"
+    assert backend.default._default_timeout == 120
+
+
+@pytest.mark.asyncio
+async def test_non_shell_proxy_does_not_expose_execute_capability(monkeypatch, tmp_path: Path):
+    content = SHELL_SYSTEM.replace("shell: true\nenv_passthrough: []\n", "")
+    source = _source(tmp_path, content)
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return _Compiled()
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", create)
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=_StateManager(),
+        model="model",
+        tools=[],
+        backend=CompositeBackend(default=object(), routes={}),
+        checkpointer=object(),
+        agent_specs=lambda _caller: [],
+    )
+    await proxy["runnable"].ainvoke({"messages": []})
+
+    assert not supports_execution(calls[0]["backend"])
+
+
+@pytest.mark.asyncio
+async def test_shell_proxy_rejects_unrouted_permissions(monkeypatch, tmp_path: Path):
+    content = SHELL_SYSTEM.replace(
+        "shell: true\nenv_passthrough: []\n",
+        "permissions:\n  - operations: [read]\n    paths: [/nope/]\nshell: true\nenv_passthrough: []\n",
+    )
+    source = _source(tmp_path, content)
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=_StateManager(),
+        model="model",
+        tools=[],
+        backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
+        checkpointer=object(),
+        agent_specs=lambda _caller: [],
+        worktree_dir=tmp_path / "repos",
+        shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
+    )
+
+    with pytest.raises(ValueError, match="mounted route prefix"):
+        await proxy["runnable"].ainvoke({"messages": []})
+
+
+def test_shell_environment_is_scrubbed_and_explicit():
+    manifest = parse_object_agent_manifest(
+        SHELL_SYSTEM.replace("env_passthrough: []", "env_passthrough: [GH_TOKEN]"),
+        source="test",
+    )
+    assert manifest.shell is not None
+
+    environment = build_shell_env(
+        shim_bin=Path("/shims"),
+        agent_home=Path("/home/agent"),
+        config=manifest.shell,
+        parent_env={"GH_TOKEN": "token", "AZURE_OPENAI_API_KEY": "secret"},
+    )
+
+    assert environment["PATH"] == "/shims:/usr/bin:/bin"
+    assert environment["GH_TOKEN"] == "token"
+    assert "AZURE_OPENAI_API_KEY" not in environment
+
+
+def test_shell_timeout_comes_from_environment(monkeypatch):
+    monkeypatch.delenv("PROGENITOR_SHELL_TIMEOUT_SECONDS", raising=False)
+    assert RuntimeConfig.from_env().shell_timeout_seconds == 120
+
+    monkeypatch.setenv("PROGENITOR_SHELL_TIMEOUT_SECONDS", "90")
+    assert RuntimeConfig.from_env().shell_timeout_seconds == 90

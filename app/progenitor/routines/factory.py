@@ -408,13 +408,14 @@ def _build_prompt_node(
     return run
 
 
-def _build_code_node(node: RoutineNode) -> Any:
+def _build_eval_node(node: RoutineNode) -> Any:
+    """Deterministic expression evaluation; returns the raw result."""
     config = _node_config(node)
     output_key = node.output_key or node.id
-    _require_no_file_source(node.id, "code", config, "expression_file")
+    _require_no_file_source(node.id, "eval", config, "expression_file")
     expression = config.get("expression")
     if not expression:
-        raise ValueError(f"code node {node.id}: config needs 'expression'")
+        raise ValueError(f"eval node {node.id}: config needs 'expression'")
     inputs_config = config.get("inputs") or {}
 
     async def run(state: RoutineState) -> dict[str, Any]:
@@ -426,86 +427,61 @@ def _build_code_node(node: RoutineNode) -> Any:
     return run
 
 
-def _build_eval_node(
-    node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
-) -> Any:
+def _build_condition_node(node: RoutineNode) -> Any:
+    """Deterministic expression evaluation, coerced to a boolean gate."""
     config = _node_config(node)
     output_key = node.output_key or node.id
-    _require_no_file_source(node.id, "eval", config, "expression_file")
+    _require_no_file_source(node.id, "condition", config, "expression_file")
     expression = config.get("expression")
+    if not expression:
+        raise ValueError(f"condition node {node.id}: config needs 'expression'")
     inputs_config = config.get("inputs") or {}
-    rubric_prompt = config.get("rubric_prompt")
-    response_schema = _resolve_response_schema(node.id, "eval", config, defs)
-    structured_model = (
-        model.with_structured_output(
-            response_schema, method="json_schema", strict=True, include_raw=True
-        )
-        if response_schema
-        else None
-    )
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
-        if expression:
-            namespace = _resolve_inputs(node.id, inputs_config, data)
-            result = bool(evaluate_expression(expression, namespace))
-            return {"data": {output_key: result}}
-
-        if not rubric_prompt:
-            raise ValueError(f"eval node {node.id}: config needs 'expression' or 'rubric_prompt'")
-        try:
-            rendered = rubric_prompt.format(**data)
-        except KeyError as exc:
-            raise KeyError(
-                f"eval node {node.id}: rubric_prompt references missing state key: {exc}"
-            ) from exc
-
-        if structured_model is not None:
-            outcome = cast(
-                dict[str, Any], await structured_model.ainvoke([HumanMessage(content=rendered)])
-            )
-            parsed = outcome["parsed"]
-            if parsed is None:
-                raise ValueError(
-                    f"eval node {node.id}: structured response failed schema "
-                    f"validation: {outcome['parsing_error']}"
-                )
-            return {"data": {output_key: bool(parsed.get("result"))}}
-
-        response = await model.ainvoke([HumanMessage(content=rendered)])
-        text = normalize_message_content(response.content).strip()
-        result = text.lower().startswith("true")
+        namespace = _resolve_inputs(node.id, inputs_config, data)
+        result = bool(evaluate_expression(expression, namespace))
         return {"data": {output_key: result}}
 
     return run
 
 
-def _build_subagent_node(node: RoutineNode, *, subagent_registry: dict[str, Any]) -> Any:
+def _build_classify_node(
+    node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
+) -> Any:
+    """Ask the model to judge a rubric against a required structured schema."""
     config = _node_config(node)
     output_key = node.output_key or node.id
-    _require_no_file_source(node.id, "subagent", config, "prompt_file")
-    subagent_name = config["subagent_name"]
-    template = config.get("prompt_template")
-    if not template:
-        raise ValueError(f"subagent node {node.id}: config needs 'prompt_template'")
+    rubric_prompt = config["rubric_prompt"]
+    inputs_config = config.get("inputs") or {}
+    response_schema = _resolve_response_schema(node.id, "classify", config, defs)
+    if response_schema is None:
+        raise ValueError(f"classify node {node.id}: config needs 'response_schema'")
+    structured_model = model.with_structured_output(
+        response_schema, method="json_schema", strict=True, include_raw=True
+    )
 
     async def run(state: RoutineState) -> dict[str, Any]:
-        if subagent_name not in subagent_registry:
-            raise KeyError(f"node {node.id}: unknown subagent '{subagent_name}'")
         data = state.get("data", {})
+        if inputs_config:
+            data = {**data, **_resolve_inputs(node.id, inputs_config, data)}
         try:
-            rendered = template.format(**data)
+            rendered = rubric_prompt.format(**data)
         except KeyError as exc:
             raise KeyError(
-                f"subagent node {node.id}: template references missing state key: {exc}"
+                f"classify node {node.id}: rubric_prompt references missing state key: {exc}"
             ) from exc
 
-        target = subagent_registry[subagent_name]
-        result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})
-        target_messages = result.get("messages") or []
-        text = normalize_message_content(target_messages[-1].content) if target_messages else ""
-
-        return {"messages": [AIMessage(content=text)], "data": {output_key: text}}
+        outcome = cast(
+            dict[str, Any], await structured_model.ainvoke([HumanMessage(content=rendered)])
+        )
+        parsed = outcome["parsed"]
+        if parsed is None:
+            raise ValueError(
+                f"classify node {node.id}: structured response failed schema "
+                f"validation: {outcome['parsing_error']}"
+            )
+        return {"data": {output_key: parsed}}
 
     return run
 
@@ -516,28 +492,48 @@ def _build_agent_node(
     agent_registry: dict[str, Any],
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
+    """Conversational delegation to a local object agent, keyed to stay on the
+    same checkpointer thread across repeat invocations of this node within one
+    routine run (``continue_thread``, default on) rather than starting a fresh
+    conversation each time."""
     config = _node_config(node)
     output_key = node.output_key or node.id
     _require_no_file_source(node.id, "agent", config, "prompt_file")
     agent_name = config["agent_name"]
     template = config.get("prompt_template")
-    if not template:
-        raise ValueError(f"agent node {node.id}: config needs 'prompt_template'")
+    inputs_config = config.get("inputs") or {}
+    if not template and not inputs_config:
+        raise ValueError(f"agent node {node.id}: config needs 'prompt_template' or 'inputs'")
     response_schema = _resolve_response_schema(node.id, "agent", config, defs)
+    continue_thread = config.get("continue_thread", True)
 
-    async def run(state: RoutineState) -> dict[str, Any]:
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
         if agent_name not in agent_registry:
             raise KeyError(f"node {node.id}: unknown agent '{agent_name}'")
         data = state.get("data", {})
-        try:
-            rendered = template.format(**data)
-        except KeyError as exc:
-            raise KeyError(
-                f"agent node {node.id}: template references missing state key: {exc}"
-            ) from exc
+        if inputs_config:
+            namespace = _resolve_inputs(node.id, inputs_config, data)
+            rendered = json.dumps(namespace)
+        else:
+            assert template is not None  # guaranteed by the guard above
+            try:
+                rendered = template.format(**data)
+            except KeyError as exc:
+                raise KeyError(
+                    f"agent node {node.id}: template references missing state key: {exc}"
+                ) from exc
 
         target = agent_registry[agent_name]
-        result = await target.ainvoke({"messages": [HumanMessage(content=rendered)]})
+        invoke_kwargs: dict[str, Any] = {}
+        if continue_thread:
+            context = getattr(runtime, "context", None) if runtime is not None else None
+            correlation = (context or {}).get("request_id") or "routine"
+            invoke_kwargs["config"] = {
+                "configurable": {"thread_id": f"routine-agent:{correlation}:{node.id}"}
+            }
+        result = await target.ainvoke(
+            {"messages": [HumanMessage(content=rendered)]}, **invoke_kwargs
+        )
         target_messages = result.get("messages") or []
         text = normalize_message_content(target_messages[-1].content) if target_messages else ""
 
@@ -558,6 +554,74 @@ def _build_agent_node(
         if parsed is not None:
             output[f"{output_key}_json"] = parsed
 
+        return {"messages": [AIMessage(content=text)], "data": output}
+
+    return run
+
+
+def _build_a2a_node(node: RoutineNode, *, tool_registry: Any) -> Any:
+    """One-shot delegation to a registered Agent2Agent-protocol peer, resolved
+    the same way the ``@agent_name request`` direct-call chat shortcut does
+    (see ``DirectA2AFastPathMiddleware``)."""
+    from ..a2a import A2AClient, extract_message_text, summarize_task_payload
+
+    config = _node_config(node)
+    output_key = node.output_key or node.id
+    _require_no_file_source(node.id, "a2a", config, "prompt_file")
+    agent_name = config["agent_name"]
+    template = config.get("prompt_template")
+    if not template:
+        raise ValueError(f"a2a node {node.id}: config needs 'prompt_template'")
+
+    def _extract_reply_text(payload: Any) -> str:
+        if isinstance(payload, dict):
+            status = payload.get("status")
+            if isinstance(status, dict):
+                text = extract_message_text(status.get("message"))
+                if text:
+                    return text
+            text = summarize_task_payload(payload)
+            if text:
+                return text
+        return f"{agent_name} completed the request."
+
+    async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
+        data = state.get("data", {})
+        try:
+            rendered = template.format(**data)
+        except KeyError as exc:
+            raise KeyError(
+                f"a2a node {node.id}: template references missing state key: {exc}"
+            ) from exc
+
+        find_by_name = getattr(tool_registry, "find_by_name", None) if tool_registry else None
+        cfg = find_by_name(agent_name) if callable(find_by_name) else None
+        if not isinstance(cfg, dict):
+            raise KeyError(f"node {node.id}: unknown A2A agent '{agent_name}'")
+        if (
+            str(cfg.get("transport") or "").lower() != "http"
+            or not str(cfg.get("url") or "").strip()
+        ):
+            raise ValueError(
+                f"a2a node {node.id}: '{agent_name}' is not a reachable HTTP A2A agent"
+            )
+
+        context = getattr(runtime, "context", None) if runtime is not None else None
+        thread_id = (context or {}).get("request_id")
+        response = await A2AClient().call_agent(
+            cfg,
+            rendered,
+            blocking=True,
+            context={"caller": "routine", "routing_mode": "routine_node", "thread_id": thread_id},
+        )
+        if not response.get("success"):
+            raise ValueError(f"a2a node {node.id}: {response.get('error') or 'unknown error'}")
+
+        text = _extract_reply_text(response.get("result"))
+        output: dict[str, Any] = {output_key: text}
+        parsed = extract_json_object(text)
+        if parsed is not None:
+            output[f"{output_key}_json"] = parsed
         return {"messages": [AIMessage(content=text)], "data": output}
 
     return run
@@ -653,17 +717,17 @@ def _build_foreach_node(node: RoutineNode, *, agent_registry: dict[str, Any]) ->
     return run_agent
 
 
-def _build_subgraph_node(node: RoutineNode, *, subgraph_registry: dict[str, Any]) -> Any:
+def _build_routine_node(node: RoutineNode, *, routine_registry: dict[str, Any]) -> Any:
     config = _node_config(node)
     output_key = node.output_key or node.id
-    name = config["subgraph_name"]
+    name = config["routine_name"]
     input_map = config.get("input_map") or {}
     output_map = config.get("output_map") or {}
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
-        target = subgraph_registry.get(name)
+        target = routine_registry.get(name)
         if target is None:
-            raise KeyError(f"node {node.id}: unknown subgraph '{name}'")
+            raise KeyError(f"node {node.id}: unknown routine '{name}'")
         parent_data = state.get("data", {})
         child_data = (
             _resolve_inputs(node.id, input_map, parent_data) if input_map else dict(parent_data)
@@ -704,29 +768,31 @@ def _build_node_callable(
     *,
     model: BaseChatModel,
     base_system_prompt: str | None,
-    subagent_registry: dict[str, Any],
     agent_registry: dict[str, Any],
-    subgraph_registry: dict[str, Any],
+    routine_registry: dict[str, Any],
+    tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
     if node.kind == "prompt":
         return _build_prompt_node(
             node, model=model, base_system_prompt=base_system_prompt, defs=defs
         )
-    if node.kind == "code":
-        return _build_code_node(node)
     if node.kind == "eval":
-        return _build_eval_node(node, model=model, defs=defs)
-    if node.kind == "subagent":
-        return _build_subagent_node(node, subagent_registry=subagent_registry)
+        return _build_eval_node(node)
+    if node.kind == "condition":
+        return _build_condition_node(node)
+    if node.kind == "classify":
+        return _build_classify_node(node, model=model, defs=defs)
     if node.kind == "agent":
         return _build_agent_node(node, agent_registry=agent_registry, defs=defs)
+    if node.kind == "a2a":
+        return _build_a2a_node(node, tool_registry=tool_registry)
     if node.kind == "foreach":
         return _build_foreach_node(node, agent_registry=agent_registry)
     if node.kind == "human":
         return _build_human_node(node)
-    if node.kind == "subgraph":
-        return _build_subgraph_node(node, subgraph_registry=subgraph_registry)
+    if node.kind == "routine":
+        return _build_routine_node(node, routine_registry=routine_registry)
     if node.kind == "noop":
         return _build_noop_node(node)
     raise ValueError(f"unknown node kind: {node.kind}")
@@ -817,9 +883,9 @@ def compile_routine_graph(
     graph: RoutineGraph,
     *,
     model: BaseChatModel,
-    subagent_registry: dict[str, Any] | None = None,
     agent_registry: dict[str, Any] | None = None,
-    subgraph_registry: dict[str, Any] | None = None,
+    routine_registry: dict[str, Any] | None = None,
+    tool_registry: Any = None,
     base_system_prompt: str | None = None,
     checkpointer: Any | None = None,
     cache: Any | None = None,
@@ -830,9 +896,8 @@ def compile_routine_graph(
     callers provide the checkpointer and invocation context when resumability or
     human approval is required.
     """
-    subagent_registry = subagent_registry or {}
     agent_registry = agent_registry or {}
-    subgraph_registry = subgraph_registry or {}
+    routine_registry = routine_registry or {}
 
     node_ids = {node.id for node in graph.nodes}
     if graph.entry not in node_ids:
@@ -870,9 +935,9 @@ def compile_routine_graph(
                 node,
                 model=model,
                 base_system_prompt=base_system_prompt,
-                subagent_registry=subagent_registry,
                 agent_registry=agent_registry,
-                subgraph_registry=subgraph_registry,
+                routine_registry=routine_registry,
+                tool_registry=tool_registry,
                 defs=graph.defs,
             ),
             **node_options,

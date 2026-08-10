@@ -80,7 +80,7 @@ class FakeAgent:
         self._response = response
         self.calls: list[dict] = []
 
-    async def ainvoke(self, state):
+    async def ainvoke(self, state, **kwargs):
         self.calls.append(state)
         return {"messages": [AIMessage(content=self._response)]}
 
@@ -241,8 +241,8 @@ class TestAgentResponseSchema:
             )
 
 
-class TestSubagentRegistry:
-    async def test_missing_subagent_raises_keyerror(self):
+class TestRoutineRegistry:
+    async def test_missing_routine_raises_keyerror(self):
         payload = {
             "id": "g",
             "name": "g",
@@ -252,19 +252,19 @@ class TestSubagentRegistry:
             "nodes": [
                 {
                     "id": "delegate",
-                    "kind": "subagent",
+                    "kind": "routine",
                     "output_key": "delegate",
-                    "config": {"subagent_name": "helper", "prompt_template": "{request}"},
+                    "config": {"routine_name": "helper"},
                 }
             ],
             "edges": [],
         }
         graph = validate_routine_graph_payload(payload)
         model = FakeModel([])
-        with pytest.raises(KeyError, match="unknown subagent 'helper'"):
+        with pytest.raises(KeyError, match="unknown routine 'helper'"):
             await _run(graph, model, agent_registry={})
 
-    async def test_subagent_result_is_extracted_and_stored(self):
+    async def test_routine_result_is_extracted_and_stored(self):
         payload = {
             "id": "g",
             "name": "g",
@@ -274,9 +274,9 @@ class TestSubagentRegistry:
             "nodes": [
                 {
                     "id": "delegate",
-                    "kind": "subagent",
+                    "kind": "routine",
                     "output_key": "delegate",
-                    "config": {"subagent_name": "helper", "prompt_template": "{request}"},
+                    "config": {"routine_name": "helper"},
                 }
             ],
             "edges": [],
@@ -284,12 +284,12 @@ class TestSubagentRegistry:
         graph = validate_routine_graph_payload(payload)
 
         class FakeSubgraph:
-            async def ainvoke(self, state):
+            async def ainvoke(self, state, **kwargs):
                 return {"messages": [*state["messages"], AIMessage(content="delegated result")]}
 
         model = FakeModel([])
         runnable = compile_routine_graph(
-            graph, model=model, subagent_registry={"helper": FakeSubgraph()}
+            graph, model=model, routine_registry={"helper": FakeSubgraph()}
         )
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
         assert result["data"]["delegate"] == "delegated result"
@@ -420,8 +420,8 @@ class TestRecursionLimitSetting:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}},
-                {"id": "b", "kind": "code", "output_key": "b", "config": {"expression": "1"}},
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}},
+                {"id": "b", "kind": "eval", "output_key": "b", "config": {"expression": "1"}},
             ],
             "edges": [
                 {"from": "a", "to": "b", "level": "normal"},
@@ -464,7 +464,7 @@ def _single_prompt_step_payload_with_schema(response_schema: dict) -> dict:
     }
 
 
-def _single_eval_rubric_step_payload_with_schema(response_schema: dict) -> dict:
+def _single_classify_step_payload_with_schema(response_schema: dict) -> dict:
     config = {"rubric_prompt": "grade this", "response_schema": response_schema}
     return {
         "id": "structured-gate",
@@ -472,14 +472,14 @@ def _single_eval_rubric_step_payload_with_schema(response_schema: dict) -> dict:
         "description": "",
         "version": "2.0.0",
         "entry": "gate",
-        "nodes": [{"id": "gate", "kind": "eval", "output_key": "gate", "config": config}],
+        "nodes": [{"id": "gate", "kind": "classify", "output_key": "gate", "config": config}],
         "edges": [],
         "settings": {},
     }
 
 
 class TestResponseSchema:
-    """config.response_schema on prompt/eval nodes binds
+    """config.response_schema on prompt/classify nodes binds
     model.with_structured_output(schema, method='json_schema', strict=True) instead
     of a plain invoke -- Responses-API schema-constrained generation, not text-parsed
     after the fact."""
@@ -510,21 +510,21 @@ class TestResponseSchema:
         with pytest.raises(ValueError, match="structured response failed schema validation"):
             await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
 
-    async def test_eval_node_with_response_schema_reads_the_result_field(self):
-        payload = _single_eval_rubric_step_payload_with_schema(_RESULT_SCHEMA)
+    async def test_classify_node_with_response_schema_reads_the_result_field(self):
+        payload = _single_classify_step_payload_with_schema(_RESULT_SCHEMA)
         graph = validate_routine_graph_payload(payload)
         model = FakeStructuredModel([{"result": True}])
         runnable = compile_routine_graph(graph, model=model)
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
-        assert result["data"]["gate"] is True
+        assert result["data"]["gate"] == {"result": True}
 
-    async def test_eval_node_with_response_schema_false_result(self):
-        payload = _single_eval_rubric_step_payload_with_schema(_RESULT_SCHEMA)
+    async def test_classify_node_with_response_schema_false_result(self):
+        payload = _single_classify_step_payload_with_schema(_RESULT_SCHEMA)
         graph = validate_routine_graph_payload(payload)
         model = FakeStructuredModel([{"result": False}])
         runnable = compile_routine_graph(graph, model=model)
         result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
-        assert result["data"]["gate"] is False
+        assert result["data"]["gate"] == {"result": False}
 
 
 def _single_prompt_step_payload_with_ref(
@@ -581,7 +581,7 @@ class TestInputSchema:
             "nodes": [
                 {
                     "id": "a",
-                    "kind": "code",
+                    "kind": "eval",
                     "output_key": "echo",
                     "config": {"expression": "candidate", "inputs": {"candidate": "candidate"}},
                 }
@@ -608,7 +608,7 @@ class TestInputSchema:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}}
             ],
             "edges": [],
         }
@@ -633,8 +633,8 @@ class TestOutputSchema:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "kept", "config": {"expression": "1"}},
-                {"id": "b", "kind": "code", "output_key": "dropped", "config": {"expression": "2"}},
+                {"id": "a", "kind": "eval", "output_key": "kept", "config": {"expression": "1"}},
+                {"id": "b", "kind": "eval", "output_key": "dropped", "config": {"expression": "2"}},
             ],
             "edges": [{"from": "a", "to": "b", "level": "normal"}],
             "output_schema": {"kept": "integer"},
@@ -653,7 +653,7 @@ class TestOutputSchema:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}}
             ],
             "edges": [],
             "output_schema": {"a": "integer", "never_produced": "string"},
@@ -674,7 +674,7 @@ class TestOutputSchema:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "a", "config": {"expression": "1"}}
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}}
             ],
             "edges": [],
         }
@@ -684,8 +684,8 @@ class TestOutputSchema:
         assert result["data"]["a"] == 1
 
 
-class TestSubagentDelegationContract:
-    """_build_subagent_node/_build_agent_node and subagent.py's CompiledSubAgent
+class TestRoutineDelegationContract:
+    """_build_routine_node/_build_agent_node and subagent.py's CompiledSubAgent
     proxy both unconditionally read result["messages"] from a compiled routine's
     invoke() -- an output_schema that dropped messages would silently break
     delegation for any routine invoked as a subagent."""
@@ -698,7 +698,7 @@ class TestSubagentDelegationContract:
             "version": "2.0.0",
             "entry": "a",
             "nodes": [
-                {"id": "a", "kind": "code", "output_key": "result", "config": {"expression": "1"}}
+                {"id": "a", "kind": "eval", "output_key": "result", "config": {"expression": "1"}}
             ],
             "edges": [],
             "output_schema": {"result": "integer"},
@@ -706,7 +706,7 @@ class TestSubagentDelegationContract:
         graph = validate_routine_graph_payload(payload)
         runnable = compile_routine_graph(graph, model=FakeModel([]))
         result = await runnable.ainvoke({"messages": [HumanMessage(content="delegated call")]})
-        # Mirrors _build_subagent_node's own access pattern exactly.
+        # Mirrors _build_routine_node's own access pattern exactly.
         target_messages = result.get("messages") or []
         assert target_messages, "messages must survive output_schema projection"
         assert target_messages[0].content == "delegated call"

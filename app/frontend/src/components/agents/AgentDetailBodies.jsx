@@ -373,37 +373,19 @@ function AgentSkillRow({ skillPath, agentsUrl }) {
   );
 }
 
-export function ObjectAgentDetailBody({ agent, agentsUrl, onSave }) {
-  const rawContent = agent.card?.raw_content;
-  const [draftContent, setDraftContent] = useState(null);
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const startEdit = () => {
-    setDraftContent(rawContent ?? '');
-    setError('');
-  };
-
-  const cancelEdit = () => {
-    setDraftContent(null);
-    setError('');
-  };
-
-  const save = async () => {
-    if (draftContent === null) return;
-    setSaving(true);
-    setError('');
-    try {
-      await onSave({ content: draftContent });
-      setDraftContent(null);
-    } catch (saveError) {
-      setError(saveError.message || 'Failed to save agent.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (draftContent !== null) {
+export function ObjectAgentDetailBody({
+  agent,
+  agentsUrl,
+  editing = false,
+  draft = null,
+  onDraftChange,
+  onStartEdit,
+  onCancelEdit,
+  onSaveEdit,
+  saving = false,
+  error = '',
+}) {
+  if (editing) {
     return (
       <div className="detail-pane__body agents-draft">
         {error ? <p className="agents-draft__note agents-draft__note--error">{error}</p> : null}
@@ -413,15 +395,15 @@ export function ObjectAgentDetailBody({ agent, agentsUrl, onSave }) {
             <textarea
               rows="24"
               className="agents-json-field"
-              value={draftContent}
-              onChange={(event) => setDraftContent(event.target.value)}
+              value={draft ?? ''}
+              onChange={(event) => onDraftChange(event.target.value)}
               spellCheck={false}
             />
           </DraftField>
         </section>
         <div className="agents-graph-editor__actions">
-          <button type="button" className="repo-btn repo-btn--ghost" onClick={cancelEdit} disabled={saving}>Cancel</button>
-          <button type="button" className="repo-btn repo-btn--primary" onClick={save} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="repo-btn repo-btn--ghost" onClick={onCancelEdit} disabled={saving}>Cancel</button>
+          <button type="button" className="repo-btn repo-btn--primary" onClick={onSaveEdit} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     );
@@ -444,7 +426,7 @@ export function ObjectAgentDetailBody({ agent, agentsUrl, onSave }) {
         <section className="agents-section">
           <header className="agents-section__head">
             <h2>Manifest</h2>
-            <button type="button" className="repo-btn repo-btn--ghost" onClick={startEdit}>Edit</button>
+            <button type="button" className="repo-btn repo-btn--ghost" onClick={onStartEdit}>Edit</button>
           </header>
           <div className="agents-card-facts">
             {frontMatterEntries

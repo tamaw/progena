@@ -41,6 +41,7 @@ from app.progenitor.content_documents import (
     AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
 from app.progenitor.utils import utcnow
@@ -60,7 +61,11 @@ from app.progenitor.workflows import (
     workflow_id_from_path,
 )
 
-from .agent_profile_routes import broadcast_agent_profiles_snapshot, create_agent_profile_router
+from .agent_profile_routes import (
+    AgentGraphModel,
+    broadcast_agent_profiles_snapshot,
+    create_agent_profile_router,
+)
 from .agent_store import get_agent_store
 from .alerts import (
     AlertInfo,
@@ -4258,8 +4263,93 @@ def _queue_kanban_trigger_reconciliation(_snapshot, changed_key: str | None = No
     task.add_done_callback(_active_kanban_reconcile_tasks.discard)
 
 
+_routine_agent_watch_callback = None
+_active_routine_agent_tasks: set[asyncio.Task] = set()
+
+
+def _queue_routine_agent_reconciliation(_snapshot, changed_key: str | None = None) -> None:
+    """Always-on watcher that reconciles the ``agent``/``agent_graph`` rows
+    for routine graph documents written outside the HTTP graph-update route --
+    chiefly the runtime agent's ``/routines/<id>.json`` filesystem tool
+    (``RoutineDirectoryBackend.awrite``). That route requires the agent row to
+    already exist (see ``update_agent_graph``), so a routine the runtime
+    creates from scratch would otherwise never appear on the Routines page and
+    never get a canonical event -- this closes that gap so a runtime-authored
+    write reaches the frontend the exact same way a UI-driven graph edit does
+    (``agent.graph.updated`` / ``agents.snapshot`` on ``/api/ui/stream`` ->
+    Redux, see ``app/frontend/src/store/uiData/agents.js``).
+
+    Registered separately from ``_queue_state_watch_status``, which returns
+    immediately with no UI client connected (fine for UI-push optimization,
+    wrong here: the row must exist by the time someone opens the page, not
+    only while they're already looking at it). ROUTINE_GRAPH_KEY_PREFIX is in
+    ``state_reader._emit_if_changed``'s bypass list so no write here is
+    silently dropped by the coarse snapshot diff.
+    """
+    task = asyncio.create_task(_reconcile_routine_agent(changed_key))
+    _active_routine_agent_tasks.add(task)
+    task.add_done_callback(_active_routine_agent_tasks.discard)
+
+
+async def _reconcile_routine_agent(changed_key: str | None) -> None:
+    store = get_agent_store()
+    if store is None:
+        return
+    if changed_key is None:
+        # Full resync (listener reconnect): catch every routine document, not
+        # just the one that triggered this NOTIFY.
+        agent_ids = await asyncio.to_thread(store.list_routine_document_ids)
+    elif changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX):
+        agent_ids = [changed_key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)]
+    else:
+        return
+
+    roster_changed = False
+    for agent_id in agent_ids:
+        if not agent_id:
+            continue
+        try:
+            graph_document = await asyncio.to_thread(store.get_routine_document, agent_id)
+            if graph_document is None:
+                continue
+            created = await asyncio.to_thread(store.ensure_routine_agent, agent_id, graph_document)
+            agent = await asyncio.to_thread(store.get_agent, agent_id)
+        except Exception:
+            logger.debug("Failed to reconcile routine agent %r", agent_id, exc_info=True)
+            continue
+        if agent is None:
+            continue
+        roster_changed = roster_changed or created
+        # `agent["graph"]` goes through `_graph_payload`, which re-reads the
+        # routine document from the store a second time (independently of
+        # `graph_document` above). That second read has raced with the write
+        # this same pass just made -- landing before it was visible -- and
+        # published an empty `nodes`/`edges` graph. GraphCanvas seeds its
+        # nodes/edges once per mount and never re-syncs from later prop
+        # updates, so one bad broadcast during mount left the routine
+        # looking permanently empty until the user forced a remount by
+        # selecting a different agent and back. Source entry/nodes/edges
+        # from the document we already fetched and just confirmed fresh;
+        # keep status/summary from the SQL row, which only that row tracks.
+        graph_payload = dict(agent["graph"])
+        graph_payload["entry"] = graph_document.get("entry")
+        graph_payload["nodes"] = graph_document.get("nodes", [])
+        graph_payload["edges"] = graph_document.get("edges", [])
+        broadcast_ui_event(
+            "agent.graph.updated",
+            {
+                "agent_id": agent_id,
+                "graph": AgentGraphModel(**graph_payload).model_dump(by_alias=True),
+            },
+        )
+
+    if roster_changed:
+        await _broadcast_agent_profiles_safe()
+
+
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4270,11 +4360,15 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _workflow_invoke_watch_callback is None:
         _workflow_invoke_watch_callback = _queue_workflow_invoke_reconciliation
         state_reader.add_watcher(_workflow_invoke_watch_callback)
+    if _routine_agent_watch_callback is None:
+        _routine_agent_watch_callback = _queue_routine_agent_reconciliation
+        state_reader.add_watcher(_routine_agent_watch_callback)
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
-    global _state_watch_callback, _kanban_trigger_watch_callback, _workflow_invoke_watch_callback
+    global _state_watch_callback, _kanban_trigger_watch_callback
+    global _workflow_invoke_watch_callback, _routine_agent_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4285,6 +4379,9 @@ async def stop_state_status_watcher() -> None:
     if _workflow_invoke_watch_callback is not None:
         state_reader.remove_watcher(_workflow_invoke_watch_callback)
         _workflow_invoke_watch_callback = None
+    if _routine_agent_watch_callback is not None:
+        state_reader.remove_watcher(_routine_agent_watch_callback)
+        _routine_agent_watch_callback = None
     await state_reader.stop_watching()
 
 
