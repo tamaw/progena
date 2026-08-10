@@ -437,6 +437,57 @@ test.describe('routine graph connectors', () => {
     ).toBeGreaterThanOrEqual(geometry.laneCx - AXIS_EPSILON - 1);
   });
 
+  test('neither rail extends into an unclicked "+ Add …" slot, and the real lane still meets the join', async ({ page }) => {
+    // "+ Add default" / "+ Add branch" are editor affordances a user hasn't
+    // turned into a real branch yet -- neither the fan-out (top, router down
+    // into each lane) nor the fan-in (bottom, lane up into the join) bar may
+    // visually claim a connection to one. This is NOT done by reassigning
+    // --fanout-last onto the real last lane (its clip formula, "stop at the
+    // clipped lane's own centre", is calibrated for the add-slot's position,
+    // not the real lane's -- moving it strands the join's stem short of the
+    // bar). Add-slot lanes instead render no bar segment at all, and the
+    // real last lane's own unclipped overhang -- unchanged -- keeps meeting
+    // the join exactly as before.
+    await page.goto('/routines/feedback-categoriser');
+    const rendered = await page.locator('.routine-fork--joined').first()
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true, () => false);
+    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+
+    const result = await page.evaluate(() => {
+      const fork = document.querySelector('.routine-fork--joined');
+      const join = fork.querySelector('.routine-fork__join').getBoundingClientRect();
+      const joinCx = join.left + join.width / 2;
+      const lanes = [...fork.querySelectorAll(':scope > .routine-fork__branches > .routine-fork__lanes > .routine-fork__lane')];
+      const addLanes = lanes.filter((l) => l.className.includes('--add'));
+      const realLanes = lanes.filter((l) => !l.className.includes('--add'));
+      const lastReal = realLanes.at(-1);
+      const wire = lastReal.querySelector('.routine-fork__wire');
+      const after = getComputedStyle(wire, '::after');
+      const wireRect = wire.getBoundingClientRect();
+      const railRight = wireRect.x + wireRect.width - (parseFloat(after.right) || 0);
+      return {
+        addLaneCount: addLanes.length,
+        before: addLanes.map((l) => getComputedStyle(l.querySelector('.routine-fork__wire'), '::before').display),
+        after: addLanes.map((l) => getComputedStyle(l.querySelector('.routine-fork__wire'), '::after').display),
+        railRight,
+        joinCx,
+      };
+    });
+
+    expect(result.addLaneCount, 'expected at least one "+ Add …" slot').toBeGreaterThan(0);
+    for (const display of result.before) {
+      expect(display, 'an "+ Add …" slot rendered a fan-out bar segment').toBe('none');
+    }
+    for (const display of result.after) {
+      expect(display, 'an "+ Add …" slot rendered a fan-in bar segment').toBe('none');
+    }
+    expect(
+      result.railRight,
+      `real last lane's rail ends at ${result.railRight.toFixed(1)}, ${(result.joinCx - result.railRight).toFixed(1)}px short of the join's centre (${result.joinCx.toFixed(1)})`,
+    ).toBeCloseTo(result.joinCx, 0);
+  });
+
   test('a graph wider than the canvas overflows rightward only', async ({ page }) => {
     // Nested scopes are what used to produce negative offsets, which no scroll
     // container can reach; 900px guarantees the chain is wider than the pane.
