@@ -35,6 +35,7 @@ from app.progenitor.mcp.loader import (
     normalize_mcp_config_payload,
     resolve_required_env_template,
 )
+from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.workflows import (
     WORKFLOW_DEFINITION_KEY_PREFIX,
     WORKFLOW_INVOKE_REQUEST_KEY_PREFIX,
@@ -1876,6 +1877,7 @@ class StateReader:
                     or changed_key.startswith(AGENT_DOCUMENT_KEY_PREFIX)
                     or changed_key.startswith(SKILL_DOCUMENT_KEY_PREFIX)
                     or changed_key.startswith(AGENT_SELF_EDIT_TOUCH_KEY_PREFIX)
+                    or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                 )
             )
             if not key_bypasses_state_diff:

@@ -3584,7 +3584,6 @@ body,
   gap: 6px 8px;
   align-items: start;
   width: 100%;
-  margin-bottom: 1px;
   padding: 7px 10px 8px;
   color: var(--color-text-primary);
   background: transparent;
@@ -3722,8 +3721,8 @@ body,
   padding: 8px 10px;
   color: var(--color-text-primary);
   text-align: left;
-  background: var(--color-bg-secondary);
-  border: 1px solid var(--color-border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 8px;
   cursor: pointer;
   transition: border-color 120ms ease, background-color 120ms ease;
@@ -6874,6 +6873,10 @@ body,
 }
 
 .agents-graph-canvas .node-type-icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 15px;
   color: var(--node-color);
   background: color-mix(in oklab, var(--node-color) 20%, transparent);
 }
@@ -6966,23 +6969,39 @@ body,
    GRAPH_KIND_COLORS in AgentGraph.jsx, which takes precedence; kept here too
    for any server-rendered/no-JS fallback). */
 .agents-graph-node--prompt {
-  --node-color: #2f6ff6;
-}
-
-.agents-graph-node--code {
-  --node-color: #b06ef6;
+  --node-color: #3b82f6;
 }
 
 .agents-graph-node--eval {
-  --node-color: #e0a23a;
+  --node-color: #6366f1;
 }
 
-.agents-graph-node--subagent {
-  --node-color: #2f9e6f;
+.agents-graph-node--condition {
+  --node-color: #f59e0b;
+}
+
+.agents-graph-node--classify {
+  --node-color: #d946ef;
 }
 
 .agents-graph-node--agent {
-  --node-color: #ef6c2a;
+  --node-color: #10b981;
+}
+
+.agents-graph-node--a2a {
+  --node-color: #f97316;
+}
+
+.agents-graph-node--human {
+  --node-color: #f43f5e;
+}
+
+.agents-graph-node--foreach {
+  --node-color: #06b6d4;
+}
+
+.agents-graph-node--routine {
+  --node-color: #8b5cf6;
 }
 
 .agents-graph-node--noop {
@@ -7375,11 +7394,15 @@ body,
   border-radius: 8px;
 }
 
-.routine-connector__menu-item .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
-.routine-connector__menu-item .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
-.routine-connector__menu-item .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
-.routine-connector__menu-item .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
-.routine-connector__menu-item .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.prompt { color: #3b82f6; background: color-mix(in oklab, #3b82f6 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.eval { color: #6366f1; background: color-mix(in oklab, #6366f1 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.condition { color: #f59e0b; background: color-mix(in oklab, #f59e0b 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.classify { color: #d946ef; background: color-mix(in oklab, #d946ef 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.agent { color: #10b981; background: color-mix(in oklab, #10b981 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.a2a { color: #f97316; background: color-mix(in oklab, #f97316 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.human { color: #f43f5e; background: color-mix(in oklab, #f43f5e 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.foreach { color: #06b6d4; background: color-mix(in oklab, #06b6d4 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.routine { color: #8b5cf6; background: color-mix(in oklab, #8b5cf6 18%, transparent); }
 .routine-connector__menu-item .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
 
 /* Delete-step control in the step card's title bar. */
@@ -8018,11 +8041,15 @@ body,
   border-radius: 7px;
 }
 
-.routine-unreachable__item .canvas-dock-icon.prompt { color: #2f6ff6; background: color-mix(in oklab, #2f6ff6 18%, transparent); }
-.routine-unreachable__item .canvas-dock-icon.code { color: #b06ef6; background: color-mix(in oklab, #b06ef6 18%, transparent); }
-.routine-unreachable__item .canvas-dock-icon.eval { color: #e0a23a; background: color-mix(in oklab, #e0a23a 18%, transparent); }
-.routine-unreachable__item .canvas-dock-icon.subagent { color: #2f9e6f; background: color-mix(in oklab, #2f9e6f 18%, transparent); }
-.routine-unreachable__item .canvas-dock-icon.agent { color: #ef6c2a; background: color-mix(in oklab, #ef6c2a 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.prompt { color: #3b82f6; background: color-mix(in oklab, #3b82f6 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.eval { color: #6366f1; background: color-mix(in oklab, #6366f1 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.condition { color: #f59e0b; background: color-mix(in oklab, #f59e0b 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.classify { color: #d946ef; background: color-mix(in oklab, #d946ef 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.agent { color: #10b981; background: color-mix(in oklab, #10b981 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.a2a { color: #f97316; background: color-mix(in oklab, #f97316 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.human { color: #f43f5e; background: color-mix(in oklab, #f43f5e 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.foreach { color: #06b6d4; background: color-mix(in oklab, #06b6d4 18%, transparent); }
+.routine-unreachable__item .canvas-dock-icon.routine { color: #8b5cf6; background: color-mix(in oklab, #8b5cf6 18%, transparent); }
 .routine-unreachable__item .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
 
 .routine-unreachable__item span:nth-child(2) {

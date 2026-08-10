@@ -24,14 +24,15 @@ RESERVED_ROUTINE_NODE_IDS = frozenset(
 )
 VALID_ROUTINE_NODE_KINDS = {
     "prompt",
-    "code",
     "eval",
-    "subagent",
+    "condition",
+    "classify",
     "agent",
+    "a2a",
     "noop",
     "human",
     "foreach",
-    "subgraph",
+    "routine",
 }
 
 ROUTINE_NODE_RETRY_DEFAULTS = {
@@ -98,7 +99,9 @@ class PromptNodeConfig(BaseModel):
     cache: bool | CachePolicyConfig | None = None
 
 
-class CodeNodeConfig(BaseModel):
+class EvalNodeConfig(BaseModel):
+    """Deterministic expression evaluation; returns the raw result."""
+
     model_config = ConfigDict(extra="forbid")
 
     language: Literal["python"] | None = None
@@ -109,28 +112,54 @@ class CodeNodeConfig(BaseModel):
     cache: bool | CachePolicyConfig | None = None
 
 
-class EvalNodeConfig(CodeNodeConfig):
-    rubric_prompt: str | None = None
-    response_schema: dict[str, Any] | None = None
+class ConditionNodeConfig(BaseModel):
+    """Deterministic expression evaluation; result is coerced to a bool gate."""
 
-
-class SubagentNodeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subagent_name: str = Field(min_length=1)
-    prompt_template: str | None = None
-    prompt_file: str | None = None
+    language: Literal["python"] | None = None
+    expression: str | None = None
+    expression_file: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
+    retry: RetryPolicyConfig | None = None
+    cache: bool | CachePolicyConfig | None = None
+
+
+class ClassifyNodeConfig(BaseModel):
+    """LLM-judged rubric evaluation against a required structured schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    rubric_prompt: str = Field(min_length=1)
+    response_schema: dict[str, Any] = Field(...)
+    inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
     cache: bool | CachePolicyConfig | None = None
 
 
 class AgentNodeConfig(BaseModel):
+    """Conversational delegation to a local object agent."""
+
     model_config = ConfigDict(extra="forbid")
 
     agent_name: str = Field(min_length=1)
     prompt_template: str | None = None
     prompt_file: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
     response_schema: dict[str, Any] | None = None
+    continue_thread: bool = True
+    retry: RetryPolicyConfig | None = None
+    cache: bool | CachePolicyConfig | None = None
+
+
+class A2ANodeConfig(BaseModel):
+    """One-shot delegation to a registered Agent2Agent-protocol peer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_name: str = Field(min_length=1)
+    prompt_template: str | None = None
+    prompt_file: str | None = None
     retry: RetryPolicyConfig | None = None
     cache: bool | CachePolicyConfig | None = None
 
@@ -176,10 +205,10 @@ ForeachNodeConfig = Annotated[
 ]
 
 
-class SubgraphNodeConfig(BaseModel):
+class RoutineNodeConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    subgraph_name: str = Field(min_length=1)
+    routine_name: str = Field(min_length=1)
     input_map: dict[str, str] = Field(default_factory=dict)
     output_map: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
@@ -201,23 +230,8 @@ class RoutineNodePrompt(BaseModel):
     y: float | None = None
 
 
-class RoutineNodeCode(BaseModel):
-    """Evaluate a restricted deterministic expression."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    kind: Literal["code"] = "code"
-    description: str = ""
-    output_key: str | None = None
-    config: CodeNodeConfig
-    label: str | None = None
-    x: float | None = None
-    y: float | None = None
-
-
 class RoutineNodeEval(BaseModel):
-    """Evaluate a restricted expression, or ask the model for a rubric result."""
+    """Evaluate a restricted deterministic expression; returns the raw result."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -231,23 +245,38 @@ class RoutineNodeEval(BaseModel):
     y: float | None = None
 
 
-class RoutineNodeSubagent(BaseModel):
-    """Invoke another compiled routine graph by name."""
+class RoutineNodeCondition(BaseModel):
+    """Evaluate a restricted expression, coerced to a boolean gate."""
 
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    kind: Literal["subagent"] = "subagent"
+    kind: Literal["condition"] = "condition"
     description: str = ""
     output_key: str | None = None
-    config: SubagentNodeConfig
+    config: ConditionNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
+class RoutineNodeClassify(BaseModel):
+    """Ask the model to judge a rubric against a required structured schema."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["classify"] = "classify"
+    description: str = ""
+    output_key: str | None = None
+    config: ClassifyNodeConfig
     label: str | None = None
     x: float | None = None
     y: float | None = None
 
 
 class RoutineNodeAgent(BaseModel):
-    """Invoke a declarative object agent by name."""
+    """Conversationally invoke a local object agent by name."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -256,6 +285,21 @@ class RoutineNodeAgent(BaseModel):
     description: str = ""
     output_key: str | None = None
     config: AgentNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
+class RoutineNodeA2A(BaseModel):
+    """Invoke a registered Agent2Agent-protocol peer by name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["a2a"] = "a2a"
+    description: str = ""
+    output_key: str | None = None
+    config: A2ANodeConfig
     label: str | None = None
     x: float | None = None
     y: float | None = None
@@ -287,14 +331,14 @@ class RoutineNodeForeach(BaseModel):
     y: float | None = None
 
 
-class RoutineNodeSubgraph(BaseModel):
+class RoutineNodeRoutine(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    kind: Literal["subgraph"] = "subgraph"
+    kind: Literal["routine"] = "routine"
     description: str = ""
     output_key: str | None = None
-    config: SubgraphNodeConfig
+    config: RoutineNodeConfig
     label: str | None = None
     x: float | None = None
     y: float | None = None
@@ -317,14 +361,15 @@ class RoutineNodeNoop(BaseModel):
 
 RoutineNode = Annotated[
     RoutineNodePrompt
-    | RoutineNodeCode
     | RoutineNodeEval
-    | RoutineNodeSubagent
+    | RoutineNodeCondition
+    | RoutineNodeClassify
     | RoutineNodeAgent
+    | RoutineNodeA2A
     | RoutineNodeNoop
     | RoutineNodeHuman
     | RoutineNodeForeach
-    | RoutineNodeSubgraph,
+    | RoutineNodeRoutine,
     Field(discriminator="kind"),
 ]
 

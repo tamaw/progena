@@ -175,6 +175,7 @@ export {
   fetchAgentProfiles,
   requestAgentDetail,
   updateAgentGraph,
+  deleteAgentProfile,
   updateObjectAgentProfile,
   fetchAgentSkillContent,
   updateAgentSkillContent,

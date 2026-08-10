@@ -1805,11 +1805,7 @@ pre.mermaid svg {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
-    margin-bottom: 1px;
     padding: 7px 10px 8px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
     cursor: pointer;
     transition: background-color 120ms ease, border-color 120ms ease;
 }

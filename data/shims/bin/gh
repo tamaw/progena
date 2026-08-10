@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Guardrail only: absolute paths can bypass this shim; the container is the boundary.
+set -euo pipefail
+
+REAL_PATH="${PROGENITOR_SHIM_SYSTEM_PATH:-/usr/bin:/bin}"
+deny() { printf 'progenitor-shim: refused: %s\n' "$*" >&2; exit 2; }
+
+args=("$@")
+for arg in "${args[@]}"; do
+  case "$arg" in
+    -X|--method|--hostname|--template)
+      deny "option: $arg"
+      ;;
+  esac
+done
+
+group=${args[0]:-}
+verb=${args[1]:-}
+case "$group:$verb" in
+  repo:view|repo:list|pr:view|pr:list|pr:diff|pr:checks|issue:view|issue:list|release:view|release:list|run:view|run:list|workflow:view|workflow:list|label:list|search:repos|search:issues|search:prs|auth:status)
+    ;;
+  *)
+    deny "gh $group $verb"
+    ;;
+esac
+
+exec /usr/bin/env PATH="$REAL_PATH" gh "${args[@]}"

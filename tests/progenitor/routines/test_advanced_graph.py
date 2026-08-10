@@ -121,7 +121,7 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
         },
         {
             "id": "recover",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "recover",
             "config": {"expression": "'recovered'"},
         },
@@ -144,25 +144,25 @@ async def test_static_fanout_waits_for_every_source_at_fanin() -> None:
         {"id": "fan", "kind": "noop", "output_key": "fan", "config": {}},
         {
             "id": "left",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "left",
             "config": {"expression": "'left'"},
         },
         {
             "id": "left_late",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "late",
             "config": {"expression": "left + '-late'", "inputs": {"left": "left"}},
         },
         {
             "id": "right",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "right",
             "config": {"expression": "'right'"},
         },
         {
             "id": "join",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "join",
             "config": {
                 "expression": "late + '-' + right",
@@ -188,13 +188,13 @@ async def test_loop_guard_routes_false_result_without_running_guarded_target() -
         {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
         {
             "id": "loop",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "loop",
             "config": {"expression": "'unexpected'"},
         },
         {
             "id": "fallback",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "fallback",
             "config": {"expression": "'finished'"},
         },
@@ -268,7 +268,7 @@ async def test_send_fanout_and_native_subgraph() -> None:
     child = graph(
         {
             "id": "child",
-            "kind": "code",
+            "kind": "eval",
             "output_key": "child",
             "config": {"expression": "item + 1", "inputs": {"item": "item"}},
         },
@@ -282,10 +282,10 @@ async def test_send_fanout_and_native_subgraph() -> None:
         },
         {
             "id": "child",
-            "kind": "subgraph",
+            "kind": "routine",
             "output_key": "result",
             "config": {
-                "subgraph_name": "child",
+                "routine_name": "child",
                 "output_map": {"child_result": "child"},
             },
         },
@@ -293,7 +293,7 @@ async def test_send_fanout_and_native_subgraph() -> None:
     )
     child_compiled = compile_routine_graph(child, model=FakeModel())
     parent_compiled = compile_routine_graph(
-        parent, model=FakeModel(), subgraph_registry={"child": child_compiled}
+        parent, model=FakeModel(), routine_registry={"child": child_compiled}
     )
     result = await parent_compiled.ainvoke(
         {"messages": [HumanMessage("go")], "data": {"items": [1, 2]}}

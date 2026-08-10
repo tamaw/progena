@@ -79,6 +79,11 @@ export const updateAgentGraph = createAcknowledgedThunk('uiData/updateAgentGraph
   },
 ));
 
+export const deleteAgentProfile = createAcknowledgedThunk('uiData/deleteAgentProfile', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}`,
+  { method: 'DELETE', requestId },
+));
+
 export const updateObjectAgentProfile = createAcknowledgedThunk('uiData/updateObjectAgentProfile', ({ agentsUrl, agentId, manifest }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/object/${encodeURIComponent(agentId)}`,
   {

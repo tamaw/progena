@@ -86,7 +86,7 @@ class TestValidateRoutineGraphStructural:
         validate_routine_graph(
             [
                 {"id": "a", "kind": "prompt"},
-                {"id": "b", "kind": "code"},
+                {"id": "b", "kind": "eval"},
                 {"id": "c", "kind": "noop"},
                 {"id": "d", "kind": "noop"},
             ],
@@ -128,7 +128,7 @@ class TestValidateRoutineGraphStructural:
     def test_rejects_unsupported_router_kind(self):
         with pytest.raises(ValueError, match="unsupported router kind"):
             validate_routine_graph(
-                [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}],
+                [{"id": "a", "kind": "eval"}, {"id": "b", "kind": "noop"}],
                 [
                     {
                         "from": "a",
@@ -143,7 +143,7 @@ class TestValidateRoutineGraphStructural:
     def test_rejects_router_default_to_unknown_node(self):
         with pytest.raises(ValueError, match="unknown target node"):
             validate_routine_graph(
-                [{"id": "a", "kind": "code"}, {"id": "b", "kind": "noop"}],
+                [{"id": "a", "kind": "eval"}, {"id": "b", "kind": "noop"}],
                 [
                     {
                         "from": "a",
@@ -160,7 +160,7 @@ class TestValidateRoutineGraphStructural:
         with pytest.raises(ValueError, match="more than one outgoing edge declaration"):
             validate_routine_graph(
                 [
-                    {"id": "a", "kind": "code"},
+                    {"id": "a", "kind": "eval"},
                     {"id": "b", "kind": "noop"},
                     {"id": "c", "kind": "noop"},
                 ],

@@ -388,6 +388,29 @@ class AgentStore:
             )
         return _object_agent_profile(manifest, source=source, raw_content=content)
 
+    def delete_user_object_agent(self, agent_id: str) -> bool:
+        """Delete an author-created (``source == "user"``) object agent's
+        ``SYSTEM.md`` document. Native agents are repo files (edit the repo
+        instead) and marketplace agents are plugin-managed (Plugins >
+        Uninstall) -- neither is deletable here. Returns False when the
+        agent id has no match at all; raises when it matches but is not
+        ``user``-sourced, so the route layer can tell "not found" from
+        "not allowed" apart.
+        """
+        entries = self._iter_object_agent_locations()
+        match = next((entry for entry in entries if f"object-{_slug(entry[1])}" == agent_id), None)
+        if match is None:
+            return False
+        source, _name, location, _manifest, _raw = match
+        if source != "user":
+            raise ValueError(
+                f"object agent {agent_id!r} is a {source} agent and cannot be deleted here"
+            )
+        self._document_store.delete_document(
+            PROGENITOR_STATE_PREFIX, content_document_key("agent", cast(str, location))
+        )
+        return True
+
     def resolve_skill(self, skill_path: str) -> dict[str, Any] | None:
         """Resolve one skill's ``SKILL.md`` by its manifest ``skills:`` entry.
 
@@ -570,6 +593,74 @@ class AgentStore:
         self._document_store.save_document(
             PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), document
         )
+
+    def get_routine_document(self, agent_id: str) -> dict[str, Any] | None:
+        """Read a routine graph document directly, without requiring an
+        ``agent`` row to already exist -- ``get_agent``'s ``graph`` field goes
+        through ``_graph_payload``, which needs the row first.
+        """
+        document = self._document_store.get_document(
+            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
+        )
+        payload = document.payload if document is not None else None
+        return payload if isinstance(payload, dict) else None
+
+    def list_routine_document_ids(self) -> list[str]:
+        """Every agent id with a persisted routine graph document."""
+        return [
+            key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)
+            for key, _ in self._document_store.list_documents(
+                PROGENITOR_STATE_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
+            )
+        ]
+
+    def ensure_routine_agent(self, agent_id: str, graph: dict[str, Any]) -> bool:
+        """Create the ``agent``/``agent_graph`` rows for a routine graph
+        document written directly to the shared document store -- chiefly the
+        runtime agent's ``/routines/<id>.json`` filesystem tool
+        (``RoutineDirectoryBackend.awrite``), which persists the graph without
+        ever going through the HTTP graph-update route and the row creation
+        it implicitly relies on (that route 404s unless the agent already
+        exists -- see ``update_agent_graph``). Idempotent: both inserts are
+        ``ON CONFLICT DO NOTHING``, so this is safe to call on every routine
+        document write, not just the first. Returns True when this created a
+        previously-unknown routine (the roster changed).
+        """
+        created = self.insert_agent_if_absent(
+            {
+                "id": agent_id,
+                "kind": "routine",
+                "name": str(graph.get("name") or agent_id),
+                "handle": None,
+                "display_group": "Routines",
+                "color": _color_for(agent_id),
+                "model": None,
+                "role": None,
+                "version": str(graph.get("version") or "1.0.0"),
+                "summary": str(graph.get("description") or ""),
+                "status": "Draft",
+                "system_prompt": None,
+            }
+        )
+        self.ensure_graph(agent_id, graph)
+        return created
+
+    def delete_routine_agent(self, agent_id: str) -> bool:
+        """Delete a routine's ``agent``/``agent_graph`` rows and its graph
+        document. Callers must already have checked ``kind == "routine"``
+        (see ``delete_agent_profile``); the ``kind`` guard here is a second,
+        cheap line of defense so this can never delete an object/A2A/ACP
+        profile row. ``agent_graph`` cascades via its FK. Returns True when a
+        row was actually deleted.
+        """
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM agent WHERE id = %s AND kind = 'routine'", (agent_id,))
+            deleted = int(cur.rowcount) > 0
+        if deleted:
+            self._document_store.delete_document(
+                PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id)
+            )
+        return deleted
 
     def reset_legacy_graphs(self, valid_kinds: set[str]) -> int:
         """Reset routine documents that use node kinds outside ``valid_kinds`` to

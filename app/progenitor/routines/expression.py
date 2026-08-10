@@ -1,4 +1,4 @@
-"""Restricted expression evaluator for routine 'code'/'eval' nodes.
+"""Restricted expression evaluator for routine 'eval'/'condition' nodes.
 
 Evaluates a small, explicitly whitelisted subset of Python expression syntax via
 ``ast.parse(mode="eval")`` plus a recursive walk of the parsed tree — never
