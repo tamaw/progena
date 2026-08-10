@@ -6,7 +6,7 @@ import Select from '../components/common/Select';
 import { DraftField } from '../components/common/DetailCards';
 import PopupModal from '../components/common/PopupModal';
 import { useConfig } from '../context/ConfigContext';
-import { selectRealtimeConnected } from '../store/realtimeSlice';
+import { selectRealtimeConnected, selectRealtimeStreamReady } from '../store/realtimeSlice';
 import {
   fetchAgentProfiles,
   requestAgentDetail,
@@ -323,6 +323,7 @@ export function AgentWorkspace({ page }) {
   const agentsState = useSelector(selectAgentProfilesState);
   const activeAgent = useSelector(selectActiveAgentProfile);
   const activeAgentState = useSelector(selectActiveAgentProfileState);
+  const streamReady = useSelector(selectRealtimeStreamReady);
 
   const navigate = useNavigate();
 
@@ -455,16 +456,23 @@ export function AgentWorkspace({ page }) {
     }
   }, [agentsUrl, basePath, dispatch, effectiveAgentId, navigate]);
 
+  // The detail only ever comes back as a one-shot `agent.selected` broadcast,
+  // and the backend replays nothing to a subscriber it did not have at publish
+  // time (replay needs a Last-Event-ID, which a first load has none of). Ask
+  // before the stream is ready and the answer is published into the void: the
+  // graph pane then waits on `graphDetailPending` forever, since nothing
+  // retries. Wait for the subscriber to exist, then ask.
   useEffect(() => {
-    if (!effectiveAgentId) {
+    if (!effectiveAgentId || !streamReady) {
       return;
     }
-    dispatch(requestAgentDetail({
-      agentsUrl,
-      agentId: effectiveAgentId,
-      requestId: `${effectiveAgentId}-${Date.now()}`,
-    }));
-  }, [agentsUrl, dispatch, effectiveAgentId]);
+    // A reconnect flips `streamReady` again; re-asking for a detail already in
+    // hand would restart the request for no new information.
+    if (activeAgent?.id === effectiveAgentId) {
+      return;
+    }
+    dispatch(requestAgentDetail({ agentsUrl, agentId: effectiveAgentId }));
+  }, [activeAgent?.id, agentsUrl, dispatch, effectiveAgentId, streamReady]);
 
   // Object agents only. Switching agents mid-edit must never leave a draft
   // bound to the wrong one underneath the newly-selected agent's page.

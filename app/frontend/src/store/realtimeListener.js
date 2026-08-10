@@ -4,6 +4,7 @@ import {
   realtimeConnecting,
   realtimeDisconnected,
   realtimeErrored,
+  realtimeStreamReady,
   uiEventReceived,
   registerPendingOp,
   failPendingOp,
@@ -147,6 +148,12 @@ realtimeListenerMiddleware.startListening({
         const { realtime } = listenerApi.getState();
         if (realtime.receivedIds.includes(event.id)) {
           return;
+        }
+        // `connection.ready` is emitted from inside the stream generator, so
+        // by the time it lands the backend has our subscriber queue and a
+        // broadcast can no longer be published into the void.
+        if (event.type === 'connection.ready') {
+          listenerApi.dispatch(realtimeStreamReady());
         }
         listenerApi.dispatch(applyUiEvent(event));
         listenerApi.dispatch(uiEventReceived(event));
