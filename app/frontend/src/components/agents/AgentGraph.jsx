@@ -1054,16 +1054,24 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const canvasRect = canvas.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const panelWidth = 340;
-    const minPanelHeight = 220;
+    // Mirrors the CSS default budget (max-height: calc(100% - 92px)) -- the
+    // natural amount of room a node's config fields expect. Shrinking below
+    // this (e.g. a fixed small floor) forces heavy internal scrolling that
+    // hides fields below the fold; a scrolled-out field's own
+    // getBoundingClientRect() still reports its unclipped layout position,
+    // so clicks/typing land on whatever renders at that screen point next
+    // (the footer) instead of the field.
+    const naturalMaxHeight = canvasRect.height - 92;
     const left = Math.max(16, Math.min(
       targetRect.right - canvasRect.left + 14,
       canvasRect.width - panelWidth - 16,
     ));
-    const top = Math.max(72, Math.min(
-      targetRect.top - canvasRect.top,
-      canvasRect.height - minPanelHeight - 16,
-    ));
-    const maxHeight = Math.max(minPanelHeight, canvasRect.height - top - 16);
+    const desiredTop = Math.max(72, targetRect.top - canvasRect.top);
+    // Prefer sliding the panel up to keep its full natural height rather
+    // than shrinking it -- only once the canvas itself is too short for
+    // that does the panel actually get shorter than natural.
+    const top = Math.max(16, Math.min(desiredTop, canvasRect.height - naturalMaxHeight - 16));
+    const maxHeight = Math.min(naturalMaxHeight, canvasRect.height - top - 16);
     setSelectedNodeId(id);
     setInspectorPosition({ left, top, maxHeight });
   }, []);
