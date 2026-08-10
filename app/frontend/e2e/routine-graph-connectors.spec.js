@@ -370,6 +370,64 @@ test.describe('routine graph connectors', () => {
       .toBeLessThanOrEqual(0.5);
   });
 
+
+  test('a fan_in join centres on its real branches, not the always-present Add-branch/Add-default slots', async ({ page }) => {
+    // The "+ Add …" trailer lanes are editor affordances rendered as real
+    // .routine-fork__lanes flex children, so a join naively centred on the
+    // whole row (margin: 0 auto against .routine-fork) lands right of the
+    // branches that actually feed it -- see .routine-fork__join's
+    // translateX correction in chrome-frame.css.
+    await page.goto('/routines/feedback-categoriser');
+    const rendered = await page.locator('.routine-fork--joined').first()
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true, () => false);
+    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+
+    const geometry = await page.evaluate(() => {
+      const fork = document.querySelector('.routine-fork--joined');
+      const realLanes = [...fork.querySelectorAll(
+        ':scope > .routine-fork__branches > .routine-fork__lanes > .routine-fork__lane:not(.routine-fork__lane--add)',
+      )];
+      const left = Math.min(...realLanes.map((l) => l.getBoundingClientRect().left));
+      const right = Math.max(...realLanes.map((l) => l.getBoundingClientRect().right));
+      const join = fork.querySelector('.routine-fork__join').getBoundingClientRect();
+      return { realCentre: (left + right) / 2, joinCentre: (join.left + join.right) / 2 };
+    });
+
+    expect(
+      Math.abs(geometry.joinCentre - geometry.realCentre),
+      `join centres at ${geometry.joinCentre.toFixed(1)}, real branches centre at ${geometry.realCentre.toFixed(1)}`,
+    ).toBeLessThanOrEqual(AXIS_EPSILON);
+  });
+
+  test("a fan_in lane's rail never overhangs past its own outer edge on the fork's flanks", async ({ page }) => {
+    // .routine-fork__lane--fanout-first/--fanout-last clip the shared bar to
+    // each flank lane's own centre so it only ever draws toward its
+    // neighbour, never past the fork's outer edge. A specificity mismatch
+    // against the unclipped base rule (right/left: -11px on every lane) can
+    // silently reinstate the overhang the clip was meant to remove.
+    await page.goto('/routines/feedback-categoriser');
+    const rendered = await page.locator('.routine-fork--joined').first()
+      .waitFor({ state: 'visible', timeout: 15_000 })
+      .then(() => true, () => false);
+    test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
+
+    const geometry = await page.evaluate(() => {
+      const first = document.querySelector('.routine-fork__lane--fanout-first');
+      const wire = first.querySelector('.routine-fork__wire');
+      const s = getComputedStyle(wire, '::after');
+      const laneRect = first.getBoundingClientRect();
+      const wireRect = wire.getBoundingClientRect();
+      const railLeft = wireRect.x + (parseFloat(s.left) || 0);
+      return { railLeft, laneLeft: laneRect.left, laneCx: laneRect.left + laneRect.width / 2 };
+    });
+
+    expect(
+      geometry.railLeft,
+      `first lane's rail starts at ${geometry.railLeft.toFixed(1)}, ${(geometry.laneCx - geometry.railLeft).toFixed(1)}px left of its own centre (${geometry.laneCx.toFixed(1)})`,
+    ).toBeGreaterThanOrEqual(geometry.laneCx - AXIS_EPSILON - 1);
+  });
+
   test('a graph wider than the canvas overflows rightward only', async ({ page }) => {
     // Nested scopes are what used to produce negative offsets, which no scroll
     // container can reach; 900px guarantees the chain is wider than the pane.
