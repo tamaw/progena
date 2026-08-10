@@ -1083,15 +1083,16 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, []);
 
   const deleteNode = useCallback((id) => {
-    const outgoing = edgesRef.current.find((edge) => edge.from === id);
-    const singleTarget = outgoing?.level === 'normal' && typeof outgoing.to === 'string'
+    const outgoing = edgesRef.current.find((edge) => edgeSourceIds(edge).includes(id));
+    const singleTarget = (outgoing?.level === 'normal' || outgoing?.level === 'fan_in')
+      && typeof outgoing.to === 'string'
       ? outgoing.to
       : null;
     setNodes((current) => current.filter((node) => node.id !== id));
     setEdges((current) => {
       const next = [];
       current.forEach((edge) => {
-        if (edge.from === id) return; // the deleted node's own outgoing edge
+        if (edgeSourceIds(edge).includes(id) && !edge.router && edge.level !== 'fan_in') return; // the deleted node's own outgoing edge
         if (edge.router) {
           const branches = { ...edge.branches };
           let changed = false;
@@ -1114,6 +1115,17 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           }
           next.push({ ...edge, branches, ...(defaultTarget ? { default: defaultTarget } : { default: undefined } ) });
           return;
+        }
+        if (edge.level === 'fan_in') {
+          if (edge.to === id) {
+            if (singleTarget) next.push({ ...edge, to: singleTarget });
+            return;
+          }
+          const sources = edgeSourceIds(edge).filter((source) => source !== id);
+          if (sources.length === edgeSourceIds(edge).length) { next.push(edge); return; } // id wasn't a source; unchanged
+          if (sources.length >= 2) { next.push({ ...edge, from: sources }); return; }
+          if (sources.length === 1) { next.push({ from: sources[0], to: edge.to, level: 'normal' }); return; }
+          return; // no sources left, drop the edge
         }
         if (edge.to === id) {
           if (singleTarget) next.push({ ...edge, to: singleTarget });
