@@ -314,7 +314,6 @@
     "edge": {
       "oneOf": [
         { "$ref": "#/$defs/normalEdge" },
-        { "$ref": "#/$defs/fanOutEdge" },
         { "$ref": "#/$defs/fanInEdge" },
         { "$ref": "#/$defs/routerEdge" }
       ]
@@ -327,17 +326,6 @@
         "from": { "$ref": "#/$defs/nodeId" },
         "to": { "$ref": "#/$defs/nodeId" },
         "level": { "const": "normal" },
-        "loop_guard": { "$ref": "#/$defs/loopGuard" }
-      }
-    },
-    "fanOutEdge": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["from", "to", "level"],
-      "properties": {
-        "from": { "$ref": "#/$defs/nodeId" },
-        "to": { "type": "array", "minItems": 2, "uniqueItems": true, "items": { "$ref": "#/$defs/nodeId" } },
-        "level": { "const": "fan_out" },
         "loop_guard": { "$ref": "#/$defs/loopGuard" }
       }
     },
