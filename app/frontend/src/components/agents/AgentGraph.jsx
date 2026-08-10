@@ -57,6 +57,11 @@ const GRAPH_KIND_COLORS = {
   noop: '#6b7280',
 };
 
+// A `condition` node is a two-way gate, so its router's branch set is fixed
+// rather than author-defined. Mirrors app.progenitor.routines.graph's
+// CONDITION_BRANCH_VALUES; order here is the left-to-right lane order.
+const CONDITION_BRANCHES = ['true', 'false'];
+
 const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
 
 function titleCase(kind) {
@@ -334,8 +339,11 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
 // A node becomes a router the moment it has branches; before that it's just a
 // "+ Split into branches" footer action. Once it is one, the state key it
 // routes on lives here (applies to all of that node's branches at once).
-function RoutingFooter({ id, routerEdge }) {
+// A `condition` is exempt: it is born a router over a fixed `true`/`false`
+// pair keyed on its own output, so there is nothing here to author.
+function RoutingFooter({ id, kind, routerEdge }) {
   const { onChangeStateKey, onSplitIntoBranches, onRemoveBranching } = useContext(GraphEditContext);
+  if (kind === 'condition') return null;
   if (!routerEdge) {
     return (
       <button type="button" className="agents-graph-node__split" onClick={() => onSplitIntoBranches(id)}>
@@ -424,7 +432,7 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
           updateNodeConfig={handleConfig}
           replaceNodeConfig={(config) => updateNode(node.id, { config })}
         />
-        <RoutingFooter id={node.id} routerEdge={routerEdge} />
+        <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
       </div>
       <footer className="routine-node-inspector__foot">
         <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onClose(); }}>
@@ -625,11 +633,19 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   if (edge && edge.router) {
     const targetIds = [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])];
     const joinId = findCommonJoin(targetIds, edgeBySource);
-    const branches = Object.entries(edge.branches || {});
+    // A condition's two arms are fixed, so render them in a stable
+    // true-then-false order rather than whatever key order the document
+    // happens to carry.
+    const fixedBranches = node.kind === 'condition';
+    const branches = fixedBranches
+      ? CONDITION_BRANCHES.filter((value) => value in (edge.branches || {}))
+        .map((value) => [value, edge.branches[value]])
+      : Object.entries(edge.branches || {});
     fork = {
       sourceId: nodeId,
       edge,
       editable: true,
+      fixedBranches,
       branches: branches.map(([value, targetId]) => ({
         value,
         tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, joinId),
@@ -776,17 +792,17 @@ function ForeachBlock({ node, body }) {
 // Which lane owns the left/right rail terminator (`--fanout-first` /
 // `--fanout-last`, chrome-frame.css) that clips the horizontal connector
 // stub to the lane's own centre instead of running off the fork's edge.
-// The "+ Add branch" slot is always appended after every real lane when
-// `editable` (see the unconditional block below the lanes.map call), so it
-// -- not the last real lane -- owns the right terminator in that case;
-// otherwise the last real lane is genuinely the rightmost rendered lane.
-// Exported for unit coverage: a fork with N branches plus an editable
-// "+ Add branch" slot must clip the rail at the slot, not one lane early.
+// The "+ Add branch" slot is appended after every real lane whenever the
+// fork can grow one (see the block below the lanes.map call), so it -- not
+// the last real lane -- owns the right terminator in that case; otherwise
+// the last real lane is genuinely the rightmost rendered lane.
+// Exported for unit coverage: a fork with N branches plus an "+ Add branch"
+// slot must clip the rail at the slot, not one lane early.
 // eslint-disable-next-line react-refresh/only-export-components
-export function forkLaneEdgePosition(index, lanesLength, editable) {
+export function forkLaneEdgePosition(index, lanesLength, hasAddSlot) {
   return {
     isFirst: index === 0,
-    isLast: index === lanesLength - 1 && !editable,
+    isLast: index === lanesLength - 1 && !hasAddSlot,
   };
 }
 
@@ -802,7 +818,11 @@ function ForkBlock({ fork, node }) {
     onRenameBranch,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
-  const { sourceId, edge, branches, defaultTree, joinTree, editable = true } = fork;
+  const { sourceId, edge, branches, defaultTree, joinTree, editable = true, fixedBranches = false } = fork;
+  // A fixed fork's arms are dictated by the node kind, so it grows no lanes
+  // and its headers are labels rather than editable chips. It can still be
+  // joined -- that's about what happens *after* the fork, not its shape.
+  const canGrowLanes = editable && !fixedBranches;
   const lanes = [
     ...branches.map(({ value, tree }) => ({
       value,
@@ -842,7 +862,7 @@ function ForkBlock({ fork, node }) {
         <div className="routine-fork__lanes">
           {lanes.map((lane, index) => {
             const isCollapsed = collapsed.has(lane.value);
-            const { isFirst, isLast } = forkLaneEdgePosition(index, lanes.length, editable);
+            const { isFirst, isLast } = forkLaneEdgePosition(index, lanes.length, canGrowLanes);
             const classes = [
               'routine-fork__lane',
               isCollapsed && 'routine-fork__lane--collapsed',
@@ -862,14 +882,14 @@ function ForkBlock({ fork, node }) {
                   onRename={(next) => onRenameBranch(sourceId, lane.value, next)}
                   onRemove={() => (lane.isDefault ? onRemoveDefault(sourceId) : onRemoveBranch(sourceId, lane.value))}
                   collapsed={isCollapsed}
-                  readOnly={!editable}
+                  readOnly={!editable || fixedBranches}
                   onToggleCollapse={() => toggleCollapse(lane.value)}
                 />
                 {isCollapsed ? null : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
               </div>
             );
           })}
-          {editable && !edge.default ? (
+          {canGrowLanes && !edge.default ? (
             <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed">
               <span className="routine-fork__wire" aria-hidden="true" />
               <div className="routine-fork__add-slot">
@@ -879,7 +899,7 @@ function ForkBlock({ fork, node }) {
               </div>
             </div>
           ) : null}
-          {editable ? (
+          {canGrowLanes ? (
             <div className="routine-fork__lane routine-fork__lane--add routine-fork__lane--collapsed routine-fork__lane--fanout-last">
               <span className="routine-fork__wire" aria-hidden="true" />
               <div className="routine-fork__add-slot">
@@ -1117,7 +1137,33 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       && typeof outgoing.to === 'string'
       ? outgoing.to
       : null;
-    setNodes((current) => current.filter((node) => node.id !== id));
+    // A condition's two arms are structural, not author-defined, so deleting
+    // the step sitting on one has to leave a placeholder behind. Dropping the
+    // arm instead would leave a one-armed condition the editor offers no
+    // "+ Add branch" to repair. Computed up front so the state updaters below
+    // stay pure (see buildChainTree's comment on StrictMode double-invokes).
+    const armPlaceholders = [];
+    if (!singleTarget) {
+      const conditionIds = new Set(
+        nodesRef.current.filter((node) => node.kind === 'condition').map((node) => node.id),
+      );
+      edgesRef.current.forEach((edge) => {
+        if (!edge.router || !conditionIds.has(edge.from)) return;
+        Object.entries(edge.branches || {}).forEach(([value, target]) => {
+          if (target !== id) return;
+          const armId = uniqueNodeId('noop', [...nodesRef.current, ...armPlaceholders.map((arm) => arm.node)]);
+          armPlaceholders.push({
+            from: edge.from,
+            value,
+            node: { ...makeNode('noop'), id: armId, label: titleCase(value) },
+          });
+        });
+      });
+    }
+    setNodes((current) => [
+      ...current.filter((node) => node.id !== id),
+      ...armPlaceholders.map((arm) => arm.node),
+    ]);
     setEdges((current) => {
       const next = [];
       current.forEach((edge) => {
@@ -1128,7 +1174,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           Object.entries(branches).forEach(([value, target]) => {
             if (target !== id) return;
             changed = true;
+            const placeholder = armPlaceholders.find(
+              (arm) => arm.from === edge.from && arm.value === value,
+            );
             if (singleTarget) branches[value] = singleTarget;
+            else if (placeholder) branches[value] = placeholder.node.id;
             else delete branches[value];
           });
           let defaultTarget = edge.default;
@@ -1170,9 +1220,13 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
   }, []);
 
-  // A Send foreach owns a scoped body. Its one normal outgoing edge names the
-  // first dynamic target; the companion noop marks the body boundary so the
-  // rigid chain renderer can still show the continuation after the fan-out.
+  // Two kinds arrive pre-wired because their shape is intrinsic, not authored.
+  // A Send foreach owns a scoped body: its one normal outgoing edge names the
+  // first dynamic target, and the companion noop marks the body boundary so
+  // the rigid chain renderer can still show the continuation after the
+  // fan-out. A condition is a two-way gate: it is *always* a router over
+  // exactly `true`/`false` (see CONDITION_BRANCH_VALUES server-side), so it
+  // lands as a fork rather than needing a separate "+ Split into branches".
   const insertAt = useCallback((slot, kind) => {
     const id = uniqueNodeId(kind, nodesRef.current);
     const added = [{ ...makeNode(kind), id }];
@@ -1211,6 +1265,25 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       added.push({ ...makeNode('noop'), id: stopId, label: 'Join fan-out' });
       nextEdges.push({ from: id, to: stopId, level: 'normal' });
       if (targetId) nextEdges.push({ from: stopId, to: targetId, level: 'normal' });
+    } else if (kind === 'condition') {
+      // Both arms get their own placeholder step. Whatever the condition was
+      // spliced in front of stays reachable as a fan_in join below the fork
+      // rather than being stranded on one arbitrary arm.
+      const arms = CONDITION_BRANCHES.map((value) => {
+        const armId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
+        added.push({ ...makeNode('noop'), id: armId, label: titleCase(value) });
+        return [value, armId];
+      });
+      nextEdges.push({
+        from: id,
+        level: 'route',
+        router: 'state_equals',
+        state_key: id,
+        branches: Object.fromEntries(arms),
+      });
+      if (targetId) {
+        nextEdges.push({ from: arms.map(([, armId]) => armId), to: targetId, level: 'fan_in' });
+      }
     } else if (targetId) {
       nextEdges.push({ from: id, to: targetId, level: 'normal' });
     }

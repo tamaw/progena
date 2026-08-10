@@ -150,9 +150,9 @@
       "router": "state_equals",
       "state_key": "domain_check",
       "branches": {
-        "True": "assess"
-      },
-      "default": "respond_invalid_domain"
+        "true": "assess",
+        "false": "respond_invalid_domain"
+      }
     },
     {
       "from": "assess",

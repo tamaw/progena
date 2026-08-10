@@ -182,6 +182,56 @@ class TestValidateRoutineGraphStructural:
                 ],
             )
 
+    # A condition's expression is coerced to a bool, so its router can only
+    # ever produce `true`/`false` (factory._branch_key). Any other arm is
+    # dead code and a default is unreachable -- both are authoring mistakes
+    # the editor can't make but a hand-written document can.
+    def _condition_graph(self, branches: dict[str, str], **edge_extra):
+        return (
+            [
+                {"id": "gate", "kind": "condition"},
+                {"id": "b", "kind": "noop"},
+                {"id": "c", "kind": "noop"},
+            ],
+            [
+                {
+                    "from": "gate",
+                    "level": "route",
+                    "router": "state_equals",
+                    "state_key": "gate",
+                    "branches": branches,
+                    **edge_extra,
+                },
+            ],
+        )
+
+    def test_accepts_condition_router_with_both_boolean_arms(self):
+        validate_routine_graph(*self._condition_graph({"true": "b", "false": "c"}))
+
+    @pytest.mark.parametrize(
+        "branches",
+        [
+            {"True": "b", "False": "c"},
+            {"true": "b"},
+            {"true": "b", "false": "c", "maybe": "c"},
+        ],
+    )
+    def test_rejects_condition_router_without_exactly_true_false(self, branches):
+        with pytest.raises(ValueError, match="exactly 'true' and 'false' branches"):
+            validate_routine_graph(*self._condition_graph(branches))
+
+    def test_rejects_condition_router_with_default(self):
+        with pytest.raises(ValueError, match="cannot have a default branch"):
+            validate_routine_graph(*self._condition_graph({"true": "b", "false": "c"}, default="c"))
+
+    def test_allows_condition_that_does_not_route(self):
+        """A condition is still a plain bool-producing step when nothing
+        branches on it -- only its *router*, if present, is constrained."""
+        validate_routine_graph(
+            [{"id": "gate", "kind": "condition"}, {"id": "b", "kind": "noop"}],
+            [{"from": "gate", "to": "b", "level": "normal"}],
+        )
+
 
 @pytest.mark.parametrize(
     "node",
