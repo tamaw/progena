@@ -371,12 +371,14 @@ test.describe('routine graph connectors', () => {
   });
 
 
-  test('a fan_in join centres on its real branches, not the always-present Add-branch/Add-default slots', async ({ page }) => {
-    // The "+ Add …" trailer lanes are editor affordances rendered as real
-    // .routine-fork__lanes flex children, so a join naively centred on the
-    // whole row (margin: 0 auto against .routine-fork) lands right of the
-    // branches that actually feed it -- see .routine-fork__join's
-    // translateX correction in chrome-frame.css.
+  test("a fan_in join stays on the fork's own centre axis, not offset toward the real branches", async ({ page }) => {
+    // Every node in the chain -- START, the router card, the join -- sits on
+    // one shared vertical axis (margin: 0 auto against .routine-fork, the
+    // same axis every other scope/segment check in this file pins). The
+    // "+ Add …" trailer lanes make the branch row visually asymmetric, but
+    // the join must NOT compensate for that by re-centring on just the real
+    // branches -- that would pull it off the axis everything above and
+    // below the fork shares.
     await page.goto('/routines/feedback-categoriser');
     const rendered = await page.locator('.routine-fork--joined').first()
       .waitFor({ state: 'visible', timeout: 15_000 })
@@ -385,19 +387,26 @@ test.describe('routine graph connectors', () => {
 
     const geometry = await page.evaluate(() => {
       const fork = document.querySelector('.routine-fork--joined');
-      const realLanes = [...fork.querySelectorAll(
-        ':scope > .routine-fork__branches > .routine-fork__lanes > .routine-fork__lane:not(.routine-fork__lane--add)',
-      )];
-      const left = Math.min(...realLanes.map((l) => l.getBoundingClientRect().left));
-      const right = Math.max(...realLanes.map((l) => l.getBoundingClientRect().right));
+      const forkRect = fork.getBoundingClientRect();
       const join = fork.querySelector('.routine-fork__join').getBoundingClientRect();
-      return { realCentre: (left + right) / 2, joinCentre: (join.left + join.right) / 2 };
+      const start = document.querySelector('.routine-cap--start')?.getBoundingClientRect() || null;
+      return {
+        forkCentre: (forkRect.left + forkRect.right) / 2,
+        joinCentre: (join.left + join.right) / 2,
+        startCentre: start ? (start.left + start.right) / 2 : null,
+      };
     });
 
     expect(
-      Math.abs(geometry.joinCentre - geometry.realCentre),
-      `join centres at ${geometry.joinCentre.toFixed(1)}, real branches centre at ${geometry.realCentre.toFixed(1)}`,
+      Math.abs(geometry.joinCentre - geometry.forkCentre),
+      `join centres at ${geometry.joinCentre.toFixed(1)}, the fork itself centres at ${geometry.forkCentre.toFixed(1)}`,
     ).toBeLessThanOrEqual(AXIS_EPSILON);
+    if (geometry.startCentre != null) {
+      expect(
+        Math.abs(geometry.joinCentre - geometry.startCentre),
+        `join centres at ${geometry.joinCentre.toFixed(1)}, off the chain's own START-anchored axis (${geometry.startCentre.toFixed(1)})`,
+      ).toBeLessThanOrEqual(AXIS_EPSILON);
+    }
   });
 
   test("a fan_in lane's rail never overhangs past its own outer edge on the fork's flanks", async ({ page }) => {

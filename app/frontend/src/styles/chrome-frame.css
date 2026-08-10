@@ -7951,21 +7951,6 @@ body,
   margin: 0 auto;
 }
 
-/* The "+ Add …" slot lanes are editor affordances, not branches -- but they
-   are real .routine-fork__lanes flex children, so they widen the box that
-   margin: 0 auto centers this against, pulling the join right of the
-   branches that actually feed it. "+ Add branch" always renders; "+ Add
-   default" joins it only when the router has no default branch yet. Each
-   contributes one lane (min-width: 246px) plus one gap (20px) to that box,
-   which shifts the naive centre right by half that per slot -- pull the
-   join back left by the same amount so it lands on the real branches'
-   centre instead. */
-.routine-fork--joined:has(.routine-fork__lane--default) > .routine-fork__join {
-  transform: translateX(-133px);
-}
-.routine-fork--joined:not(:has(.routine-fork__lane--default)) > .routine-fork__join {
-  transform: translateX(-266px);
-}
 
 /* The stem only has to cross the box's bottom padding to reach the fan-in
    rail; the join's own connector supplies the rest. With no margin above it
