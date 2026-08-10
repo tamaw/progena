@@ -79,7 +79,7 @@ class CachePolicyConfig(BaseModel):
 
 
 class LoopGuardConfig(BaseModel):
-    """A deterministic guard for a normal or fan-out edge."""
+    """A deterministic guard for a normal edge."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -383,13 +383,13 @@ class RoutineSettings(BaseModel):
 
 
 class RoutineEdge(BaseModel):
-    """A normal, static fan-out, barrier fan-in, or conditional router edge."""
+    """A normal, barrier fan-in, or conditional router edge."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     from_: str | list[str] = Field(alias="from")
     to: str | list[str] | None = None
-    level: Literal["normal", "fan_out", "fan_in", "route"]
+    level: Literal["normal", "fan_in", "route"]
     router: Literal["state_equals"] | None = None
     state_key: str | None = None
     branches: dict[str, str] | None = None
@@ -454,7 +454,7 @@ def _retry_recovery_target(config: Any) -> str | None:
 def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
     """Validate graph topology and cross-reference constraints.
 
-    JSON Schema owns field types and the four edge shapes. This layer owns
+    JSON Schema owns field types and the three edge shapes. This layer owns
     cross-edge invariants: one outgoing edge declaration per node, all named
     destinations exist, Send fan-out has a visible normal edge, and recovery/
     guard routes point at graph nodes.
@@ -511,11 +511,9 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
             targets = _as_node_ids(edge.get("to"), field="to")
             if level == "normal" and (len(sources) != 1 or len(targets) != 1):
                 raise ValueError("normal edge requires one source and one target")
-            if level == "fan_out" and (len(sources) != 1 or len(targets) < 2):
-                raise ValueError("fan_out edge requires one source and at least two targets")
             if level == "fan_in" and (len(sources) < 2 or len(targets) != 1):
                 raise ValueError("fan_in edge requires at least two sources and one target")
-            if level not in {"normal", "fan_out", "fan_in"}:
+            if level not in {"normal", "fan_in"}:
                 raise ValueError(f"unsupported edge level: {level}")
             if level == "fan_in" and edge.get("loop_guard") is not None:
                 raise ValueError("fan_in edge cannot have a loop_guard")

@@ -139,50 +139,6 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
 
 
 @pytest.mark.asyncio
-async def test_static_fanout_waits_for_every_source_at_fanin() -> None:
-    routine = graph(
-        {"id": "fan", "kind": "noop", "output_key": "fan", "config": {}},
-        {
-            "id": "left",
-            "kind": "eval",
-            "output_key": "left",
-            "config": {"expression": "'left'"},
-        },
-        {
-            "id": "left_late",
-            "kind": "eval",
-            "output_key": "late",
-            "config": {"expression": "left + '-late'", "inputs": {"left": "left"}},
-        },
-        {
-            "id": "right",
-            "kind": "eval",
-            "output_key": "right",
-            "config": {"expression": "'right'"},
-        },
-        {
-            "id": "join",
-            "kind": "eval",
-            "output_key": "join",
-            "config": {
-                "expression": "late + '-' + right",
-                "inputs": {"late": "late", "right": "right"},
-            },
-        },
-        edges=[
-            {"from": "fan", "to": ["left", "right"], "level": "fan_out"},
-            {"from": "left", "to": "left_late", "level": "normal"},
-            {"from": ["left_late", "right"], "to": "join", "level": "fan_in"},
-        ],
-    )
-    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
-        {"messages": [HumanMessage("go")]}
-    )
-
-    assert result["data"]["join"] == "left-late-right"
-
-
-@pytest.mark.asyncio
 async def test_loop_guard_routes_false_result_without_running_guarded_target() -> None:
     routine = graph(
         {"id": "start", "kind": "noop", "output_key": "start", "config": {}},

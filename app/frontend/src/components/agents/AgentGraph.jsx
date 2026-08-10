@@ -586,7 +586,7 @@ function plainPath(startId, edgeBySource) {
     path.push(current);
     seen.add(current);
     const edge = edgeBySource.get(current);
-    if (!edge || edge.router || edge.level === 'fan_out') break;
+    if (!edge || edge.router) break;
     [current] = edgeTargetIds(edge);
   }
   return path;
@@ -620,24 +620,19 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   const edge = edgeBySource.get(nodeId);
   let next = null;
   let fork = null;
-  if (edge && (edge.router || edge.level === 'fan_out')) {
-    const isRouter = Boolean(edge.router);
-    const targetIds = isRouter
-      ? [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])]
-      : edgeTargetIds(edge);
+  if (edge && edge.router) {
+    const targetIds = [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])];
     const joinId = findCommonJoin(targetIds, edgeBySource);
-    const branches = isRouter
-      ? Object.entries(edge.branches || {})
-      : targetIds.map((targetId, index) => [`path-${index + 1}`, targetId]);
+    const branches = Object.entries(edge.branches || {});
     fork = {
       sourceId: nodeId,
-      edge: isRouter ? edge : { ...edge, router: 'fan_out', branches: Object.fromEntries(branches) },
-      editable: isRouter,
+      edge,
+      editable: true,
       branches: branches.map(([value, targetId]) => ({
         value,
         tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, joinId),
       })),
-      defaultTree: isRouter && edge.default
+      defaultTree: edge.default
         ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered, joinId)
         : null,
       joinTree: joinId
