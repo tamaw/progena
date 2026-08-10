@@ -138,7 +138,10 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -169,7 +172,10 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -202,7 +208,10 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,
@@ -245,7 +254,10 @@ class TestSkillsWiring:
             storage=SimpleNamespace(
                 state_dir=Path("data/state"),
                 prompts_dir=Path("data/prompts"),
+                shim_bin_dir=Path("data/shims/bin"),
+                shell_home_dir=Path("data/shell-home"),
             ),
+            runtime=SimpleNamespace(shell_timeout_seconds=120),
         )
         with (
             patch("app.progenitor.agent.agent.create_deep_agent") as mock_create,

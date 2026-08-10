@@ -435,7 +435,10 @@ class TestMiddlewareIntegration:
                         llm=SimpleNamespace(model_default="gpt-chat-latest"),
                         storage=SimpleNamespace(
                             prompts_dir=prompts_dir,
+                            shim_bin_dir=Path(tmpdir) / "shims" / "bin",
+                            shell_home_dir=Path(tmpdir) / "shell-home",
                         ),
+                        runtime=SimpleNamespace(shell_timeout_seconds=120),
                     )
                     await create_progenitor_agent(
                         config=fake_config,

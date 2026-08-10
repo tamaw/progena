@@ -24,6 +24,10 @@ def test_observe_config_prefers_agent_model(monkeypatch) -> None:
     monkeypatch.setenv("PROGENITOR_LOG_DIR", "/tmp/logs")
     monkeypatch.delenv("PROGENITOR_DATA_DIR", raising=False)
     monkeypatch.delenv("PROGENITOR_PROMPTS_DIR", raising=False)
+    # Asserts the built-in default below, so the overrides that would displace
+    # it have to go too -- a developer .env commonly sets PROGENITOR_WORKTREE_DIR.
+    monkeypatch.delenv("PROGENITOR_WORKTREE_DIR", raising=False)
+    monkeypatch.delenv("PROGENITOR_WORKTREES_ROOT", raising=False)
     config = ObserveConfig.load()
     repo_root = Path(__file__).resolve().parents[3]
 
