@@ -139,6 +139,53 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
 
 
 @pytest.mark.asyncio
+async def test_router_branch_join_via_deferred_fan_in() -> None:
+    """A fan_in join's declared sources are router branches, which are
+    mutually exclusive -- at most one of them ever runs. The join must
+    still fire once the branch that *did* run has finished, rather than
+    waiting forever for the untaken branch (see compile_routine_graph's
+    fan_in_targets/defer wiring)."""
+    routine = graph(
+        {"id": "gate", "kind": "eval", "output_key": "gate", "config": {"expression": "True"}},
+        {
+            "id": "left",
+            "kind": "eval",
+            "output_key": "left",
+            "config": {"expression": "'L'"},
+        },
+        {
+            "id": "right",
+            "kind": "eval",
+            "output_key": "right",
+            "config": {"expression": "'R'"},
+        },
+        {
+            "id": "join",
+            "kind": "eval",
+            "output_key": "join",
+            "config": {"expression": "'joined'"},
+        },
+        edges=[
+            {
+                "from": "gate",
+                "level": "route",
+                "router": "state_equals",
+                "state_key": "gate",
+                "branches": {"True": "left", "False": "right"},
+            },
+            {"from": ["left", "right"], "to": "join", "level": "fan_in"},
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    assert result["data"]["left"] == "L"
+    assert result["data"]["join"] == "joined"
+    assert "right" not in result["data"]
+
+
+@pytest.mark.asyncio
 async def test_loop_guard_routes_false_result_without_running_guarded_target() -> None:
     routine = graph(
         {"id": "start", "kind": "noop", "output_key": "start", "config": {}},

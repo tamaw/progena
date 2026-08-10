@@ -913,6 +913,13 @@ def compile_routine_graph(
         output_schema=_output_schema_type(output_fields),
     )
     settings = graph.settings.model_dump(exclude_none=True)
+    # A fan_in join's declared sources are almost always mutually-exclusive
+    # router branches -- at most one of them runs per invocation. Deferring
+    # the join node makes it fire once every source that *did* run this
+    # invocation has finished, instead of LangGraph's default barrier
+    # semantics (wait for literally every declared source, which never
+    # completes when only one branch was ever taken).
+    fan_in_targets = {edge.target_ids[0] for edge in graph.edges if edge.level == "fan_in"}
     builder.add_node(_SEED_NODE_ID, _seed_node(input_fields))
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
@@ -925,6 +932,7 @@ def compile_routine_graph(
         node_options: dict[str, Any] = {
             "retry_policy": _retry_policy(retry_config),
             "cache_policy": _cache_policy(config),
+            "defer": node.id in fan_in_targets,
         }
         if recovery_target is not None:
             node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)
@@ -982,7 +990,15 @@ def compile_routine_graph(
             continue
 
         if edge.level == "fan_in":
-            builder.add_edge(edge.source_ids, edge.target_ids[0])
+            # Per-source edges, not a single list-form add_edge: the target
+            # is deferred (see fan_in_targets above), so it fires once
+            # whichever sources actually ran this invocation are done --
+            # list-form add_edge instead creates a strict "wait for every
+            # listed source" barrier that a mutually-exclusive router branch
+            # can never satisfy.
+            target = edge.target_ids[0]
+            for source in edge.source_ids:
+                builder.add_edge(source, target)
             continue
 
         source = edge.source_ids[0]
