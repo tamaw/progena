@@ -955,7 +955,12 @@ function RoutineChain({ nodes, edges, entry }) {
     </div>
   );
 }
-function validateWorkingGraph(nodes, edges, entry) {
+// Exported for unit coverage: regression guard for the fan_in-edge bug
+// (edge.from is an array for fan_in, but this validator used to compare/look
+// it up as a plain string, so every graph with a router-fork "Join branches"
+// join permanently failed validation and could never enable Run).
+// eslint-disable-next-line react-refresh/only-export-components
+export function validateWorkingGraph(nodes, edges, entry) {
   const errors = [];
   const ids = new Set(nodes.map((node) => node.id).filter(Boolean));
   if (!entry || !ids.has(entry)) errors.push('Entry must reference an existing node.');
@@ -967,7 +972,7 @@ function validateWorkingGraph(nodes, edges, entry) {
     const targets = edge.router
       ? [...Object.values(edge.branches || {}), ...(edge.default ? [edge.default] : [])]
       : [edge.to];
-    if (!ids.has(edge.from)) errors.push(`Edge source "${edge.from}" is missing.`);
+    edgeSourceIds(edge).forEach((source) => { if (!ids.has(source)) errors.push(`Edge source "${source}" is missing.`); });
     targets.forEach((target) => {
       if (!ids.has(target)) errors.push(`Edge target "${target}" is missing.`);
     });
@@ -976,7 +981,7 @@ function validateWorkingGraph(nodes, edges, entry) {
   const visit = (id) => {
     if (!id || reachable.has(id)) return;
     reachable.add(id);
-    const outgoing = edges.filter((edge) => edge.from === id);
+    const outgoing = edges.filter((edge) => edgeSourceIds(edge).includes(id));
     outgoing.forEach((edge) => {
       if (edge.router) {
         Object.values(edge.branches || {}).forEach(visit);
