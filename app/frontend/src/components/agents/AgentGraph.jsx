@@ -710,15 +710,58 @@ function routerTargets(edge) {
   return [...Object.values(edge?.branches || {}), ...(edge?.default ? [edge.default] : [])];
 }
 
-function plainPath(startId, edgeBySource) {
+// Every step a join placed after this fork would fan in from: each lane walked
+// to its end, descending through a nested fork so a lane that itself branches
+// contributes all of its own ends instead of disqualifying the whole fork.
+// Empty when there is nothing to bring together -- a lane that loops back,
+// rejoins content already on the chain, or converges with a sibling leaves the
+// fork without two distinct ends. The offer and the action both read this, so
+// a fork that shows a `+` is exactly one `onJoinBranches` can wire up.
+export function joinTerminals(edges, sourceId) {
+  const router = edges.find((edge) => edge.from === sourceId && edge.router);
+  if (!router) return [];
+  const bySource = edgeBySourceMap(edges);
+  const seen = new Set([sourceId]);
+  const walk = (nodeId) => {
+    if (!nodeId || seen.has(nodeId)) return null;
+    seen.add(nodeId);
+    const outgoing = bySource.get(nodeId);
+    if (!outgoing) return [nodeId];
+    if (outgoing.router) {
+      const lanes = routerTargets(outgoing).map(walk);
+      return lanes.some((lane) => lane === null) ? null : lanes.flat();
+    }
+    return walk(edgeTargetIds(outgoing)[0]);
+  };
+  const lanes = routerTargets(router).map(walk);
+  if (lanes.some((lane) => lane === null)) return [];
+  const terminals = [...new Set(lanes.flat())];
+  return terminals.length > 1 ? terminals : [];
+}
+
+// Every node that all paths out of `startId` must pass through, nearest first.
+// A plain chain is just its own steps. Where the chain forks, only what all of
+// the fork's branches share survives -- which is precisely what makes a node a
+// join for everything above it. Without descending, a lane that branches again
+// contributed nothing and the outer fork could never find its join.
+function dominatingPath(startId, edgeBySource, seen = new Set()) {
   const path = [];
-  const seen = new Set();
   let current = startId;
   while (current && !seen.has(current)) {
     path.push(current);
     seen.add(current);
     const edge = edgeBySource.get(current);
-    if (!edge || edge.router) break;
+    if (!edge) return path;
+    if (edge.router) {
+      // Each branch gets its own `seen`: sharing one would let the first
+      // branch claim nodes the others also pass through, and those are exactly
+      // the shared nodes the intersection is looking for.
+      const branches = routerTargets(edge)
+        .map((target) => dominatingPath(target, edgeBySource, new Set(seen)));
+      if (!branches.length) return path;
+      const [first, ...rest] = branches;
+      return [...path, ...first.filter((id) => rest.every((branch) => branch.includes(id)))];
+    }
     [current] = edgeTargetIds(edge);
   }
   return path;
@@ -726,7 +769,7 @@ function plainPath(startId, edgeBySource) {
 
 function findCommonJoin(targetIds, edgeBySource) {
   if (targetIds.length < 2) return null;
-  const paths = targetIds.map((targetId) => plainPath(targetId, edgeBySource));
+  const paths = targetIds.map((targetId) => dominatingPath(targetId, edgeBySource));
   return paths[0].find((candidate) => paths.every((path) => path.includes(candidate))) || null;
 }
 
@@ -871,7 +914,13 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   let fork = null;
   if (edge && edge.router) {
     const targetIds = routerTargets(edge);
-    const joinId = findCommonJoin(targetIds, edgeBySource);
+    // A nested fork whose lanes converge on an ancestor's join does not own
+    // that join -- it belongs to the fork above. Claiming it here would render
+    // the shared step tucked inside one lane of the outer fork instead of
+    // below the fork it actually closes.
+    const commonJoin = findCommonJoin(targetIds, edgeBySource);
+    const joinId = commonJoin === stopAt ? null : commonJoin;
+    const branchStop = joinId || stopAt;
     // A condition's two arms are fixed, so render them in a stable
     // true-then-false order rather than whatever key order the document
     // happens to carry.
@@ -887,10 +936,10 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
       fixedBranches,
       branches: branches.map(([value, targetId]) => ({
         value,
-        tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, joinId),
+        tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, branchStop),
       })),
       defaultTree: edge.default
-        ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered, joinId)
+        ? buildChainTree(edge.default, nodesById, edgeBySource, visiting, rendered, branchStop)
         : null,
       joinTree: joinId
         ? buildChainTree(joinId, nodesById, edgeBySource, visiting, rendered)
@@ -903,16 +952,25 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   return { type: 'node', id: nodeId, node, next, fork };
 }
 
-// Whether a branch's chain, followed to its end, reaches a genuine graph
-// END ('end') rather than looping back ('loop'), rejoining already-rendered
-// content ('rejoin'), or hitting a nested fork ('fork') -- i.e. whether it's
-// a real candidate to feed into a join. Mirrors the terminal-node walk
-// `onJoinBranches` does over the live edge list, kept in sync deliberately:
-// a branch this says "yes" to is exactly one `onJoinBranches` can wire up.
+// Where a branch's chain ends once followed all the way down: a genuine graph
+// END ('end'), a loop back ('loop'), a rejoin onto already-rendered content
+// ('rejoin'), or an existing join ('join'). Used to decide which lanes a
+// rendered join draws its fan-in rail from.
+//
+// A lane that itself branches ends wherever its own branches end, so descend:
+// past the nested fork's join if it has one, otherwise into its lanes, which
+// agree on an answer or leave the outer lane genuinely forked.
 function chainTerminus(tree) {
   let current = tree;
   while (current && current.type === 'node') {
-    if (current.fork) return 'fork';
+    if (current.fork) {
+      if (current.fork.joinTree) return chainTerminus(current.fork.joinTree);
+      const inner = [
+        ...current.fork.branches.map((branch) => branch.tree),
+        ...(current.fork.defaultTree ? [current.fork.defaultTree] : []),
+      ].map(chainTerminus);
+      return inner.length && inner.every((terminus) => terminus === inner[0]) ? inner[0] : 'fork';
+    }
     current = current.next;
   }
   return current === null ? 'end' : current.type;
@@ -1055,6 +1113,7 @@ function ForkBlock({ fork, node }) {
     onRemoveBranch,
     onRemoveDefault,
     onRenameBranch,
+    edges,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
   const { sourceId, edge, branches, defaultTree, joinTree, editable = true, fixedBranches = false } = fork;
@@ -1078,11 +1137,10 @@ function ForkBlock({ fork, node }) {
   ];
   const joining = joinTree ? lanes.filter((lane) => chainTerminus(lane.tree) === 'join') : [];
   const joiningValues = new Set(joining.map(({ value }) => value));
-  const joinableValues = useMemo(() => new Set([
-    ...branches.filter(({ tree }) => chainTerminus(tree) === 'end').map(({ value }) => value),
-    ...(edge.default && chainTerminus(defaultTree) === 'end' ? ['default'] : []),
-  ]), [branches, edge.default, defaultTree]);
-  const canOfferJoin = joinableValues.size > 1;
+  // Asks the wiring itself whether a join is possible rather than reading it
+  // off the rendered tree, so the `+` appears exactly when the action behind
+  // it would do something -- including on a fork whose lane branches again.
+  const canOfferJoin = useMemo(() => joinTerminals(edges, sourceId).length > 0, [edges, sourceId]);
   const toggleCollapse = useCallback((value) => {
     setCollapsed((current) => {
       const next = new Set(current);
@@ -1626,25 +1684,12 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
 
   const onJoinBranches = useCallback((sourceId, kind = 'noop') => {
-    const router = edgesRef.current.find((edge) => edge.from === sourceId && edge.router);
-    if (!router) return;
-    const targets = routerTargets(router);
-    const terminals = targets.map((targetId) => {
-      let current = targetId;
-      const seen = new Set();
-      while (current && !seen.has(current)) {
-        seen.add(current);
-        const outgoing = edgesRef.current.find((edge) => edge.from === current);
-        if (!outgoing || outgoing.router) return outgoing ? null : current;
-        current = outgoing.to;
-      }
-      return null;
-    }).filter(Boolean);
-    if (terminals.length < 2 || new Set(terminals).size < 2) return;
+    const terminals = joinTerminals(edgesRef.current, sourceId);
+    if (!terminals.length) return;
     const joinId = uniqueNodeId(kind, nodesRef.current);
     const nextEdges = [
       ...edgesRef.current,
-      { from: [...new Set(terminals)], to: joinId, level: 'fan_in' },
+      { from: terminals, to: joinId, level: 'fan_in' },
     ];
     setNodes((current) => [...current, {
       ...makeNode(kind),
@@ -1701,7 +1746,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRemoveDefault,
     onRenameBranch,
     settings: meta.settings,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings]);
+    edges,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
