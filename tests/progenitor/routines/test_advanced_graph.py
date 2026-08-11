@@ -92,7 +92,7 @@ async def test_retry_policy_retries_transient_node_failure() -> None:
             "output_key": "say",
             "config": {
                 "prompt_template": "ok",
-                "retry": {"max_attempts": 2, "initial_interval": 0, "jitter": False},
+                "retry": {"max_retries": 1, "initial_interval": 0, "jitter": False},
             },
         },
     )
@@ -112,7 +112,7 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
             "config": {
                 "prompt_template": "work",
                 "retry": {
-                    "max_attempts": 2,
+                    "max_retries": 1,
                     "initial_interval": 0,
                     "jitter": False,
                 },
@@ -153,7 +153,7 @@ async def test_no_error_edge_still_propagates_exception() -> None:
             "config": {
                 "prompt_template": "work",
                 "retry": {
-                    "max_attempts": 1,
+                    "max_retries": 0,
                     "initial_interval": 0,
                     "jitter": False,
                 },

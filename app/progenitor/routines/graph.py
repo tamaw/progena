@@ -39,11 +39,13 @@ VALID_ROUTINE_NODE_KINDS = {
 # its router's branch set is fixed rather than author-defined.
 CONDITION_BRANCH_VALUES = frozenset({"true", "false"})
 
+# Counted as retries, not attempts: 0 means the node runs once and is never
+# retried, which is also what omitting the whole `retry` block does.
 ROUTINE_NODE_RETRY_DEFAULTS = {
     "initial_interval": 0.1,
     "backoff_factor": 2.0,
     "max_interval": 5.0,
-    "max_attempts": 3,
+    "max_retries": 2,
     "jitter": False,
 }
 
@@ -65,7 +67,7 @@ class RoutineContext(TypedDict, total=False):
 class RetryPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    max_attempts: int | None = Field(default=None, ge=1)
+    max_retries: int | None = Field(default=None, ge=0)
     initial_interval: float | None = Field(default=None, ge=0)
     backoff_factor: float | None = Field(default=None, ge=1)
     max_interval: float | None = Field(default=None, ge=0)
