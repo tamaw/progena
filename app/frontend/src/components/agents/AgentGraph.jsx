@@ -153,6 +153,12 @@ export function missingRequiredConfig(node) {
   return missingRequirements(node).flat();
 }
 
+// One predicate behind the inspector lock, the canvas badge and the autosave
+// gate, so a step can never look complete in one place and not another.
+export function isNodeComplete(node) {
+  return missingRequirements(node).length === 0;
+}
+
 // Nodes the backend would reject, in canvas order. Empty means the graph is
 // safe to PATCH as far as per-node completeness goes.
 export function incompleteNodes(nodes) {
@@ -442,14 +448,17 @@ function RoutingFooter({ id, kind, routerEdge }) {
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node, routerEdge }) {
   const { selectNode, selectedNodeId } = useContext(GraphEditContext);
+  // A step can arrive incomplete from the JSON editor or the runtime, not just
+  // from the picker, so the chain has to say which one is holding the save.
+  const incomplete = !isNodeComplete(node);
   return (
     <div
-      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}`}
+      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}${incomplete ? ' routine-step-card--incomplete' : ''}`}
       data-node-id={node.id}
       style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       role="button"
       tabIndex={0}
-      aria-label={`${node.label || node.id} ${node.kind} step`}
+      aria-label={`${node.label || node.id} ${node.kind} step${incomplete ? ', incomplete' : ''}`}
       onClick={(event) => selectNode(node.id, event)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -463,6 +472,7 @@ function StepCard({ node, routerEdge }) {
         <span className="routine-step-card__copy">
           <strong className="routine-step-card__label">{node.label || node.id}</strong>
         </span>
+        {incomplete ? <span className="routine-step-card__incomplete" title="Required fields are empty">!</span> : null}
         {routerEdge ? <span className="routine-step-card__branches">{Object.keys(routerEdge.branches || {}).length + (routerEdge.default ? 1 : 0)} paths</span> : null}
       </div>
     </div>
@@ -478,10 +488,14 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
   const unmet = missingRequirements(node);
   const missing = unmet.flat();
   const missingSet = missing.length ? new Set(missing) : EMPTY_MISSING;
+  // Held open until the step can actually be saved. Closing here would strand
+  // an unsaveable step somewhere in the chain with the whole graph withheld
+  // behind it, so the only ways out are filling the fields or deleting it.
+  const locked = unmet.length > 0;
   return (
     <aside
       ref={panelRef}
-      className="routine-node-inspector"
+      className={`routine-node-inspector${locked ? ' routine-node-inspector--locked' : ''}`}
       style={{ ...style, '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       aria-label={`${node.label || node.id} details`}
     >
@@ -491,15 +505,24 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
           <strong>{node.label || node.id}</strong>
           <span className="routine-node-inspector__kind">{node.kind}</span>
         </div>
-        <button type="button" className="routine-node-inspector__close" onClick={onClose} aria-label="Close node details">×</button>
+        <button
+          type="button"
+          className="routine-node-inspector__close"
+          onClick={onClose}
+          disabled={locked}
+          title={locked ? 'Fill the required fields, or delete this step' : undefined}
+          aria-label="Close node details"
+        >
+          ×
+        </button>
       </header>
       <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
         {unmet.length ? (
           <p className="routine-node-inspector__required-hint" role="status">
             {unmet.length === 1
-              ? 'One field is required before this routine can be saved.'
-              : `${unmet.length} fields are required before this routine can be saved.`}
+              ? 'One field is required before this step can be saved. Fill it in, or delete the step.'
+              : `${unmet.length} fields are required before this step can be saved. Fill them in, or delete the step.`}
           </p>
         ) : null}
         <label className="agents-graph-node__field">
@@ -1248,12 +1271,15 @@ function serializeGraph(nodes, edges, meta) {
   };
 }
 
-// A rejected save leaves `lastSavedRef` on the last good signature, so undoing
-// the offending edit puts the canvas back in step with the server. No retry is
-// queued from there, so the failure has to be cleared here — otherwise the
-// banner outlives the change that caused it and accuses a graph that is fine.
+// Neither a rejected save nor a withheld one advances `lastSavedRef`, so
+// undoing the edit behind either -- fixing the change the server refused, or
+// deleting the incomplete step that was never sent -- puts the canvas back in
+// step with the server. No save is queued from there to clear the chip, so
+// both states have to collapse here, or the warning outlives the change that
+// caused it and accuses a graph that is fine.
+const UNSETTLED_SAVE_STATES = new Set(['error', 'incomplete']);
 export function saveStatusWhenInSync(current) {
-  return current === 'error' ? 'idle' : current;
+  return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
 function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
@@ -1308,7 +1334,20 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setSelectedNodeId(id);
     setInspectorPosition({ left, top, maxHeight: canvasRect.height - top - 16 });
   }, []);
-  const selectNode = useCallback((id, event) => positionInspector(id, event.currentTarget), [positionInspector]);
+  // A held-open step refuses selection of any other card, or "held open" would
+  // only mean "held open until you click the next one". Insertion deliberately
+  // still works and carries the lock to the new step -- the one it leaves
+  // behind keeps its badge, and the save stays withheld for both.
+  const lockedNodeIdRef = useRef(null);
+  useEffect(() => {
+    const selected = nodes.find((node) => node.id === selectedNodeId) || null;
+    lockedNodeIdRef.current = selected && !isNodeComplete(selected) ? selected.id : null;
+  }, [nodes, selectedNodeId]);
+  const selectNode = useCallback((id, event) => {
+    const locked = lockedNodeIdRef.current;
+    if (locked && locked !== id) return;
+    positionInspector(id, event.currentTarget);
+  }, [positionInspector]);
   // A newly inserted node opens its own inspector. Every kind except `noop`
   // lands with its required config empty, so the fields have to be put in
   // front of the author rather than left to be discovered after a rejected
@@ -1800,6 +1839,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
               <div
                 className="routine-canvas__scroll"
                 onClick={(event) => {
+                  // A locked inspector ignores the background too, otherwise
+                  // the click that cannot close it via × closes it anyway.
+                  if (selectedNode && !isNodeComplete(selectedNode)) return;
                   if (!event.target.closest('button, input, textarea, [role="button"], .routine-node-inspector')) {
                     setSelectedNodeId(null);
                     setInspectorPosition(null);
