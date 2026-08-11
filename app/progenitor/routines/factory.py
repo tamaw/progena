@@ -89,8 +89,13 @@ def _retry_policy(config: dict[str, Any]) -> RetryPolicy | None:
         "initial_interval": float(retry.get("initial_interval", defaults["initial_interval"])),
         "backoff_factor": float(retry.get("backoff_factor", defaults["backoff_factor"])),
         "max_interval": float(retry.get("max_interval", defaults["max_interval"])),
-        "max_attempts": int(retry.get("max_attempts", defaults["max_attempts"])),
+        # The only place the two vocabularies meet: routines count retries so
+        # that 0 plainly means "never retry", LangGraph counts total attempts.
+        "max_attempts": int(retry.get("max_retries", defaults["max_retries"])) + 1,
         "jitter": bool(retry.get("jitter", defaults["jitter"])),
+        # LangGraph's default declines to retry ValueError/TypeError/OSError and
+        # friends as unfixable bugs. A routine node raising those is usually a
+        # bad parse of a nondeterministic model response, which a retry does fix.
         "retry_on": Exception,
     }
     return RetryPolicy(**values)

@@ -1095,13 +1095,13 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
 function LoopBlock({ targetLabel, body }) {
   const { settings } = useContext(GraphEditContext);
   const recursionLimit = settings?.recursion_limit;
-  const maxAttempts = settings?.retry?.max_attempts;
+  const maxRetries = settings?.retry?.max_retries;
   return (
     <section className="routine-loop" aria-label={`Retry loop back to ${targetLabel}`}>
       <div className="routine-loop__head">
         <span className="routine-loop__eyebrow">↺ Retry loop</span>
         {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
-        {maxAttempts ? <span className="routine-loop__badge">{maxAttempts} attempts/step</span> : null}
+        {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
       </div>
       <div className="routine-loop__body">{body}</div>
       <div className="routine-loop__back">↺ back to “{targetLabel}”</div>

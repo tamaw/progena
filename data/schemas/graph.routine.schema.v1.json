@@ -297,7 +297,7 @@
       "additionalProperties": false,
       "minProperties": 1,
       "properties": {
-        "max_attempts": { "type": "integer", "minimum": 1 },
+        "max_retries": { "type": "integer", "minimum": 0, "description": "Extra attempts after the first one fails. 0 never retries." },
         "initial_interval": { "type": "number", "minimum": 0 },
         "backoff_factor": { "type": "number", "minimum": 1 },
         "max_interval": { "type": "number", "minimum": 0 },

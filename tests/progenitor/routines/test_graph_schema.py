@@ -445,3 +445,55 @@ def test_rejects_error_edge_with_branches() -> None:
                 ],
             }
         )
+
+
+def test_rejects_max_attempts_in_retry_block() -> None:
+    """retryPolicy has additionalProperties: false; max_attempts is no longer allowed."""
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(
+            {
+                "id": "test",
+                "name": "Test",
+                "description": "",
+                "version": "2.0.0",
+                "entry": "a",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "kind": "prompt",
+                        "output_key": "a",
+                        "config": {
+                            "prompt_template": "hi",
+                            "retry": {"max_attempts": 2, "initial_interval": 0},
+                        },
+                    },
+                ],
+                "edges": [],
+            }
+        )
+
+
+def test_rejects_negative_max_retries() -> None:
+    """max_retries has minimum: 0; negative values are rejected."""
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(
+            {
+                "id": "test",
+                "name": "Test",
+                "description": "",
+                "version": "2.0.0",
+                "entry": "a",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "kind": "prompt",
+                        "output_key": "a",
+                        "config": {
+                            "prompt_template": "hi",
+                            "retry": {"max_retries": -1, "initial_interval": 0},
+                        },
+                    },
+                ],
+                "edges": [],
+            }
+        )

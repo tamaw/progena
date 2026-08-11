@@ -376,7 +376,7 @@ class TestGraphWideRetryDefault:
 
     async def test_settings_retry_covers_a_node_with_no_retry_of_its_own(self):
         payload = _single_prompt_step_payload(
-            settings={"retry": {"max_attempts": 3, "initial_interval": 0}}
+            settings={"retry": {"max_retries": 2, "initial_interval": 0}}
         )
         graph = validate_routine_graph_payload(payload)
         model = FlakyModel(fail_times=2, response="ok")
@@ -398,8 +398,8 @@ class TestGraphWideRetryDefault:
         # Graph default allows 3 attempts, but this node opts into only 1 -- its
         # own config.retry must win per StateGraph.set_node_defaults semantics.
         payload = _single_prompt_step_payload(
-            settings={"retry": {"max_attempts": 3, "initial_interval": 0}},
-            node_retry={"max_attempts": 1, "initial_interval": 0},
+            settings={"retry": {"max_retries": 2, "initial_interval": 0}},
+            node_retry={"max_retries": 0, "initial_interval": 0},
         )
         graph = validate_routine_graph_payload(payload)
         model = FlakyModel(fail_times=2, response="ok")
@@ -407,6 +407,43 @@ class TestGraphWideRetryDefault:
         with pytest.raises(RuntimeError, match="simulated transient failure"):
             await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
         assert model.attempts == 1
+
+
+class TestRetryPolicyContract:
+    """max_retries counts retries, not attempts."""
+
+    async def test_max_retries_zero_runs_exactly_once(self):
+        """max_retries: 0 compiles to max_attempts == 1, i.e. one attempt, zero retries."""
+        payload = _single_prompt_step_payload(node_retry={"max_retries": 0, "initial_interval": 0})
+        graph = validate_routine_graph_payload(payload)
+        compiled = compile_routine_graph(graph, model=FakeModel([]))
+        assert compiled.nodes["step"].retry_policy[0].max_attempts == 1
+        # Observable check: the node is called once and then propagates.
+        model = FlakyModel(fail_times=1, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        with pytest.raises(RuntimeError, match="simulated transient failure"):
+            await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+        assert model.attempts == 1
+
+    async def test_max_retries_n_produces_n_retries_after_first_failure(self):
+        """max_retries: 2 means 2 retries, so 3 total attempts before the
+        error edge routes to recovery."""
+        payload = _single_prompt_step_payload(node_retry={"max_retries": 2, "initial_interval": 0})
+        payload["nodes"].append(
+            {
+                "id": "recover",
+                "kind": "eval",
+                "output_key": "recover",
+                "config": {"expression": "'recovered'"},
+            }
+        )
+        payload["edges"].append({"from": "step", "to": "recover", "level": "error"})
+        graph = validate_routine_graph_payload(payload)
+        model = FlakyModel(fail_times=999, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+        assert model.attempts == 3
+        assert result["data"]["recover"] == "recovered"
 
 
 class TestRecursionLimitSetting:
