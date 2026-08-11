@@ -6,6 +6,7 @@ import {
   forkLaneEdgePosition,
   incompleteNodes,
   isNodeComplete,
+  joinTerminals,
   missingRequirements,
   missingRequiredConfig,
   removeForkBranch,
@@ -355,5 +356,62 @@ describe('isNodeComplete', () => {
 
   it('still holds when only some of several requirements are met', () => {
     expect(isNodeComplete({ kind: 'classify', config: { rubric_prompt: 'Rate it' } })).toBe(false);
+  });
+});
+
+// repo-setup-worker: `classify` forks to `prepare` and `escalate`, and
+// `escalate` forks again. The outer fork offered no `+` to join on, because
+// the walk gave up the moment a lane branched -- leaving no way at all to add
+// a step after it, while the inner fork offered one.
+describe('joinTerminals', () => {
+  const outer = {
+    from: 'classify',
+    level: 'route',
+    router: 'state_equals',
+    state_key: 'setup_state.state',
+    branches: { ready: 'prepare', blocked: 'escalate' },
+  };
+  const inner = {
+    from: 'escalate',
+    level: 'route',
+    router: 'state_equals',
+    state_key: 'blocker_severity.severity',
+    branches: { minor: 'log_only', critical: 'page_oncall' },
+  };
+
+  it('gathers a nested fork\'s own ends for the outer fork', () => {
+    expect(joinTerminals([outer, inner], 'classify')).toEqual(['prepare', 'log_only', 'page_oncall']);
+  });
+
+  it('still joins the nested fork on its own', () => {
+    expect(joinTerminals([outer, inner], 'escalate')).toEqual(['log_only', 'page_oncall']);
+  });
+
+  it('walks a multi-step lane to the step that actually ends it', () => {
+    const edges = [
+      { from: 'gate', level: 'route', router: 'state_equals', state_key: 'k', branches: { a: 'a1', b: 'b1' } },
+      { from: 'a1', to: 'a2', level: 'normal' },
+    ];
+    expect(joinTerminals(edges, 'gate')).toEqual(['a2', 'b1']);
+  });
+
+  it('offers nothing once the lanes already converge on a join', () => {
+    const edges = [
+      { from: 'gate', level: 'route', router: 'state_equals', state_key: 'k', branches: { a: 'a1', b: 'b1' } },
+      { from: ['a1', 'b1'], to: 'after', level: 'fan_in' },
+    ];
+    expect(joinTerminals(edges, 'gate')).toEqual([]);
+  });
+
+  it('offers nothing when a lane loops back into the fork', () => {
+    const edges = [
+      { from: 'gate', level: 'route', router: 'state_equals', state_key: 'k', branches: { a: 'a1', b: 'b1' } },
+      { from: 'a1', to: 'gate', level: 'normal' },
+    ];
+    expect(joinTerminals(edges, 'gate')).toEqual([]);
+  });
+
+  it('offers nothing for a node that is not a fork', () => {
+    expect(joinTerminals([{ from: 'a', to: 'b', level: 'normal' }], 'a')).toEqual([]);
   });
 });
