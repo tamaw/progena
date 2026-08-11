@@ -283,6 +283,14 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
   );
 }
 
+function FieldHint({ children }) {
+  return (
+    <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginTop: '2px' }}>
+      {children}
+    </span>
+  );
+}
+
 function TimeoutField({ id, config, updateNodeConfig }) {
   return (
     <label className="agents-graph-node__field">
@@ -297,7 +305,36 @@ function TimeoutField({ id, config, updateNodeConfig }) {
           timeout: event.target.value === '' ? undefined : Number(event.target.value),
         })}
       />
-      <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginTop: '2px' }}>0 means no limit</span>
+      <FieldHint>0 means no limit</FieldHint>
+    </label>
+  );
+}
+
+// Pure helper so the retry write semantics are testable without a renderer.
+export function buildRetryPatch(configRetry, value) {
+  if (value === '') {
+    const { max_retries: _drop, ...rest } = configRetry || {};
+    if (Object.keys(rest).length === 0) {
+      return { retry: undefined };
+    }
+    return { retry: rest };
+  }
+  return { retry: { ...configRetry, max_retries: Number(value) } };
+}
+
+function RetryField({ id, config, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">Retry attempts</span>
+      <input
+        type="number"
+        min="0"
+        className="agents-graph-node__toolinput"
+        value={config?.retry?.max_retries ?? ''}
+        placeholder="0"
+        onChange={(event) => updateNodeConfig(id, buildRetryPatch(config?.retry, event.target.value))}
+      />
+      <FieldHint>0 never retries</FieldHint>
     </label>
   );
 }
@@ -346,6 +383,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template… use {request} / {other_node} to reference state" multiline updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="system_prompt" label="System prompt (optional)" placeholder="Node-specific system prompt…" multiline updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -355,6 +393,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -365,6 +404,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <JsonConfigField key={id} id={id} config={config} field="response_schema" label="Response schema (required JSON Schema)" placeholder='{"type":"object","required":["result"],"properties":{"result":{"type":"boolean"}}}' updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -376,6 +416,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <BooleanField id={id} config={config} field="continue_thread" label="Continue conversation across calls" updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -385,6 +426,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="agent_name" label="A2A agent name" placeholder="registered-a2a-agent" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the peer…" multiline updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -394,6 +436,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="message" label="Approval message" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />
         <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -425,6 +468,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
             <ConfigField id={id} config={config} field="prompt_template" label="Prompt per item" placeholder="Handle {item}" multiline updateNodeConfig={updateNodeConfig} />
             <NumberField id={id} config={config} field="max_concurrency" label="Maximum concurrency (optional)" placeholder="4" updateNodeConfig={updateNodeConfig} />
             <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+            <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
           </>
         ) : null}
       </>
@@ -437,6 +481,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <KeyValueMapField id={id} config={config} field="input_map" label="Input map (child field: parent data path)" placeholder="request: request" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="output_map" label="Output map (parent field: child data path)" placeholder="result: answer" updateNodeConfig={updateNodeConfig} />
         <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }

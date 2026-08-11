@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
+  buildRetryPatch,
   forkJoin,
   forkLaneEdgePosition,
   incompleteNodes,
@@ -500,5 +501,25 @@ describe('error edges in chain tree building', () => {
     const withErrorLast = [router, leftToJoin, rightToJoin, errorFromLeft];
     expect(joinTerminals(plain, 'gate')).toEqual([]);
     expect(joinTerminals(withErrorLast, 'gate')).toEqual([]);
+  });
+});
+
+describe('buildRetryPatch', () => {
+  it('typing a number produces retry: { max_retries: N }', () => {
+    expect(buildRetryPatch(undefined, '3')).toEqual({ retry: { max_retries: 3 } });
+    expect(buildRetryPatch({ initial_interval: 0.5 }, '2')).toEqual({
+      retry: { initial_interval: 0.5, max_retries: 2 },
+    });
+  });
+
+  it('clearing the input removes the retry key entirely when no sibling keys exist', () => {
+    expect(buildRetryPatch({ max_retries: 1 }, '')).toEqual({ retry: undefined });
+    expect(buildRetryPatch(undefined, '')).toEqual({ retry: undefined });
+  });
+
+  it('clearing the input keeps sibling keys when they exist', () => {
+    expect(buildRetryPatch({ max_retries: 2, initial_interval: 0.5, backoff_factor: 2 }, '')).toEqual({
+      retry: { initial_interval: 0.5, backoff_factor: 2 },
+    });
   });
 });
