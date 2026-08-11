@@ -46,7 +46,9 @@ ROUTINE_NODE_RETRY_DEFAULTS = {
     "backoff_factor": 2.0,
     "max_interval": 5.0,
     "max_retries": 2,
-    "jitter": False,
+    # A foreach fan-out fails its branches together, so unjittered backoff
+    # marches them all back into the same failing endpoint in lockstep.
+    "jitter": True,
 }
 
 # The usual way an agent step fails is by hanging, not by raising, so every
