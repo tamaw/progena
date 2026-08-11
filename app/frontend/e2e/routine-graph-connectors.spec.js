@@ -151,10 +151,32 @@ function readGraph() {
   return { scopes, chainLeft: box(chain).top != null ? chain.getBoundingClientRect().x : 0, leftmost };
 }
 
+/**
+ * Hold until the page stops moving.
+ *
+ * On a cold profile the shell paints its defaults first — expanded nav rail,
+ * light theme — and re-lays out when the stored preferences arrive, sliding
+ * the whole canvas sideways by the width the rail gives up. `.routine-fork`
+ * is visible throughout, so waiting on the graph alone can measure the middle
+ * of that reflow: geometry read either side of it belongs to two different
+ * layouts. Two identical frames means nothing is in flight.
+ */
+async function settled(page) {
+  await page.waitForFunction(() => {
+    const chain = document.querySelector('.routine-chain');
+    if (!chain) return false;
+    const rect = JSON.stringify(chain.getBoundingClientRect());
+    const held = window.__lastChainRect === rect;
+    window.__lastChainRect = rect;
+    return held;
+  }, { timeout: 20_000, polling: 'raf' });
+}
+
 async function graphAt(page, routineId) {
   await page.goto(`/routines/${routineId}`);
   await expect(page.locator('.routine-chain')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.canvas-node').first()).toBeVisible({ timeout: 20_000 });
+  await settled(page);
   return page.evaluate(readGraph);
 }
 
@@ -285,6 +307,7 @@ test.describe('routine graph connectors', () => {
       .then(() => true, () => false);
     test.skip(!rendered, 'repo-setup-worker is not provisioned in this environment');
 
+    await settled(page);
     const { scopes } = await page.evaluate(readGraph);
     const forks = scopes.filter((s) => s.lanes.length);
     expect(forks.length, 'repo-setup-worker should render nested forks').toBeGreaterThan(1);
@@ -333,6 +356,7 @@ test.describe('routine graph connectors', () => {
   test('the label stem reaches the label, and a collapsed lane draws none', async ({ page }) => {
     await page.goto('/routines/routine-branch-join');
     await expect(page.locator('.routine-fork').first()).toBeVisible({ timeout: 20_000 });
+    await settled(page);
 
     const expanded = await page.evaluate(readGraph);
     const lanes = expanded.scopes.flatMap((s) => s.lanes).filter((l) => l.labelLine);
@@ -344,15 +368,23 @@ test.describe('routine graph connectors', () => {
         .toBeLessThanOrEqual(lane.label.bottom + GAP_EPSILON);
     }
 
-    const before = expanded.scopes.flatMap((s) => s.lanes)[0];
+    const scopeBefore = expanded.scopes[0];
+    const before = scopeBefore.lanes[0];
     await page.locator('.routine-fork__lane .routine-fork__header-collapse').first().click();
     await page.waitForTimeout(400);
-    const after = (await page.evaluate(readGraph)).scopes.flatMap((s) => s.lanes)[0];
+    await settled(page);
+    const scopeAfter = (await page.evaluate(readGraph)).scopes[0];
+    const after = scopeAfter.lanes[0];
 
     expect(after.collapsed, 'clicking the chevron did not collapse the lane').toBe(true);
     expect(after.labelLine, 'a collapsed lane still draws a stem below its label').toBeNull();
-    // Collapsing must not move the rails: the lane keeps its slot.
-    expect(Math.abs(after.cx - before.cx)).toBeLessThanOrEqual(AXIS_EPSILON);
+    // Collapsing must not move the rails: the lane keeps its slot. Measured
+    // against the fork's own centre, because the lane's slot is a fact about
+    // the fork -- where the shell happens to have put the canvas is not.
+    const slotBefore = before.cx - scopeBefore.cx;
+    const slotAfter = after.cx - scopeAfter.cx;
+    expect(Math.abs(slotAfter - slotBefore), `collapsing moved the lane ${(slotAfter - slotBefore).toFixed(2)}px within its fork`)
+      .toBeLessThanOrEqual(AXIS_EPSILON);
   });
 
   test("the join's + sits evenly between the branch box and the join card", async ({ page }) => {
@@ -386,7 +418,7 @@ test.describe('routine graph connectors', () => {
       .waitFor({ state: 'visible', timeout: 15_000 })
       .then(() => true, () => false);
     test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
-
+    await settled(page);
     const geometry = await page.evaluate(() => {
       const fork = document.querySelector('.routine-fork--joined');
       const forkRect = fork.getBoundingClientRect();
@@ -422,7 +454,7 @@ test.describe('routine graph connectors', () => {
       .waitFor({ state: 'visible', timeout: 15_000 })
       .then(() => true, () => false);
     test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
-
+    await settled(page);
     const geometry = await page.evaluate(() => {
       const first = document.querySelector('.routine-fork__lane--fanout-first');
       const wire = first.querySelector('.routine-fork__wire');
@@ -456,7 +488,7 @@ test.describe('routine graph connectors', () => {
       .waitFor({ state: 'visible', timeout: 15_000 })
       .then(() => true, () => false);
     test.skip(!rendered, 'feedback-categoriser is not provisioned in this environment');
-
+    await settled(page);
     const result = await page.evaluate(() => {
       const fork = document.querySelector('.routine-fork--joined');
       const join = fork.querySelector('.routine-fork__join').getBoundingClientRect();
