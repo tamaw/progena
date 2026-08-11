@@ -4,6 +4,9 @@ import {
   addForkLane,
   forkJoin,
   forkLaneEdgePosition,
+  incompleteNodes,
+  missingRequirements,
+  missingRequiredConfig,
   removeForkBranch,
   removeForkDefault,
   saveStatusWhenInSync,
@@ -244,5 +247,85 @@ describe('saveStatusWhenInSync', () => {
 
   it('leaves an untouched canvas idle', () => {
     expect(saveStatusWhenInSync('idle')).toBe('idle');
+  });
+});
+
+// A node lands from the kind picker with its required config empty, so the
+// canvas has to know what the backend will reject before it PATCHes -- the
+// alternative is the round trip that produced "prompt_template is not valid
+// under any of the given schemas" on every single insert.
+describe('missingRequiredConfig', () => {
+  it('reports a freshly inserted prompt as missing its template', () => {
+    expect(missingRequiredConfig({ kind: 'prompt', config: { prompt_template: '' } }))
+      .toEqual(['prompt_template', 'prompt_file']);
+  });
+
+  it('accepts either arm of a one-of group, not both', () => {
+    expect(missingRequiredConfig({ kind: 'prompt', config: { prompt_template: 'Hi' } })).toEqual([]);
+    expect(missingRequiredConfig({ kind: 'prompt', config: { prompt_file: 'p.md' } })).toEqual([]);
+  });
+
+  it('treats whitespace as unfilled', () => {
+    expect(missingRequiredConfig({ kind: 'human', config: { message: '   ' } })).toEqual(['message']);
+  });
+
+  it('has nothing to require of a noop', () => {
+    expect(missingRequiredConfig({ kind: 'noop', config: {} })).toEqual([]);
+  });
+
+  it('requires both a name and a way to prompt an agent', () => {
+    expect(missingRequiredConfig({ kind: 'agent', config: {} }))
+      .toEqual(['agent_name', 'prompt_template', 'prompt_file', 'inputs']);
+    expect(missingRequiredConfig({ kind: 'agent', config: { agent_name: 'bot', inputs: { a: 'b' } } })).toEqual([]);
+  });
+
+  it('counts an empty object or array as unfilled, not as present', () => {
+    expect(missingRequiredConfig({ kind: 'agent', config: { agent_name: 'bot', inputs: {} } }))
+      .toEqual(['prompt_template', 'prompt_file', 'inputs']);
+  });
+
+  it('switches foreach requirements on its own mode', () => {
+    expect(missingRequiredConfig({ kind: 'foreach', config: { mode: 'send', items_from: 'data.xs' } })).toEqual([]);
+    expect(missingRequiredConfig({ kind: 'foreach', config: { mode: 'agent', items_from: 'data.xs' } }))
+      .toEqual(['agent_name', 'prompt_template']);
+  });
+
+  it('requires a condition to carry an expression, like eval', () => {
+    expect(missingRequiredConfig({ kind: 'condition', config: {} })).toEqual(['expression', 'expression_file']);
+  });
+});
+
+// The autosave gate: a graph is withheld while any step is incomplete, so the
+// backend never sees a payload it is guaranteed to reject.
+describe('incompleteNodes', () => {
+  it('names every step still missing config', () => {
+    const nodes = [
+      { id: 'a', kind: 'prompt', config: { prompt_template: 'ok' } },
+      { id: 'b', kind: 'prompt', config: { prompt_template: '' } },
+      { id: 'c', kind: 'noop', config: {} },
+      { id: 'd', kind: 'routine', config: {} },
+    ];
+    expect(incompleteNodes(nodes).map((entry) => entry.node.id)).toEqual(['b', 'd']);
+  });
+
+  it('clears once the last required field is filled, releasing the save', () => {
+    expect(incompleteNodes([{ id: 'a', kind: 'routine', config: { routine_name: 'child' } }])).toEqual([]);
+  });
+});
+
+// The inspector counts unmet requirements, not field names: telling an author
+// a fresh prompt is missing "2 fields" when either a template or a file will
+// satisfy it is simply wrong.
+describe('missingRequirements', () => {
+  it('counts a one-of choice as a single unmet requirement', () => {
+    expect(missingRequirements({ kind: 'prompt', config: {} })).toEqual([['prompt_template', 'prompt_file']]);
+  });
+
+  it('keeps independent requirements separate', () => {
+    expect(missingRequirements({ kind: 'classify', config: {} })).toEqual([['rubric_prompt'], ['response_schema']]);
+  });
+
+  it('drops a requirement as soon as any one alternative is filled', () => {
+    expect(missingRequirements({ kind: 'agent', config: { prompt_file: 'p.md' } })).toEqual([['agent_name']]);
   });
 });
