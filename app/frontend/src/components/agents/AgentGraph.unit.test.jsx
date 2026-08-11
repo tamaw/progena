@@ -5,6 +5,7 @@ import {
   forkJoin,
   forkLaneEdgePosition,
   incompleteNodes,
+  isFlowEdge,
   isNodeComplete,
   joinTerminals,
   missingRequirements,
@@ -413,5 +414,91 @@ describe('joinTerminals', () => {
 
   it('offers nothing for a node that is not a fork', () => {
     expect(joinTerminals([{ from: 'a', to: 'b', level: 'normal' }], 'a')).toEqual([]);
+  });
+});
+
+describe('isFlowEdge', () => {
+  it('returns true for normal, fan_in, and route edges', () => {
+    expect(isFlowEdge({ from: 'a', to: 'b', level: 'normal' })).toBe(true);
+    expect(isFlowEdge({ from: ['a', 'b'], to: 'c', level: 'fan_in' })).toBe(true);
+    expect(isFlowEdge({ from: 'a', level: 'route', router: 'state_equals', branches: {} })).toBe(true);
+  });
+
+  it('returns false for error edges and nothing else', () => {
+    expect(isFlowEdge({ from: 'a', to: 'b', level: 'error' })).toBe(false);
+    expect(isFlowEdge(null)).toBe(true);
+    expect(isFlowEdge(undefined)).toBe(true);
+  });
+});
+
+describe('error edges in validation', () => {
+  const makeNode = (id) => ({ id, kind: 'prompt', config: { prompt_template: 'ok' } });
+
+  it('does NOT trip the one-outgoing-edge rule when a node has one flow edge and one error edge', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')];
+    const edges = [
+      { from: 'a', to: 'b', level: 'normal' },
+      { from: 'a', to: 'c', level: 'error' },
+    ];
+    expect(validateWorkingGraph(nodes, edges, 'a')).toEqual([]);
+  });
+
+  it('reports a node with two error edges', () => {
+    const nodes = [makeNode('a'), makeNode('b'), makeNode('c')];
+    const edges = [
+      { from: 'a', to: 'b', level: 'error' },
+      { from: 'a', to: 'c', level: 'error' },
+    ];
+    expect(validateWorkingGraph(nodes, edges, 'a')).toContain('"a" has more than one error edge.');
+  });
+
+  it('reports a self-loop error edge', () => {
+    const nodes = [makeNode('a'), makeNode('b')];
+    const edges = [
+      { from: 'a', to: 'a', level: 'error' },
+      { from: 'a', to: 'b', level: 'normal' },
+    ];
+    expect(validateWorkingGraph(nodes, edges, 'a')).toContain('"a" cannot route its own errors to itself.');
+  });
+
+  it('does not report an error-only-reachable node as unreachable', () => {
+    const nodes = [makeNode('a'), makeNode('b')];
+    const edges = [
+      { from: 'a', to: 'b', level: 'error' },
+    ];
+    expect(validateWorkingGraph(nodes, edges, 'a')).toEqual([]);
+  });
+
+  it('still flags a genuinely missing error edge target', () => {
+    const nodes = [makeNode('a')];
+    const edges = [{ from: 'a', to: 'missing', level: 'error' }];
+    expect(validateWorkingGraph(nodes, edges, 'a')).toContain('Edge target "missing" is missing.');
+  });
+});
+
+describe('error edges in chain tree building', () => {
+  // The chain renderer builds its tree from edgeBySourceMap, which must
+  // exclude error edges so they do not corrupt fork/join detection.
+  it('builds the same tree whether or not nodes carry error edges', () => {
+    const router = {
+      from: 'gate',
+      level: 'route',
+      router: 'state_equals',
+      state_key: 'k',
+      branches: { a: 'left', b: 'right' },
+    };
+    const leftToJoin = { from: 'left', to: 'join', level: 'normal' };
+    const rightToJoin = { from: 'right', to: 'join', level: 'normal' };
+    const errorFromLeft = { from: 'left', to: 'recover', level: 'error' };
+
+    // Both lanes already converge on 'join', so there is nothing to bring
+    // together -- joinTerminals returns []. If edgeBySourceMap wrongly
+    // includes error edges, 'left' maps to errorFromLeft (the last edge that
+    // sources from it), so the walk from 'left' goes to 'recover' instead of
+    // 'join', and joinTerminals would incorrectly return ['recover', 'join'].
+    const plain = [router, leftToJoin, rightToJoin];
+    const withErrorLast = [router, leftToJoin, rightToJoin, errorFromLeft];
+    expect(joinTerminals(plain, 'gate')).toEqual([]);
+    expect(joinTerminals(withErrorLast, 'gate')).toEqual([]);
   });
 });

@@ -47,6 +47,11 @@ ROUTINE_NODE_RETRY_DEFAULTS = {
     "jitter": False,
 }
 
+# The usual way an agent step fails is by hanging, not by raising, so every
+# node is bounded unless its author says otherwise. Matches the shell tool's
+# PROGENITOR_SHELL_TIMEOUT_SECONDS default.
+ROUTINE_NODE_TIMEOUT_SECONDS = 120.0
+
 
 class RoutineContext(TypedDict, total=False):
     """Per-invocation values injected into every routine node."""
@@ -57,14 +62,6 @@ class RoutineContext(TypedDict, total=False):
     metadata: dict[str, Any]
 
 
-class RetryExhaustedConfig(BaseModel):
-    """Recovery destination after LangGraph has exhausted the retry policy."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    route_to: str = Field(min_length=1)
-
-
 class RetryPolicyConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -73,7 +70,6 @@ class RetryPolicyConfig(BaseModel):
     backoff_factor: float | None = Field(default=None, ge=1)
     max_interval: float | None = Field(default=None, ge=0)
     jitter: bool | None = None
-    on_exhausted: RetryExhaustedConfig | None = None
 
 
 class CachePolicyConfig(BaseModel):
@@ -100,6 +96,7 @@ class PromptNodeConfig(BaseModel):
     system_prompt: str | None = None
     response_schema: dict[str, Any] | None = None
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -113,6 +110,7 @@ class EvalNodeConfig(BaseModel):
     expression_file: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -126,6 +124,7 @@ class ConditionNodeConfig(BaseModel):
     expression_file: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -138,6 +137,7 @@ class ClassifyNodeConfig(BaseModel):
     response_schema: dict[str, Any] = Field(...)
     inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -153,6 +153,7 @@ class AgentNodeConfig(BaseModel):
     response_schema: dict[str, Any] | None = None
     continue_thread: bool = True
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -165,6 +166,7 @@ class A2ANodeConfig(BaseModel):
     prompt_template: str | None = None
     prompt_file: str | None = None
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -178,6 +180,7 @@ class HumanNodeConfig(BaseModel):
     message: str = Field(min_length=1)
     allowed_responses: list[str] | None = None
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
 
 
 class ForeachSendConfig(BaseModel):
@@ -200,6 +203,7 @@ class ForeachAgentConfig(BaseModel):
     max_items: int | None = Field(default=None, ge=1)
     max_concurrency: int | None = Field(default=None, ge=1)
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -216,6 +220,7 @@ class RoutineNodeConfig(BaseModel):
     input_map: dict[str, str] = Field(default_factory=dict)
     output_map: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
 
 
@@ -382,18 +387,19 @@ class RoutineSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
     recursion_limit: int | None = Field(default=None, ge=1)
     cache: bool | None = None
 
 
 class RoutineEdge(BaseModel):
-    """A normal, barrier fan-in, or conditional router edge."""
+    """A normal, barrier fan-in, conditional router, or error edge."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     from_: str | list[str] = Field(alias="from")
     to: str | list[str] | None = None
-    level: Literal["normal", "fan_in", "route"]
+    level: Literal["normal", "fan_in", "route", "error"]
     router: Literal["state_equals"] | None = None
     state_key: str | None = None
     branches: dict[str, str] | None = None
@@ -403,6 +409,18 @@ class RoutineEdge(BaseModel):
     @property
     def is_router(self) -> bool:
         return self.level == "route"
+
+    @property
+    def is_flow(self) -> bool:
+        """Whether this edge carries ordinary execution.
+
+        An error edge names where a failure goes, not where the work goes
+        next, so it stays out of every successor walk and out of the one
+        outgoing edge declaration each node is allowed. This property is the
+        only place that distinction is made -- read it rather than comparing
+        `level` by hand.
+        """
+        return self.level != "error"
 
     @property
     def source_ids(self) -> list[str]:
@@ -445,23 +463,25 @@ def _as_node_ids(value: Any, *, field: str) -> list[str]:
     raise ValueError(f"edge {field} must be a non-empty node id or node-id list")
 
 
-def _retry_recovery_target(config: Any) -> str | None:
-    if not isinstance(config, dict):
-        return None
-    retry = config.get("retry")
-    if not isinstance(retry, dict):
-        return None
-    exhausted = retry.get("on_exhausted")
-    return exhausted.get("route_to") if isinstance(exhausted, dict) else None
+def error_targets(edges: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each node id to where its failures go, for the error edges present."""
+    return {
+        edge["from"]: edge["to"]
+        for edge in edges
+        if isinstance(edge, dict)
+        and edge.get("level") == "error"
+        and isinstance(edge.get("from"), str)
+        and isinstance(edge.get("to"), str)
+    }
 
 
 def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> None:
     """Validate graph topology and cross-reference constraints.
 
-    JSON Schema owns field types and the three edge shapes. This layer owns
-    cross-edge invariants: one outgoing edge declaration per node, all named
-    destinations exist, Send fan-out has a visible normal edge, and recovery/
-    guard routes point at graph nodes.
+    JSON Schema owns field types and the four edge shapes. This layer owns
+    cross-edge invariants: one outgoing edge declaration per node, at most one
+    error edge per node, all named destinations exist, Send fan-out has a
+    visible normal edge, and guard routes point at graph nodes.
     """
     if not isinstance(nodes, list) or not isinstance(edges, list):
         raise ValueError("routine graph nodes and edges must be lists")
@@ -485,6 +505,7 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
             raise ValueError(f"unknown node kind: {kind}")
 
     outgoing: dict[str, dict[str, Any]] = {}
+    failing: set[str] = set()
     for edge in edges:
         if not isinstance(edge, dict):
             raise ValueError("each edge must be an object")
@@ -495,9 +516,20 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
         for source in sources:
             if source not in ids:
                 raise ValueError(f"edge references unknown source node: {source}")
-            if source in outgoing:
-                raise ValueError(f"node has more than one outgoing edge declaration: {source}")
-            outgoing[source] = edge
+        # An error edge says where a failure goes, not where the work goes
+        # next, so it is deliberately exempt from the one-outgoing-declaration
+        # rule -- a node names its successor and its error destination at once.
+        if level == "error":
+            if len(sources) != 1 or not isinstance(edge.get("from"), str):
+                raise ValueError("error edge from must be one node id")
+            if sources[0] in failing:
+                raise ValueError(f"node has more than one error edge: {sources[0]}")
+            failing.add(sources[0])
+        else:
+            for source in sources:
+                if source in outgoing:
+                    raise ValueError(f"node has more than one outgoing edge declaration: {source}")
+                outgoing[source] = edge
 
         if level == "route":
             if len(sources) != 1 or not isinstance(edge.get("from"), str):
@@ -517,10 +549,15 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
                 raise ValueError("normal edge requires one source and one target")
             if level == "fan_in" and (len(sources) < 2 or len(targets) != 1):
                 raise ValueError("fan_in edge requires at least two sources and one target")
-            if level not in {"normal", "fan_in"}:
+            if level == "error":
+                if len(targets) != 1:
+                    raise ValueError("error edge requires one source and one target")
+                if targets[0] == sources[0]:
+                    raise ValueError(f"node cannot route its own errors to itself: {sources[0]}")
+            if level not in {"normal", "fan_in", "error"}:
                 raise ValueError(f"unsupported edge level: {level}")
-            if level == "fan_in" and edge.get("loop_guard") is not None:
-                raise ValueError("fan_in edge cannot have a loop_guard")
+            if level != "normal" and edge.get("loop_guard") is not None:
+                raise ValueError(f"{level} edge cannot have a loop_guard")
 
         for target in targets:
             if target not in ids:
@@ -534,9 +571,6 @@ def validate_routine_graph(nodes: list[dict[str, Any]], edges: list[dict[str, An
 
     for node_id, node in nodes_by_id.items():
         config = node.get("config")
-        recovery = _retry_recovery_target(config)
-        if recovery is not None and recovery not in ids:
-            raise ValueError(f"node {node_id} retry recovery routes to unknown node: {recovery}")
         if (
             node.get("kind") == "foreach"
             and isinstance(config, dict)
@@ -574,8 +608,5 @@ def validate_routine_graph_payload(payload: dict[str, Any]) -> RoutineGraph:
     node_ids = {node["id"] for node in nodes}
     if entry not in node_ids:
         raise ValueError(f"entry references unknown node: {entry}")
-    settings_retry = _retry_recovery_target(payload.get("settings"))
-    if settings_retry is not None and settings_retry not in node_ids:
-        raise ValueError(f"graph retry recovery routes to unknown node: {settings_retry}")
 
     return RoutineGraph.model_validate(payload)

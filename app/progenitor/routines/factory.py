@@ -32,6 +32,7 @@ from ..structured import validate_against_schema
 from .expression import evaluate_expression
 from .graph import (
     ROUTINE_NODE_RETRY_DEFAULTS,
+    ROUTINE_NODE_TIMEOUT_SECONDS,
     ROUTINE_PROJECT_NODE_ID,
     ROUTINE_SEED_NODE_ID,
     RoutineContext,
@@ -103,6 +104,21 @@ def _cache_policy(config: dict[str, Any]) -> CachePolicy | None:
         key_func=_cache_key,
         ttl=int(cache["ttl"]) if isinstance(cache, dict) and cache.get("ttl") is not None else None,
     )
+
+
+def _node_timeout(config: dict[str, Any], settings: dict[str, Any]) -> float | None:
+    """Seconds a node may run for, resolved node-first then graph-wide.
+
+    Mirrors how `retry` resolves: the node's own value wins if it declares one,
+    otherwise the graph's. Every node carries a limit by default, because the
+    common failure of an agent step is not raising but hanging. An explicit 0
+    is the way to say a step is allowed to take as long as it takes.
+    """
+    for source in (config, settings):
+        if "timeout" in source:
+            timeout = float(source["timeout"])
+            return timeout or None
+    return ROUTINE_NODE_TIMEOUT_SECONDS
 
 
 _RESERVED_STATE_CHANNELS = frozenset({"messages", "data"})
@@ -926,10 +942,15 @@ def compile_routine_graph(
     # A fan_in join's declared sources are almost always mutually-exclusive
     # router branches -- at most one of them runs per invocation. Deferring
     # the join node makes it fire once every source that *did* run this
-    # invocation has finished, instead of LangGraph's default barrier
-    # semantics (wait for literally every declared source, which never
-    # completes when only one branch was ever taken).
+    # invocation has finished. Without it a join whose branches are unequal
+    # lengths fires once per arriving branch instead of once in total.
     fan_in_targets = {edge.target_ids[0] for edge in graph.edges if edge.level == "fan_in"}
+    # Where each node's failure goes, declared as an edge rather than buried in
+    # the node's retry block, so failure paths are visible to anything that
+    # reads the topology.
+    error_routes = {
+        edge.source_ids[0]: edge.target_ids[0] for edge in graph.edges if edge.level == "error"
+    }
     builder.add_node(_SEED_NODE_ID, _seed_node(input_fields))
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
@@ -937,12 +958,12 @@ def compile_routine_graph(
     for node in graph.nodes:
         config = _node_config(node)
         retry_config = config if "retry" in config else settings
-        exhausted = (retry_config.get("retry") or {}).get("on_exhausted")
-        recovery_target = exhausted.get("route_to") if exhausted else None
+        recovery_target = error_routes.get(node.id)
         node_options: dict[str, Any] = {
             "retry_policy": _retry_policy(retry_config),
             "cache_policy": _cache_policy(config),
             "defer": node.id in fan_in_targets,
+            "timeout": _node_timeout(config, settings),
         }
         if recovery_target is not None:
             node_options["error_handler"] = _build_retry_exhausted_handler(node.id, recovery_target)
@@ -971,8 +992,12 @@ def compile_routine_graph(
         builder.add_edge(ROUTINE_PROJECT_NODE_ID, END)
         terminal_target = ROUTINE_PROJECT_NODE_ID
 
+    # Error edges are wired as the node's error_handler above, not here: they
+    # are not successors, so they neither occupy a node's outgoing slot nor
+    # stop an otherwise-terminal node from reaching the end of the graph.
+    flow_edges = [edge for edge in graph.edges if edge.is_flow]
     outgoing: dict[str, RoutineEdge] = {}
-    for edge in graph.edges:
+    for edge in flow_edges:
         for source in edge.source_ids:
             if source in outgoing:
                 raise ValueError(f"node has more than one outgoing edge declaration: {source}")
@@ -987,7 +1012,7 @@ def compile_routine_graph(
         if node.id not in outgoing:
             builder.add_edge(node.id, terminal_target)
 
-    for edge in graph.edges:
+    for edge in flow_edges:
         if edge.level == "route":
             targets = list((edge.branches or {}).values())
             if edge.default is not None:

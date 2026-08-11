@@ -115,7 +115,6 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
                     "max_attempts": 2,
                     "initial_interval": 0,
                     "jitter": False,
-                    "on_exhausted": {"route_to": "recover"},
                 },
             },
         },
@@ -125,6 +124,9 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
             "output_key": "recover",
             "config": {"expression": "'recovered'"},
         },
+        edges=[
+            {"from": "work", "to": "recover", "level": "error"},
+        ],
     )
     result = await compile_routine_graph(routine, model=model).ainvoke(
         {"messages": [HumanMessage("go")]}
@@ -136,6 +138,75 @@ async def test_retry_exhaustion_routes_to_recovery_node() -> None:
         "type": "RuntimeError",
         "message": "permanent",
     }
+
+
+@pytest.mark.asyncio
+async def test_no_error_edge_still_propagates_exception() -> None:
+    """A node without an error edge still bubbles the exception up rather than
+    swallowing it silently."""
+    model = AlwaysFailModel()
+    routine = graph(
+        {
+            "id": "work",
+            "kind": "prompt",
+            "output_key": "work",
+            "config": {
+                "prompt_template": "work",
+                "retry": {
+                    "max_attempts": 1,
+                    "initial_interval": 0,
+                    "jitter": False,
+                },
+            },
+        },
+    )
+    compiled = compile_routine_graph(routine, model=model)
+    with pytest.raises(RuntimeError, match="permanent"):
+        await compiled.ainvoke({"messages": [HumanMessage("go")]})
+
+
+def test_settings_timeout_default_is_120() -> None:
+    """When settings.timeout is not declared, the default 120 s is wired to
+    LangGraph's add_node."""
+    routine = graph(
+        {
+            "id": "a",
+            "kind": "prompt",
+            "output_key": "a",
+            "config": {"prompt_template": "hi"},
+        },
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel())
+    assert compiled.nodes["a"].timeout.run_timeout == 120.0
+
+
+def test_per_node_timeout_overrides_settings() -> None:
+    """A node's own config.timeout wins over settings.timeout."""
+    routine = graph(
+        {
+            "id": "a",
+            "kind": "prompt",
+            "output_key": "a",
+            "config": {"prompt_template": "hi", "timeout": 30},
+        },
+        settings={"timeout": 60},
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel())
+    assert compiled.nodes["a"].timeout.run_timeout == 30.0
+
+
+def test_timeout_zero_means_no_limit() -> None:
+    """timeout: 0 disables the timeout limit entirely."""
+    routine = graph(
+        {
+            "id": "a",
+            "kind": "prompt",
+            "output_key": "a",
+            "config": {"prompt_template": "hi", "timeout": 0},
+        },
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel())
+    assert compiled.nodes["a"].timeout is None
 
 
 @pytest.mark.asyncio

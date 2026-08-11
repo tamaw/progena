@@ -265,13 +265,13 @@ function StringListField({ id, config, field, label, placeholder, updateNodeConf
 }
 
 
-function NumberField({ id, config, field, label, placeholder, updateNodeConfig }) {
+function NumberField({ id, config, field, label, placeholder, updateNodeConfig, min = 1 }) {
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
       <input
         type="number"
-        min="1"
+        min={min}
         className="agents-graph-node__toolinput"
         value={config?.[field] ?? ''}
         placeholder={placeholder}
@@ -279,6 +279,25 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig }
           [field]: event.target.value === '' ? undefined : Number(event.target.value),
         })}
       />
+    </label>
+  );
+}
+
+function TimeoutField({ id, config, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">Timeout (seconds)</span>
+      <input
+        type="number"
+        min="0"
+        className="agents-graph-node__toolinput"
+        value={config?.timeout ?? ''}
+        placeholder="120"
+        onChange={(event) => updateNodeConfig(id, {
+          timeout: event.target.value === '' ? undefined : Number(event.target.value),
+        })}
+      />
+      <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginTop: '2px' }}>0 means no limit</span>
     </label>
   );
 }
@@ -326,6 +345,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template… use {request} / {other_node} to reference state" multiline updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="system_prompt" label="System prompt (optional)" placeholder="Node-specific system prompt…" multiline updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -334,6 +354,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -343,6 +364,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt" placeholder="Ask the model a judged question…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <JsonConfigField key={id} id={id} config={config} field="response_schema" label="Response schema (required JSON Schema)" placeholder='{"type":"object","required":["result"],"properties":{"result":{"type":"boolean"}}}' updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -353,6 +375,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
         <BooleanField id={id} config={config} field="continue_thread" label="Continue conversation across calls" updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -361,6 +384,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="agent_name" label="A2A agent name" placeholder="registered-a2a-agent" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the peer…" multiline updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -369,6 +393,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="message" label="Approval message" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />
         <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -399,6 +424,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
             <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
             <ConfigField id={id} config={config} field="prompt_template" label="Prompt per item" placeholder="Handle {item}" multiline updateNodeConfig={updateNodeConfig} />
             <NumberField id={id} config={config} field="max_concurrency" label="Maximum concurrency (optional)" placeholder="4" updateNodeConfig={updateNodeConfig} />
+            <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
           </>
         ) : null}
       </>
@@ -410,6 +436,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="routine_name" label="Routine name" placeholder="shared-validation-routine" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="input_map" label="Input map (child field: parent data path)" placeholder="request: request" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="output_map" label="Output map (parent field: child data path)" placeholder="result: answer" updateNodeConfig={updateNodeConfig} />
+        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -693,6 +720,12 @@ function edgeSourceIds(edge) {
   return Array.isArray(edge?.from) ? edge.from : [edge?.from];
 }
 
+// Flow edges are the ones that shape the chain tree; error edges route
+// retries on exhaustion and must NOT participate in chain layout.
+export function isFlowEdge(edge) {
+  return edge?.level !== 'error';
+}
+
 function edgeTargetIds(edge) {
   if (!edge?.to) return [];
   return Array.isArray(edge.to) ? edge.to : [edge.to];
@@ -701,7 +734,7 @@ function edgeTargetIds(edge) {
 function edgeBySourceMap(edges) {
   return new Map(
     edges
-      .filter((edge) => edge && edge.from)
+      .filter((edge) => edge && edge.from && isFlowEdge(edge))
       .flatMap((edge) => edgeSourceIds(edge).map((source) => [source, edge])),
   );
 }
@@ -792,6 +825,10 @@ export function forkJoin(edges, router) {
 // Every node the graph can still get to from `entry`. Shared by validation and
 // by lane removal, which decides what a dropped lane owned by diffing this
 // before and after the drop.
+//
+// This walks BOTH flow edges and error edges: a node reachable only as an
+// error edge target must NOT be reported unreachable. Chain-shape walks
+// (buildChainTree, dominatingPath) exclude error edges via edgeBySourceMap.
 // eslint-disable-next-line react-refresh/only-export-components
 export function reachableFrom(entry, edges) {
   const reachable = new Set();
@@ -1291,13 +1328,29 @@ export function validateWorkingGraph(nodes, edges, entry) {
   // feeds a join is named as a source *by* the join, so anything that also
   // hands it a plain edge (splicing a step in after it, say) leaves it with
   // two ways out. Checking it here surfaces the break in the editor instead
-  // of only as a rejected save.
+  // of only as a rejected save. Error edges do NOT count -- a node may have
+  // both one flow edge and one error edge.
   const outgoingCount = new Map();
-  edges.forEach((edge) => edgeSourceIds(edge).forEach((source) => {
+  edges.filter(isFlowEdge).forEach((edge) => edgeSourceIds(edge).forEach((source) => {
     outgoingCount.set(source, (outgoingCount.get(source) || 0) + 1);
   }));
   outgoingCount.forEach((count, source) => {
     if (count > 1) errors.push(`"${source}" has more than one outgoing edge.`);
+  });
+  // Error edge rules: at most one per node, no self-loops, target must exist.
+  const errorEdgesBySource = new Map();
+  edges.forEach((edge) => {
+    if (edge.level === 'error') {
+      const source = edge.from;
+      if (errorEdgesBySource.has(source)) {
+        errors.push(`"${source}" has more than one error edge.`);
+      } else {
+        errorEdgesBySource.set(source, edge);
+      }
+      if (edge.to === source) {
+        errors.push(`"${source}" cannot route its own errors to itself.`);
+      }
+    }
   });
   const reachable = reachableFrom(entry, edges);
   nodes.filter((node) => !reachable.has(node.id)).forEach((node) => errors.push(`"${node.id}" is unreachable.`));
@@ -1461,9 +1514,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, []);
 
   const deleteNode = useCallback((id) => {
-    const outgoing = edgesRef.current.find((edge) => edgeSourceIds(edge).includes(id));
-    const singleTarget = (outgoing?.level === 'normal' || outgoing?.level === 'fan_in')
-      && typeof outgoing.to === 'string'
+    const outgoing = edgesRef.current.find((edge) => isFlowEdge(edge) && edgeSourceIds(edge).includes(id));
+    const singleTarget = outgoing?.to && typeof outgoing.to === 'string'
       ? outgoing.to
       : null;
     // A condition's two arms are structural, not author-defined, so deleting
@@ -1570,7 +1622,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     } else if (slot.kind === 'plain' || slot.kind === 'foreach') {
       // `foreach` is the slot inside a fan-out's body. The edge leaving the
       // fan-out node is that body's entry, so it splices like a plain one.
-      const existing = nextEdges.find((edge) => edgeSourceIds(edge).includes(slot.sourceId));
+      const existing = nextEdges.find((edge) => isFlowEdge(edge) && edgeSourceIds(edge).includes(slot.sourceId));
       if (existing?.level === 'fan_in') {
         // The step feeds a join, and a join names its sources rather than
         // being pointed at, so there is no `to` here to steal. Splice by
@@ -1650,7 +1702,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const splitIntoBranches = useCallback((sourceId) => {
     const stateKey = window.prompt('Route on which data key? (e.g. "gate" for {{ data.gate }})', sourceId);
     if (!stateKey) return;
-    const existing = edgesRef.current.find((edge) => edge.from === sourceId);
+    const existing = edgesRef.current.find((edge) => isFlowEdge(edge) && edge.from === sourceId);
     const carryOverTarget = existing && !existing.router ? existing.to : null;
     const branchId = uniqueNodeId('noop', nodesRef.current);
     const routerEdge = {
@@ -1661,7 +1713,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       branches: { 'case-1': branchId },
       ...(carryOverTarget ? { default: carryOverTarget } : {}),
     };
-    setEdges((current) => [...current.filter((edge) => edge.from !== sourceId), routerEdge]);
+    setEdges((current) => [...current.filter((edge) => !(isFlowEdge(edge) && edge.from === sourceId)), routerEdge]);
     setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
   }, []);
 
