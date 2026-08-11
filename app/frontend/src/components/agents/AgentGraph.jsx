@@ -99,21 +99,95 @@ function makeNode(kind) {
   return { id: '', kind, label: titleCase(kind), description: '', config };
 }
 
+// What each kind must carry before the backend will accept it, mirroring the
+// `required`/`oneOf` blocks of the *Config defs in graph.routine.schema.v1.json.
+// A nested array means "exactly one of these" (a prompt takes an inline
+// template or a file, never both). Kept as data rather than spread through the
+// field renderers so the inspector, the canvas badge and the autosave gate all
+// read one source -- and so it stays diffable against the schema it mirrors.
+export const REQUIRED_CONFIG = {
+  prompt: [['prompt_template', 'prompt_file']],
+  eval: [['expression', 'expression_file']],
+  condition: [['expression', 'expression_file']],
+  classify: ['rubric_prompt', 'response_schema'],
+  agent: ['agent_name', ['prompt_template', 'prompt_file', 'inputs']],
+  a2a: ['agent_name', ['prompt_template', 'prompt_file', 'inputs']],
+  human: ['message'],
+  routine: ['routine_name'],
+  noop: [],
+};
+
+function isBlank(value) {
+  if (value === undefined || value === null) return true;
+  if (typeof value === 'string') return value.trim() === '';
+  if (Array.isArray(value)) return value.length === 0;
+  if (typeof value === 'object') return Object.keys(value).length === 0;
+  return false;
+}
+
+// `foreach` is the one kind whose requirements depend on its own config: the
+// schema splits it into foreachSendConfig/foreachAgentConfig on `mode`.
+function requiredFieldsFor(node) {
+  if (node?.kind === 'foreach') {
+    return node.config?.mode === 'agent'
+      ? ['items_from', 'agent_name', 'prompt_template']
+      : ['items_from'];
+  }
+  return REQUIRED_CONFIG[node?.kind] || [];
+}
+
+// The requirements a node has not met, one entry per requirement. A one-of
+// group stays grouped -- "a prompt needs a template or a file" is a single
+// unmet requirement offering two ways to satisfy it, so counting its members
+// would tell the author two fields are missing when either one will do.
+export function missingRequirements(node) {
+  const config = node?.config || {};
+  return requiredFieldsFor(node)
+    .map((requirement) => (Array.isArray(requirement) ? requirement : [requirement]))
+    .filter((group) => group.every((field) => isBlank(config[field])));
+}
+
+// The same thing flattened to field names, for marking every alternative in
+// the inspector and for deciding whether the graph is safe to PATCH.
+export function missingRequiredConfig(node) {
+  return missingRequirements(node).flat();
+}
+
+// Nodes the backend would reject, in canvas order. Empty means the graph is
+// safe to PATCH as far as per-node completeness goes.
+export function incompleteNodes(nodes) {
+  return (nodes || [])
+    .map((node) => ({ node, missing: missingRequiredConfig(node) }))
+    .filter((entry) => entry.missing.length > 0);
+}
+
 // Edit callbacks shared with the card/branch renderers (avoids threading
 // mutable refs through node data, which React forbids reading during render).
 const GraphEditContext = createContext(null);
 
+// The required fields the inspected node is still missing. A context rather
+// than a prop so the marker reaches every ConfigField without rethreading each
+// of NodeConfigBody's per-kind call sites.
+const EMPTY_MISSING = new Set();
+const MissingFieldsContext = createContext(EMPTY_MISSING);
+
 // One config field bound to `data.config[field]` (a plain string value).
 function ConfigField({ id, config, field, label, placeholder, multiline, updateNodeConfig }) {
+  const missing = useContext(MissingFieldsContext);
   const value = config?.[field] || '';
+  const required = missing.has(field);
   const onChange = (event) => updateNodeConfig(id, { [field]: event.target.value });
+  const inputClass = (base) => `${base}${required ? ' agents-graph-node__input--required' : ''}`;
   return (
-    <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">{label}</span>
+    <label className={`agents-graph-node__field${required ? ' agents-graph-node__field--required' : ''}`}>
+      <span className="agents-graph-node__field-label">
+        {label}
+        {required ? <span className="agents-graph-node__required" title="Required before this routine can be saved">Required</span> : null}
+      </span>
       {multiline ? (
-        <textarea className="agents-graph-node__prompt" value={value} placeholder={placeholder} onChange={onChange} />
+        <textarea className={inputClass('agents-graph-node__prompt')} value={value} placeholder={placeholder} onChange={onChange} aria-required={required || undefined} />
       ) : (
-        <input className="agents-graph-node__toolinput" value={value} placeholder={placeholder} onChange={onChange} />
+        <input className={inputClass('agents-graph-node__toolinput')} value={value} placeholder={placeholder} onChange={onChange} aria-required={required || undefined} />
       )}
     </label>
   );
@@ -371,6 +445,7 @@ function StepCard({ node, routerEdge }) {
   return (
     <div
       className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}`}
+      data-node-id={node.id}
       style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       role="button"
       tabIndex={0}
@@ -400,6 +475,9 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
   const { updateNode, deleteNode } = useContext(GraphEditContext);
   if (!node) return null;
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
+  const unmet = missingRequirements(node);
+  const missing = unmet.flat();
+  const missingSet = missing.length ? new Set(missing) : EMPTY_MISSING;
   return (
     <aside
       ref={panelRef}
@@ -415,7 +493,15 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
         </div>
         <button type="button" className="routine-node-inspector__close" onClick={onClose} aria-label="Close node details">×</button>
       </header>
+      <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
+        {unmet.length ? (
+          <p className="routine-node-inspector__required-hint" role="status">
+            {unmet.length === 1
+              ? 'One field is required before this routine can be saved.'
+              : `${unmet.length} fields are required before this routine can be saved.`}
+          </p>
+        ) : null}
         <label className="agents-graph-node__field">
           <span className="agents-graph-node__field-label">Label</span>
           <input
@@ -434,6 +520,7 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
         />
         <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
       </div>
+      </MissingFieldsContext.Provider>
       <footer className="routine-node-inspector__foot">
         <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onClose(); }}>
           Delete step
@@ -1199,9 +1286,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const edgesRef = useRef(edges);
   const metaRef = useRef(meta);
   useEffect(() => { nodesRef.current = nodes; }, [nodes]);
-  const selectNode = useCallback((id, event) => {
+  const positionInspector = useCallback((id, target) => {
     const canvas = canvasRef.current;
-    const target = event.currentTarget;
     if (!canvas || !target) return;
     const canvasRect = canvas.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -1222,6 +1308,23 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setSelectedNodeId(id);
     setInspectorPosition({ left, top, maxHeight: canvasRect.height - top - 16 });
   }, []);
+  const selectNode = useCallback((id, event) => positionInspector(id, event.currentTarget), [positionInspector]);
+  // A newly inserted node opens its own inspector. Every kind except `noop`
+  // lands with its required config empty, so the fields have to be put in
+  // front of the author rather than left to be discovered after a rejected
+  // save. Positioning needs the card's real geometry, which only exists once
+  // React has committed it -- hence the ref handoff instead of selecting
+  // inline in insertAt.
+  const pendingSelectRef = useRef(null);
+  useLayoutEffect(() => {
+    const id = pendingSelectRef.current;
+    if (!id) return;
+    const escaped = typeof CSS !== 'undefined' && CSS.escape ? CSS.escape(id) : id;
+    const target = canvasRef.current?.querySelector(`[data-node-id="${escaped}"]`);
+    if (!target) return;
+    pendingSelectRef.current = null;
+    positionInspector(id, target);
+  }, [nodes, positionInspector]);
   // One-shot correction per selection: measures the panel's actual
   // (unclamped) content height once it's mounted, and only then decides
   // whether it needs to slide up to fit -- see selectNode above for why
@@ -1436,6 +1539,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         ...terminalIds,
       ];
     }
+    pendingSelectRef.current = id;
     setNodes((current) => [...current, ...added]);
     setEdges(nextEdges);
   }, []);
@@ -1562,6 +1666,12 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
+  // A graph carrying a node with unfilled required config is withheld rather
+  // than sent: the backend would reject it, and an author midway through
+  // filling in a step they just inserted has not made a mistake worth a red
+  // banner. `lastSavedRef` is deliberately left alone so the moment the last
+  // field lands the signature still differs and the save goes out on its own.
+  const incomplete = useMemo(() => incompleteNodes(nodes), [nodes]);
   const lastSavedRef = useRef(null);
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
@@ -1573,6 +1683,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     if (signature === lastSavedRef.current) {
       setSaveError(null);
       setSaveState(saveStatusWhenInSync);
+      return undefined;
+    }
+    if (incomplete.length) {
+      setSaveError(null);
+      setSaveState('incomplete');
       return undefined;
     }
     const timer = setTimeout(async () => {
@@ -1588,7 +1703,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       }
     }, 700);
     return () => clearTimeout(timer);
-  }, [nodes, edges, meta]);
+  }, [nodes, edges, meta, incomplete]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
@@ -1628,8 +1743,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
               {saveState !== 'idle' ? (
-                <span className={`agents-graph-save agents-graph-save--${saveState}`}>
-                  {saveState === 'saving' ? 'Saving…' : saveState === 'saved' ? 'Saved' : 'Save failed'}
+                <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
+                  {saveState === 'saving' ? 'Saving…'
+                    : saveState === 'saved' ? 'Saved'
+                      : saveState === 'incomplete' ? `Not saved · ${incomplete.length} step${incomplete.length === 1 ? '' : 's'} incomplete`
+                        : 'Save failed'}
                 </span>
               ) : null}
               <span

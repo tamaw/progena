@@ -6929,6 +6929,46 @@ body,
 .agents-graph-floating .agents-graph-save--saving { color: var(--color-text-muted); }
 .agents-graph-floating .agents-graph-save--saved { color: var(--color-success, #22c55e); }
 .agents-graph-floating .agents-graph-save--error { color: var(--color-error, #ef4444); }
+/* Withheld rather than rejected: a warning, not the error red of a failed save. */
+.agents-graph-floating .agents-graph-save--incomplete { color: var(--color-warning, #d29922); }
+
+/* Required-but-empty config in the node inspector. The field itself is
+   outlined so the eye lands on the input, not just the label. */
+.routine-node-inspector__required-hint {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  color: var(--color-warning, #d29922);
+  background: color-mix(in oklab, var(--color-warning, #d29922) 12%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in oklab, var(--color-warning, #d29922) 38%, var(--color-border));
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.agents-graph-node__field--required .agents-graph-node__field-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: space-between;
+}
+
+.agents-graph-node__required {
+  color: var(--color-warning, #d29922);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.agents-graph-node__input--required {
+  border-color: color-mix(in oklab, var(--color-warning, #d29922) 55%, var(--color-border));
+  background: color-mix(in oklab, var(--color-warning, #d29922) 7%, transparent);
+}
+
+.agents-graph-node__input--required:focus {
+  border-color: var(--color-warning, #d29922);
+  outline: none;
+}
 
 .agents-graph-save-error {
   position: absolute;
