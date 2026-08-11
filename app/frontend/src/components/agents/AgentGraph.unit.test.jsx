@@ -5,6 +5,7 @@ import {
   forkJoin,
   forkLaneEdgePosition,
   incompleteNodes,
+  isNodeComplete,
   missingRequirements,
   missingRequiredConfig,
   removeForkBranch,
@@ -241,6 +242,12 @@ describe('saveStatusWhenInSync', () => {
     expect(saveStatusWhenInSync('error')).toBe('idle');
   });
 
+  // Deleting a withheld step restores the last-saved signature, so no save is
+  // queued to clear the chip -- it read "Not saved · 0 steps incomplete".
+  it('drops a withheld save once the step holding it back is gone', () => {
+    expect(saveStatusWhenInSync('incomplete')).toBe('idle');
+  });
+
   it('leaves a successful save reported as saved', () => {
     expect(saveStatusWhenInSync('saved')).toBe('saved');
   });
@@ -327,5 +334,26 @@ describe('missingRequirements', () => {
 
   it('drops a requirement as soon as any one alternative is filled', () => {
     expect(missingRequirements({ kind: 'agent', config: { prompt_file: 'p.md' } })).toEqual([['agent_name']]);
+  });
+});
+
+// The inspector is held open on an incomplete step: it drives the disabled
+// close button and the ignored background click, and the same predicate badges
+// the card so a step left incomplete by the JSON editor is still findable.
+describe('isNodeComplete', () => {
+  it('holds the inspector on a step the backend would reject', () => {
+    expect(isNodeComplete({ kind: 'prompt', config: { prompt_template: '' } })).toBe(false);
+  });
+
+  it('releases it as soon as the requirement is met', () => {
+    expect(isNodeComplete({ kind: 'prompt', config: { prompt_template: 'Summarise.' } })).toBe(true);
+  });
+
+  it('never holds a step that requires nothing', () => {
+    expect(isNodeComplete({ kind: 'noop', config: {} })).toBe(true);
+  });
+
+  it('still holds when only some of several requirements are met', () => {
+    expect(isNodeComplete({ kind: 'classify', config: { rubric_prompt: 'Rate it' } })).toBe(false);
   });
 });
