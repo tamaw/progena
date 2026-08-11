@@ -6,6 +6,7 @@ import {
   forkLaneEdgePosition,
   removeForkBranch,
   removeForkDefault,
+  saveStatusWhenInSync,
   validateWorkingGraph,
 } from './AgentGraph';
 
@@ -225,5 +226,23 @@ describe('fork lanes and their join', () => {
   it('keeps a grown fork valid as a whole graph', () => {
     const nodes = ['gate', 'left', 'right', 'noop-1', 'reply', 'done'].map((id) => ({ id, kind: 'eval' }));
     expect(validateWorkingGraph(nodes, addForkLane(edges, 'gate', 'noop-1'), 'gate')).toEqual([]);
+  });
+});
+
+// Regression coverage for the stranded save banner: adding a node the schema
+// rejects fails the PATCH, and removing it again restores the exact signature
+// the server already holds. The autosave short-circuits on that match, so
+// nothing else ever clears the failure the user has already undone.
+describe('saveStatusWhenInSync', () => {
+  it('drops a failure once the canvas matches what the server holds', () => {
+    expect(saveStatusWhenInSync('error')).toBe('idle');
+  });
+
+  it('leaves a successful save reported as saved', () => {
+    expect(saveStatusWhenInSync('saved')).toBe('saved');
+  });
+
+  it('leaves an untouched canvas idle', () => {
+    expect(saveStatusWhenInSync('idle')).toBe('idle');
   });
 });

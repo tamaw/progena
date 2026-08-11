@@ -1160,6 +1160,15 @@ function serializeGraph(nodes, edges, meta) {
     $defs: meta.$defs || {},
   };
 }
+
+// A rejected save leaves `lastSavedRef` on the last good signature, so undoing
+// the offending edit puts the canvas back in step with the server. No retry is
+// queued from there, so the failure has to be cleared here — otherwise the
+// banner outlives the change that caused it and accuses a graph that is fine.
+export function saveStatusWhenInSync(current) {
+  return current === 'error' ? 'idle' : current;
+}
+
 function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
@@ -1561,7 +1570,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       lastSavedRef.current = signature;
       return undefined;
     }
-    if (signature === lastSavedRef.current) return undefined;
+    if (signature === lastSavedRef.current) {
+      setSaveError(null);
+      setSaveState(saveStatusWhenInSync);
+      return undefined;
+    }
     const timer = setTimeout(async () => {
       setSaveState('saving');
       try {
