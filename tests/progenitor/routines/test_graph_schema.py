@@ -232,6 +232,84 @@ class TestValidateRoutineGraphStructural:
             [{"from": "gate", "to": "b", "level": "normal"}],
         )
 
+    # Error edges are failure routing, not flow edges: they coexist with a
+    # node's one outgoing edge declaration rather than consuming it.
+    def test_accepts_error_edge_alongside_normal_edge(self):
+        validate_routine_graph(
+            [
+                {"id": "a", "kind": "prompt"},
+                {"id": "b", "kind": "eval"},
+                {"id": "c", "kind": "noop"},
+            ],
+            [
+                {"from": "a", "to": "b", "level": "normal"},
+                {"from": "a", "to": "c", "level": "error"},
+            ],
+        )
+
+    def test_rejects_two_error_edges_from_same_source(self):
+        with pytest.raises(ValueError, match="more than one error edge"):
+            validate_routine_graph(
+                [
+                    {"id": "a", "kind": "prompt"},
+                    {"id": "b", "kind": "noop"},
+                    {"id": "c", "kind": "noop"},
+                ],
+                [
+                    {"from": "a", "to": "b", "level": "error"},
+                    {"from": "a", "to": "c", "level": "error"},
+                ],
+            )
+
+    def test_rejects_error_edge_to_unknown_node(self):
+        with pytest.raises(ValueError, match="unknown target node"):
+            validate_routine_graph(
+                [
+                    {"id": "a", "kind": "prompt"},
+                    {"id": "b", "kind": "noop"},
+                ],
+                [
+                    {"from": "a", "to": "ghost", "level": "error"},
+                ],
+            )
+
+    def test_rejects_self_loop_error_edge(self):
+        with pytest.raises(ValueError, match="cannot route its own errors to itself"):
+            validate_routine_graph(
+                [
+                    {"id": "a", "kind": "prompt"},
+                ],
+                [
+                    {"from": "a", "to": "a", "level": "error"},
+                ],
+            )
+
+    def test_rejects_error_edge_with_from_as_list(self):
+        with pytest.raises(ValueError, match="error edge from must be one node id"):
+            validate_routine_graph(
+                [
+                    {"id": "a", "kind": "prompt"},
+                    {"id": "b", "kind": "noop"},
+                    {"id": "c", "kind": "noop"},
+                ],
+                [
+                    {"from": ["a", "b"], "to": "c", "level": "error"},
+                ],
+            )
+
+    def test_error_edge_target_counts_as_reachable(self):
+        """A node reachable only via an error edge is still considered
+        reachable and should not trigger an unreachable-node complaint."""
+        validate_routine_graph(
+            [
+                {"id": "a", "kind": "prompt"},
+                {"id": "b", "kind": "noop"},
+            ],
+            [
+                {"from": "a", "to": "b", "level": "error"},
+            ],
+        )
+
 
 @pytest.mark.parametrize(
     "node",
@@ -304,4 +382,66 @@ def test_rejects_loop_guard_on_barrier_fanin() -> None:
                     "loop_guard": {"expression": "True"},
                 }
             ],
+        )
+
+
+def test_rejects_error_edge_with_loop_guard() -> None:
+    """errorEdge has additionalProperties: false; loop_guard is not allowed."""
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(
+            {
+                "id": "test",
+                "name": "Test",
+                "description": "",
+                "version": "2.0.0",
+                "entry": "a",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "kind": "prompt",
+                        "output_key": "a",
+                        "config": {"prompt_template": "hi"},
+                    },
+                    {"id": "b", "kind": "noop", "output_key": "b", "config": {}},
+                ],
+                "edges": [
+                    {
+                        "from": "a",
+                        "to": "b",
+                        "level": "error",
+                        "loop_guard": {"expression": "True"},
+                    },
+                ],
+            }
+        )
+
+
+def test_rejects_error_edge_with_branches() -> None:
+    """errorEdge has additionalProperties: false; branches is not allowed."""
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_routine_graph_payload(
+            {
+                "id": "test",
+                "name": "Test",
+                "description": "",
+                "version": "2.0.0",
+                "entry": "a",
+                "nodes": [
+                    {
+                        "id": "a",
+                        "kind": "prompt",
+                        "output_key": "a",
+                        "config": {"prompt_template": "hi"},
+                    },
+                    {"id": "b", "kind": "noop", "output_key": "b", "config": {}},
+                ],
+                "edges": [
+                    {
+                        "from": "a",
+                        "to": "b",
+                        "level": "error",
+                        "branches": {"x": "b"},
+                    },
+                ],
+            }
         )

@@ -132,6 +132,7 @@
         "system_prompt": { "type": "string" },
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -148,6 +149,7 @@
         "expression_file": { "type": "string", "minLength": 1 },
         "inputs": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -164,6 +166,7 @@
         "expression_file": { "type": "string", "minLength": 1 },
         "inputs": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -180,6 +183,7 @@
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "inputs": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       }
     },
@@ -195,6 +199,7 @@
         "response_schema": { "$ref": "#/$defs/responseSchema" },
         "continue_thread": { "type": "boolean" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -212,6 +217,7 @@
         "prompt_template": { "type": "string", "minLength": 1 },
         "prompt_file": { "type": "string", "minLength": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       },
       "oneOf": [
@@ -227,7 +233,8 @@
       "properties": {
         "message": { "type": "string", "minLength": 1 },
         "allowed_responses": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } },
-        "retry": { "$ref": "#/$defs/retryPolicy" }
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." }
       }
     },
     "foreachConfig": {
@@ -260,6 +267,7 @@
         "max_items": { "type": "integer", "minimum": 1 },
         "max_concurrency": { "type": "integer", "minimum": 1 },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       }
     },
@@ -272,6 +280,7 @@
         "input_map": { "$ref": "#/$defs/inputMap" },
         "output_map": { "$ref": "#/$defs/inputMap" },
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }
       }
     },
@@ -292,13 +301,7 @@
         "initial_interval": { "type": "number", "minimum": 0 },
         "backoff_factor": { "type": "number", "minimum": 1 },
         "max_interval": { "type": "number", "minimum": 0 },
-        "jitter": { "type": "boolean" },
-        "on_exhausted": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["route_to"],
-          "properties": { "route_to": { "$ref": "#/$defs/nodeId" } }
-        }
+        "jitter": { "type": "boolean" }
       }
     },
     "loopGuard": {
@@ -315,7 +318,8 @@
       "oneOf": [
         { "$ref": "#/$defs/normalEdge" },
         { "$ref": "#/$defs/fanInEdge" },
-        { "$ref": "#/$defs/routerEdge" }
+        { "$ref": "#/$defs/routerEdge" },
+        { "$ref": "#/$defs/errorEdge" }
       ]
     },
     "normalEdge": {
@@ -352,11 +356,23 @@
         "default": { "$ref": "#/$defs/nodeId" }
       }
     },
+    "errorEdge": {
+      "description": "Where a node's failure goes once its retries are spent. Not a flow edge: it does not count as the source's one outgoing edge declaration, so a node names its normal successor and its error destination at the same time.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to", "level"],
+      "properties": {
+        "from": { "$ref": "#/$defs/nodeId" },
+        "to": { "$ref": "#/$defs/nodeId" },
+        "level": { "const": "error" }
+      }
+    },
     "settings": {
       "type": "object",
       "additionalProperties": false,
       "properties": {
         "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Default seconds before a node is abandoned, overridable per node. 0 disables the limit." },
         "recursion_limit": { "type": "integer", "minimum": 1 },
         "cache": { "type": "boolean" }
       }
