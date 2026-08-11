@@ -445,6 +445,14 @@ class TestRetryPolicyContract:
         assert model.attempts == 3
         assert result["data"]["recover"] == "recovered"
 
+    def test_retry_omitted_jitter_defaults_to_true(self):
+        """A retry block that says nothing about jitter still gets it, so
+        sibling branches that failed together do not retry in lockstep."""
+        payload = _single_prompt_step_payload(node_retry={"max_retries": 1, "initial_interval": 0})
+        graph = validate_routine_graph_payload(payload)
+        compiled = compile_routine_graph(graph, model=FakeModel([]))
+        assert compiled.nodes["step"].retry_policy[0].jitter is True
+
 
 class TestRecursionLimitSetting:
     """settings.recursion_limit is the real backstop for a graph cycle that never terminates."""
