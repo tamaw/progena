@@ -47,8 +47,6 @@ from app.progenitor.workflows import (
     WORKFLOW_RUN_KEY_PREFIX,
     WorkflowDefinition,
     WorkflowListItem,
-    WorkflowNodeCode,
-    WorkflowNodeUser,
     WorkflowRun,
     default_workflow_definition,
     parse_workflow_invoke_request_document,
@@ -90,9 +88,7 @@ from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
     PromptExecutionResult,
     WorkflowExecutor,
-    build_agent_node_instruction,
     build_manual_trigger_event,
-    build_user_node_instruction,
     delete_workflow_definition,
     get_workflow_definition,
     get_workflow_run,
@@ -563,61 +559,26 @@ async def _workflow_prompt_runner(
     input_text: str,
     thread_id: str | None,
 ) -> PromptExecutionResult:
+    """Execute every ordinary workflow step through one normal prompt path."""
+
     widget_id = f"workflow:{workflow.id}:{node_id}"
-    root_widget_id = f"workflow:{workflow.id}"
-    if isinstance(node, WorkflowNodeCode):
-        # Code nodes have no dedicated sandboxed executor (same as the old
-        # Workspace canvas): the agent is asked to run the snippet itself
-        # through the normal SSE prompt path.
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            code=node.content,
-            language=node.language,
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    elif isinstance(node, WorkflowNodeUser):
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=build_user_node_instruction(node, input_text),
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    elif getattr(node, "kind", "") == "agent":
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=build_agent_node_instruction(node, input_text),
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    else:
-        request = ActionRunRequest(
-            widget_id=widget_id,
-            prompt=node.prompt,
-            input=input_text,
-            broadcast_response=False,
-            thread_id=thread_id,
-            invocation_type="workflow_step",
-            invocation_source=widget_id,
-            root_widget_id=root_widget_id,
-        )
-    thread_id, response_obj, response_text = await _execute_action_run(request)
+    request = ActionRunRequest(
+        widget_id=widget_id,
+        prompt=node.prompt,
+        input=input_text,
+        broadcast_response=False,
+        thread_id=thread_id,
+        invocation_type="workflow_step",
+        invocation_source=widget_id,
+        root_widget_id=f"workflow:{workflow.id}",
+    )
+    thread_id, _response_obj, response_text = await _execute_action_run(request)
     return PromptExecutionResult(response=response_text, thread_id=thread_id)
 
 
 def get_workflow_executor() -> WorkflowExecutor:
     """Return the singleton backend workflow executor."""
+    from app.backend.workflow_service import _create_default_mcp_caller
 
     global _workflow_executor
     if _workflow_executor is None:
@@ -629,6 +590,7 @@ def get_workflow_executor() -> WorkflowExecutor:
                 payload,
                 request_id=_workflow_event_request_id(payload),
             ),
+            mcp_caller=_create_default_mcp_caller(get_default_document_store),
         )
     return _workflow_executor
 
@@ -1089,18 +1051,33 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
     return triggers
 
 
-def _enrich_kanban_workflow_triggers(triggers: list[dict], now: str) -> list[dict]:
-    return [
-        {
-            **trigger,
-            "payload": {
-                **(trigger.get("payload") or {}),
-                "timestamp": trigger.get("timestamp") or now,
-                "source": "kanban",
-            },
-        }
-        for trigger in triggers
-    ]
+def _enrich_kanban_workflow_triggers(
+    state_reader: StateReader, triggers: list[dict], now: str
+) -> list[dict]:
+    """Attach the immutable task snapshot required by workflow dataflow."""
+    enriched: list[dict] = []
+    for trigger in triggers:
+        payload = dict(trigger.get("payload") or {})
+        card = payload.get("card")
+        if isinstance(card, dict):
+            task = _read_task_content(state_reader, card)
+            payload["task"] = {
+                "path": task.path,
+                "format": task.format,
+                "updated_at": task.updated_at,
+                "content": task.content,
+            }
+        enriched.append(
+            {
+                **trigger,
+                "payload": {
+                    **payload,
+                    "timestamp": trigger.get("timestamp") or now,
+                    "source": "kanban",
+                },
+            }
+        )
+    return enriched
 
 
 async def _apply_kanban_card_diff_effects(
@@ -1118,7 +1095,7 @@ async def _apply_kanban_card_diff_effects(
     triggers = _kanban_card_change_triggers(previous_card, refreshed_card, now)
     _apply_event_widget_triggers(state_reader, triggers, request_id=request_id)
     await _dispatch_workflow_triggers(
-        _enrich_kanban_workflow_triggers(triggers, now),
+        _enrich_kanban_workflow_triggers(state_reader, triggers, now),
         request_id=request_id,
     )
     if previous_card.get("status") != refreshed_card.get("status"):
@@ -1231,7 +1208,9 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
                 "payload": {"event_type": "kanban.card.created", "card": card},
             }
             _apply_event_widget_triggers(state_reader, [trigger])
-            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
+            await _dispatch_workflow_triggers(
+                _enrich_kanban_workflow_triggers(state_reader, [trigger], now)
+            )
 
         for card_id in known_ids - current_ids:
             previous = _last_known_kanban_cards.get(card_id)
@@ -1244,7 +1223,9 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
                 "payload": {"event_type": "kanban.card.deleted", "card": previous},
             }
             _apply_event_widget_triggers(state_reader, [trigger])
-            await _dispatch_workflow_triggers(_enrich_kanban_workflow_triggers([trigger], now))
+            await _dispatch_workflow_triggers(
+                _enrich_kanban_workflow_triggers(state_reader, [trigger], now)
+            )
 
         for card_id in current_ids & known_ids:
             previous = _last_known_kanban_cards.get(card_id)
@@ -3142,18 +3123,20 @@ async def create_kanban_card(
         request_id=request_id,
     )
     await _dispatch_workflow_triggers(
-        [
-            {
-                "event_type": "kanban.card.created",
-                "timestamp": now,
-                "payload": {
+        _enrich_kanban_workflow_triggers(
+            state_reader,
+            [
+                {
                     "event_type": "kanban.card.created",
-                    "card": created,
                     "timestamp": now,
-                    "source": "kanban",
-                },
-            }
-        ],
+                    "payload": {
+                        "event_type": "kanban.card.created",
+                        "card": created,
+                    },
+                }
+            ],
+            now,
+        ),
         request_id=request_id,
     )
     async with _kanban_card_trigger_lock:
@@ -3299,18 +3282,20 @@ async def delete_kanban_card(
             request_id=request_id,
         )
         await _dispatch_workflow_triggers(
-            [
-                {
-                    "event_type": "kanban.card.deleted",
-                    "timestamp": timestamp,
-                    "payload": {
+            _enrich_kanban_workflow_triggers(
+                state_reader,
+                [
+                    {
                         "event_type": "kanban.card.deleted",
-                        "card": deleted_card,
                         "timestamp": timestamp,
-                        "source": "kanban",
-                    },
-                }
-            ],
+                        "payload": {
+                            "event_type": "kanban.card.deleted",
+                            "card": deleted_card,
+                        },
+                    }
+                ],
+                timestamp,
+            ),
             request_id=request_id,
         )
         async with _kanban_card_trigger_lock:

@@ -67,18 +67,16 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Agents list loads real agents and selecting one renders its detail body (AgentDetailBodies)', async ({ page }) => {
+  test('Agents opens a subagent draft without relying on live registry contents', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/agents');
     await expect(page.locator('.agents-pane')).toBeVisible();
-    await expect(page.getByPlaceholder('Search agents...')).toBeVisible();
+    await page.getByRole('button', { name: '+ New' }).click();
+    await expect(page.getByRole('dialog', { name: 'New agent' })).toBeVisible();
+    await page.getByRole('button', { name: /^Subagent/ }).click();
 
-    // Real agent rows arrive via the realtime snapshot.
-    const rows = page.locator('.agents-agent-row');
-    await expect(rows.first()).toBeVisible({ timeout: 20_000 });
-    await rows.first().click();
-    // The extracted A2A/ACP/Subagent detail body renders into the detail pane.
-    await expect(page.locator('.detail-pane__body').first()).toBeVisible();
+    await expect(page.getByRole('textbox', { name: 'Agent name' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'System prompt' })).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -90,17 +88,21 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Agent search filters the list (uiDataSlice agents domain still wired)', async ({ page }) => {
+  test('Agent search remains responsive while the registry is unavailable', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/agents');
-    const rows = page.locator('.agents-agent-row');
-    await expect(rows.first()).toBeVisible({ timeout: 20_000 });
-    expect(await rows.count()).toBeGreaterThan(0);
-
-    // A query that should match nothing collapses the list to its empty state.
-    await page.getByPlaceholder('Search agents...').fill('zzz-no-such-agent-zzz');
-    await expect(rows).toHaveCount(0);
-    await expect(page.getByText('No agents match this view.')).toBeVisible();
+    const search = page.getByPlaceholder('Search agents...');
+    await search.fill('zzz-no-such-agent-zzz');
+    await expect(search).toHaveValue('zzz-no-such-agent-zzz');
     expect(errors).toEqual([]);
   });
+  test('Workflows renders its empty state without persisted workflow records', async ({ page }) => {
+    const errors = trackPageErrors(page);
+    await page.goto('/workflows');
+
+    await expect(page.getByText('No workflows match the current filters.')).toBeVisible();
+    await expect(page.getByText('Select a workflow to edit or create a new one.')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
 });

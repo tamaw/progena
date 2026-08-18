@@ -137,6 +137,14 @@
   position: relative;
 }
 
+/* The floating workflow actions sit beside the list pane. Anchor their labels
+   to the icon's left edge so the bubble grows into the canvas, not under the
+   clipped sidebar. */
+.workflow-canvas .agents-graph-floating .detail-header-action[data-tooltip]::after {
+  left: 0;
+  right: auto;
+}
+
 .workflows-page {
   min-height: 0;
 }
@@ -354,11 +362,57 @@
   height: 100%;
 }
 
-.workflow-graph-node--event {
+.workflow-graph-node--prompt {
+  --workflow-node-color: #58a6ff;
+}
+
+.workflow-graph-node--agent {
+  --workflow-node-color: #f85149;
+}
+
+.workflow-graph-node--knowledge {
+  --workflow-node-color: #3fb950;
+}
+
+.workflow-graph-node--repository {
+  --workflow-node-color: #d29922;
+}
+
+.workflow-graph-node--kanban,
+.workflow-graph-node--trigger {
+  --workflow-node-color: #f2cc60;
+}
+
+.workflow-graph-node--ask_user {
+  --workflow-node-color: #39c5cf;
+}
+
+.workflow-graph-node--inbox {
+  --workflow-node-color: #bc8cff;
+}
+
+.workflow-graph-node--routine {
+  --workflow-node-color: #2dd4bf;
+}
+
+.workflow-graph-node--mcp {
+  --workflow-node-color: #a371f7;
+}
+
+.workflow-graph-node--condition {
   --workflow-node-color: #ffa657;
 }
 
+.workflow-graph-node--approval {
+  --workflow-node-color: #3fb950;
+}
+
 .workflow-graph-node .node-type-icon {
+  color: var(--workflow-node-color);
+  background: color-mix(in oklab, var(--workflow-node-color) 18%, transparent);
+}
+
+.workflow-graph-node__kind {
   color: var(--workflow-node-color);
   background: color-mix(in oklab, var(--workflow-node-color) 18%, transparent);
 }
@@ -380,6 +434,12 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+
+.workflow-graph-node__field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
 }
 
 .workflow-graph-node__field span {
@@ -632,6 +692,71 @@
 .canvas-dock-icon.condition { background: rgba(210, 153, 34, 0.18); color: #d29922; }
 .canvas-dock-icon.approval { background: rgba(248, 81, 73, 0.18); color: #f85149; }
 .canvas-dock-icon.inbox { background: rgba(188, 140, 255, 0.18); color: #bc8cff; }
+
+.workflow-dock-item--prompt {
+  --workflow-node-color: #58a6ff;
+}
+
+.workflow-dock-item--call-agent {
+  --workflow-node-color: #f85149;
+}
+
+.workflow-dock-item--knowledge-search {
+  --workflow-node-color: #3fb950;
+}
+
+.workflow-dock-item--repository-task {
+  --workflow-node-color: #d29922;
+}
+
+.workflow-dock-item--kanban-task {
+  --workflow-node-color: #f2cc60;
+}
+
+.workflow-dock-item--mcp-tool {
+  --workflow-node-color: #a371f7;
+}
+
+.workflow-dock-item--ask-user {
+  --workflow-node-color: #39c5cf;
+}
+
+.workflow-dock-item--inbox-message {
+  --workflow-node-color: #bc8cff;
+}
+
+.workflow-dock-item--routine {
+  --workflow-node-color: #2dd4bf;
+}
+
+.workflow-dock-item--condition {
+  --workflow-node-color: #ffa657;
+}
+
+.workflow-dock-item--approval {
+  --workflow-node-color: #3fb950;
+}
+
+.agents-graph-shell .workflow-dock-item .canvas-dock-icon {
+  color: var(--workflow-node-color) !important;
+  background: color-mix(in oklab, var(--workflow-node-color) 18%, transparent) !important;
+}
+
+.agents-graph-shell .workflow-dock-item .canvas-dock-tooltip {
+  color: var(--workflow-node-color) !important;
+}
+
+.canvas-dock-icon.prompt { background: color-mix(in oklab, #58a6ff 18%, transparent) !important; color: #58a6ff !important; }
+.canvas-dock-icon.call-agent { background: color-mix(in oklab, #f85149 18%, transparent) !important; color: #f85149 !important; }
+.canvas-dock-icon.knowledge-search { background: color-mix(in oklab, #3fb950 18%, transparent) !important; color: #3fb950 !important; }
+.canvas-dock-icon.repository-task { background: color-mix(in oklab, #d29922 18%, transparent) !important; color: #d29922 !important; }
+.canvas-dock-icon.kanban-task { background: color-mix(in oklab, #f2cc60 18%, transparent) !important; color: #f2cc60 !important; }
+.canvas-dock-icon.mcp-tool { background: color-mix(in oklab, #a371f7 18%, transparent) !important; color: #a371f7 !important; }
+.canvas-dock-icon.ask-user { background: color-mix(in oklab, #39c5cf 18%, transparent) !important; color: #39c5cf !important; }
+.canvas-dock-icon.inbox-message { background: color-mix(in oklab, #bc8cff 18%, transparent) !important; color: #bc8cff !important; }
+.canvas-dock-icon.routine { background: color-mix(in oklab, #2dd4bf 18%, transparent) !important; color: #2dd4bf !important; }
+.canvas-dock-icon.condition { background: color-mix(in oklab, #ffa657 18%, transparent) !important; color: #ffa657 !important; }
+.canvas-dock-icon.approval { background: color-mix(in oklab, #3fb950 18%, transparent) !important; color: #3fb950 !important; }
 
 .canvas-dock-tooltip {
   position: absolute;
@@ -1043,4 +1168,243 @@
 .workflow-delete-modal__confirm:disabled {
   cursor: progress;
   opacity: 0.7;
+}
+
+/* ---- Schema Editor ---- */
+.workflow-schema-editor__label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.workflow-schema-editor__tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.workflow-schema-editor__tabs button {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  background: var(--color-bg-hover);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+
+.workflow-schema-editor__tabs button.active {
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  border-color: var(--color-accent);
+}
+
+.workflow-schema-editor__tabs button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.workflow-schema-editor__visual {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schema-property-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.schema-property-row__name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  color: var(--color-text-primary);
+}
+
+.schema-property-row__name:hover {
+  border-color: var(--color-border);
+}
+
+.schema-property-row__name:focus {
+  border-color: var(--color-accent);
+  background: var(--color-bg-secondary);
+  outline: none;
+}
+
+.schema-property-row__type {
+  padding: 4px 6px;
+  font-size: 11px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-primary);
+}
+
+.schema-property-row__required {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.schema-property-row__delete {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.schema-property-row__delete:hover {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.workflow-schema-editor__empty {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  padding: 4px 0;
+}
+
+/* ---- MCP Node ---- */
+.mcp-tool-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-tool-description {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.mcp-bindings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mcp-bindings__title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-muted);
+}
+
+.mcp-binding-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.mcp-binding-field__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.mcp-binding-field__name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.mcp-binding-field__type {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+}
+
+.mcp-binding-field__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-binding-field__controls select,
+.mcp-binding-field__controls input {
+  padding: 5px 7px;
+  font-size: 11px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  color: var(--color-text-primary);
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-binding-field__clear {
+  background: none;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.mcp-binding-field__clear:hover {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.15);
+}
+
+.mcp-schema-fallback,
+.mcp-schema-missing {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  line-height: 1.45;
+}
+
+.node-meta-chip.mcp-server {
+  background: rgba(163, 113, 247, 0.12);
+  color: #a371f7;
+}
+
+.node-meta-chip.mcp-tool {
+  background: rgba(163, 113, 247, 0.18);
+  color: #a371f7;
+  font-weight: 600;
+}
+
+.node-type-icon.mcp {
+  background: rgba(163, 113, 247, 0.2);
+  color: #a371f7;
 }

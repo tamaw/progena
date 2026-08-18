@@ -28,8 +28,9 @@ import * as logs from './uiData/logs';
 import * as preferences from './uiData/preferences';
 import * as marketplaces from './uiData/marketplaces';
 import * as repos from './uiData/repos';
+import * as routines from './uiData/routines';
 
-const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, agents, chats, inbox, logs, preferences, marketplaces, repos];
+const domains = [runtime, mcp, knowledge, prompts, tasks, workflows, routines, agents, chats, inbox, logs, preferences, marketplaces, repos];
 
 const initialState = domains.reduce(
   (acc, domain) => ({ ...acc, ...domain.initialState }),
@@ -258,6 +259,14 @@ export {
   selectWorkflowDetailByPath,
   selectWorkflowLatestRunById,
 } from './uiData/workflows';
+
+export {
+  fetchRoutines,
+  fetchRoutineDetail,
+  selectRoutines,
+  selectRoutinesState,
+  selectRoutineDetail,
+} from './uiData/routines';
 
 export {
   fetchPreferences,
