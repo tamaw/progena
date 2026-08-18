@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
-  buildRetryPatch,
   forkJoin,
   forkLaneEdgePosition,
   incompleteNodes,
@@ -14,6 +13,8 @@ import {
   removeForkBranch,
   removeForkDefault,
   saveStatusWhenInSync,
+  schemaFieldsToText,
+  textToSchemaFields,
   validateWorkingGraph,
 } from './AgentGraph';
 
@@ -338,6 +339,15 @@ describe('missingRequirements', () => {
   it('drops a requirement as soon as any one alternative is filled', () => {
     expect(missingRequirements({ kind: 'agent', config: { prompt_file: 'p.md' } })).toEqual([['agent_name']]);
   });
+
+  it('requires an expression for switch, same one-of shape as condition/eval', () => {
+    expect(missingRequirements({ kind: 'switch', config: {} })).toEqual([['expression', 'expression_file']]);
+    expect(missingRequirements({ kind: 'switch', config: { expression: 'category' } })).toEqual([]);
+  });
+
+  it('requires nothing for split -- a structural parallel gateway, not an expression node', () => {
+    expect(missingRequirements({ kind: 'split', config: {} })).toEqual([]);
+  });
 });
 
 // The inspector is held open on an incomplete step: it drives the disabled
@@ -358,6 +368,10 @@ describe('isNodeComplete', () => {
 
   it('still holds when only some of several requirements are met', () => {
     expect(isNodeComplete({ kind: 'classify', config: { rubric_prompt: 'Rate it' } })).toBe(false);
+  });
+
+  it('a fresh split is complete on insert, same as noop', () => {
+    expect(isNodeComplete({ kind: 'split', config: {} })).toBe(true);
   });
 });
 
@@ -504,22 +518,81 @@ describe('error edges in chain tree building', () => {
   });
 });
 
-describe('buildRetryPatch', () => {
-  it('typing a number produces retry: { max_retries: N }', () => {
-    expect(buildRetryPatch(undefined, '3')).toEqual({ retry: { max_retries: 3 } });
-    expect(buildRetryPatch({ initial_interval: 0.5 }, '2')).toEqual({
-      retry: { initial_interval: 0.5, max_retries: 2 },
+// Select's response_schema is authored as one "name: type[, description]"
+// line per field rather than hand-written JSON Schema -- textToSchemaFields
+// must produce a strict-mode-compatible schema (every field required,
+// additionalProperties: false), and schemaFieldsToText must read an existing
+// schema back into the same line format so the field round-trips.
+describe('textToSchemaFields', () => {
+  it('marks every field required and forbids extra properties, per structured-output strict mode', () => {
+    expect(textToSchemaFields('category: string\nisUrgent: boolean')).toEqual({
+      type: 'object',
+      properties: { category: { type: 'string' }, isUrgent: { type: 'boolean' } },
+      required: ['category', 'isUrgent'],
+      additionalProperties: false,
     });
   });
 
-  it('clearing the input removes the retry key entirely when no sibling keys exist', () => {
-    expect(buildRetryPatch({ max_retries: 1 }, '')).toEqual({ retry: undefined });
-    expect(buildRetryPatch(undefined, '')).toEqual({ retry: undefined });
+  it('accepts shorthand type aliases', () => {
+    expect(textToSchemaFields('n: int\nx: bool\ny: num\nz: str')).toEqual({
+      type: 'object',
+      properties: {
+        n: { type: 'integer' },
+        x: { type: 'boolean' },
+        y: { type: 'number' },
+        z: { type: 'string' },
+      },
+      required: ['n', 'x', 'y', 'z'],
+      additionalProperties: false,
+    });
   });
 
-  it('clearing the input keeps sibling keys when they exist', () => {
-    expect(buildRetryPatch({ max_retries: 2, initial_interval: 0.5, backoff_factor: 2 }, '')).toEqual({
-      retry: { initial_interval: 0.5, backoff_factor: 2 },
+  it('parses an enum(...) type into a string with an enum constraint', () => {
+    const schema = textToSchemaFields('category: enum(billing, technical, other)');
+    expect(schema.properties.category).toEqual({ type: 'string', enum: ['billing', 'technical', 'other'] });
+  });
+
+  it('parses a trailing "type[]" as an array of that item type', () => {
+    expect(textToSchemaFields('tags: string[]').properties.tags).toEqual({
+      type: 'array',
+      items: { type: 'string' },
     });
+  });
+
+  it('keeps the text after the first comma as the field description', () => {
+    expect(textToSchemaFields('summary: string, one sentence explaining why').properties.summary).toEqual({
+      type: 'string',
+      description: 'one sentence explaining why',
+    });
+  });
+
+  it('falls back an unrecognized type to string rather than emitting an invalid schema', () => {
+    expect(textToSchemaFields('x: widget').properties.x).toEqual({ type: 'string' });
+  });
+
+  it('ignores blank lines and lines with no name', () => {
+    expect(textToSchemaFields('\n: string\ncategory: string\n')).toEqual({
+      type: 'object',
+      properties: { category: { type: 'string' } },
+      required: ['category'],
+      additionalProperties: false,
+    });
+  });
+});
+
+describe('schemaFieldsToText', () => {
+  it('round-trips a schema produced by textToSchemaFields back to the same field lines', () => {
+    const original = 'category: enum(billing, technical)\nisUrgent: boolean\nsummary: string, one sentence explaining why';
+    expect(schemaFieldsToText(textToSchemaFields(original))).toBe(original);
+  });
+
+  it('renders an array-of-string property back as "type[]"', () => {
+    expect(schemaFieldsToText({ type: 'object', properties: { tags: { type: 'array', items: { type: 'string' } } } }))
+      .toBe('tags: string[]');
+  });
+
+  it('returns empty text for a schema with no properties, e.g. the unset default {}', () => {
+    expect(schemaFieldsToText({})).toBe('');
+    expect(schemaFieldsToText(undefined)).toBe('');
   });
 });
