@@ -467,6 +467,40 @@ def _build_condition_node(node: RoutineNode) -> Any:
     return run
 
 
+def _build_switch_node(node: RoutineNode) -> Any:
+    """Deterministic expression evaluation; the raw result becomes the value
+    an author-defined branch set routes on (see `_build_split_router`'s
+    sibling `_build_router`, unchanged for `switch`). Unlike `condition`,
+    the result is not coerced to a bool."""
+    config = _node_config(node)
+    output_key = node.output_key or node.id
+    _require_no_file_source(node.id, "switch", config, "expression_file")
+    expression = config.get("expression")
+    if not expression:
+        raise ValueError(f"switch node {node.id}: config needs 'expression'")
+    inputs_config = config.get("inputs") or {}
+
+    async def run(state: RoutineState) -> dict[str, Any]:
+        data = state.get("data", {})
+        namespace = _resolve_inputs(node.id, inputs_config, data)
+        result = evaluate_expression(expression, namespace)
+        return {"data": {output_key: result}}
+
+    return run
+
+
+def _build_split_node(node: RoutineNode) -> Any:
+    """Structural parallel gateway: no computation, exactly like `noop` --
+    all the real behavior lives in `_build_split_router` on its outgoing
+    edge, which takes every branch unconditionally rather than evaluating
+    anything this node's own config could hold."""
+
+    async def run(state: RoutineState) -> dict[str, Any]:
+        return {}
+
+    return run
+
+
 def _build_classify_node(
     node: RoutineNode, *, model: BaseChatModel, defs: dict[str, dict[str, Any]] | None = None
 ) -> Any:
@@ -802,6 +836,10 @@ def _build_node_callable(
         return _build_eval_node(node)
     if node.kind == "condition":
         return _build_condition_node(node)
+    if node.kind == "switch":
+        return _build_switch_node(node)
+    if node.kind == "split":
+        return _build_split_node(node)
     if node.kind == "classify":
         return _build_classify_node(node, model=model, defs=defs)
     if node.kind == "agent":
@@ -847,6 +885,21 @@ def _build_router(edge: RoutineEdge) -> Callable[[RoutineState], str]:
         raise ValueError(
             f"router from {edge.from_}: no branch for state '{edge.state_key}'={key!r} and no default"
         )
+
+    return route
+
+
+def _build_split_router(edge: RoutineEdge) -> Callable[[RoutineState], list[str]]:
+    """`split`'s router: no expression, no picking -- every branch (and the
+    default, if wired) runs, always. `edge.state_key` is present only to
+    satisfy the router edge shape and is never read; a `split` node has
+    nothing to evaluate it against."""
+    targets = list((edge.branches or {}).values())
+    if edge.default is not None:
+        targets.append(edge.default)
+
+    def route(state: RoutineState) -> list[str]:
+        return targets
 
     return route
 
@@ -1013,6 +1066,7 @@ def compile_routine_graph(
         for node in graph.nodes
         if node.kind == "foreach" and _node_config(node)["mode"] == "send"
     }
+    split_ids = {node.id for node in graph.nodes if node.kind == "split"}
     for node in graph.nodes:
         if node.id not in outgoing:
             builder.add_edge(node.id, terminal_target)
@@ -1022,9 +1076,10 @@ def compile_routine_graph(
             targets = list((edge.branches or {}).values())
             if edge.default is not None:
                 targets.append(edge.default)
+            source = edge.source_ids[0]
             builder.add_conditional_edges(
-                edge.source_ids[0],
-                _build_router(edge),
+                source,
+                _build_split_router(edge) if source in split_ids else _build_router(edge),
                 path_map={target: target for target in targets},
             )
             continue

@@ -26,6 +26,8 @@ VALID_ROUTINE_NODE_KINDS = {
     "prompt",
     "eval",
     "condition",
+    "switch",
+    "split",
     "classify",
     "agent",
     "a2a",
@@ -130,6 +132,28 @@ class ConditionNodeConfig(BaseModel):
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
+
+
+class SwitchNodeConfig(BaseModel):
+    """Deterministic expression evaluation; result routes on an author-defined,
+    open-ended branch set (unlike `condition`, which is fixed to true/false)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    language: Literal["python"] | None = None
+    expression: str | None = None
+    expression_file: str | None = None
+    inputs: dict[str, str] = Field(default_factory=dict)
+    retry: RetryPolicyConfig | None = None
+    timeout: float | None = Field(default=None, ge=0)
+    cache: bool | CachePolicyConfig | None = None
+
+
+class SplitNodeConfig(BaseModel):
+    """No computation: `split` is a structural parallel gateway, not an
+    expression node. Its router edge takes every branch unconditionally."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class ClassifyNodeConfig(BaseModel):
@@ -273,6 +297,38 @@ class RoutineNodeCondition(BaseModel):
     y: float | None = None
 
 
+class RoutineNodeSwitch(BaseModel):
+    """Evaluate a restricted expression; routes on an author-defined,
+    open-ended branch set instead of a fixed boolean gate."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["switch"] = "switch"
+    description: str = ""
+    output_key: str | None = None
+    config: SwitchNodeConfig
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
+class RoutineNodeSplit(BaseModel):
+    """Structural parallel gateway: every branch on its router edge runs,
+    unconditionally -- no expression, no picking."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    kind: Literal["split"] = "split"
+    description: str = ""
+    output_key: str | None = None
+    config: SplitNodeConfig = Field(default_factory=SplitNodeConfig)
+    label: str | None = None
+    x: float | None = None
+    y: float | None = None
+
+
 class RoutineNodeClassify(BaseModel):
     """Ask the model to judge a rubric against a required structured schema."""
 
@@ -376,6 +432,8 @@ RoutineNode = Annotated[
     RoutineNodePrompt
     | RoutineNodeEval
     | RoutineNodeCondition
+    | RoutineNodeSwitch
+    | RoutineNodeSplit
     | RoutineNodeClassify
     | RoutineNodeAgent
     | RoutineNodeA2A
