@@ -8,6 +8,9 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useSelector } from 'react-redux';
+import Select from '../common/Select';
+import { selectAgentProfiles } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
@@ -32,14 +35,16 @@ import hljs from 'highlight.js/lib/common';
 // Routine step kinds offered at each insertion point. Mirrors
 // app.progenitor.routines.graph.VALID_ROUTINE_NODE_KINDS.
 const GRAPH_NODE_KINDS = [
-  { kind: 'prompt', label: 'Prompt', icon: '?' },
+  { kind: 'prompt', label: 'Prompt' },
   { kind: 'eval', label: 'Eval', icon: '<>' },
-  { kind: 'condition', label: 'Condition', icon: '◇' },
-  { kind: 'classify', label: 'Classify', icon: '⚖' },
+  { kind: 'condition', label: 'Branch' },
+  { kind: 'switch', label: 'Switch' },
+  { kind: 'split', label: 'Fork' },
+  { kind: 'classify', label: 'Select' },
   { kind: 'agent', label: 'Agent', icon: '✦' },
   { kind: 'a2a', label: 'A2A', icon: '⇄' },
   { kind: 'human', label: 'Human approval', icon: '⚑' },
-  { kind: 'foreach', label: 'Send fan-out', icon: '⇉' },
+  { kind: 'foreach', label: 'Each', icon: '⇉' },
   { kind: 'routine', label: 'Routine', icon: '⧉' },
   { kind: 'noop', label: 'Noop', icon: '·' },
 ];
@@ -48,6 +53,8 @@ const GRAPH_KIND_COLORS = {
   prompt: '#3b82f6',
   eval: '#6366f1',
   condition: '#f59e0b',
+  switch: '#eab308',
+  split: '#84cc16',
   classify: '#d946ef',
   agent: '#10b981',
   a2a: '#f97316',
@@ -63,6 +70,100 @@ const GRAPH_KIND_COLORS = {
 const CONDITION_BRANCHES = ['true', 'false'];
 
 const GRAPH_KIND_ICONS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.icon]));
+// The picker's display name for a kind, everywhere a kind needs to read as
+// text: a fresh node's default label, the inspector's kind badge, a step
+// card's aria-label. Deriving these from the raw `kind` string instead
+// (`titleCase('condition')` -> "Condition", not "Branch"; `titleCase('a2a')`
+// -> "A2a", not "A2A") drifts from the picker the moment a kind's label
+// diverges from its identifier or isn't simple title case to begin with.
+const GRAPH_KIND_LABELS = Object.fromEntries(GRAPH_NODE_KINDS.map((item) => [item.kind, item.label]));
+
+// Renders a kind's icon. `prompt`, `condition`/`decision`, `switch`, and
+// `split` get real (`currentColor`-stroked) SVGs instead of a plain
+// character; everything else stays a plain Unicode glyph. This has to be a
+// component (evaluated during render), not a value baked into
+// GRAPH_NODE_KINDS/GRAPH_KIND_ICONS at module scope -- those are built
+// eagerly on import, and this project's plain-esbuild vitest transform
+// (no @vitejs/plugin-react, see vitest.config.js) compiles JSX to
+// `React.createElement`, which would throw immediately on import for any
+// JSX evaluated outside a component body.
+//
+// `condition` (Decision) keeps the plain diamond -- the base binary gate.
+// `switch` and `split` are visually unrelated to it on purpose (an earlier
+// pass tried differentiating them only by a small mark inside the same
+// diamond, which read as near-identical at 12px): `switch` is a `{}` pair
+// (the case/switch-statement glyph -- reads unambiguously as "multiple
+// named cases"), `split` is an inverted fork -- a plain Y, one stem
+// branching into two downward tines (a literal fork in the road: one path
+// becomes several, all taken).
+function DiamondIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M8 1.5 14.5 8 8 14.5 1.5 8Z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function SwitchIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M6.5 2.5c-1.4 0-2 .7-2 2v1.3c0 .9-.4 1.3-1.3 1.5v.4c.9.2 1.3.6 1.3 1.5V10.5c0 1.3.6 2 2 2M9.5 2.5c1.4 0 2 .7 2 2v1.3c0 .9.4 1.3 1.3 1.5v.4c-.9.2-1.3.6-1.3 1.5V10.5c0 1.3-.6 2-2 2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SplitIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path
+        d="M8 2.5v3.8M8 6.3 4 13M8 6.3l4 6.7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SelectIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="8" cy="8" r="2.2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function KindIcon({ kind }) {
+  if (kind === 'prompt') {
+    return (
+      <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+        <path
+          d="M2.5 3.5A1.5 1.5 0 0 1 4 2h8a1.5 1.5 0 0 1 1.5 1.5v5A1.5 1.5 0 0 1 12 10H6.5l-2.75 2.5V10H4a1.5 1.5 0 0 1-1.5-1.5z"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === 'condition') return <DiamondIcon />;
+  if (kind === 'classify') return <SelectIcon />;
+  if (kind === 'switch') return <SwitchIcon />;
+  if (kind === 'split') return <SplitIcon />;
+  return GRAPH_KIND_ICONS[kind] || '•';
+}
 
 function titleCase(kind) {
   return kind.charAt(0).toUpperCase() + kind.slice(1);
@@ -88,6 +189,8 @@ function makeNode(kind) {
     prompt: { prompt_template: '' },
     eval: { expression: '', inputs: {} },
     condition: { expression: '', inputs: {} },
+    switch: { expression: '', inputs: {} },
+    split: {},
     classify: { rubric_prompt: '', response_schema: {} },
     agent: { agent_name: '', prompt_template: '' },
     a2a: { agent_name: '', prompt_template: '' },
@@ -96,7 +199,7 @@ function makeNode(kind) {
     routine: { routine_name: '', input_map: {}, output_map: {} },
     noop: {},
   }[kind] || {};
-  return { id: '', kind, label: titleCase(kind), description: '', config };
+  return { id: '', kind, label: GRAPH_KIND_LABELS[kind] || titleCase(kind), description: '', config };
 }
 
 // What each kind must carry before the backend will accept it, mirroring the
@@ -109,6 +212,8 @@ export const REQUIRED_CONFIG = {
   prompt: [['prompt_template', 'prompt_file']],
   eval: [['expression', 'expression_file']],
   condition: [['expression', 'expression_file']],
+  switch: [['expression', 'expression_file']],
+  split: [],
   classify: ['rubric_prompt', 'response_schema'],
   agent: ['agent_name', ['prompt_template', 'prompt_file', 'inputs']],
   a2a: ['agent_name', ['prompt_template', 'prompt_file', 'inputs']],
@@ -199,6 +304,48 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
   );
 }
 
+// `agent_name` field for the `agent`/`a2a`/foreach-agent-mode node kinds: a
+// searchable dropdown over the live agent roster (redux `agents.snapshot`)
+// instead of a free-text box the author has to get exactly right by hand.
+// `agentKind` scopes the roster to what that node kind can actually resolve
+// at runtime -- `agent` nodes delegate to a local object agent
+// (routines/factory.py `_build_agent_node`), `a2a` nodes delegate to a
+// registered Agent2Agent peer (`_build_a2a_node`) -- so the two must not
+// share one option list. The current value is always kept in the list even
+// if the live roster no longer has it (renamed/removed agent, or the
+// snapshot just hasn't arrived yet) so a saved reference is never silently
+// blanked out from under the author.
+function AgentSelectField({ id, config, field = 'agent_name', label, agentKind, updateNodeConfig }) {
+  const missing = useContext(MissingFieldsContext);
+  const required = missing.has(field);
+  const profiles = useSelector(selectAgentProfiles);
+  const value = config?.[field] || '';
+  const options = useMemo(() => {
+    const names = profiles.filter((agent) => agent.kind === agentKind).map((agent) => agent.name).filter(Boolean);
+    const known = new Set(names);
+    if (value && !known.has(value)) names.push(value);
+    return [...new Set(names)].sort((a, b) => a.localeCompare(b)).map((name) => ({ value: name, label: name }));
+  }, [profiles, agentKind, value]);
+  return (
+    <label className={`agents-graph-node__field${required ? ' agents-graph-node__field--required' : ''}`}>
+      <span className="agents-graph-node__field-label">
+        {label}
+        {required ? <span className="agents-graph-node__required" title="Required before this routine can be saved">Required</span> : null}
+      </span>
+      <Select
+        value={value}
+        onChange={(next) => updateNodeConfig(id, { [field]: next })}
+        options={options}
+        placeholder="Select an agent…"
+        searchable
+        portal
+        ariaLabel={label}
+        className={`agents-graph-node__select${required ? ' agents-graph-node__select--required' : ''}`}
+      />
+    </label>
+  );
+}
+
 // `eval`/`condition` nodes resolve named inputs from dotted `data` paths before
 // evaluation (config.inputs, an object). Edited as one "name: path" per line so
 // authors don't have to hand-write JSON for a small map.
@@ -227,6 +374,83 @@ function InputsField({ id, config, updateNodeConfig }) {
         value={inputsToText(config?.inputs)}
         placeholder="host: parse_json.host"
         onChange={(event) => updateNodeConfig(id, { inputs: textToInputs(event.target.value) })}
+      />
+    </label>
+  );
+}
+
+// `classify`/`prompt`/`agent` nodes' response_schema is plain JSON Schema, but
+// authoring one by hand for a flat set of output fields is needless ceremony.
+// Edited as one "name: type[, description]" per line -- the same "name: value"
+// convention as inputsToText/textToInputs above -- and converted to a strict
+// JSON Schema object (every field required, additionalProperties: false, since
+// that's what with_structured_output(method="json_schema", strict=True) needs).
+// Schemas this can't represent (anything not a flat object of primitives --
+// $ref indirection, nested objects, oneOf, etc.) round-trip to an empty list;
+// authors needing that still reach it via the graph-level "Edit as JSON" dock.
+const SCHEMA_FIELD_TYPE_ALIASES = { bool: 'boolean', str: 'string', int: 'integer', num: 'number' };
+const SCHEMA_FIELD_PRIMITIVE_TYPES = ['string', 'number', 'integer', 'boolean'];
+
+function parseSchemaFieldType(raw) {
+  const trimmed = raw.trim();
+  const enumMatch = trimmed.match(/^enum\((.*)\)$/i);
+  if (enumMatch) {
+    return { type: 'string', enum: enumMatch[1].split(',').map((value) => value.trim()).filter(Boolean) };
+  }
+  const arrayMatch = trimmed.match(/^(\w+)\[\]$/);
+  if (arrayMatch) {
+    const itemType = SCHEMA_FIELD_TYPE_ALIASES[arrayMatch[1].toLowerCase()] || arrayMatch[1].toLowerCase();
+    return { type: 'array', items: { type: SCHEMA_FIELD_PRIMITIVE_TYPES.includes(itemType) ? itemType : 'string' } };
+  }
+  const normalized = SCHEMA_FIELD_TYPE_ALIASES[trimmed.toLowerCase()] || trimmed.toLowerCase();
+  return { type: SCHEMA_FIELD_PRIMITIVE_TYPES.includes(normalized) ? normalized : 'string' };
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function schemaFieldsToText(schema) {
+  const properties = schema?.properties;
+  if (!properties || typeof properties !== 'object') return '';
+  return Object.entries(properties).map(([name, def]) => {
+    let typeText;
+    if (Array.isArray(def?.enum)) typeText = `enum(${def.enum.join(', ')})`;
+    else if (def?.type === 'array') typeText = `${def.items?.type || 'string'}[]`;
+    else typeText = def?.type || 'string';
+    return def?.description ? `${name}: ${typeText}, ${def.description}` : `${name}: ${typeText}`;
+  }).join('\n');
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function textToSchemaFields(text) {
+  const properties = {};
+  const required = [];
+  text.split('\n').forEach((line) => {
+    const separator = line.indexOf(':');
+    if (separator === -1) return;
+    const name = line.slice(0, separator).trim();
+    if (!name) return;
+    const rest = line.slice(separator + 1).trim();
+    // enum(...) may itself contain commas, so its closing paren -- not the
+    // first comma in the line -- is what ends the type token.
+    const enumMatch = rest.match(/^(enum\([^)]*\))\s*,?\s*(.*)$/i);
+    const commaIndex = enumMatch ? -1 : rest.indexOf(',');
+    const typeRaw = enumMatch ? enumMatch[1] : (commaIndex === -1 ? rest : rest.slice(0, commaIndex));
+    const description = enumMatch ? enumMatch[2].trim() : (commaIndex === -1 ? '' : rest.slice(commaIndex + 1).trim());
+    const def = parseSchemaFieldType(typeRaw || 'string');
+    properties[name] = description ? { ...def, description } : def;
+    required.push(name);
+  });
+  return { type: 'object', properties, required, additionalProperties: false };
+}
+
+function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
+  return (
+    <label className="agents-graph-node__field">
+      <span className="agents-graph-node__field-label">{label}</span>
+      <textarea
+        className="agents-graph-node__prompt"
+        value={schemaFieldsToText(config?.[field])}
+        placeholder={'category: enum(billing, technical, other)\nisUrgent: boolean\nsummary: string, one sentence explaining why'}
+        onChange={(event) => updateNodeConfig(id, { [field]: textToSchemaFields(event.target.value) })}
       />
     </label>
   );
@@ -283,96 +507,6 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
   );
 }
 
-function FieldHint({ children }) {
-  return (
-    <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginTop: '2px' }}>
-      {children}
-    </span>
-  );
-}
-
-function TimeoutField({ id, config, updateNodeConfig }) {
-  return (
-    <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">Timeout (seconds)</span>
-      <input
-        type="number"
-        min="0"
-        className="agents-graph-node__toolinput"
-        value={config?.timeout ?? ''}
-        placeholder="120"
-        onChange={(event) => updateNodeConfig(id, {
-          timeout: event.target.value === '' ? undefined : Number(event.target.value),
-        })}
-      />
-      <FieldHint>0 means no limit</FieldHint>
-    </label>
-  );
-}
-
-// Pure helper so the retry write semantics are testable without a renderer.
-export function buildRetryPatch(configRetry, value) {
-  if (value === '') {
-    const { max_retries: _drop, ...rest } = configRetry || {};
-    if (Object.keys(rest).length === 0) {
-      return { retry: undefined };
-    }
-    return { retry: rest };
-  }
-  return { retry: { ...configRetry, max_retries: Number(value) } };
-}
-
-function RetryField({ id, config, updateNodeConfig }) {
-  return (
-    <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">Retry attempts</span>
-      <input
-        type="number"
-        min="0"
-        className="agents-graph-node__toolinput"
-        value={config?.retry?.max_retries ?? ''}
-        placeholder="0"
-        onChange={(event) => updateNodeConfig(id, buildRetryPatch(config?.retry, event.target.value))}
-      />
-      <FieldHint>0 never retries</FieldHint>
-    </label>
-  );
-}
-
-function JsonConfigField({ id, config, field, label, placeholder, updateNodeConfig }) {
-  const [text, setText] = useState(() => JSON.stringify(config?.[field] ?? {}, null, 2));
-  const [error, setError] = useState(null);
-  const onChange = (event) => {
-    const value = event.target.value;
-    setText(value);
-    try {
-      const parsed = JSON.parse(value || '{}');
-      setError(null);
-      updateNodeConfig(id, { [field]: parsed });
-    } catch {
-      setError('invalid JSON');
-    }
-  };
-  return (
-    <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">{label}{error ? ` — ${error}` : ''}</span>
-      <textarea className="agents-graph-node__prompt" value={text} placeholder={placeholder} onChange={onChange} />
-    </label>
-  );
-}
-
-function BooleanField({ id, config, field, label, updateNodeConfig, defaultValue = true }) {
-  const checked = config?.[field] ?? defaultValue;
-  return (
-    <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">
-        <input type="checkbox" checked={checked} onChange={(event) => updateNodeConfig(id, { [field]: event.target.checked })} />
-        {' '}{label}
-      </span>
-    </label>
-  );
-}
-
 // Kind-specific config fields, mirroring app.progenitor.routines.graph's per-kind
 // config shape (prompt_template/system_prompt, expression/inputs, rubric_prompt/
 // response_schema, agent_name + prompt_template/inputs). `noop` has no config.
@@ -382,51 +516,39 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template… use {request} / {other_node} to reference state" multiline updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="system_prompt" label="System prompt (optional)" placeholder="Node-specific system prompt…" multiline updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
-  if (kind === 'eval' || kind === 'condition') {
+  if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
       <>
         <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
   if (kind === 'classify') {
     return (
       <>
-        <ConfigField id={id} config={config} field="rubric_prompt" label="Rubric prompt" placeholder="Ask the model a judged question…" multiline updateNodeConfig={updateNodeConfig} />
-        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <JsonConfigField key={id} id={id} config={config} field="response_schema" label="Response schema (required JSON Schema)" placeholder='{"type":"object","required":["result"],"properties":{"result":{"type":"boolean"}}}' updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <ConfigField id={id} config={config} field="rubric_prompt" label="Prompt" placeholder="e.g. Categorize this request: {request}" multiline updateNodeConfig={updateNodeConfig} />
+        <ResponseSchemaField id={id} config={config} field="response_schema" label="Response fields (required)" updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
   if (kind === 'agent') {
     return (
       <>
-        <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
+        <AgentSelectField id={id} config={config} label="Agent" agentKind="object" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the agent…" multiline updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <BooleanField id={id} config={config} field="continue_thread" label="Continue conversation across calls" updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
   if (kind === 'a2a') {
     return (
       <>
-        <ConfigField id={id} config={config} field="agent_name" label="A2A agent name" placeholder="registered-a2a-agent" updateNodeConfig={updateNodeConfig} />
+        <AgentSelectField id={id} config={config} label="Agent" agentKind="a2a" updateNodeConfig={updateNodeConfig} />
         <ConfigField id={id} config={config} field="prompt_template" label="Prompt" placeholder="Template sent to the peer…" multiline updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -435,8 +557,6 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
       <>
         <ConfigField id={id} config={config} field="message" label="Approval message" placeholder="What should a person approve?" multiline updateNodeConfig={updateNodeConfig} />
         <StringListField id={id} config={config} field="allowed_responses" label="Allowed responses (comma-separated)" placeholder="approve, reject" updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
@@ -464,11 +584,9 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <NumberField id={id} config={config} field="max_items" label="Maximum items (optional)" placeholder="100" updateNodeConfig={updateNodeConfig} />
         {mode === 'agent' ? (
           <>
-            <ConfigField id={id} config={config} field="agent_name" label="Agent name" placeholder="worker-name" updateNodeConfig={updateNodeConfig} />
+            <AgentSelectField id={id} config={config} label="Agent" agentKind="object" updateNodeConfig={updateNodeConfig} />
             <ConfigField id={id} config={config} field="prompt_template" label="Prompt per item" placeholder="Handle {item}" multiline updateNodeConfig={updateNodeConfig} />
             <NumberField id={id} config={config} field="max_concurrency" label="Maximum concurrency (optional)" placeholder="4" updateNodeConfig={updateNodeConfig} />
-            <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-            <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
           </>
         ) : null}
       </>
@@ -480,29 +598,23 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
         <ConfigField id={id} config={config} field="routine_name" label="Routine name" placeholder="shared-validation-routine" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="input_map" label="Input map (child field: parent data path)" placeholder="request: request" updateNodeConfig={updateNodeConfig} />
         <KeyValueMapField id={id} config={config} field="output_map" label="Output map (parent field: child data path)" placeholder="result: answer" updateNodeConfig={updateNodeConfig} />
-        <TimeoutField id={id} config={config} updateNodeConfig={updateNodeConfig} />
-        <RetryField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
   }
   return null;
 }
 
-// A node becomes a router the moment it has branches; before that it's just a
-// "+ Split into branches" footer action. Once it is one, the state key it
-// routes on lives here (applies to all of that node's branches at once).
-// A `condition` is exempt: it is born a router over a fixed `true`/`false`
-// pair keyed on its own output, so there is nothing here to author.
+// The state key an already-routed node's branches route on lives here.
+// `condition` and `split` are exempt: `condition` is born a router over a
+// fixed `true`/`false` pair keyed on its own output, and `split` never
+// evaluates anything -- its branches all fire unconditionally, so there is
+// no state key to author for either. A node with no branches yet isn't
+// offered a way to become a router from here -- routing is chosen at
+// insert time by picking a routing-capable node kind (`condition`,
+// `switch`, `split`, `foreach`), not toggled on after the fact.
 function RoutingFooter({ id, kind, routerEdge }) {
-  const { onChangeStateKey, onSplitIntoBranches, onRemoveBranching } = useContext(GraphEditContext);
-  if (kind === 'condition') return null;
-  if (!routerEdge) {
-    return (
-      <button type="button" className="agents-graph-node__split" onClick={() => onSplitIntoBranches(id)}>
-        + Split into branches
-      </button>
-    );
-  }
+  const { onChangeStateKey, onRemoveBranching } = useContext(GraphEditContext);
+  if (kind === 'condition' || kind === 'split' || !routerEdge) return null;
   return (
     <div className="agents-graph-node__routing">
       <input
@@ -518,7 +630,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
 }
 
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
-function StepCard({ node, routerEdge }) {
+function StepCard({ node }) {
   const { selectNode, selectedNodeId } = useContext(GraphEditContext);
   // A step can arrive incomplete from the JSON editor or the runtime, not just
   // from the picker, so the chain has to say which one is holding the save.
@@ -530,7 +642,7 @@ function StepCard({ node, routerEdge }) {
       style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
       role="button"
       tabIndex={0}
-      aria-label={`${node.label || node.id} ${node.kind} step${incomplete ? ', incomplete' : ''}`}
+      aria-label={`${node.label || node.id} ${GRAPH_KIND_LABELS[node.kind] || node.kind} step${incomplete ? ', incomplete' : ''}`}
       onClick={(event) => selectNode(node.id, event)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -540,12 +652,11 @@ function StepCard({ node, routerEdge }) {
       }}
     >
       <div className="node-title-bar routine-step-card__title">
-        <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
+        <span className="node-type-icon"><KindIcon kind={node.kind} /></span>
         <span className="routine-step-card__copy">
           <strong className="routine-step-card__label">{node.label || node.id}</strong>
         </span>
         {incomplete ? <span className="routine-step-card__incomplete" title="Required fields are empty">!</span> : null}
-        {routerEdge ? <span className="routine-step-card__branches">{Object.keys(routerEdge.branches || {}).length + (routerEdge.default ? 1 : 0)} paths</span> : null}
       </div>
     </div>
   );
@@ -553,8 +664,30 @@ function StepCard({ node, routerEdge }) {
 
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
-function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
+function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, panelRef }) {
   const { updateNode, deleteNode } = useContext(GraphEditContext);
+  const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState('');
+  const labelInputRef = useRef(null);
+  const inspectedNodeIdRef = useRef(node?.id);
+
+  // A different node was selected -- drop any in-flight edit on the old one
+  // rather than let it leak into the newly opened step. Adjusted during
+  // render (React's documented "reset state when a prop changes" pattern)
+  // instead of an effect, since an effect would commit the stale label
+  // input for one extra frame before catching up.
+  if (inspectedNodeIdRef.current !== node?.id) {
+    inspectedNodeIdRef.current = node?.id;
+    if (isEditingLabel) setIsEditingLabel(false);
+  }
+
+  useEffect(() => {
+    if (!isEditingLabel) return undefined;
+    labelInputRef.current?.focus();
+    labelInputRef.current?.select();
+    return undefined;
+  }, [isEditingLabel]);
+
   if (!node) return null;
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
   const unmet = missingRequirements(node);
@@ -564,6 +697,15 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
   // an unsaveable step somewhere in the chain with the whole graph withheld
   // behind it, so the only ways out are filling the fields or deleting it.
   const locked = unmet.length > 0;
+  const startLabelEdit = () => {
+    setLabelDraft(node.label || '');
+    setIsEditingLabel(true);
+  };
+  const cancelLabelEdit = () => setIsEditingLabel(false);
+  const saveLabelEdit = () => {
+    updateNode(node.id, { label: labelDraft.replace(/\s+/g, ' ').trim() });
+    setIsEditingLabel(false);
+  };
   return (
     <aside
       ref={panelRef}
@@ -572,17 +714,58 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
       aria-label={`${node.label || node.id} details`}
     >
       <header className="routine-node-inspector__head">
-        <span className="node-type-icon">{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
+        <span className="node-type-icon"><KindIcon kind={node.kind} /></span>
         <div>
-          <strong>{node.label || node.id}</strong>
-          <span className="routine-node-inspector__kind">{node.kind}</span>
+          <span className="routine-node-inspector__title">
+            {isEditingLabel ? (
+              <input
+                ref={labelInputRef}
+                type="text"
+                className="routine-node-inspector__label-input"
+                value={labelDraft}
+                placeholder={node.id}
+                aria-label="Step label"
+                onChange={(event) => setLabelDraft(event.target.value)}
+                onBlur={cancelLabelEdit}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    saveLabelEdit();
+                  } else if (event.key === 'Escape') {
+                    event.preventDefault();
+                    cancelLabelEdit();
+                  }
+                }}
+              />
+            ) : (
+              <strong className="routine-node-inspector__title-text">{node.label || node.id}</strong>
+            )}
+            <button
+              type="button"
+              className="routine-node-inspector__rename"
+              data-tooltip={isEditingLabel ? 'Save step label' : 'Rename step'}
+              aria-label={isEditingLabel ? 'Save step label' : 'Rename step'}
+              onMouseDown={isEditingLabel ? (event) => event.preventDefault() : undefined}
+              onClick={isEditingLabel ? saveLabelEdit : startLabelEdit}
+            >
+              {isEditingLabel ? (
+                <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                  <path d="M3.25 8.25 6.5 11.5l6.25-6.75" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+                  <path d="M2 14h3l8-8-3-3-8 8z" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+                </svg>
+              )}
+            </button>
+          </span>
+          <span className="routine-node-inspector__kind">{GRAPH_KIND_LABELS[node.kind] || node.kind}</span>
         </div>
         <button
           type="button"
           className="routine-node-inspector__close"
           onClick={onClose}
-          disabled={locked}
-          title={locked ? 'Fill the required fields, or delete this step' : undefined}
+          title={locked ? (isNew ? 'Close and discard this step' : 'Close and discard changes') : undefined}
           aria-label="Close node details"
         >
           ×
@@ -593,19 +776,12 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
         {unmet.length ? (
           <p className="routine-node-inspector__required-hint" role="status">
             {unmet.length === 1
-              ? 'One field is required before this step can be saved. Fill it in, or delete the step.'
-              : `${unmet.length} fields are required before this step can be saved. Fill them in, or delete the step.`}
+              ? 'One field is required before this step can be saved.'
+              : `${unmet.length} fields are required before this step can be saved.`}
+            {' '}
+            {isNew ? 'Fill it in, or close to discard this step.' : 'Fill it in, or close to discard your changes.'}
           </p>
         ) : null}
-        <label className="agents-graph-node__field">
-          <span className="agents-graph-node__field-label">Label</span>
-          <input
-            className="agents-graph-node__toolinput"
-            value={node.label || ''}
-            placeholder="Label"
-            onChange={(event) => updateNode(node.id, { label: event.target.value })}
-          />
-        </label>
         <NodeConfigBody
           id={node.id}
           kind={node.kind}
@@ -617,7 +793,7 @@ function NodeInspector({ node, routerEdge, onClose, style, panelRef }) {
       </div>
       </MissingFieldsContext.Provider>
       <footer className="routine-node-inspector__foot">
-        <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onClose(); }}>
+        <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onDismiss(); }}>
           Delete step
         </button>
       </footer>
@@ -692,7 +868,7 @@ function ConnectorInsert({ slot }) {
                 setOpen(false);
               }}
             >
-              <span className={`canvas-dock-icon ${item.kind}`}>{item.icon}</span>
+              <span className={`canvas-dock-icon ${item.kind}`}><KindIcon kind={item.kind} /></span>
               {item.label}
             </button>
           ))}
@@ -712,6 +888,7 @@ function BranchHeader({
   collapsed,
   onToggleCollapse,
   readOnly = false,
+  hideLabel = false,
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -732,7 +909,7 @@ function BranchHeader({
       >
         {collapsed ? '▸' : '▾'}
       </button>
-      {isDefault || readOnly ? (
+      {hideLabel ? null : isDefault || readOnly ? (
         <span className="routine-fork__header-label">{isDefault ? 'Default' : value}</span>
       ) : editing ? (
         <input
@@ -1016,6 +1193,10 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
       edge,
       editable: true,
       fixedBranches,
+      // `split`'s branches don't route on a matched value -- they all fire
+      // unconditionally -- so their lane headers have nothing meaningful to
+      // label or rename (see ForkBlock/BranchHeader).
+      unconditional: node.kind === 'split',
       branches: branches.map(([value, targetId]) => ({
         value,
         tree: buildChainTree(targetId, nodesById, edgeBySource, visiting, rendered, branchStop),
@@ -1127,7 +1308,7 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
       out.push(<ForkBlock key={`fork-${current.id}`} fork={current.fork} node={current.node} />);
       break;
     }
-    out.push(<StepCard key={current.id} node={current.node} routerEdge={null} />);
+    out.push(<StepCard key={current.id} node={current.node} />);
     slot = { sourceId: current.id, kind: 'plain' };
     current = current.next;
   }
@@ -1198,7 +1379,7 @@ function ForkBlock({ fork, node }) {
     edges,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
-  const { sourceId, edge, branches, defaultTree, joinTree, editable = true, fixedBranches = false } = fork;
+  const { sourceId, edge, branches, defaultTree, joinTree, editable = true, fixedBranches = false, unconditional = false } = fork;
   // A fixed fork's arms are dictated by the node kind, so it grows no lanes
   // and its headers are labels rather than editable chips. It can still be
   // joined -- that's about what happens *after* the fork, not its shape.
@@ -1235,7 +1416,7 @@ function ForkBlock({ fork, node }) {
   return (
     <section className={`routine-fork ${joining.length ? 'routine-fork--joined' : ''}`}>
       <div className="routine-fork__head">
-        <StepCard node={node} routerEdge={edge} />
+        <StepCard node={node} />
       </div>
       <div className="routine-fork__branches">
         <div className="routine-fork__lanes">
@@ -1262,6 +1443,7 @@ function ForkBlock({ fork, node }) {
                   onRemove={() => (lane.isDefault ? onRemoveDefault(sourceId) : onRemoveBranch(sourceId, lane.value))}
                   collapsed={isCollapsed}
                   readOnly={!editable || fixedBranches}
+                  hideLabel={unconditional}
                   onToggleCollapse={() => toggleCollapse(lane.value)}
                 />
                 {isCollapsed ? null : renderRun(lane.tree, lane.slot, Boolean(joinTree))}
@@ -1316,7 +1498,7 @@ function UnreachableTray({ nodes }) {
       <div className="routine-unreachable__list">
         {nodes.map((node) => (
           <div key={node.id} className="routine-unreachable__item">
-            <span className={`canvas-dock-icon ${node.kind}`}>{GRAPH_KIND_ICONS[node.kind] || '•'}</span>
+            <span className={`canvas-dock-icon ${node.kind}`}><KindIcon kind={node.kind} /></span>
             <span>{node.label || node.id}</span>
             <button type="button" onClick={() => deleteNode(node.id)} title="Delete" aria-label="Delete">×</button>
           </div>
@@ -1456,12 +1638,27 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const [saveError, setSaveError] = useState(null);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [inspectorPosition, setInspectorPosition] = useState(null);
+  // Mirrors confirmedNodeIdsRef for the currently open node only, captured
+  // once at open time (see positionInspector) -- render can't read a ref
+  // directly, and this doesn't need to react to anything else.
+  const [selectedNodeIsNew, setSelectedNodeIsNew] = useState(false);
   const canvasRef = useRef(null);
   const panelRef = useRef(null);
+  // Which node ids have a legitimate prior state to fall back to -- either
+  // loaded from the saved graph, or previously closed here while complete.
+  // A freshly inserted node starts outside this set: closing it invalid has
+  // nothing sane to revert to, so it deletes instead (see closeInspector).
+  const confirmedNodeIdsRef = useRef(new Set((graph.nodes || []).map((node) => node.id)));
+  // The selected node's own fields as they stood the moment it was opened,
+  // so an invalid close on an already-confirmed node can discard just this
+  // edit rather than the whole step.
+  const openSnapshotRef = useRef(null);
+  const selectedNodeIdRef = useRef(null);
+  useEffect(() => { selectedNodeIdRef.current = selectedNodeId; }, [selectedNodeId]);
 
   useEffect(() => { persistRef.current = onPersist; }, [onPersist]);
 
-  // Refs mirror the latest state synchronously so insertAt/splitIntoBranches
+  // Refs mirror the latest state synchronously so insertAt and friends
   // can compute a consistent next state without nesting setState calls
   // inside other setState updaters.
   const nodesRef = useRef(nodes);
@@ -1471,6 +1668,19 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const positionInspector = useCallback((id, target) => {
     const canvas = canvasRef.current;
     if (!canvas || !target) return;
+    // Switching straight from one card to another (no explicit close in
+    // between) is still a "leave it as-is" for whatever was open, provided
+    // it was actually complete -- selectNode already refuses to switch away
+    // from an incomplete one, so reaching here means it graduates too.
+    const previousId = selectedNodeIdRef.current;
+    if (previousId && previousId !== id) {
+      const previousNode = nodesRef.current.find((node) => node.id === previousId);
+      if (previousNode && isNodeComplete(previousNode)) {
+        confirmedNodeIdsRef.current.add(previousId);
+      }
+    }
+    const openingNode = nodesRef.current.find((node) => node.id === id);
+    openSnapshotRef.current = openingNode ? { ...openingNode } : null;
     const canvasRect = canvas.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const panelWidth = 340;
@@ -1488,6 +1698,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     // panel far from a small node (too generous) or clips a tall node's
     // fields out of the clickable area (too tight, see prior regressions).
     setSelectedNodeId(id);
+    setSelectedNodeIsNew(!confirmedNodeIdsRef.current.has(id));
     setInspectorPosition({ left, top, maxHeight: canvasRect.height - top - 16 });
   }, []);
   // A held-open step refuses selection of any other card, or "held open" would
@@ -1499,6 +1710,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     const selected = nodes.find((node) => node.id === selectedNodeId) || null;
     lockedNodeIdRef.current = selected && !isNodeComplete(selected) ? selected.id : null;
   }, [nodes, selectedNodeId]);
+  useEffect(() => {
+    if (!selectedNodeId) openSnapshotRef.current = null;
+  }, [selectedNodeId]);
   const selectNode = useCallback((id, event) => {
     const locked = lockedNodeIdRef.current;
     if (locked && locked !== id) return;
@@ -1559,6 +1773,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, []);
 
   const deleteNode = useCallback((id) => {
+    confirmedNodeIdsRef.current.delete(id);
     const outgoing = edgesRef.current.find((edge) => isFlowEdge(edge) && edgeSourceIds(edge).includes(id));
     const singleTarget = outgoing?.to && typeof outgoing.to === 'string'
       ? outgoing.to
@@ -1646,13 +1861,33 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setMeta((current) => (current.entry === id ? { ...current, entry: singleTarget } : current));
   }, []);
 
+  // The × button's close: an invalid step behaves like the Delete step
+  // button if it never had a valid prior state (a freshly inserted node
+  // whose required field was never filled in), or discards just this edit
+  // and reverts to the open-time snapshot if it did. A complete step just
+  // closes normally, and graduates into "has a valid prior state" for next
+  // time.
+  const closeInspector = useCallback((node) => {
+    if (node) {
+      if (isNodeComplete(node)) {
+        confirmedNodeIdsRef.current.add(node.id);
+      } else if (confirmedNodeIdsRef.current.has(node.id)) {
+        if (openSnapshotRef.current) updateNode(node.id, openSnapshotRef.current);
+      } else {
+        deleteNode(node.id);
+      }
+    }
+    setSelectedNodeId(null);
+    setInspectorPosition(null);
+  }, [updateNode, deleteNode]);
+
   // Two kinds arrive pre-wired because their shape is intrinsic, not authored.
   // A Send foreach owns a scoped body: its one normal outgoing edge names the
   // first dynamic target, and the companion noop marks the body boundary so
   // the rigid chain renderer can still show the continuation after the
   // fan-out. A condition is a two-way gate: it is *always* a router over
   // exactly `true`/`false` (see CONDITION_BRANCH_VALUES server-side), so it
-  // lands as a fork rather than needing a separate "+ Split into branches".
+  // lands as a fork rather than being authored as one after the fact.
   const insertAt = useCallback((slot, kind) => {
     const id = uniqueNodeId(kind, nodesRef.current);
     const added = [{ ...makeNode(kind), id }];
@@ -1700,7 +1935,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     let terminalIds = [id];
     if (kind === 'foreach') {
       const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
-      added.push({ ...makeNode('noop'), id: stopId, label: 'Join fan-out' });
+      added.push({ ...makeNode('noop'), id: stopId, label: 'Join each' });
       nextEdges.push({ from: id, to: stopId, level: 'normal' });
       if (targetId) nextEdges.push({ from: stopId, to: targetId, level: 'normal' });
       terminalIds = [stopId];
@@ -1724,6 +1959,25 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       if (targetId) {
         nextEdges.push({ from: terminalIds, to: targetId, level: 'fan_in' });
       }
+    } else if (kind === 'switch' || kind === 'split') {
+      // One growable arm, not two fixed ones: `switch`/`split` are
+      // open-ended (author adds more via "+ Add branch"), unlike
+      // `condition`'s fixed true/false pair. Whatever the connector was
+      // pointing at before insertion carries straight through as the
+      // router's `default` rather than needing a separate fan_in join --
+      // exactly the shape the old (removed) "Split into branches" action
+      // used to produce by hand.
+      const armId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
+      added.push({ ...makeNode('noop'), id: armId, label: kind === 'switch' ? 'Case 1' : 'Path 1' });
+      nextEdges.push({
+        from: id,
+        level: 'route',
+        router: 'state_equals',
+        state_key: id,
+        branches: { 'case-1': armId },
+        ...(targetId ? { default: targetId } : {}),
+      });
+      terminalIds = [armId];
     } else if (targetId) {
       nextEdges.push({ from: id, to: targetId, level: 'normal' });
     }
@@ -1742,24 +1996,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setEdges((current) => current.map((edge) => (
       edge.from === sourceId && edge.router ? { ...edge, state_key: value } : edge
     )));
-  }, []);
-
-  const splitIntoBranches = useCallback((sourceId) => {
-    const stateKey = window.prompt('Route on which data key? (e.g. "gate" for {{ data.gate }})', sourceId);
-    if (!stateKey) return;
-    const existing = edgesRef.current.find((edge) => isFlowEdge(edge) && edge.from === sourceId);
-    const carryOverTarget = existing && !existing.router ? existing.to : null;
-    const branchId = uniqueNodeId('noop', nodesRef.current);
-    const routerEdge = {
-      from: sourceId,
-      level: 'route',
-      router: 'state_equals',
-      state_key: stateKey,
-      branches: { 'case-1': branchId },
-      ...(carryOverTarget ? { default: carryOverTarget } : {}),
-    };
-    setEdges((current) => [...current.filter((edge) => !(isFlowEdge(edge) && edge.from === sourceId)), routerEdge]);
-    setNodes((current) => [...current, { ...makeNode('noop'), id: branchId }]);
   }, []);
 
   const removeBranching = useCallback((sourceId) => {
@@ -1832,7 +2068,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     deleteNode,
     insertAt,
     onChangeStateKey,
-    onSplitIntoBranches: splitIntoBranches,
     onRemoveBranching: removeBranching,
     onAddBranch,
     onJoinBranches,
@@ -1844,7 +2079,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRenameBranch,
     settings: meta.settings,
     edges,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, splitIntoBranches, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -1982,12 +2217,13 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
               <div
                 className="routine-canvas__scroll"
                 onClick={(event) => {
-                  // A locked inspector ignores the background too, otherwise
-                  // the click that cannot close it via × closes it anyway.
+                  // A locked inspector still ignores the background: an
+                  // accidental outside click discarding an in-progress edit
+                  // (or deleting a brand-new step) would be a nasty surprise
+                  // -- that only happens via the explicit × or Delete step.
                   if (selectedNode && !isNodeComplete(selectedNode)) return;
                   if (!event.target.closest('button, input, textarea, [role="button"], .routine-node-inspector')) {
-                    setSelectedNodeId(null);
-                    setInspectorPosition(null);
+                    closeInspector(selectedNode);
                   }
                 }}
               >
@@ -1997,7 +2233,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 <NodeInspector
                   node={selectedNode}
                   routerEdge={selectedRouterEdge}
-                  onClose={() => { setSelectedNodeId(null); setInspectorPosition(null); }}
+                  onClose={() => closeInspector(selectedNode)}
+                  onDismiss={() => { setSelectedNodeId(null); setInspectorPosition(null); }}
+                  isNew={selectedNodeIsNew}
                   style={inspectorPosition}
                   panelRef={panelRef}
                 />
