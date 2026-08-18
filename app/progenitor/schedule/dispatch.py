@@ -57,6 +57,7 @@ async def enqueue_due_schedule_entries(
         if not message:
             continue
         user_request = str(entry.get("user_request") or "").strip()
+        workflow_id = str(entry.get("workflow_id") or "").strip()
 
         if user_request:
             full_message = f"<original_message>{user_request}</original_message>\n\n{message}"
@@ -65,15 +66,28 @@ async def enqueue_due_schedule_entries(
 
         run_id = generate_schedule_run_id()
         thread_id = generate_schedule_thread_id(schedule_id)
-        queued = await queues.enqueue_input(
-            f"{SCHEDULED_INPUT_PREFIX}{full_message}",
-            timeout=0.5,
-            metadata={
-                "thread_id": thread_id,
-                "schedule_id": schedule_id,
-                "schedule_run_id": run_id,
-            },
-        )
+        if workflow_id:
+            await state_manager.request_workflow_run(
+                request_id=f"schedule_{schedule_id}_{run_id}",
+                workflow_id=workflow_id,
+                input={
+                    "schedule_id": schedule_id,
+                    "schedule_run_id": run_id,
+                    "message": full_message,
+                },
+                ancestry=[],
+            )
+            queued = True
+        else:
+            queued = await queues.enqueue_input(
+                f"{SCHEDULED_INPUT_PREFIX}{full_message}",
+                timeout=0.5,
+                metadata={
+                    "thread_id": thread_id,
+                    "schedule_id": schedule_id,
+                    "schedule_run_id": run_id,
+                },
+            )
         if not queued:
             break
 

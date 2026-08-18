@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Workflow MCP Node",
+  "description": "An MCP tool call node in a v1 workflow graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "title", "server_id", "tool_name"],
+  "properties": {
+    "kind": { "const": "mcp" },
+    "title": { "type": "string", "minLength": 1 },
+    "server_id": { "type": "string", "minLength": 1 },
+    "tool_name": { "type": "string", "minLength": 1 },
+    "inputs": { "type": "object", "additionalProperties": { "$ref": "definition.workflow.schema.v1.json#/$defs/binding" } },
+    "output_schema": { "type": ["object", "null"] }
+  }
+}

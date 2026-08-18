@@ -143,6 +143,8 @@ async def test_agent_card_move_fires_matching_workflow(workflow_env, backend_cli
     payload = run["trigger_event"]["payload"]
     assert payload["from"]["column_id"] == "backlog"
     assert payload["to"]["column_id"] == "done"
+    assert payload["task"]["path"] == "tasks/card_agent_1.md"
+    assert "Agent-authored card" in payload["task"]["content"]
 
 
 async def test_rest_driven_move_is_not_double_dispatched_by_reconciler(

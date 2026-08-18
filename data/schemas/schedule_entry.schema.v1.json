@@ -28,6 +28,10 @@
     "user_request": {
       "type": ["string", "null"],
       "description": "The original natural-language request that created this schedule."
+    },
+    "workflow_id": {
+      "type": ["string", "null"],
+      "description": "Optional backend workflow id. When set, firing writes a durable workflow invocation instead of a conversational scheduled input."
     }
   },
   "required": ["message"],

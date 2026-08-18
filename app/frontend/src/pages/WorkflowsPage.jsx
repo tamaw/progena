@@ -21,6 +21,14 @@ import Select from '../components/common/Select';
 import { useNotifications } from '../context/NotificationContext';
 import {
   deleteWorkflow,
+  fetchAgentProfiles,
+  fetchInbox,
+  fetchKanbanBoard,
+  fetchKnowledge,
+  fetchMcp,
+  fetchPrompts,
+  fetchRepos,
+  fetchRoutines,
   fetchWorkflowContent,
   fetchWorkflows,
   fetchWorkflowRuns,
@@ -58,6 +66,9 @@ import {
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
 import { JsonCodeEditor } from '../components/canvas/WorkflowJsonPanel';
+import McpNode from '../components/canvas/McpNode';
+import WorkflowReferencePicker from '../components/canvas/WorkflowReferencePicker';
+import WorkflowNodeTitle from '../components/canvas/WorkflowNodeTitle';
 import PopupModal from '../components/common/PopupModal';
 import '../styles/canvas.css';
 import '../styles/nodes.css';
@@ -94,9 +105,9 @@ const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 // form). Switching views resizes the node to whichever one the user last
 // left it at, instead of forcing one fixed rectangle for both.
 const DEFAULT_NODE_SIZES = {
-  event: {
+  kanban_trigger: {
     data: { width: 320, height: 120 },
-    settings: { width: 320, height: 190 },
+    settings: { width: 340, height: 260 },
   },
   prompt: {
     data: { width: 340, height: 160 },
@@ -126,56 +137,79 @@ const DEFAULT_NODE_SIZES = {
     data: { width: 340, height: 140 },
     settings: { width: 440, height: 280 },
   },
+  mcp: {
+    data: { width: 340, height: 150 },
+    settings: { width: 420, height: 360 },
+  },
 };
-// Node kinds addable from the dock/JSON editor beyond the fixed event start
-// node. Order here drives the dock's button order.
-const DOCK_NODE_KINDS = ['prompt', 'user', 'code', 'condition', 'approval', 'inbox', 'agent'];
-const USER_MESSAGE_TYPES = [
-  { value: 'say_to_user', label: 'say_to_user' },
-  { value: 'notify_user', label: 'notify_user' },
-  { value: 'ask_user', label: 'ask_user' },
-];
-const USER_NOTIFICATION_LEVELS = ['info', 'warning', 'error', 'success'];
-const USER_NOTIFICATION_LEVEL_OPTIONS = USER_NOTIFICATION_LEVELS.map((level) => ({ value: level, label: level }));
-const CODE_LANGUAGES = [
-  'javascript', 'python', 'html', 'css', 'bash',
-  'json', 'yaml', 'markdown', 'typescript', 'sql',
-];
-const CODE_LANGUAGE_OPTIONS = CODE_LANGUAGES.map((lang) => ({ value: lang, label: lang }));
-const AGENT_NODE_TRANSPORT_OPTIONS = [
-  { value: 'a2a', label: 'A2A' },
-  { value: 'acp', label: 'ACP' },
-];
-// Default editable-field values for a freshly dock-added node, keyed by kind.
+// Templates create the same prompt node with a focused initial instruction.
+const DOCK_NODE_KINDS = ['prompt', 'call-agent', 'knowledge-search', 'repository-task', 'kanban-task', 'mcp-tool', 'ask-user', 'inbox-message', 'routine', 'condition', 'approval'];
 const DOCK_NODE_DEFAULTS = {
-  prompt: () => ({
-    title: 'Prompt', prompt: 'Handle this workflow event.', agentName: 'progenitor', role: '',
-  }),
-  user: () => ({
-    title: 'User', messageType: 'say_to_user', message: 'Summarize the workflow result for the user.', notificationTitle: '', level: 'info',
-  }),
-  code: () => ({
-    title: 'Code', language: 'javascript', content: '// Write code for the agent to run',
-  }),
+  prompt: () => ({ title: 'Prompt', prompt: 'Handle this workflow event.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'call-agent': () => ({ title: 'Call Agent', prompt: 'Use the selected agent to handle this workflow context.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'knowledge-search': () => ({ title: 'Search Knowledge', prompt: 'Search the selected knowledge base and answer using the relevant findings.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'repository-task': () => ({ title: 'Repository Task', prompt: 'Complete this task using the selected repository context.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'kanban-task': () => ({ title: 'Kanban Task', prompt: 'Complete the selected Kanban task.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'mcp-tool': () => ({ title: 'MCP Tool', serverId: '', toolName: '', inputs: {}, outputSchema: null }),
+  'ask-user': () => ({ title: 'Ask User', prompt: 'Ask the user for the information needed to continue.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  'inbox-message': () => ({ title: 'Use Inbox Message', prompt: 'Use the selected inbox message as context and complete the requested task.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
+  routine: () => ({ title: 'Run Routine', prompt: 'Run the selected routine with the configured input.', agentName: 'progenitor', references: {}, inputs: {}, outputSchema: null }),
   condition: () => ({ title: 'Condition', expression: 'payload.card.status == "done"' }),
   approval: () => ({ title: 'Approval', message: 'Approve this workflow action.' }),
-  inbox: () => ({
-    title: 'Send to Inbox',
-    messageTitle: 'Workflow message',
-    message: 'Workflow completed an action.',
-    level: 'info',
-  }),
-  agent: () => ({
-    title: 'Call Agent',
-    transport: 'a2a',
-    agentName: '',
-    request: 'Handle this workflow input.',
-    timeoutSeconds: 300,
-  }),
+};
+
+const CAPABILITY_NODE_KINDS = [
+  'agent',
+  'knowledge',
+  'repository',
+  'kanban',
+  'ask_user',
+  'inbox',
+  'routine',
+];
+
+const CAPABILITY_REFERENCE_KEYS = {
+  agent: 'agent_id',
+  knowledge: 'knowledge_base_id',
+  repository: 'repository_id',
+  kanban: 'kanban_card_id',
+  inbox: 'inbox_message_id',
+};
+
+const CAPABILITY_FIELD = {
+  prompt: { source: 'prompt', label: 'Saved prompt', dataKey: 'promptPath' },
+  agent: { source: 'agent', label: 'Agent profile', dataKey: 'agentId' },
+  knowledge: { source: 'knowledge_base', label: 'Knowledge base', dataKey: 'knowledgeBaseId' },
+  repository: { source: 'repository', label: 'Repository', dataKey: 'repositoryId' },
+  kanban: { source: 'kanban_card', label: 'Kanban card', dataKey: 'kanbanCardId' },
+  inbox: { source: 'inbox_message', label: 'Inbox message', dataKey: 'inboxMessageId' },
+  routine: { source: 'routine', label: 'Routine', dataKey: 'routineId' },
+};
+
+
+const NODE_KIND_LABELS = {
+  prompt: 'Prompt',
+  agent: 'Agent',
+  knowledge: 'Knowledge',
+  repository: 'Repository',
+  kanban: 'Kanban',
+  ask_user: 'Ask user',
+  inbox: 'Inbox',
+  routine: 'Routine',
+};
+const DOCK_TO_NODE_KIND = {
+  'call-agent': 'agent',
+  'knowledge-search': 'knowledge',
+  'repository-task': 'repository',
+  'kanban-task': 'kanban',
+  'ask-user': 'ask_user',
+  'inbox-message': 'inbox',
+  routine: 'routine',
+  'mcp-tool': 'mcp',
 };
 
 function resolveNodeSizes(kind, storedSize) {
-  const defaults = DEFAULT_NODE_SIZES[kind];
+  const defaults = DEFAULT_NODE_SIZES[kind] || DEFAULT_NODE_SIZES.prompt;
   return {
     data: {
       width: storedSize?.data?.width || defaults.data.width,
@@ -210,10 +244,12 @@ function cloneValue(value) {
 }
 
 const NODE_MINIMAP_COLORS = {
+  kanban_trigger: '#ffa657',
   event: '#ffa657',
   prompt: '#58a6ff',
   user: '#39c5cf',
   code: '#3fb950',
+  mcp: '#a371f7',
 };
 
 function nodeColor(node) {
@@ -263,6 +299,18 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
     onToggleExpanded: callbacks.onToggleExpanded,
     onResize: callbacks.onResize,
   };
+  if (kind === 'kanban_trigger') {
+    return {
+      ...shared,
+      kind,
+      title: 'Kanban trigger',
+      eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
+      fromColumn: node.fromColumn || '',
+      toColumn: node.toColumn || '',
+      onChange: callbacks.onTriggerChange,
+      canDelete: false,
+    };
+  }
   if (kind === 'event') {
     return {
       ...shared,
@@ -313,6 +361,8 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
     return {
       ...shared, ...runState, kind, title: node.title || 'Condition',
       expression: node.expression || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['true', 'false'] },
       onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
     };
   }
@@ -320,23 +370,25 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
     return {
       ...shared, ...runState, kind, title: node.title || 'Approval',
       message: node.message || '',
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || { type: 'string', enum: ['approved', 'rejected'] },
       onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
     };
   }
-  if (kind === 'inbox') {
+  if (kind === 'mcp') {
     return {
-      ...shared, ...runState, kind, title: node.title || 'Send to Inbox',
-      messageTitle: node.message_title || 'Workflow message',
-      message: node.message || '', level: node.level || 'info',
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
-    };
-  }
-  if (kind === 'agent') {
-    return {
-      ...shared, ...runState, kind, title: node.title || 'Call Agent',
-      transport: node.transport || 'a2a', agentName: node.agent_name || '',
-      request: node.request || '', timeoutSeconds: node.timeout_seconds || 300,
-      onChange: callbacks.onNodeChange, onDelete: callbacks.onDeleteNode, canDelete: true,
+      ...shared,
+      ...runState,
+      kind,
+      title: node.title || 'MCP Tool',
+      serverId: node.server_id || '',
+      toolName: node.tool_name || '',
+      inputs: cloneValue(node.inputs) || {},
+      inputSchema: cloneValue(node.input_schema) || null,
+      outputSchema: cloneValue(node.output_schema) || null,
+      onChange: callbacks.onNodeChange,
+      onDelete: callbacks.onDeleteNode,
+      canDelete: true,
     };
   }
   return {
@@ -346,7 +398,20 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
     title: node.title || 'Prompt',
     prompt: node.prompt || '',
     agentName: node.agent_name || 'progenitor',
-    role: node.role || '',
+    references: cloneValue(node.references) || {},
+    inputs: cloneValue(node.inputs) || {},
+    inputSchema: cloneValue(node.input_schema) || null,
+    outputSchema: cloneValue(node.output_schema) || null,
+    ...(kind === 'prompt' ? { promptPath: node.prompt_path || node.references?.prompt_path || '' } : {}),
+    ...(kind === 'agent' ? { agentId: node.agent_id || '' } : {}),
+    ...(kind === 'knowledge' ? { knowledgeBaseId: node.knowledge_base_id || '' } : {}),
+    ...(kind === 'repository' ? { repositoryId: node.repository_id || '' } : {}),
+    ...(kind === 'kanban' ? { kanbanCardId: node.kanban_card_id || '' } : {}),
+    ...(kind === 'inbox' ? { inboxMessageId: node.inbox_message_id || '' } : {}),
+    ...(kind === 'routine' ? {
+      routineId: node.routine_id || '',
+      routineRevision: node.routine_revision || 1,
+    } : {}),
     onChange: callbacks.onNodeChange,
     onDelete: callbacks.onDeleteNode,
     canDelete: true,
@@ -355,35 +420,40 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
 
 function workflowToFlow(definition, callbacks, latestRun) {
   const uiNodes = definition?.ui?.nodes || {};
-  const nodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
-    const kind = DEFAULT_NODE_SIZES[node.kind] ? node.kind : 'prompt';
+  const triggerUi = definition?.ui?.trigger || {};
+  const triggerSizes = resolveNodeSizes('kanban_trigger', triggerUi.size);
+  const triggerNode = {
+    id: 'trigger_kanban',
+    type: 'kanban_trigger',
+    position: triggerUi.position || { x: 96, y: 160 },
+    width: triggerSizes.data.width,
+    height: triggerSizes.data.height,
+    style: { width: triggerSizes.data.width, height: triggerSizes.data.height },
+    data: buildNodeData('kanban_trigger', {
+      eventType: definition.trigger?.event_type,
+      fromColumn: definition.trigger?.from_column,
+      toColumn: definition.trigger?.to_column,
+      outputSchema: cloneValue(definition.trigger?.output_schema) || null,
+    }, callbacks, latestRun, triggerSizes),
+  };
+  const graphNodes = Object.entries(definition?.graph?.nodes || {}).map(([nodeId, node]) => {
+    const kind = CAPABILITY_NODE_KINDS.includes(node.kind) || DEFAULT_NODE_SIZES[node.kind]
+      ? node.kind
+      : 'prompt';
     const uiNode = uiNodes[nodeId] || {};
     const sizes = resolveNodeSizes(kind, uiNode.size);
-    const position = uiNode.position || (kind === 'event' ? { x: 96, y: 160 } : { x: 456, y: 160 });
-    const enriched = kind === 'event'
-      ? {
-        ...node,
-        eventType: definition.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
-        fromColumn: definition.trigger?.from_column || '',
-        toColumn: definition.trigger?.to_column || '',
-      }
-      : node;
+    const position = uiNode.position || { x: 456, y: 160 };
     return {
       id: nodeId,
       type: kind,
       position,
-      // Nodes always load in the compact "data" view, so the rendered size
-      // starts at sizes.data; toggling to settings swaps to sizes.settings.
-      // Both the top-level width/height and style must be set: React Flow's
-      // NodeResizer reads/writes the top-level fields once a node has been
-      // manually resized, and those then take precedence over style.
       width: sizes.data.width,
       height: sizes.data.height,
       style: { width: sizes.data.width, height: sizes.data.height },
-      data: buildNodeData(kind, enriched, callbacks, latestRun, sizes),
+      data: buildNodeData(kind, node, callbacks, latestRun, sizes),
     };
   });
-  const edges = (definition?.graph?.edges || []).map((edge) => ({
+  const graphEdges = (definition?.graph?.edges || []).map((edge) => ({
     id: `edge_${edge.from.node}_${edge.to.node}_${edge.from.port || 'default'}`,
     source: edge.from.node,
     ...(edge.from.port && edge.from.port !== 'default' ? { sourceHandle: edge.from.port } : {}),
@@ -392,9 +462,18 @@ function workflowToFlow(definition, callbacks, latestRun) {
     type: 'smoothstep',
     animated: true,
   }));
+  const inboundNodeIds = new Set(graphEdges.map((edge) => edge.target));
+  const rootNode = graphNodes.find((node) => !inboundNodeIds.has(node.id));
+  const triggerEdge = rootNode ? [{
+    id: `edge_trigger_kanban_${rootNode.id}`,
+    source: triggerNode.id,
+    target: rootNode.id,
+    type: 'smoothstep',
+    animated: true,
+  }] : [];
   return {
-    nodes,
-    edges,
+    nodes: [triggerNode, ...graphNodes],
+    edges: [...triggerEdge, ...graphEdges],
     viewport: definition?.ui?.viewport || DEFAULT_VIEWPORT,
   };
 }
@@ -403,8 +482,8 @@ function applyRunStateToNodes(nodes, latestRun) {
   const currentNodeId = latestRun?.current_node_id || null;
   const completedNodeIds = latestRun?.completed_node_ids || [];
   return nodes.map((node) => {
-    const nextData = node.type === 'event'
-      ? { ...node.data, currentNodeId }
+    const nextData = node.type === 'kanban_trigger'
+      ? node.data
       : { ...node.data, currentNodeId, completedNodeIds };
     if (nextData === node.data) {
       return node;
@@ -417,63 +496,87 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
   const graphNodes = {};
   const uiNodes = {};
   nodes.forEach((node) => {
-    if (node.type === 'event') {
-      graphNodes[node.id] = {
-        kind: 'event',
-        title: String(node.data?.title || 'Event'),
+    if (node.type === 'kanban_trigger') {
+      const sizes = resolveNodeSizes(node.type, {
+        data: node.data?.dataSize,
+        settings: node.data?.settingsSize,
+      });
+      uiNodes.trigger = {
+        position: {
+          x: Math.round(node.position?.x || 0),
+          y: Math.round(node.position?.y || 0),
+        },
+        size: {
+          data: { width: Math.round(sizes.data.width), height: Math.round(sizes.data.height) },
+          settings: { width: Math.round(sizes.settings.width), height: Math.round(sizes.settings.height) },
+        },
       };
-    } else if (node.type === 'user') {
-      graphNodes[node.id] = {
-        kind: 'user',
-        title: String(node.data?.title || 'User'),
-        message_type: node.data?.messageType || 'say_to_user',
-        message: String(node.data?.message || ''),
-        notification_title: node.data?.notificationTitle ? String(node.data.notificationTitle) : null,
-        level: node.data?.level || 'info',
-      };
-    } else if (node.type === 'code') {
-      graphNodes[node.id] = {
-        kind: 'code',
-        title: String(node.data?.title || 'Code'),
-        language: String(node.data?.language || 'javascript'),
-        content: String(node.data?.content || ''),
-      };
-    } else if (node.type === 'condition') {
+      return;
+    }
+    if (node.type === 'condition') {
       graphNodes[node.id] = {
         kind: 'condition',
         title: String(node.data?.title || 'Condition'),
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
         expression: String(node.data?.expression || ''),
       };
     } else if (node.type === 'approval') {
       graphNodes[node.id] = {
         kind: 'approval',
         title: String(node.data?.title || 'Approval'),
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
         message: String(node.data?.message || ''),
       };
-    } else if (node.type === 'inbox') {
+    } else if (node.type === 'mcp') {
       graphNodes[node.id] = {
-        kind: 'inbox',
-        title: String(node.data?.title || 'Send to Inbox'),
-        message_title: String(node.data?.messageTitle || 'Workflow message'),
-        message: String(node.data?.message || ''),
-        level: node.data?.level || 'info',
+        kind: 'mcp',
+        title: String(node.data?.title || 'MCP Tool'),
+        server_id: String(node.data?.serverId || ''),
+        tool_name: String(node.data?.toolName || ''),
+        inputs: cloneValue(node.data?.inputs) || {},
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
-    } else if (node.type === 'agent') {
-      graphNodes[node.id] = {
-        kind: 'agent',
-        title: String(node.data?.title || 'Call Agent'),
-        transport: node.data?.transport || 'a2a',
-        agent_name: String(node.data?.agentName || ''),
-        request: String(node.data?.request || ''),
-        timeout_seconds: Number(node.data?.timeoutSeconds || 300),
+    } else if (CAPABILITY_NODE_KINDS.includes(node.type)) {
+      const references = cloneValue(node.data?.references) || {};
+      const capability = {
+        kind: node.type,
+        title: String(node.data?.title || 'Prompt'),
+        prompt: String(node.data?.prompt || ''),
+        agent_name: String(node.data?.agentName || 'progenitor'),
+        references,
+        inputs: cloneValue(node.data?.inputs) || {},
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
+      const referenceKey = CAPABILITY_REFERENCE_KEYS[node.type];
+      if (referenceKey) {
+        const dataKey = referenceKey.replace(/_([a-z])/g, (_match, letter) => letter.toUpperCase());
+        capability[referenceKey] = String(node.data?.[dataKey] || references[referenceKey] || '');
+      } else if (node.type === 'routine') {
+        capability.routine_id = String(node.data?.routineId || references.routine?.id || '');
+        capability.routine_revision = Number(node.data?.routineRevision || references.routine?.revision || 1);
+      }
+      graphNodes[node.id] = capability;
     } else {
+      const references = cloneValue(node.data?.references) || {};
+      const promptPath = String(node.data?.promptPath || '').trim();
+      if (promptPath) {
+        references.prompt_path = promptPath;
+      } else {
+        delete references.prompt_path;
+      }
       graphNodes[node.id] = {
         kind: 'prompt',
         title: String(node.data?.title || 'Prompt'),
         prompt: String(node.data?.prompt || ''),
         agent_name: String(node.data?.agentName || 'progenitor'),
-        role: node.data?.role ? String(node.data.role) : null,
+        references,
+        inputs: cloneValue(node.data?.inputs) || {},
+        input_schema: cloneValue(node.data?.inputSchema) || null,
+        output_schema: cloneValue(node.data?.outputSchema) || null,
       };
     }
     const sizes = resolveNodeSizes(node.type, {
@@ -492,22 +595,24 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
     };
   });
 
-  const eventNode = nodes.find((node) => node.type === 'event');
+  const triggerNode = nodes.find((node) => node.type === 'kanban_trigger');
   return {
     ...baseWorkflow,
     trigger: {
       ...baseWorkflow.trigger,
       type: 'event',
-      event_type: eventNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
-      from_column: eventNode?.data?.fromColumn || null,
-      to_column: eventNode?.data?.toColumn || null,
+      event_type: triggerNode?.data?.eventType || baseWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0],
+      from_column: triggerNode?.data?.fromColumn || null,
+      to_column: triggerNode?.data?.toColumn || null,
     },
     graph: {
       nodes: graphNodes,
-      edges: edges.map((edge) => ({
-        from: { node: edge.source, port: edge.sourceHandle || 'default' },
-        to: { node: edge.target, port: edge.targetHandle || 'default' },
-      })),
+      edges: edges
+        .filter((edge) => edge.source !== 'trigger_kanban')
+        .map((edge) => ({
+          from: { node: edge.source, port: edge.sourceHandle || 'default' },
+          to: { node: edge.target, port: edge.targetHandle || 'default' },
+        })),
     },
     ui: {
       ...(baseWorkflow.ui || {}),
@@ -517,104 +622,17 @@ function flowToWorkflow(baseWorkflow, nodes, edges, viewport) {
   };
 }
 
-function EventNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const expanded = data.expanded;
-  return (
-    <>
-      <NodeResizer
-        minWidth={220}
-        minHeight={expanded ? 140 : 80}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--event ${selected ? 'selected' : ''}`}>
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
-        <div className="node-title-bar drag-handle">
-          <span className="node-type-icon event">E</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="Event title"
-          />
-          <span className={`node-status-badge ${isRunning ? 'running' : 'idle'}`}>{isRunning ? 'Live' : 'Start'}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
-        </div>
-        <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Trigger</span>
-                <Select
-                  className="nodrag"
-                  value={data.eventType}
-                  onChange={(next) => data.onChange(id, { eventType: next })}
-                  options={WORKFLOW_EVENT_TYPE_OPTIONS}
-                  ariaLabel="Trigger"
-                  portal
-                />
-              </label>
-              {data.eventType === 'kanban.card.moved' ? (
-                <>
-                  <label className="workflow-graph-node__field">
-                    <span>From column</span>
-                    <Select
-                      className="nodrag"
-                      value={data.fromColumn}
-                      onChange={(next) => data.onChange(id, { fromColumn: next })}
-                      options={WORKFLOW_KANBAN_COLUMNS}
-                      ariaLabel="From column"
-                      portal
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>To column</span>
-                    <Select
-                      className="nodrag"
-                      value={data.toColumn}
-                      onChange={(next) => data.onChange(id, { toColumn: next })}
-                      options={WORKFLOW_KANBAN_COLUMNS}
-                      ariaLabel="To column"
-                      portal
-                    />
-                  </label>
-                </>
-              ) : null}
-              <p className="workflow-graph-node__hint">
-                One event node starts the v1 workflow path.
-              </p>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <div className="prompt-preview">
-                {data.eventType}
-                {data.eventType === 'kanban.card.moved' && (data.fromColumn || data.toColumn)
-                  ? ` (${data.fromColumn || 'any'} → ${data.toColumn || 'any'})`
-                  : ''}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
-
 function PromptNode({ id, data, selected }) {
+  const capabilityField = CAPABILITY_FIELD[data.kind];
+
+
   const isRunning = data.currentNodeId === id;
   const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
   const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Prompt');
+  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : NODE_KIND_LABELS[data.kind] || 'Prompt');
   const expanded = data.expanded;
+
+
   return (
     <>
       <NodeResizer
@@ -623,18 +641,18 @@ function PromptNode({ id, data, selected }) {
         isVisible={selected}
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--prompt ${selected ? 'selected' : ''}`}>
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
         <Handle type="target" position={Position.Left} className="canvas-handle" />
         <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
-          <span className="node-type-icon prompt">P</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
+          <span className={`node-type-icon ${data.kind}`}>{data.kind === 'ask_user' ? 'U' : data.kind[0].toUpperCase()}</span>
+          <WorkflowNodeTitle
+            expanded={expanded}
+            title={data.title}
             placeholder="Prompt title"
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
           />
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
+          <span className={`node-status-badge workflow-graph-node__kind ${statusClass}`}>{statusLabel}</span>
           <button
             type="button"
             className="node-expand-btn nodrag"
@@ -658,30 +676,42 @@ function PromptNode({ id, data, selected }) {
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Agent</span>
-                <input
-                  value={data.agentName}
-                  onChange={(event) => data.onChange(id, { agentName: event.target.value })}
-                  placeholder="progenitor"
+              {capabilityField ? (
+                <WorkflowReferencePicker
+                  source={capabilityField.source}
+                  label={capabilityField.label}
+                  value={data[capabilityField.dataKey]}
+                  onChange={(value) => data.onChange(id, {
+                    [capabilityField.dataKey]: value || '',
+                  })}
+                  onOptionChange={(option) => {
+                    if (data.kind !== 'routine' || !option) return;
+                    data.onChange(id, {
+                      routineId: option.value,
+                      routineRevision: option.revision,
+                    });
+                  }}
                 />
-              </label>
-              <label className="workflow-graph-node__field">
-                <span>Role</span>
-                <input
-                  value={data.role}
-                  onChange={(event) => data.onChange(id, { role: event.target.value })}
-                  placeholder="Optional role"
-                />
-              </label>
-              <label className="workflow-graph-node__field">
-                <span>Prompt</span>
-                <textarea
-                  value={data.prompt}
-                  onChange={(event) => data.onChange(id, { prompt: event.target.value })}
-                  placeholder="Handle this workflow event."
-                />
-              </label>
+              ) : null}
+              {data.kind === 'ask_user' ? (
+                <label className="workflow-graph-node__field">
+                  <span>Question</span>
+                  <textarea
+                    value={data.prompt}
+                    onChange={(event) => data.onChange(id, { prompt: event.target.value })}
+                    placeholder="Ask the user for the information needed to continue."
+                  />
+                </label>
+              ) : (
+                <label className="workflow-graph-node__field">
+                  <span>Instruction</span>
+                  <textarea
+                    value={data.prompt}
+                    onChange={(event) => data.onChange(id, { prompt: event.target.value })}
+                    placeholder="Handle this workflow event."
+                  />
+                </label>
+              )}
             </div>
           ) : (
             <div className="node-body-compact">
@@ -695,137 +725,26 @@ function PromptNode({ id, data, selected }) {
   );
 }
 
-function UserNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
-  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'User');
-  const expanded = data.expanded;
-  return (
-    <>
-      <NodeResizer
-        minWidth={240}
-        minHeight={expanded ? 200 : 100}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--user ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
-        <div className="node-title-bar drag-handle">
-          <span className="node-type-icon user">U</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="User title"
-          />
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
-          >
-            {expanded ? '▲' : '▼'}
-          </button>
-          {data.canDelete ? (
-            <button
-              type="button"
-              className="node-remove-btn"
-              aria-label="Delete user node"
-              onClick={() => data.onDelete(id)}
-            >
-              ×
-            </button>
-          ) : null}
-        </div>
-        <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Delivery</span>
-                <Select
-                  className="nodrag"
-                  value={data.messageType}
-                  onChange={(next) => data.onChange(id, { messageType: next })}
-                  options={USER_MESSAGE_TYPES}
-                  ariaLabel="Delivery"
-                  portal
-                />
-              </label>
-              {data.messageType === 'notify_user' ? (
-                <>
-                  <label className="workflow-graph-node__field">
-                    <span>Notification title</span>
-                    <input
-                      value={data.notificationTitle}
-                      onChange={(event) => data.onChange(id, { notificationTitle: event.target.value })}
-                      placeholder="Notification title"
-                    />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>Level</span>
-                    <Select
-                      className="nodrag"
-                      value={data.level}
-                      onChange={(next) => data.onChange(id, { level: next })}
-                      options={USER_NOTIFICATION_LEVEL_OPTIONS}
-                      ariaLabel="Level"
-                      portal
-                    />
-                  </label>
-                </>
-              ) : null}
-              <label className="workflow-graph-node__field">
-                <span>Message</span>
-                <textarea
-                  value={data.message}
-                  onChange={(event) => data.onChange(id, { message: event.target.value })}
-                  placeholder="Message to send to the user"
-                />
-              </label>
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <span className="node-meta-chip prompt-agent">{data.messageType}</span>
-              <div className="prompt-preview">{data.message || 'Empty message'}</div>
-            </div>
-          )}
-        </div>
-      </div>
-    </>
-  );
-}
 
-function CodeNode({ id, data, selected }) {
-  const isRunning = data.currentNodeId === id;
-  const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
-  const statusClass = isRunning ? 'running' : (isCompleted ? 'completed' : 'idle');
-  const statusLabel = isRunning ? 'Running' : (isCompleted ? 'Done' : 'Code');
+function KanbanTriggerNode({ id, data, selected }) {
   const expanded = data.expanded;
+  const isMoveTrigger = data.eventType === 'kanban.card.moved';
+
+  const updateEventType = (eventType) => {
+    data.onChange({
+      eventType,
+      ...(eventType === 'kanban.card.moved' ? {} : { fromColumn: '', toColumn: '' }),
+    });
+  };
+
   return (
     <>
-      <NodeResizer
-        minWidth={260}
-        minHeight={expanded ? 220 : 110}
-        isVisible={selected}
-        onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
-      />
-      <div className={`canvas-node workflow-graph-node workflow-graph-node--code ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
+      <NodeResizer minWidth={280} minHeight={expanded ? 220 : 110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <div className={`canvas-node workflow-graph-node workflow-graph-node--trigger ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
-          <span className="node-type-icon code">{'<>'}</span>
-          <input
-            className="node-title-input"
-            value={data.title}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-            placeholder="Code title"
-          />
-          <span className="code-language-badge">{data.language}</span>
-          <span className={`node-status-badge ${statusClass}`}>{statusLabel}</span>
+          <span className="node-type-icon event">K</span>
+          <span className="node-title">Kanban trigger</span>
+          <span className="node-status-badge workflow-graph-node__kind">Trigger</span>
           <button
             type="button"
             className="node-expand-btn nodrag"
@@ -835,90 +754,84 @@ function CodeNode({ id, data, selected }) {
           >
             {expanded ? '▲' : '▼'}
           </button>
-          {data.canDelete ? (
-            <button
-              type="button"
-              className="node-remove-btn"
-              aria-label="Delete code node"
-              onClick={() => data.onDelete(id)}
-            >
-              ×
-            </button>
-          ) : null}
         </div>
         <div className="node-body">
           {expanded ? (
             <div className="node-body-expanded workflow-graph-node__body">
               <label className="workflow-graph-node__field">
-                <span>Language</span>
-                <Select
-                  className="nodrag"
-                  value={data.language}
-                  onChange={(next) => data.onChange(id, { language: next })}
-                  options={CODE_LANGUAGE_OPTIONS}
-                  ariaLabel="Language"
-                  portal
-                />
+                <span>Event type</span>
+                <Select value={data.eventType} onChange={updateEventType} options={WORKFLOW_EVENT_TYPE_OPTIONS} ariaLabel="Kanban event type" />
               </label>
-              <label className="workflow-graph-node__field">
-                <span>Code</span>
-                <textarea
-                  className="code-editor nodrag nowheel"
-                  value={data.content}
-                  onChange={(event) => data.onChange(id, { content: event.target.value })}
-                  placeholder="// Write code for the agent to run"
-                  spellCheck={false}
-                />
-              </label>
+              {isMoveTrigger ? (
+                <div className="workflow-graph-node__field-grid">
+                  <label className="workflow-graph-node__field">
+                    <span>From column</span>
+                    <Select value={data.fromColumn} onChange={(fromColumn) => data.onChange({ fromColumn })} options={WORKFLOW_KANBAN_COLUMNS} ariaLabel="From Kanban column" />
+                  </label>
+                  <label className="workflow-graph-node__field">
+                    <span>To column</span>
+                    <Select value={data.toColumn} onChange={(toColumn) => data.onChange({ toColumn })} options={WORKFLOW_KANBAN_COLUMNS} ariaLabel="To Kanban column" />
+                  </label>
+                </div>
+              ) : null}
             </div>
           ) : (
             <div className="node-body-compact">
-              <pre className="code-preview">{data.content || '// empty'}</pre>
+              <span className="node-meta-chip">{data.eventType}</span>
+              {isMoveTrigger && (data.fromColumn || data.toColumn) ? (
+                <div className="prompt-preview">{data.fromColumn || 'Any'} → {data.toColumn || 'Any'}</div>
+              ) : null}
             </div>
           )}
         </div>
+        <Handle type="source" position={Position.Right} className="canvas-handle" />
       </div>
     </>
   );
 }
 
 function WorkflowControlNode({ id, data, selected }) {
+  const expanded = data.expanded;
   const labels = {
     condition: 'Condition',
     approval: 'Approval',
-    inbox: 'Send to Inbox',
-    agent: data.transport === 'acp' ? 'Call ACP Agent' : 'Call A2A Agent',
   };
-  const label = labels[data.kind] || data.kind;
-  const field = data.kind === 'condition' ? 'expression'
-    : data.kind === 'approval' ? 'message'
-      : data.kind === 'inbox' ? 'message'
-        : 'request';
+  const label = labels[data.kind];
+  const field = data.kind === 'condition' ? 'expression' : 'message';
   const value = data[field] || '';
   return (
     <>
-      <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <NodeResizer minWidth={260} minHeight={expanded ? 180 : 110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
       <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
         <Handle type="target" position={Position.Left} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
-          <span className={`node-type-icon ${data.kind}`}>{data.kind === 'agent' ? 'A' : data.kind[0].toUpperCase()}</span>
-          <input className="node-title-input" value={data.title} onChange={(event) => data.onChange(id, { title: event.target.value })} />
+          <span className={`node-type-icon ${data.kind}`}>{data.kind[0].toUpperCase()}</span>
+          <WorkflowNodeTitle
+            expanded={expanded}
+            title={data.title}
+            placeholder={`${label} title`}
+            onChange={(event) => data.onChange(id, { title: event.target.value })}
+          />
+          <span className="node-status-badge workflow-graph-node__kind">{label}</span>
+          <button
+            type="button"
+            className="node-expand-btn nodrag"
+            onClick={() => data.onToggleExpanded(id)}
+            title={expanded ? 'Show data' : 'Show settings'}
+            aria-label={expanded ? 'Show data' : 'Show settings'}
+          >
+            {expanded ? '▲' : '▼'}
+          </button>
           <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
         </div>
         <div className="node-body">
-          {data.kind === 'inbox' && <input className="node-field-input" value={data.messageTitle} onChange={(event) => data.onChange(id, { messageTitle: event.target.value })} placeholder="Inbox title" />}
-          {data.kind === 'agent' && (
-            <Select
-              className="nodrag node-field-input"
-              value={data.transport}
-              onChange={(next) => data.onChange(id, { transport: next })}
-              options={AGENT_NODE_TRANSPORT_OPTIONS}
-              ariaLabel="Transport"
-              portal
-            />
+          {expanded ? (
+            <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
+          ) : (
+            <div className="node-body-compact">
+              <div className="prompt-preview">{value || `Empty ${label}`}</div>
+            </div>
           )}
-          {data.kind === 'agent' && <input className="node-field-input" value={data.agentName} onChange={(event) => data.onChange(id, { agentName: event.target.value })} placeholder="Agent name" />}
-          <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
         </div>
         {data.kind === 'condition' ? (
           <>
@@ -930,21 +843,25 @@ function WorkflowControlNode({ id, data, selected }) {
             <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="canvas-handle" />
             <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="canvas-handle" />
           </>
-        ) : <Handle type="source" position={Position.Right} className="canvas-handle" />}
+        ) : null}
       </div>
     </>
   );
 }
 
 const NODE_TYPES = {
-  event: EventNode,
+  kanban_trigger: KanbanTriggerNode,
   prompt: PromptNode,
-  user: UserNode,
-  code: CodeNode,
+  agent: PromptNode,
+  knowledge: PromptNode,
+  repository: PromptNode,
+  kanban: PromptNode,
+  ask_user: PromptNode,
+  inbox: PromptNode,
+  routine: PromptNode,
   condition: WorkflowControlNode,
   approval: WorkflowControlNode,
-  inbox: WorkflowControlNode,
-  agent: WorkflowControlNode,
+  mcp: McpNode,
 };
 
 // Chevrons for the right tools dock / collapse seam (point toward the action:
@@ -966,15 +883,6 @@ function ChevronRightSmall() {
   );
 }
 
-const DOCK_ITEM_META = {
-  prompt: { icon: 'P', label: 'Prompt', title: 'Add a prompt step' },
-  user: { icon: 'U', label: 'User', title: 'Add a user message step' },
-  code: { icon: '<>', label: 'Code', title: 'Add a code step' },
-  condition: { icon: '◇', label: 'Condition', title: 'Add a condition branch' },
-  approval: { icon: '✓', label: 'Approval', title: 'Add an approval gate' },
-  inbox: { icon: '↓', label: 'Inbox', title: 'Send a message to Inbox' },
-  agent: { icon: 'A', label: 'Agent', title: 'Call an A2A or ACP agent' },
-};
 
 // Bottom-center floating dock for adding nodes to the canvas — ported directly
 // from the Agents/Sequences canvas's GraphDock: drag onto the canvas or click
@@ -992,11 +900,10 @@ function WorkflowDock({ onAdd }) {
           <button
             key={kind}
             type="button"
-            className="canvas-dock-item"
+            className={`canvas-dock-item workflow-dock-item--${kind}`}
             draggable
             onDragStart={onDragStart(kind)}
             onClick={() => onAdd(kind)}
-            title={DOCK_ITEM_META[kind].title}
           >
             <span className={`canvas-dock-icon ${kind}`}>{DOCK_ITEM_META[kind].icon}</span>
             <span className="canvas-dock-tooltip">{DOCK_ITEM_META[kind].label}</span>
@@ -1016,6 +923,20 @@ const WORKFLOW_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
   { id: 'runs', label: 'Runs', title: 'Run history' },
 ];
+
+const DOCK_ITEM_META = {
+  prompt: { icon: 'P', label: 'Prompt' },
+  'call-agent': { icon: 'A', label: 'Agent' },
+  'knowledge-search': { icon: 'K', label: 'Knowledge' },
+  'repository-task': { icon: 'R', label: 'Repository' },
+  'kanban-task': { icon: 'T', label: 'Kanban' },
+  'mcp-tool': { icon: 'M', label: 'MCP' },
+  'ask-user': { icon: 'U', label: 'Ask' },
+  'inbox-message': { icon: 'I', label: 'Inbox' },
+  routine: { icon: 'R', label: 'Routine' },
+  condition: { icon: '◇', label: 'Condition' },
+  approval: { icon: '✓', label: 'Approval' },
+};
 
 function WorkflowSideDock({ onSelect }) {
   return (
@@ -1047,10 +968,7 @@ function WorkflowRow({ item, latestRun, selectedPath, onSelect }) {
       onClick={() => onSelect(path)}
       title={item.description || item.title}
     >
-      <span
-        className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`}
-        aria-hidden="true"
-      />
+      <span className={`pane-card-row__dot${dotTone ? ` pane-card-row__dot--${dotTone}` : ''}`} aria-hidden="true" />
       <div className="pane-card-row__body">
         <div className="pane-card-row__top">
           <span className="pane-card-row__title">{item.title}</span>
@@ -1112,6 +1030,16 @@ function WorkflowsInner() {
   const { show } = useNotifications();
   const workflowsUrl = getApiUrl('workflows');
   const workflowRunsUrl = getApiUrl('workflowRuns');
+  const referenceUrls = {
+    agentsUrl: getApiUrl('agentProfiles'),
+    inboxUrl: getApiUrl('inbox'),
+    kanbanUrl: getApiUrl('kanban'),
+    knowledgeUrl: getApiUrl('/api/ui/knowledge'),
+    mcpUrl: getApiUrl('mcp'),
+    promptsUrl: getApiUrl('prompts'),
+    reposUrl: getApiUrl('repos'),
+    routinesUrl: getApiUrl('routines'),
+  };
   const realtime = useSelector(selectRealtime);
   const workflows = useSelector(selectWorkflows);
   const workflowsState = useSelector(selectWorkflowsState);
@@ -1169,6 +1097,21 @@ function WorkflowsInner() {
     void loadWorkflows();
     void loadRuns();
   }, [loadRuns, loadWorkflows, realtime.connected]);
+  useEffect(() => {
+    if (!realtime.connected) {
+      return;
+    }
+    void Promise.allSettled([
+      dispatch(fetchAgentProfiles({ agentsUrl: referenceUrls.agentsUrl })),
+      dispatch(fetchInbox({ inboxUrl: referenceUrls.inboxUrl })),
+      dispatch(fetchKanbanBoard({ kanbanUrl: referenceUrls.kanbanUrl })),
+      dispatch(fetchKnowledge({ knowledgeUrl: referenceUrls.knowledgeUrl })),
+      dispatch(fetchMcp({ mcpUrl: referenceUrls.mcpUrl })),
+      dispatch(fetchPrompts({ promptsUrl: referenceUrls.promptsUrl })),
+      dispatch(fetchRepos({ reposUrl: referenceUrls.reposUrl })),
+      dispatch(fetchRoutines({ routinesUrl: referenceUrls.routinesUrl })),
+    ]);
+  }, [dispatch, realtime.connected, referenceUrls.agentsUrl, referenceUrls.inboxUrl, referenceUrls.kanbanUrl, referenceUrls.knowledgeUrl, referenceUrls.mcpUrl, referenceUrls.promptsUrl, referenceUrls.reposUrl, referenceUrls.routinesUrl]);
 
   useEffect(() => {
     if (!workflows.length) {
@@ -1260,6 +1203,17 @@ function WorkflowsInner() {
         setGraphNodes((currentNodes) => {
           const nextNodes = currentNodes.map((node) => (
             node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+          ));
+          nodesRef.current = nextNodes;
+          if (!hydratingGraphRef.current) setLocalDraftDirty(true);
+          setDraftWorkflow((current) => flowToWorkflow(current || cloned, nextNodes, edgesRef.current, viewportRef.current));
+          return nextNodes;
+        });
+      },
+      onTriggerChange: (patch) => {
+        setGraphNodes((currentNodes) => {
+          const nextNodes = currentNodes.map((node) => (
+            node.type === 'kanban_trigger' ? { ...node, data: { ...node.data, ...patch } } : node
           ));
           nodesRef.current = nextNodes;
           if (!hydratingGraphRef.current) setLocalDraftDirty(true);
@@ -1446,12 +1400,44 @@ function WorkflowsInner() {
       show('error', 'Invalid workflow connection', validationError);
       return;
     }
+    const source = nodesRef.current.find((node) => node.id === connection.source);
+    const sourceSchema = cloneValue(source?.data?.outputSchema);
+    if (!sourceSchema) {
+      show('error', 'Missing output contract', 'Connect a node only after it has an output schema.');
+      return;
+    }
+    const target = nodesRef.current.find((node) => node.id === connection.target);
+    const targetUsesBindings = ['prompt', ...CAPABILITY_NODE_KINDS].includes(target?.type);
+    const nextNodes = nodesRef.current.map((node) => {
+      if (node.id !== connection.target || ![
+        'prompt', ...CAPABILITY_NODE_KINDS, 'mcp', 'condition', 'approval',
+      ].includes(node.type)) {
+        return node;
+      }
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          inputSchema: sourceSchema,
+          ...(targetUsesBindings ? {
+            inputs: {
+              ...(node.data?.inputs || {}),
+              input: {
+                source: source?.type === 'kanban_trigger' ? 'trigger' : 'previous_output',
+                path: '/',
+              },
+            },
+          } : {}),
+        },
+      };
+    });
+    setGraphNodes(nextNodes);
     setGraphEdges((currentEdges) => {
       const nextEdges = addEdge({ ...connection, ...DEFAULT_EDGE_OPTIONS }, currentEdges);
-      syncWorkflowFromGraph(nodesRef.current, nextEdges, viewportRef.current);
+      syncWorkflowFromGraph(nextNodes, nextEdges, viewportRef.current);
       return nextEdges;
     });
-  }, [show, syncWorkflowFromGraph, validateConnection]);
+  }, [setGraphNodes, show, syncWorkflowFromGraph, validateConnection]);
 
   const handleViewportChange = useCallback((_event, viewport) => {
     viewportRef.current = viewport;
@@ -1475,14 +1461,15 @@ function WorkflowsInner() {
     if (!draftWorkflow || !DOCK_NODE_DEFAULTS[kind]) {
       return;
     }
-    const nodeId = `${kind}_${Math.random().toString(36).slice(2, 10)}`;
+    const nodeType = DOCK_TO_NODE_KIND[kind] || kind;
+    const nodeId = `${nodeType}_${Math.random().toString(36).slice(2, 10)}`;
     const position = dropPosition || nextDockNodePosition(nodesRef.current);
-    const sizes = DEFAULT_NODE_SIZES[kind];
+    const sizes = DEFAULT_NODE_SIZES[nodeType] || DEFAULT_NODE_SIZES.prompt;
     const nextNodes = [
       ...nodesRef.current,
       {
         id: nodeId,
-        type: kind,
+        type: nodeType,
         // New nodes start in the settings view (sized accordingly) so their
         // fields are immediately editable.
         width: sizes.settings.width,
@@ -1490,7 +1477,7 @@ function WorkflowsInner() {
         style: { ...sizes.settings },
         position,
         data: {
-          kind,
+          kind: nodeType,
           ...DOCK_NODE_DEFAULTS[kind](),
           currentNodeId: null,
           completedNodeIds: [],
@@ -1596,6 +1583,15 @@ function WorkflowsInner() {
           setGraphNodes((currentNodes) => {
             const nextNodes = currentNodes.map((node) => (
               node.id === nodeId ? { ...node, data: { ...node.data, ...patch } } : node
+            ));
+            syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
+            return nextNodes;
+          });
+        },
+        onTriggerChange: (patch) => {
+          setGraphNodes((currentNodes) => {
+            const nextNodes = currentNodes.map((node) => (
+              node.type === 'kanban_trigger' ? { ...node, data: { ...node.data, ...patch } } : node
             ));
             syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
             return nextNodes;
@@ -1919,30 +1915,6 @@ function WorkflowsInner() {
                             placeholder="Workflow title"
                           />
                         </label>
-                        <label>
-                          <span>Event type</span>
-                          <Select
-                            value={draftWorkflow.trigger?.event_type || WORKFLOW_EVENT_TYPES[0]}
-                            onChange={(nextEventType) => {
-                              handleFieldChange('trigger', {
-                                ...draftWorkflow.trigger,
-                                type: 'event',
-                                event_type: nextEventType,
-                              });
-                              setGraphNodes((currentNodes) => {
-                                const nextNodes = currentNodes.map((node) => (
-                                  node.type === 'event'
-                                    ? { ...node, data: { ...node.data, eventType: nextEventType } }
-                                    : node
-                                ));
-                                syncWorkflowFromGraph(nextNodes, edgesRef.current, viewportRef.current);
-                                return nextNodes;
-                              });
-                            }}
-                            options={WORKFLOW_EVENT_TYPE_OPTIONS}
-                            ariaLabel="Event type"
-                          />
-                        </label>
                         <label className="workflow-form__toggle">
                           <span>Enabled</span>
                           <input
@@ -1999,7 +1971,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { workflowToFlow };
+export { flowToWorkflow, workflowToFlow };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>
