@@ -33,6 +33,8 @@
         { "$ref": "#/$defs/nodePrompt" },
         { "$ref": "#/$defs/nodeEval" },
         { "$ref": "#/$defs/nodeCondition" },
+        { "$ref": "#/$defs/nodeSwitch" },
+        { "$ref": "#/$defs/nodeSplit" },
         { "$ref": "#/$defs/nodeClassify" },
         { "$ref": "#/$defs/nodeAgent" },
         { "$ref": "#/$defs/nodeA2A" },
@@ -71,6 +73,20 @@
       "allOf": [
         { "$ref": "#/$defs/nodeBase" },
         { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "condition" }, "config": { "$ref": "#/$defs/conditionConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeSwitch": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key", "config"], "properties": { "kind": { "const": "switch" }, "config": { "$ref": "#/$defs/switchConfig" } } }
+      ],
+      "unevaluatedProperties": false
+    },
+    "nodeSplit": {
+      "allOf": [
+        { "$ref": "#/$defs/nodeBase" },
+        { "required": ["id", "kind", "output_key"], "properties": { "kind": { "const": "split" }, "config": { "$ref": "#/$defs/splitConfig" } } }
       ],
       "unevaluatedProperties": false
     },
@@ -174,6 +190,24 @@
         { "required": ["expression_file"], "not": { "required": ["expression"] } }
       ]
     },
+    "switchConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "language": { "const": "python" },
+        "expression": { "type": "string", "minLength": 1 },
+        "expression_file": { "type": "string", "minLength": 1 },
+        "inputs": { "$ref": "#/$defs/inputMap" },
+        "retry": { "$ref": "#/$defs/retryPolicy" },
+        "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
+        "cache": { "$ref": "#/$defs/cachePolicy" }
+      },
+      "oneOf": [
+        { "required": ["expression"], "not": { "required": ["expression_file"] } },
+        { "required": ["expression_file"], "not": { "required": ["expression"] } }
+      ]
+    },
+    "splitConfig": { "type": "object", "additionalProperties": false },
     "classifyConfig": {
       "type": "object",
       "additionalProperties": false,
