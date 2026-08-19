@@ -164,6 +164,7 @@
         "expression": { "type": "string", "minLength": 1 },
         "expression_file": { "type": "string", "minLength": 1 },
         "inputs": { "$ref": "#/$defs/inputMap" },
+        "defaults": { "type": "object", "description": "Per-input fallback used when that input's own path is missing from state -- lets an expression work seedless on its first visit, e.g. an iteration counter reading its own not-yet-written prior output." },
         "retry": { "$ref": "#/$defs/retryPolicy" },
         "timeout": { "type": "number", "minimum": 0, "description": "Seconds before this node is abandoned, overriding settings.timeout. 0 disables the limit." },
         "cache": { "$ref": "#/$defs/cachePolicy" }

@@ -293,13 +293,19 @@ def resolve_data_path(data: dict[str, Any], path: str) -> Any:
 
 
 def _resolve_inputs(
-    node_id: str, inputs_config: dict[str, str], data: dict[str, Any]
+    node_id: str,
+    inputs_config: dict[str, str],
+    data: dict[str, Any],
+    defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     namespace: dict[str, Any] = {}
     for local_name, path in inputs_config.items():
         try:
             namespace[local_name] = resolve_data_path(data, path)
         except KeyError as exc:
+            if defaults is not None and local_name in defaults:
+                namespace[local_name] = defaults[local_name]
+                continue
             raise KeyError(f"node {node_id}: {exc}") from exc
     return namespace
 
@@ -438,10 +444,11 @@ def _build_eval_node(node: RoutineNode) -> Any:
     if not expression:
         raise ValueError(f"eval node {node.id}: config needs 'expression'")
     inputs_config = config.get("inputs") or {}
+    defaults = config.get("defaults") or {}
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
-        namespace = _resolve_inputs(node.id, inputs_config, data)
+        namespace = _resolve_inputs(node.id, inputs_config, data, defaults)
         result = evaluate_expression(expression, namespace)
         return {"data": {output_key: result}}
 

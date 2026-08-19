@@ -332,6 +332,78 @@ async def test_loop_guard_routes_false_result_without_running_guarded_target() -
 
 
 @pytest.mark.asyncio
+async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_guard() -> None:
+    """The pattern AgentGraph.jsx's `insertAt` auto-wires for a fresh Loop:
+    start -> tail(eval, self-incrementing) -> (guard) -> start, exiting once
+    the guard's own bound is reached. There is no dedicated counter node --
+    `eval`'s `config.defaults` lets its own `inputs` resolution fall back to
+    0 instead of raising, specifically so the same expression node can read
+    its own not-yet-written prior output on its first visit."""
+    routine = graph(
+        {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
+        {
+            "id": "tail",
+            "kind": "eval",
+            "output_key": "tail",
+            "config": {
+                "expression": "tail + 1",
+                "inputs": {"tail": "tail"},
+                "defaults": {"tail": 0},
+            },
+        },
+        {"id": "after", "kind": "eval", "output_key": "after", "config": {"expression": "'done'"}},
+        edges=[
+            {"from": "start", "to": "tail", "level": "normal"},
+            {
+                "from": "tail",
+                "to": "start",
+                "level": "normal",
+                "loop_guard": {
+                    "expression": "tail < 3",
+                    "inputs": {"tail": "tail"},
+                    "on_false": "after",
+                },
+            },
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")], "data": {}}
+    )
+
+    assert result["data"]["tail"] == 3
+    assert result["data"]["after"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_eval_node_default_only_applies_when_the_input_path_is_missing() -> None:
+    """The fallback in `config.defaults` must not mask a genuinely present
+    value -- it only fires when `resolve_data_path` would otherwise raise."""
+    routine = graph(
+        {
+            "id": "hits",
+            "kind": "eval",
+            "output_key": "hits",
+            "config": {
+                "expression": "hits + 1",
+                "inputs": {"hits": "hits"},
+                "defaults": {"hits": 0},
+            },
+        },
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")], "data": {}}
+    )
+
+    assert result["data"]["hits"] == 1
+
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")], "data": {"hits": 5}}
+    )
+
+    assert result["data"]["hits"] == 6
+
+
+@pytest.mark.asyncio
 async def test_foreach_agent_caps_items_and_collects_ordered_results() -> None:
     worker = FakeObjectAgent()
     routine = graph(
