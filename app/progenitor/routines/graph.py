@@ -115,6 +115,15 @@ class EvalNodeConfig(BaseModel):
     expression: str | None = None
     expression_file: str | None = None
     inputs: dict[str, str] = Field(default_factory=dict)
+    # Per-input fallback used when `resolve_data_path` would otherwise raise
+    # for that leg -- the strict KeyError-on-missing behavior exists to
+    # catch author typos, but a node whose expression legitimately needs to
+    # work seedless on its first visit (e.g. an iteration counter reading
+    # its own not-yet-written prior output) needs an escape hatch. Scoped to
+    # `eval` only: `condition`/`switch`/`loop_guard` never hit this case,
+    # since anything they'd reference is always written earlier in the same
+    # visit.
+    defaults: dict[str, Any] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
