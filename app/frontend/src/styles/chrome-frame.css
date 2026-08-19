@@ -7211,6 +7211,30 @@ body,
   letter-spacing: 0.02em;
 }
 
+/* Inputs autocomplete: reuses .app-listbox__panel/__list/__option's chrome
+   (background/border/shadow/hover state), but position/top/left are set
+   inline per keystroke from real caret coordinates, so the CSS here only
+   adds what the base listbox doesn't need for a button-triggered panel. */
+.agents-graph-node__inputs-menu {
+  z-index: var(--z-tooltip, 1100);
+  max-width: 280px;
+}
+
+.agents-graph-node__inputs-menu .app-listbox__option-label {
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  color: var(--node-color, var(--color-text-primary));
+}
+
+.agents-graph-node__inputs-menu-source {
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agents-graph-node__routing {
   display: flex;
   flex-direction: column;

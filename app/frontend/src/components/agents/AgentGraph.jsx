@@ -9,6 +9,7 @@ import {
   useState,
 } from 'react';
 import { useSelector } from 'react-redux';
+import { createPortal } from 'react-dom';
 import Select from '../common/Select';
 import { selectAgentProfiles } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
@@ -459,16 +460,234 @@ function textToInputs(text) {
   return result;
 }
 
-function InputsField({ id, config, updateNodeConfig }) {
+const EMPTY_SUGGESTIONS = [];
+
+// Where does the "path" token being typed on a `name: path` line start/end,
+// and does it warrant a whole `name: path` line vs just the trailing path
+// segment? Two trigger shapes, both requiring at least one already-typed
+// character (an empty query never opens the menu):
+//  - `mode: 'path'`  -- the line already has a colon; only the fragment
+//    after it (and any single leading space) is the query, and only that
+//    fragment gets replaced on accept.
+//  - `mode: 'line'`  -- no colon on the line yet (a fresh line, or one the
+//    author started typing a path into directly); the whole line is the
+//    query, and accepting fills in a generated `name: ` prefix too.
+// eslint-disable-next-line react-refresh/only-export-components
+export function getInputsAutocompleteContext(text, caret) {
+  if (typeof text !== 'string') return null;
+  const position = Number.isFinite(caret) ? caret : text.length;
+  const lineStart = text.lastIndexOf('\n', position - 1) + 1;
+  const line = text.slice(lineStart, position);
+  const afterColon = line.match(/:\s*([A-Za-z0-9_.]*)$/);
+  if (afterColon && afterColon[1]) {
+    const tokenStart = lineStart + line.length - afterColon[1].length;
+    return { query: afterColon[1], tokenStart, tokenEnd: position, replaceStart: tokenStart, mode: 'path' };
+  }
+  if (!line.includes(':')) {
+    const bare = line.match(/([A-Za-z0-9_.]*)$/);
+    if (bare && bare[1]) {
+      const tokenStart = lineStart + line.length - bare[1].length;
+      return { query: bare[1], tokenStart, tokenEnd: position, replaceStart: lineStart, mode: 'line' };
+    }
+  }
+  return null;
+}
+
+// `startsWith` matches first, `includes` matches after, both case-
+// insensitive against the dotted path text (not the display source/label).
+// eslint-disable-next-line react-refresh/only-export-components
+export function filterInputSuggestions(suggestions, query) {
+  const q = (query || '').toLowerCase();
+  return suggestions
+    .filter((item) => item.path.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const aStarts = a.path.toLowerCase().startsWith(q) ? 0 : 1;
+      const bStarts = b.path.toLowerCase().startsWith(q) ? 0 : 1;
+      return aStarts - bStarts;
+    });
+}
+
+const MIRROR_STYLE_PROPS = [
+  'boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+  'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+  'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight',
+  'textTransform', 'wordSpacing', 'tabSize', 'whiteSpace', 'wordWrap', 'overflowWrap',
+];
+
+// A <textarea> exposes no native API for "where on screen is character N" --
+// the standard workaround (same technique as the "textarea-caret-position"
+// pattern) is an offscreen div mirroring the textarea's exact box/font
+// metrics, filled with the text up to `position`, whose trailing marker
+// span's offset IS that position. Only invoked while the menu is open, not
+// on every keystroke.
+function getCaretCoordinates(textarea, position) {
+  const div = document.createElement('div');
+  const style = window.getComputedStyle(textarea);
+  MIRROR_STYLE_PROPS.forEach((prop) => { div.style[prop] = style[prop]; });
+  div.style.position = 'absolute';
+  div.style.visibility = 'hidden';
+  div.style.top = '0';
+  div.style.left = '-9999px';
+  div.style.whiteSpace = 'pre-wrap';
+  div.style.wordWrap = 'break-word';
+  div.style.overflowWrap = 'break-word';
+  document.body.appendChild(div);
+  div.textContent = textarea.value.slice(0, position);
+  const marker = document.createElement('span');
+  marker.textContent = textarea.value.slice(position) || '.';
+  div.appendChild(marker);
+  const coords = { top: marker.offsetTop, left: marker.offsetLeft, height: marker.offsetHeight || parseFloat(style.lineHeight) || 16 };
+  document.body.removeChild(div);
+  return coords;
+}
+
+// Caret-anchored, keeps focus in the textarea throughout (onMouseDown
+// preventDefault on every option -- a real mousedown would blur the
+// textarea before the click landed, closing the menu out from under it).
+function InputSuggestionsMenu({ items, activeIndex, position, onHover, onSelect }) {
+  if (!position) return null;
+  return createPortal(
+    <div className="app-listbox__panel agents-graph-node__inputs-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
+      <ul className="app-listbox__list" role="listbox" aria-label="State path suggestions">
+        {items.map((item, index) => (
+          <li key={item.path} role="option" aria-selected={index === activeIndex} data-index={index}>
+            <button
+              type="button"
+              className={`app-listbox__option ${index === activeIndex ? 'is-active' : ''}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => onHover(index)}
+              onClick={() => onSelect(item)}
+            >
+              <span className="app-listbox__option-label">{item.path}</span>
+              <span className="agents-graph-node__inputs-menu-source">{item.source}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>,
+    document.body,
+  );
+}
+
+// `autocomplete` opts a call site into the caret-anchored path menu (eval/
+// condition/switch config today; agent config and Loop's loop_guard reuse
+// this same field without it for now). `text` is a local buffer, not a
+// derivation of `config.inputs` on every render -- `textToInputs` silently
+// drops any line that doesn't have a colon yet (that's how it recognizes
+// "not a real entry"), so deriving the textarea's value straight from
+// `inputsToText(textToInputs(rawText))` on every keystroke would erase an
+// in-progress, colon-less line the instant it re-rendered. The buffer resets
+// from `config.inputs` only when `id` changes (a different node is now
+// selected) or `config.inputs` changed for a reason other than this field's
+// own last edit (e.g. the "Edit as JSON" panel) -- tracked by comparing
+// object identity against what this field itself last emitted.
+function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
+  const graph = useContext(GraphEditContext);
+  const [trackedId, setTrackedId] = useState(id);
+  const [trackedInputs, setTrackedInputs] = useState(config?.inputs);
+  const [text, setText] = useState(() => inputsToText(config?.inputs));
+  if (trackedId !== id || config?.inputs !== trackedInputs) {
+    setTrackedId(id);
+    setTrackedInputs(config?.inputs);
+    const nextText = inputsToText(config?.inputs);
+    if (nextText !== text) setText(nextText);
+  }
+
+  const textareaRef = useRef(null);
+  const [caret, setCaret] = useState(0);
+  const [rawActiveIndex, setRawActiveIndex] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState(null);
+  const [panelPos, setPanelPos] = useState(null);
+
+  const suggestions = useMemo(
+    () => (autocomplete ? buildInputSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
+    [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
+  );
+  const context = useMemo(
+    () => (autocomplete ? getInputsAutocompleteContext(text, caret) : null),
+    [autocomplete, text, caret],
+  );
+  const filtered = useMemo(
+    () => (context ? filterInputSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
+    [suggestions, context],
+  );
+  const activeIndex = filtered.length ? ((rawActiveIndex % filtered.length) + filtered.length) % filtered.length : 0;
+  const menuOpen = !!context && filtered.length > 0 && dismissedAt !== context.tokenStart;
+
+  useLayoutEffect(() => {
+    if (!menuOpen || !textareaRef.current) return;
+    const rect = textareaRef.current.getBoundingClientRect();
+    const coords = getCaretCoordinates(textareaRef.current, context.tokenStart);
+    setPanelPos({
+      top: rect.top - textareaRef.current.scrollTop + coords.top + coords.height + 4,
+      left: rect.left - textareaRef.current.scrollLeft + coords.left,
+    });
+  }, [menuOpen, context?.tokenStart, text]);
+
+  function commitText(nextText) {
+    setText(nextText);
+    const parsed = textToInputs(nextText);
+    setTrackedInputs(parsed);
+    updateNodeConfig(id, { inputs: parsed });
+  }
+
+  function accept(item) {
+    if (!item || !context) return;
+    const insertion = context.mode === 'line' ? `${item.name}: ${item.path}` : item.path;
+    const nextText = `${text.slice(0, context.replaceStart)}${insertion}${text.slice(context.tokenEnd)}`;
+    const nextCaret = context.replaceStart + insertion.length;
+    commitText(nextText);
+    setDismissedAt(null);
+    setRawActiveIndex(0);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(nextCaret, nextCaret);
+      setCaret(nextCaret);
+    });
+  }
+
+  function handleKeyDown(event) {
+    if (!menuOpen) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setRawActiveIndex((current) => current + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setRawActiveIndex((current) => current - 1);
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      accept(filtered[activeIndex]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setDismissedAt(context.tokenStart);
+    }
+  }
+
+  const syncCaret = (event) => setCaret(event.target.selectionStart);
+
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
       <textarea
+        ref={textareaRef}
         className="agents-graph-node__prompt"
-        value={inputsToText(config?.inputs)}
+        value={text}
         placeholder="host: parse_json.host"
-        onChange={(event) => updateNodeConfig(id, { inputs: textToInputs(event.target.value) })}
+        onChange={(event) => {
+          commitText(event.target.value);
+          setCaret(event.target.selectionStart);
+        }}
+        onKeyDown={handleKeyDown}
+        onKeyUp={syncCaret}
+        onClick={syncCaret}
+        onBlur={() => setDismissedAt(context?.tokenStart ?? null)}
       />
+      {menuOpen ? (
+        <InputSuggestionsMenu items={filtered} activeIndex={activeIndex} position={panelPos} onHover={setRawActiveIndex} onSelect={accept} />
+      ) : null}
     </label>
   );
 }
@@ -614,7 +833,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
     return (
       <>
         <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} />
-        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
+        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} autocomplete />
       </>
     );
   }
@@ -1180,6 +1399,72 @@ export function reachableFrom(entry, edges) {
   };
   visit(entry);
   return reachable;
+}
+
+// The reverse of `reachableFrom`: every node whose output could have run
+// before `nodeId` on SOME path through the graph -- used to offer Inputs
+// autocomplete candidates. Deliberately excludes error edges (isFlowEdge)
+// unlike `reachableFrom`: a node only reachable via a recovery path isn't a
+// normal-path predecessor an author should be pointed at by an autocomplete
+// menu. This is a superset, not a soundness proof -- graph reachability
+// can't tell "always ran before you" from "reachable on some branch/loop
+// path", so a branch sibling or a not-yet-taken loop pass can still show up
+// even though it may not actually be populated at runtime. Cheaper to over-
+// suggest a sometimes-absent name than to hide a valid one.
+// eslint-disable-next-line react-refresh/only-export-components
+export function predecessorsOf(nodeId, edges) {
+  const flowEdges = (edges || []).filter(isFlowEdge);
+  const predecessors = new Set();
+  const visit = (id) => {
+    flowEdges.forEach((edge) => {
+      const targets = edge.router
+        ? routerTargets(edge)
+        : [...edgeTargetIds(edge), ...(edge.loop_guard?.on_false ? [edge.loop_guard.on_false] : [])];
+      if (!targets.includes(id)) return;
+      edgeSourceIds(edge).forEach((src) => {
+        if (!src || src === nodeId || predecessors.has(src)) return;
+        predecessors.add(src);
+        visit(src);
+      });
+    });
+  };
+  visit(nodeId);
+  return predecessors;
+}
+
+// The candidate `inputs` paths a node at `nodeId` could point at: the routine's
+// own declared invocation inputs, the two always-seeded keys, and every
+// predecessor's output key -- plus, for a predecessor carrying a
+// `response_schema` (Select/classify always; prompt/agent when authored with
+// one), a `<output_key>.<property>` entry per schema field, since
+// `resolve_data_path` already walks nested dicts (`app/progenitor/routines/
+// factory.py`'s `_resolve_inputs`) with no synthetic flattening needed.
+// `eval`/`switch`/`condition` predecessors offer only their bare key -- their
+// result has no declared shape to drill into.
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildInputSuggestions(nodeId, nodes, edges, inputSchema) {
+  const nodesById = new Map((nodes || []).map((node) => [node.id, node]));
+  const seen = new Set();
+  const suggestions = [];
+  const add = (path, entry) => {
+    if (seen.has(path)) return;
+    seen.add(path);
+    suggestions.push({ path, name: path.includes('.') ? path.slice(path.lastIndexOf('.') + 1) : path, ...entry });
+  };
+  add('request', { source: 'Seeded', hint: 'the routine invocation request' });
+  add('context', { source: 'Seeded', hint: 'accumulated context' });
+  Object.keys(inputSchema || {}).forEach((name) => add(name, { source: 'Routine input', hint: inputSchema[name] }));
+  predecessorsOf(nodeId, edges).forEach((id) => {
+    const node = nodesById.get(id);
+    if (!node) return;
+    const source = node.label || node.id;
+    add(node.id, { source, kind: node.kind });
+    const properties = node.config?.response_schema?.properties;
+    if (properties && typeof properties === 'object') {
+      Object.keys(properties).forEach((prop) => add(`${node.id}.${prop}`, { source, kind: node.kind, hint: properties[prop]?.type }));
+    }
+  });
+  return suggestions;
 }
 
 // Drop every trace of `removed`: edges into them go, edges out of them go, and
@@ -2347,7 +2632,9 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRenameBranch,
     settings: meta.settings,
     edges,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
+    nodes,
+    inputSchema: meta.input_schema,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges, nodes, meta.input_schema]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
