@@ -6925,6 +6925,83 @@ body,
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--node-color) 22%, transparent);
 }
 
+/* Expression field: a transparent <textarea> over a highlight.js <pre>, same
+   technique as .agents-graph-editor__code, sized to match
+   .agents-graph-node__prompt's box metrics so it drops into the same layout. */
+.agents-graph-node__expr {
+  position: relative;
+  min-height: 52px;
+  max-height: 120px;
+}
+
+.agents-graph-node__expr-highlight,
+.agents-graph-node__expr-textarea {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 52px;
+  max-height: 120px;
+  padding: 6px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.4;
+  tab-size: 2;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+}
+
+.agents-graph-node__expr-highlight {
+  position: absolute;
+  inset: 0;
+  background: var(--color-bg-primary);
+  pointer-events: none;
+}
+
+.agents-graph-node__expr-highlight code.hljs {
+  padding: 0;
+  background: transparent;
+  font: inherit;
+}
+
+.agents-graph-node__expr-textarea {
+  position: relative;
+  resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--color-text-secondary);
+}
+
+.agents-graph-node__expr-textarea::selection {
+  background: var(--color-accent-soft);
+}
+
+.agents-graph-node__expr-textarea:focus {
+  outline: none;
+}
+
+.agents-graph-node__expr:focus-within {
+  border-radius: 7px;
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--node-color) 22%, transparent);
+}
+
+.agents-graph-node__expr:focus-within .agents-graph-node__expr-highlight,
+.agents-graph-node__expr:focus-within .agents-graph-node__expr-textarea {
+  border-color: color-mix(in oklab, var(--node-color) 55%, var(--color-border));
+}
+
+.agents-graph-node__expr.agents-graph-node__input--required .agents-graph-node__expr-highlight,
+.agents-graph-node__expr.agents-graph-node__input--required .agents-graph-node__expr-textarea {
+  border-color: color-mix(in oklab, var(--color-warning, #d29922) 55%, var(--color-border));
+  background: color-mix(in oklab, var(--color-warning, #d29922) 7%, transparent);
+}
+
+.agents-graph-node__expr.agents-graph-node__input--required .agents-graph-node__expr-highlight {
+  background: color-mix(in oklab, var(--color-warning, #d29922) 7%, var(--color-bg-primary));
+}
+
 /* Save status chip in the floating header. */
 .agents-graph-floating .agents-graph-save--saving { color: var(--color-text-muted); }
 .agents-graph-floating .agents-graph-save--saved { color: var(--color-success, #22c55e); }
@@ -7305,6 +7382,12 @@ body,
 }
 
 .routine-node-inspector__body .agents-graph-node__prompt {
+  min-height: 72px;
+}
+
+.routine-node-inspector__body .agents-graph-node__expr,
+.routine-node-inspector__body .agents-graph-node__expr-highlight,
+.routine-node-inspector__body .agents-graph-node__expr-textarea {
   min-height: 72px;
 }
 

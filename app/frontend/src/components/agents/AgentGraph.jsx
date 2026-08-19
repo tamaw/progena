@@ -315,6 +315,55 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
   );
 }
 
+// `expression` fields (eval/condition/switch config, Loop's loop_guard) hold a
+// restricted Python expression -- worth highlighting the same way the "Edit as
+// JSON" panel does: a transparent <textarea> stacked over a highlight.js
+// `<pre>` so syntax colors show through while the caret still lands in a real,
+// editable, screen-reader-visible textarea underneath.
+function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  const missing = useContext(MissingFieldsContext);
+  const value = config?.[field] || '';
+  const required = missing.has(field);
+  const highlightRef = useRef(null);
+  const highlighted = useMemo(() => {
+    try {
+      return hljs.highlight(value, { language: 'python' }).value;
+    } catch {
+      return value;
+    }
+  }, [value]);
+  const onChange = (event) => updateNodeConfig(id, { [field]: event.target.value });
+  function syncScroll(event) {
+    const target = highlightRef.current;
+    if (target) {
+      target.scrollTop = event.target.scrollTop;
+      target.scrollLeft = event.target.scrollLeft;
+    }
+  }
+  return (
+    <label className={`agents-graph-node__field${required ? ' agents-graph-node__field--required' : ''}`}>
+      <span className="agents-graph-node__field-label">
+        {label}
+        {required ? <span className="agents-graph-node__required" title="Required before this routine can be saved">Required</span> : null}
+      </span>
+      <div className={`agents-graph-node__expr${required ? ' agents-graph-node__input--required' : ''}`}>
+        <pre ref={highlightRef} className="agents-graph-node__expr-highlight" aria-hidden="true">
+          <code className="hljs language-python" dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
+        </pre>
+        <textarea
+          className="agents-graph-node__expr-textarea"
+          value={value}
+          placeholder={placeholder}
+          onChange={onChange}
+          onScroll={syncScroll}
+          spellCheck={false}
+          aria-required={required || undefined}
+        />
+      </div>
+    </label>
+  );
+}
+
 // `agent_name` field for the `agent`/`a2a`/foreach-agent-mode node kinds: a
 // searchable dropdown over the live agent roster (redux `agents.snapshot`)
 // instead of a free-text box the author has to get exactly right by hand.
@@ -530,7 +579,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
   if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
       <>
-        <ConfigField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" multiline updateNodeConfig={updateNodeConfig} />
+        <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} />
         <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} />
       </>
     );
@@ -806,7 +855,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
         ) : null}
         {guardEdge ? (
           <>
-            <ConfigField id={node.id} config={guardConfig} field="expression" label="Continue while" placeholder="e.g. attempt < 3" multiline updateNodeConfig={handleGuardConfig} />
+            <ExpressionField id={node.id} config={guardConfig} field="expression" label="Continue while" placeholder="e.g. attempt < 3" updateNodeConfig={handleGuardConfig} />
             <InputsField id={node.id} config={guardConfig} updateNodeConfig={handleGuardConfig} />
           </>
         ) : null}
