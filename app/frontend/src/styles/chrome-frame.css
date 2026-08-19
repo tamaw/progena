@@ -6935,6 +6935,7 @@ body,
 }
 
 .agents-graph-node__expr-highlight,
+.agents-graph-node__expr-error,
 .agents-graph-node__expr-textarea {
   margin: 0;
   width: 100%;
@@ -6953,11 +6954,39 @@ body,
   overflow: auto;
 }
 
-.agents-graph-node__expr-highlight {
+.agents-graph-node__expr-highlight,
+.agents-graph-node__expr-error {
   position: absolute;
   inset: 0;
-  background: var(--color-bg-primary);
   pointer-events: none;
+}
+
+.agents-graph-node__expr-highlight {
+  background: var(--color-bg-primary);
+}
+
+.agents-graph-node__expr-error {
+  color: transparent;
+}
+
+.agents-graph-node__expr-error-span {
+  color: transparent;
+  text-decoration-line: underline;
+  text-decoration-style: wavy;
+  text-decoration-color: var(--color-error, #ef4444);
+  text-underline-offset: 2px;
+}
+
+.agents-graph-node__expr--invalid .agents-graph-node__expr-highlight,
+.agents-graph-node__expr--invalid .agents-graph-node__expr-textarea {
+  border-color: color-mix(in oklab, var(--color-error, #ef4444) 45%, var(--color-border));
+}
+
+.agents-graph-node__expr-error-hint {
+  margin-top: 2px;
+  color: var(--color-error, #ef4444);
+  font-size: 10.5px;
+  font-family: var(--font-family-mono);
 }
 
 .agents-graph-node__expr-highlight code.hljs {
@@ -7387,6 +7416,7 @@ body,
 
 .routine-node-inspector__body .agents-graph-node__expr,
 .routine-node-inspector__body .agents-graph-node__expr-highlight,
+.routine-node-inspector__body .agents-graph-node__expr-error,
 .routine-node-inspector__body .agents-graph-node__expr-textarea {
   min-height: 72px;
 }
