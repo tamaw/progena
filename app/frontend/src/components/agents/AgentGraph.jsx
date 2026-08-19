@@ -12,6 +12,7 @@ import { useSelector } from 'react-redux';
 import Select from '../common/Select';
 import { selectAgentProfiles } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
+import { checkExpressionSyntax } from '../../lib/restrictedExpression';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
 // The Routines graph itself is NOT a free canvas though (see rationale below),
@@ -19,6 +20,13 @@ import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIc
 import '../../styles/canvas.css';
 import '../../styles/nodes.css';
 import hljs from 'highlight.js/lib/common';
+
+// Escapes `text` for use inside a `dangerouslySetInnerHTML` layer -- only the
+// three characters that change HTML parsing matter here (this never lands in
+// an attribute), unlike markdown.js's escapeHtml which also escapes quotes.
+function escapeHtmlText(text) {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 // A routine graph is compiled straight into a runnable LangGraph agent: node
 // position on screen carries no meaning (there's no "x"/"y" in the schema),
@@ -319,12 +327,18 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
 // restricted Python expression -- worth highlighting the same way the "Edit as
 // JSON" panel does: a transparent <textarea> stacked over a highlight.js
 // `<pre>` so syntax colors show through while the caret still lands in a real,
-// editable, screen-reader-visible textarea underneath.
+// editable, screen-reader-visible textarea underneath. A second, equally
+// transparent `<pre>` sits between the two: same text, but every character is
+// `color: transparent` except the span `checkExpressionSyntax` flags as the
+// first construct outside `expression.py`'s whitelist, which gets a red wavy
+// underline via `text-decoration-color` (independent of the (transparent)
+// text color, so the squiggly shows without a second copy of the glyphs).
 function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig }) {
   const missing = useContext(MissingFieldsContext);
   const value = config?.[field] || '';
   const required = missing.has(field);
   const highlightRef = useRef(null);
+  const errorLayerRef = useRef(null);
   const highlighted = useMemo(() => {
     try {
       return hljs.highlight(value, { language: 'python' }).value;
@@ -332,12 +346,24 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
       return value;
     }
   }, [value]);
+  const issue = useMemo(() => checkExpressionSyntax(value), [value]);
+  const errorHtml = useMemo(() => {
+    if (issue.ok) return null;
+    const before = escapeHtmlText(value.slice(0, issue.start));
+    const flagged = escapeHtmlText(value.slice(issue.start, issue.end)) || ' ';
+    const after = escapeHtmlText(value.slice(issue.end));
+    return `${before}<span class="agents-graph-node__expr-error-span">${flagged}</span>${after}\n`;
+  }, [issue, value]);
   const onChange = (event) => updateNodeConfig(id, { [field]: event.target.value });
   function syncScroll(event) {
-    const target = highlightRef.current;
-    if (target) {
-      target.scrollTop = event.target.scrollTop;
-      target.scrollLeft = event.target.scrollLeft;
+    const { scrollTop, scrollLeft } = event.target;
+    if (highlightRef.current) {
+      highlightRef.current.scrollTop = scrollTop;
+      highlightRef.current.scrollLeft = scrollLeft;
+    }
+    if (errorLayerRef.current) {
+      errorLayerRef.current.scrollTop = scrollTop;
+      errorLayerRef.current.scrollLeft = scrollLeft;
     }
   }
   return (
@@ -346,10 +372,16 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
         {label}
         {required ? <span className="agents-graph-node__required" title="Required before this routine can be saved">Required</span> : null}
       </span>
-      <div className={`agents-graph-node__expr${required ? ' agents-graph-node__input--required' : ''}`}>
+      <div
+        className={`agents-graph-node__expr${required ? ' agents-graph-node__input--required' : ''}${issue.ok ? '' : ' agents-graph-node__expr--invalid'}`}
+        title={issue.ok ? undefined : issue.message}
+      >
         <pre ref={highlightRef} className="agents-graph-node__expr-highlight" aria-hidden="true">
           <code className="hljs language-python" dangerouslySetInnerHTML={{ __html: `${highlighted}\n` }} />
         </pre>
+        {errorHtml ? (
+          <pre ref={errorLayerRef} className="agents-graph-node__expr-error" aria-hidden="true" dangerouslySetInnerHTML={{ __html: errorHtml }} />
+        ) : null}
         <textarea
           className="agents-graph-node__expr-textarea"
           value={value}
@@ -358,8 +390,10 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
           onScroll={syncScroll}
           spellCheck={false}
           aria-required={required || undefined}
+          aria-invalid={issue.ok ? undefined : true}
         />
       </div>
+      {issue.ok ? null : <span className="agents-graph-node__expr-error-hint" role="alert">{issue.message}</span>}
     </label>
   );
 }
