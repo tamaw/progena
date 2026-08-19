@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
+  buildInputSuggestions,
+  filterInputSuggestions,
   forkJoin,
   forkLaneEdgePosition,
+  getInputsAutocompleteContext,
   incompleteLoopEdges,
   incompleteNodes,
   isFlowEdge,
@@ -11,6 +14,7 @@ import {
   joinTerminals,
   missingRequirements,
   missingRequiredConfig,
+  predecessorsOf,
   reachableFrom,
   removeForkBranch,
   removeForkDefault,
@@ -670,5 +674,140 @@ describe('reachableFrom with loop_guard edges', () => {
       { from: 'tail', to: 'a', level: 'normal', loop_guard: { expression: 'x', inputs: {} } },
     ];
     expect(() => reachableFrom('a', edges)).not.toThrow();
+  });
+});
+
+describe('predecessorsOf', () => {
+  it('walks a straight chain backward', () => {
+    const edges = [
+      { from: 'a', to: 'b', level: 'normal' },
+      { from: 'b', to: 'c', level: 'normal' },
+    ];
+    const predecessors = predecessorsOf('c', edges);
+    expect(predecessors.has('a')).toBe(true);
+    expect(predecessors.has('b')).toBe(true);
+  });
+
+  it('never includes the node itself, even inside a loop cycle', () => {
+    const edges = [
+      { from: 'start', to: 'tail', level: 'normal' },
+      { from: 'tail', to: 'start', level: 'normal', loop_guard: { expression: 'x', inputs: {}, on_false: 'exit' } },
+    ];
+    const predecessors = predecessorsOf('start', edges);
+    expect(predecessors.has('start')).toBe(false);
+    expect(predecessors.has('tail')).toBe(true);
+  });
+
+  it('walks backward through a router edges branches', () => {
+    const edges = [
+      { from: 'router', router: true, branches: { yes: 'a', no: 'b' }, default: 'c' },
+    ];
+    expect(predecessorsOf('a', edges).has('router')).toBe(true);
+    expect(predecessorsOf('c', edges).has('router')).toBe(true);
+  });
+
+  it('excludes error-recovery edges from the predecessor set', () => {
+    const edges = [{ from: 'a', to: 'b', level: 'error' }];
+    expect(predecessorsOf('b', edges).has('a')).toBe(false);
+  });
+
+  it('walks backward through a fan-in edge with multiple sources', () => {
+    const edges = [{ from: ['a', 'b'], to: 'join', level: 'fan_in' }];
+    const predecessors = predecessorsOf('join', edges);
+    expect(predecessors.has('a')).toBe(true);
+    expect(predecessors.has('b')).toBe(true);
+  });
+});
+
+describe('buildInputSuggestions', () => {
+  const nodes = [
+    { id: 'classify_intent', kind: 'classify', label: 'Classify intent', config: { response_schema: { properties: { label: { type: 'string' }, confidence: { type: 'number' } } } } },
+    { id: 'compute_score', kind: 'eval', label: 'Compute score', config: {} },
+    { id: 'this_node', kind: 'condition', label: 'Gate', config: {} },
+  ];
+  const edges = [
+    { from: 'classify_intent', to: 'compute_score', level: 'normal' },
+    { from: 'compute_score', to: 'this_node', level: 'normal' },
+  ];
+
+  it('always offers the seeded keys and declared routine inputs first', () => {
+    const suggestions = buildInputSuggestions('this_node', nodes, edges, { host: 'target host' });
+    expect(suggestions.map((s) => s.path).slice(0, 3)).toEqual(['request', 'context', 'host']);
+  });
+
+  it('offers a bare key for a predecessor with no declared schema', () => {
+    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const paths = suggestions.map((s) => s.path);
+    expect(paths).toContain('compute_score');
+    expect(paths).not.toContain('compute_score.result');
+  });
+
+  it('drills into a predecessors response_schema properties', () => {
+    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const paths = suggestions.map((s) => s.path);
+    expect(paths).toContain('classify_intent');
+    expect(paths).toContain('classify_intent.label');
+    expect(paths).toContain('classify_intent.confidence');
+  });
+
+  it('derives the local alias name from the last dotted segment', () => {
+    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const label = suggestions.find((s) => s.path === 'classify_intent.label');
+    expect(label.name).toBe('label');
+    const bare = suggestions.find((s) => s.path === 'classify_intent');
+    expect(bare.name).toBe('classify_intent');
+  });
+
+  it('never suggests the node currently being edited', () => {
+    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    expect(suggestions.map((s) => s.path)).not.toContain('this_node');
+  });
+});
+
+describe('getInputsAutocompleteContext', () => {
+  it('returns null before any character is typed after the colon', () => {
+    expect(getInputsAutocompleteContext('host: ', 6)).toBeNull();
+    expect(getInputsAutocompleteContext('host:', 5)).toBeNull();
+  });
+
+  it('detects a path in progress after a colon (mode: path)', () => {
+    const context = getInputsAutocompleteContext('host: parse_j', 13);
+    expect(context).toMatchObject({ query: 'parse_j', mode: 'path', tokenEnd: 13 });
+    expect(context.tokenStart).toBe(6);
+  });
+
+  it('detects a bare token on a colonless line (mode: line)', () => {
+    const context = getInputsAutocompleteContext('clas', 4);
+    expect(context).toMatchObject({ query: 'clas', mode: 'line', tokenStart: 0, tokenEnd: 4, replaceStart: 0 });
+  });
+
+  it('only considers the current line, not earlier completed lines', () => {
+    const text = 'host: parse_json.host\ncla';
+    const context = getInputsAutocompleteContext(text, text.length);
+    expect(context).toMatchObject({ query: 'cla', mode: 'line' });
+    expect(context.tokenStart).toBe(text.indexOf('cla'));
+  });
+
+  it('returns null on a line with a colon but nothing typed after it, even mid-text', () => {
+    expect(getInputsAutocompleteContext('host: \nother line', 6)).toBeNull();
+  });
+});
+
+describe('filterInputSuggestions', () => {
+  const suggestions = [
+    { path: 'classify_intent.label', name: 'label' },
+    { path: 'classify_intent', name: 'classify_intent' },
+    { path: 'compute_score', name: 'compute_score' },
+  ];
+
+  it('filters by substring match on the path, case-insensitively', () => {
+    const filtered = filterInputSuggestions(suggestions, 'CLASS');
+    expect(filtered.map((s) => s.path)).toEqual(['classify_intent.label', 'classify_intent']);
+  });
+
+  it('ranks a startsWith match ahead of a mid-string match', () => {
+    const withMidMatch = [...suggestions, { path: 'x_compute_score', name: 'x_compute_score' }];
+    const filtered = filterInputSuggestions(withMidMatch, 'compute');
+    expect(filtered.map((s) => s.path)).toEqual(['compute_score', 'x_compute_score']);
   });
 });
