@@ -4,12 +4,14 @@ import {
   addForkLane,
   forkJoin,
   forkLaneEdgePosition,
+  incompleteLoopEdges,
   incompleteNodes,
   isFlowEdge,
   isNodeComplete,
   joinTerminals,
   missingRequirements,
   missingRequiredConfig,
+  reachableFrom,
   removeForkBranch,
   removeForkDefault,
   saveStatusWhenInSync,
@@ -518,7 +520,7 @@ describe('error edges in chain tree building', () => {
   });
 });
 
-// Select's response_schema is authored as one "name: type[, description]"
+// Select's response_schema is authored as one "name: type[ #description]"
 // line per field rather than hand-written JSON Schema -- textToSchemaFields
 // must produce a strict-mode-compatible schema (every field required,
 // additionalProperties: false), and schemaFieldsToText must read an existing
@@ -559,12 +561,22 @@ describe('textToSchemaFields', () => {
     });
   });
 
-  it('keeps the text after the first comma as the field description', () => {
-    expect(textToSchemaFields('summary: string, one sentence explaining why').properties.summary).toEqual({
+  it('keeps the text after the first "#" as the field description', () => {
+    expect(textToSchemaFields('summary: string #one sentence explaining why').properties.summary).toEqual({
       type: 'string',
       description: 'one sentence explaining why',
     });
   });
+
+  it('does not let a description split an enum(...) on its internal commas', () => {
+    const schema = textToSchemaFields('category: enum(billing, technical, other) #which team owns this');
+    expect(schema.properties.category).toEqual({
+      type: 'string',
+      enum: ['billing', 'technical', 'other'],
+      description: 'which team owns this',
+    });
+  });
+
 
   it('falls back an unrecognized type to string rather than emitting an invalid schema', () => {
     expect(textToSchemaFields('x: widget').properties.x).toEqual({ type: 'string' });
@@ -582,7 +594,7 @@ describe('textToSchemaFields', () => {
 
 describe('schemaFieldsToText', () => {
   it('round-trips a schema produced by textToSchemaFields back to the same field lines', () => {
-    const original = 'category: enum(billing, technical)\nisUrgent: boolean\nsummary: string, one sentence explaining why';
+    const original = 'category: enum(billing, technical)\nisUrgent: boolean\nsummary: string # one sentence explaining why';
     expect(schemaFieldsToText(textToSchemaFields(original))).toBe(original);
   });
 
@@ -594,5 +606,69 @@ describe('schemaFieldsToText', () => {
   it('returns empty text for a schema with no properties, e.g. the unset default {}', () => {
     expect(schemaFieldsToText({})).toBe('');
     expect(schemaFieldsToText(undefined)).toBe('');
+  });
+});
+
+// The Loop construct's own tail edge (see insertAt's `kind === 'loop'`
+// branch): a fresh loop starts with a blank `loop_guard.expression`, which
+// the backend's LoopGuardConfig rejects outright (min_length=1) -- this is
+// the gate that withholds autosave instead of sending an invalid payload.
+describe('incompleteLoopEdges', () => {
+  it('flags a loop_guard edge with a blank expression', () => {
+    const edges = [{ from: 'tail', to: 'loop', level: 'normal', loop_guard: { expression: '', inputs: {} } }];
+    expect(incompleteLoopEdges(edges)).toEqual(edges);
+  });
+
+  it('flags a loop_guard edge whose expression is only whitespace', () => {
+    const edges = [{ from: 'tail', to: 'loop', level: 'normal', loop_guard: { expression: '   ', inputs: {} } }];
+    expect(incompleteLoopEdges(edges)).toEqual(edges);
+  });
+
+  it('does not flag a loop_guard edge with a real expression', () => {
+    const edges = [{ from: 'tail', to: 'loop', level: 'normal', loop_guard: { expression: 'attempt < 3', inputs: {} } }];
+    expect(incompleteLoopEdges(edges)).toEqual([]);
+  });
+
+  it('ignores plain edges entirely', () => {
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(incompleteLoopEdges(edges)).toEqual([]);
+  });
+
+  it('handles an empty or missing edge list', () => {
+    expect(incompleteLoopEdges([])).toEqual([]);
+    expect(incompleteLoopEdges(undefined)).toEqual([]);
+  });
+});
+
+// A Loop's exit (`loop_guard.on_false`) is a second, real path out of the
+// tail -- UnreachableTray must not flag whatever it points at just because
+// the primary `to` (the loop's own start) is the only target a plain
+// normal edge usually has.
+describe('reachableFrom with loop_guard edges', () => {
+  it('treats loop_guard.on_false as reachable, not just the primary to', () => {
+    const edges = [
+      { from: 'a', to: 'tail', level: 'normal' },
+      { from: 'tail', to: 'a', level: 'normal', loop_guard: { expression: 'x', inputs: {}, on_false: 'exit' } },
+    ];
+    const reachable = reachableFrom('a', edges);
+    expect(reachable.has('exit')).toBe(true);
+  });
+
+  it('still reaches the loop body itself via the primary to', () => {
+    const edges = [
+      { from: 'a', to: 'tail', level: 'normal' },
+      { from: 'tail', to: 'a', level: 'normal', loop_guard: { expression: 'x', inputs: {} } },
+    ];
+    const reachable = reachableFrom('a', edges);
+    expect(reachable.has('a')).toBe(true);
+    expect(reachable.has('tail')).toBe(true);
+  });
+
+  it('does not choke on a loop_guard with no on_false at all', () => {
+    const edges = [
+      { from: 'a', to: 'tail', level: 'normal' },
+      { from: 'tail', to: 'a', level: 'normal', loop_guard: { expression: 'x', inputs: {} } },
+    ];
+    expect(() => reachableFrom('a', edges)).not.toThrow();
   });
 });

@@ -45,6 +45,7 @@ const GRAPH_NODE_KINDS = [
   { kind: 'a2a', label: 'A2A', icon: '⇄' },
   { kind: 'human', label: 'Human approval', icon: '⚑' },
   { kind: 'foreach', label: 'Each', icon: '⇉' },
+  { kind: 'loop', label: 'Loop', icon: '↺' },
   { kind: 'routine', label: 'Routine', icon: '⧉' },
   { kind: 'noop', label: 'Noop', icon: '·' },
 ];
@@ -60,6 +61,7 @@ const GRAPH_KIND_COLORS = {
   a2a: '#f97316',
   human: '#f43f5e',
   foreach: '#06b6d4',
+  loop: '#d29922',
   routine: '#8b5cf6',
   noop: '#6b7280',
 };
@@ -272,6 +274,15 @@ export function incompleteNodes(nodes) {
     .filter((entry) => entry.missing.length > 0);
 }
 
+// Backend's LoopGuardConfig requires a non-empty expression -- a fresh
+// Loop's tail starts blank (see insertAt), same "not saved yet" gate as an
+// Eval/Condition with an empty expression, just read off the edge instead
+// of a node's config.
+// eslint-disable-next-line react-refresh/only-export-components
+export function incompleteLoopEdges(edges) {
+  return (edges || []).filter((edge) => edge.loop_guard && !edge.loop_guard.expression?.trim());
+}
+
 // Edit callbacks shared with the card/branch renderers (avoids threading
 // mutable refs through node data, which React forbids reading during render).
 const GraphEditContext = createContext(null);
@@ -368,7 +379,7 @@ function textToInputs(text) {
 function InputsField({ id, config, updateNodeConfig }) {
   return (
     <label className="agents-graph-node__field">
-      <span className="agents-graph-node__field-label">Inputs (name: data.path)</span>
+      <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
       <textarea
         className="agents-graph-node__prompt"
         value={inputsToText(config?.inputs)}
@@ -381,7 +392,7 @@ function InputsField({ id, config, updateNodeConfig }) {
 
 // `classify`/`prompt`/`agent` nodes' response_schema is plain JSON Schema, but
 // authoring one by hand for a flat set of output fields is needless ceremony.
-// Edited as one "name: type[, description]" per line -- the same "name: value"
+// Edited as one "name: type[ #description]" per line -- the same "name: value"
 // convention as inputsToText/textToInputs above -- and converted to a strict
 // JSON Schema object (every field required, additionalProperties: false, since
 // that's what with_structured_output(method="json_schema", strict=True) needs).
@@ -415,7 +426,7 @@ export function schemaFieldsToText(schema) {
     if (Array.isArray(def?.enum)) typeText = `enum(${def.enum.join(', ')})`;
     else if (def?.type === 'array') typeText = `${def.items?.type || 'string'}[]`;
     else typeText = def?.type || 'string';
-    return def?.description ? `${name}: ${typeText}, ${def.description}` : `${name}: ${typeText}`;
+    return def?.description ? `${name}: ${typeText} # ${def.description}` : `${name}: ${typeText}`;
   }).join('\n');
 }
 
@@ -429,12 +440,9 @@ export function textToSchemaFields(text) {
     const name = line.slice(0, separator).trim();
     if (!name) return;
     const rest = line.slice(separator + 1).trim();
-    // enum(...) may itself contain commas, so its closing paren -- not the
-    // first comma in the line -- is what ends the type token.
-    const enumMatch = rest.match(/^(enum\([^)]*\))\s*,?\s*(.*)$/i);
-    const commaIndex = enumMatch ? -1 : rest.indexOf(',');
-    const typeRaw = enumMatch ? enumMatch[1] : (commaIndex === -1 ? rest : rest.slice(0, commaIndex));
-    const description = enumMatch ? enumMatch[2].trim() : (commaIndex === -1 ? '' : rest.slice(commaIndex + 1).trim());
+    const hashIndex = rest.indexOf('#');
+    const typeRaw = (hashIndex === -1 ? rest : rest.slice(0, hashIndex)).trim();
+    const description = hashIndex === -1 ? '' : rest.slice(hashIndex + 1).trim();
     const def = parseSchemaFieldType(typeRaw || 'string');
     properties[name] = description ? { ...def, description } : def;
     required.push(name);
@@ -449,7 +457,7 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
       <textarea
         className="agents-graph-node__prompt"
         value={schemaFieldsToText(config?.[field])}
-        placeholder={'category: enum(billing, technical, other)\nisUrgent: boolean\nsummary: string, one sentence explaining why'}
+        placeholder={'category: enum(billing, technical, other)\nsummary: string # one sentence recap of the request'}
         onChange={(event) => updateNodeConfig(id, { [field]: textToSchemaFields(event.target.value) })}
       />
     </label>
@@ -619,7 +627,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
     <div className="agents-graph-node__routing">
       <input
         className="agents-graph-node__toolinput"
-        placeholder="route on data.<key>"
+        placeholder="route on <key>"
         onChange={(event) => onChangeStateKey(id, event.target.value)}
       />
       <button type="button" className="agents-graph-node__unsplit" onClick={() => onRemoveBranching(id)} title="Remove branching">
@@ -631,18 +639,23 @@ function RoutingFooter({ id, kind, routerEdge }) {
 
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node }) {
-  const { selectNode, selectedNodeId } = useContext(GraphEditContext);
+  const { selectNode, selectedNodeId, edges } = useContext(GraphEditContext);
   // A step can arrive incomplete from the JSON editor or the runtime, not just
   // from the picker, so the chain has to say which one is holding the save.
   const incomplete = !isNodeComplete(node);
+  // A loop's start is a plain `noop` on the wire (see insertAt's `kind ===
+  // 'loop'` comment) -- styled as its own kind here purely for legibility,
+  // the same way it already gets its own picker entry and inspector badge.
+  const isLoopStart = edges.some((edge) => edge.loop_guard && edge.to === node.id);
+  const displayKind = isLoopStart ? 'loop' : node.kind;
   return (
     <div
-      className={`canvas-node agents-graph-node agents-graph-node--${node.kind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}${incomplete ? ' routine-step-card--incomplete' : ''}`}
+      className={`canvas-node agents-graph-node agents-graph-node--${displayKind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}${incomplete ? ' routine-step-card--incomplete' : ''}`}
       data-node-id={node.id}
-      style={{ '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+      style={{ '--node-color': GRAPH_KIND_COLORS[displayKind] || '#8b949e' }}
       role="button"
       tabIndex={0}
-      aria-label={`${node.label || node.id} ${GRAPH_KIND_LABELS[node.kind] || node.kind} step${incomplete ? ', incomplete' : ''}`}
+      aria-label={`${node.label || node.id} ${isLoopStart ? 'Loop' : (GRAPH_KIND_LABELS[node.kind] || node.kind)} step${incomplete ? ', incomplete' : ''}`}
       onClick={(event) => selectNode(node.id, event)}
       onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -652,7 +665,7 @@ function StepCard({ node }) {
       }}
     >
       <div className="node-title-bar routine-step-card__title">
-        <span className="node-type-icon"><KindIcon kind={node.kind} /></span>
+        <span className="node-type-icon"><KindIcon kind={displayKind} /></span>
         <span className="routine-step-card__copy">
           <strong className="routine-step-card__label">{node.label || node.id}</strong>
         </span>
@@ -664,8 +677,8 @@ function StepCard({ node }) {
 
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
-function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode } = useContext(GraphEditContext);
+function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
+  const { updateNode, deleteNode, updateLoopGuard } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
   const labelInputRef = useRef(null);
@@ -690,13 +703,22 @@ function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, pan
 
   if (!node) return null;
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
+  // A loop's expression/inputs live on its tail's edge (`loop_guard`), not
+  // on this node's own config -- there's no separate node kind for it (see
+  // insertAt's `kind === 'loop'` comment), so `config`/`updateNodeConfig`
+  // here are a shim over `updateLoopGuard` instead of `node.config`. Reuses
+  // ConfigField/InputsField exactly as Eval/Condition do; the guard just
+  // isn't state this node's own config actually holds.
+  const guardConfig = guardEdge?.loop_guard;
+  const handleGuardConfig = (_nodeId, patch) => updateLoopGuard(guardEdge.from, patch);
   const unmet = missingRequirements(node);
-  const missing = unmet.flat();
+  const guardIncomplete = guardEdge && !guardConfig.expression?.trim();
+  const missing = [...unmet.flat(), ...(guardIncomplete ? ['expression'] : [])];
   const missingSet = missing.length ? new Set(missing) : EMPTY_MISSING;
   // Held open until the step can actually be saved. Closing here would strand
   // an unsaveable step somewhere in the chain with the whole graph withheld
   // behind it, so the only ways out are filling the fields or deleting it.
-  const locked = unmet.length > 0;
+  const locked = unmet.length > 0 || guardIncomplete;
   const startLabelEdit = () => {
     setLabelDraft(node.label || '');
     setIsEditingLabel(true);
@@ -710,11 +732,11 @@ function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, pan
     <aside
       ref={panelRef}
       className={`routine-node-inspector${locked ? ' routine-node-inspector--locked' : ''}`}
-      style={{ ...style, '--node-color': GRAPH_KIND_COLORS[node.kind] || '#8b949e' }}
+      style={{ ...style, '--node-color': GRAPH_KIND_COLORS[guardEdge ? 'loop' : node.kind] || '#8b949e' }}
       aria-label={`${node.label || node.id} details`}
     >
       <header className="routine-node-inspector__head">
-        <span className="node-type-icon"><KindIcon kind={node.kind} /></span>
+        <span className="node-type-icon"><KindIcon kind={guardEdge ? 'loop' : node.kind} /></span>
         <div>
           <span className="routine-node-inspector__title">
             {isEditingLabel ? (
@@ -759,7 +781,7 @@ function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, pan
               )}
             </button>
           </span>
-          <span className="routine-node-inspector__kind">{GRAPH_KIND_LABELS[node.kind] || node.kind}</span>
+          <span className="routine-node-inspector__kind">{guardEdge ? 'Loop' : (GRAPH_KIND_LABELS[node.kind] || node.kind)}</span>
         </div>
         <button
           type="button"
@@ -773,14 +795,20 @@ function NodeInspector({ node, routerEdge, onClose, onDismiss, isNew, style, pan
       </header>
       <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
-        {unmet.length ? (
+        {missing.length ? (
           <p className="routine-node-inspector__required-hint" role="status">
-            {unmet.length === 1
+            {missing.length === 1
               ? 'One field is required before this step can be saved.'
-              : `${unmet.length} fields are required before this step can be saved.`}
+              : `${missing.length} fields are required before this step can be saved.`}
             {' '}
             {isNew ? 'Fill it in, or close to discard this step.' : 'Fill it in, or close to discard your changes.'}
           </p>
+        ) : null}
+        {guardEdge ? (
+          <>
+            <ConfigField id={node.id} config={guardConfig} field="expression" label="Continue while" placeholder="e.g. attempt < 3" multiline updateNodeConfig={handleGuardConfig} />
+            <InputsField id={node.id} config={guardConfig} updateNodeConfig={handleGuardConfig} />
+          </>
         ) : null}
         <NodeConfigBody
           id={node.id}
@@ -1061,7 +1089,10 @@ export function reachableFrom(entry, edges) {
       if (edge.router) {
         Object.values(edge.branches || {}).forEach(visit);
         visit(edge.default);
-      } else visit(edge.to);
+      } else {
+        visit(edge.to);
+        if (edge.loop_guard) visit(edge.loop_guard.on_false);
+      }
     });
   };
   visit(entry);
@@ -1171,6 +1202,7 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
   const edge = edgeBySource.get(nodeId);
   let next = null;
   let fork = null;
+  let loop = null;
   if (edge && edge.router) {
     const targetIds = routerTargets(edge);
     // A nested fork whose lanes converge on an ancestor's join does not own
@@ -1208,11 +1240,27 @@ function buildChainTree(nodeId, nodesById, edgeBySource, visiting, rendered, sto
         ? buildChainTree(joinId, nodesById, edgeBySource, visiting, rendered)
         : null,
     };
+  } else if (edge && edge.loop_guard) {
+    // The reached-while-`visiting` ancestor check above is what actually
+    // resolves the cycle -- `edge.to` always leads back to this loop's own
+    // start, which is necessarily still on the stack here, so there is
+    // nothing to compute for that half. What IS new: the guard's own
+    // on_false, a second, structural way out of this exact position -- the
+    // loop's ordinary forward continuation -- computed the same way any
+    // other "next" is.
+    loop = {
+      sourceId: nodeId,
+      bodyStartId: edge.to,
+      edge,
+      exitTree: edge.loop_guard.on_false
+        ? buildChainTree(edge.loop_guard.on_false, nodesById, edgeBySource, visiting, rendered, stopAt)
+        : null,
+    };
   } else {
     next = buildChainTree(edgeTargetIds(edge)[0], nodesById, edgeBySource, visiting, rendered, stopAt);
   }
   visiting.delete(nodeId);
-  return { type: 'node', id: nodeId, node, next, fork };
+  return { type: 'node', id: nodeId, node, next, fork, loop };
 }
 
 // Where a branch's chain ends once followed all the way down: a genuine graph
@@ -1273,7 +1321,16 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
       const bodyStart = positions.get(current.id);
       if (bodyStart !== undefined) {
         const body = out.splice(bodyStart);
+        // The connector just pushed above (top of this same iteration) is
+        // body's last element -- it's the one whose edge is the back-edge
+        // itself. Render it after the box, not swept inside: same "+ after
+        // the block" affordance every other construct (fork, foreach)
+        // offers, and functionally unchanged -- inserting there still
+        // splices a new step onto the tail before it loops back, which the
+        // next render sweeps into a now-larger box.
+        const trailing = body.pop();
         out.push(<LoopBlock key={`loop-${current.id}`} targetLabel={current.label} body={body} />);
+        if (trailing) out.push(trailing);
       } else {
         out.push(<ChainChip key={`loop-${current.id}`} kind="loop" label={`↺ loops back to “${current.label}”`} />);
       }
@@ -1309,28 +1366,56 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
       break;
     }
     out.push(<StepCard key={current.id} node={current.node} />);
+    if (current.loop) {
+      // Reaching the tail: the body is everything pushed since the loop's
+      // own start's card and connector -- the start itself stays outside
+      // the box, rendered as a plain step above it (matching ForkBlock's
+      // own router card, e.g. "Classify Item"), and is where its
+      // properties are actually edited (NodeInspector, via `guardEdge` --
+      // see there for why). `positions.get(bodyStartId) + 1` skips past
+      // the start's own card, keeping only the connector onward. `exitTree`
+      // continues the OUTER chain past the box -- the guard's own
+      // on_false -- exactly like a foreach's stop marker hands off to
+      // whatever comes after the fan-out.
+      const bodyStart = positions.get(current.loop.bodyStartId);
+      const body = bodyStart !== undefined ? out.splice(bodyStart + 1) : [];
+      out.push(<LoopBlock key={`loop-${current.id}`} edge={current.loop.edge} body={body} />);
+      slot = { sourceId: current.id, kind: 'loop-exit' };
+      current = current.loop.exitTree;
+      continue;
+    }
     slot = { sourceId: current.id, kind: 'plain' };
     current = current.next;
   }
   return out;
 }
 
-// Retry loop: boxes the cycle's body -- from the node it loops back to,
-// through everything up to the back-edge -- like ForeachBlock does for a
-// fan-out, instead of leaving just a floating "loops back to" chip.
-function LoopBlock({ targetLabel, body }) {
+// Retry loop: boxes the cycle's body -- everything after the node it loops
+// back to, through the back-edge -- like ForeachBlock does for a fan-out.
+// One box, not a box nested inside a box, and the loop-start's own card
+// (e.g. "Loop") renders OUTSIDE/above it, exactly like a router's own card
+// sits above ForkBlock's lanes -- this section is purely the body. `edge`
+// is the guarded case (a real Loop construct's tail, `loop_guard` present);
+// its properties are edited by clicking the loop-start card itself
+// (NodeInspector), not here. `targetLabel` alone (no `edge`) is the
+// fallback for a hand-authored, unguarded cycle the JSON editor can still
+// produce. Either way there's no separate "back to X" line -- the box's
+// own closing edge already says that.
+function LoopBlock({ edge, targetLabel, body }) {
   const { settings } = useContext(GraphEditContext);
   const recursionLimit = settings?.recursion_limit;
   const maxRetries = settings?.retry?.max_retries;
+  const guard = edge?.loop_guard;
   return (
-    <section className="routine-loop" aria-label={`Retry loop back to ${targetLabel}`}>
+    <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
       <div className="routine-loop__head">
-        <span className="routine-loop__eyebrow">↺ Retry loop</span>
+        <span className={`routine-loop__eyebrow${guard ? ' routine-loop__eyebrow--guarded' : ''}${guard && !guard.expression ? ' routine-loop__eyebrow--unset' : ''}`}>
+          {guard ? (guard.expression ? `↺ Loop while ${guard.expression}` : '↺ Loop · set condition') : '↺ Retry loop'}
+        </span>
         {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
         {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
       </div>
       <div className="routine-loop__body">{body}</div>
-      <div className="routine-loop__back">↺ back to “{targetLabel}”</div>
     </section>
   );
 }
@@ -1774,10 +1859,27 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
 
   const deleteNode = useCallback((id) => {
     confirmedNodeIdsRef.current.delete(id);
+    // A loop's start and tail are its structural boundary: the guard edge
+    // is `to` the start (found from the tail) or `from` the tail (found
+    // from the start) -- either way it's the same edge, and it never
+    // survives either boundary node going. Reattaching through it (its
+    // primary `to` is always the loop's own start) would silently turn it
+    // into a self-loop; reattaching *as* it (keeping `loop_guard` on a
+    // rewritten edge) would leave a guard with nothing left to guard. The
+    // loop's actual exit -- its `on_false`, if any -- is what a deleted
+    // boundary node's own predecessor should land on instead.
+    const guardEdge = edgesRef.current.find((edge) => edge.loop_guard && (edge.to === id || edge.from === id));
     const outgoing = edgesRef.current.find((edge) => isFlowEdge(edge) && edgeSourceIds(edge).includes(id));
-    const singleTarget = outgoing?.to && typeof outgoing.to === 'string'
-      ? outgoing.to
-      : null;
+    // A router's own edge has no `to` -- its nearest thing to "what happens
+    // next" is its `default` arm, the one place a router already names
+    // "nothing more specific applied". No default -> no single answer
+    // (it had several branches, not one), same as the plain-edge case
+    // below when there's nothing to fall back to.
+    const singleTarget = guardEdge
+      ? (typeof guardEdge.loop_guard.on_false === 'string' ? guardEdge.loop_guard.on_false : null)
+      : outgoing?.router
+        ? (typeof outgoing.default === 'string' ? outgoing.default : null)
+        : (outgoing?.to && typeof outgoing.to === 'string' ? outgoing.to : null);
     // A condition's two arms are structural, not author-defined, so deleting
     // the step sitting on one has to leave a placeholder behind. Dropping the
     // arm instead would leave a one-armed condition the editor offers no
@@ -1808,7 +1910,15 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     setEdges((current) => {
       const next = [];
       current.forEach((edge) => {
-        if (edgeSourceIds(edge).includes(id) && !edge.router && edge.level !== 'fan_in') return; // the deleted node's own outgoing edge
+        // This loop's own guard edge never survives either boundary node
+        // going -- see the comment above `guardEdge`.
+        if (edge.loop_guard && (edge.to === id || edge.from === id)) return;
+        // The deleted node's own outgoing edge -- plain, fan_in-target, or
+        // (a router node deleted outright) its own route edge -- never
+        // survives it. What was built inside its branches isn't cascade-
+        // deleted; losing this edge just makes it unreachable, exactly
+        // like any other content UnreachableTray already exists to catch.
+        if (edgeSourceIds(edge).includes(id) && edge.level !== 'fan_in') return;
         if (edge.router) {
           const branches = { ...edge.branches };
           let changed = false;
@@ -1889,8 +1999,14 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   // exactly `true`/`false` (see CONDITION_BRANCH_VALUES server-side), so it
   // lands as a fork rather than being authored as one after the fact.
   const insertAt = useCallback((slot, kind) => {
+    // `loop` has no backend node kind of its own -- the body-start node it
+    // creates is a plain `noop`, exactly like a foreach's "Join each" stop
+    // marker is. Looping is entirely a property of the tail's own edge
+    // (`loop_guard`), never of a node, so nothing here ever writes a
+    // `kind: 'loop'` onto the wire.
+    const nodeKind = kind === 'loop' ? 'noop' : kind;
     const id = uniqueNodeId(kind, nodesRef.current);
-    const added = [{ ...makeNode(kind), id }];
+    const added = [{ ...makeNode(nodeKind), id, ...(kind === 'loop' ? { label: 'Loop' } : {}) }];
     let targetId = null;
     let joinEdge = null;
     const nextEdges = edgesRef.current.map((edge) => (
@@ -1929,11 +2045,69 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         targetId = router.default;
         router.default = id;
       }
+    } else if (slot.kind === 'loop-exit') {
+      // The connector after a loop's box: its source is the tail, whose
+      // own outgoing edge is the guard itself, so this must not touch
+      // `to` (always the loop's own start) the way a plain slot would --
+      // only the guard's on_false, its actual "next".
+      const tail = nextEdges.find((edge) => edge.from === slot.sourceId && edge.loop_guard);
+      if (tail) {
+        targetId = tail.loop_guard.on_false;
+        tail.loop_guard = { ...tail.loop_guard, on_false: id };
+      }
     }
     // Whatever the new step ends on is the lane's terminal from here: a
     // fan-out's companion stop, a condition's two arms, or the step itself.
     let terminalIds = [id];
-    if (kind === 'foreach') {
+    if (kind === 'loop') {
+      // A stable tail marker the body always flows back through -- never a
+      // moving target -- so extending the body later (inserting at the
+      // connector just before the tail) is an ordinary splice: body
+      // extension only ever touches edges INTO the tail, never the tail's
+      // own outgoing (guarded) edge. Mirrors foreach's stop-node shape
+      // exactly, just with a back-edge instead of a forward one.
+      //
+      // There's no dedicated counter node kind: `eval` already IS the
+      // general "evaluate an expression, write the result" primitive, and
+      // an increment is just an expression. LangGraph's conditional-edge
+      // routing function is typed to return only a path name, never also
+      // update state (checked against the installed langgraph's own
+      // add_conditional_edges signature) -- a plain edge genuinely cannot
+      // count itself -- but a node executing right before that edge fires,
+      // every single time, is the closest honest equivalent. Its own
+      // increment commits before its outgoing (guarded) edge evaluates, so
+      // the guard always sees the fresh count.
+      //
+      // The only thing `eval` needed to cover this case was a fallback for
+      // its own not-yet-written prior output on the loop's first visit --
+      // `config.defaults` supplies that (see EvalNodeConfig.defaults) --
+      // so `resolve_data_path`'s strict KeyError-on-missing behavior (which
+      // exists to catch author typos elsewhere) doesn't apply here.
+      const tailId = uniqueNodeId('count', [...nodesRef.current, ...added]);
+      added.push({
+        ...makeNode('eval'),
+        id: tailId,
+        label: '↺ Continue',
+        config: { expression: `${tailId} + 1`, inputs: { [tailId]: tailId }, defaults: { [tailId]: 0 } },
+      });
+      nextEdges.push({ from: id, to: tailId, level: 'normal' });
+      // A loop spliced in front of a shared join reaches it directly
+      // through its own guard's on_false, not by joining the declared
+      // fan_in sources -- the tail already has its own outgoing edge
+      // (this one), and a node can only declare one.
+      const exitTarget = joinEdge ? joinEdge.to : targetId;
+      nextEdges.push({
+        from: tailId,
+        to: id,
+        level: 'normal',
+        loop_guard: {
+          expression: `${tailId} < 3`,
+          inputs: { [tailId]: tailId },
+          ...(exitTarget ? { on_false: exitTarget } : {}),
+        },
+      });
+      terminalIds = [];
+    } else if (kind === 'foreach') {
       const stopId = uniqueNodeId('noop', [...nodesRef.current, ...added]);
       added.push({ ...makeNode('noop'), id: stopId, label: 'Join each' });
       nextEdges.push({ from: id, to: stopId, level: 'normal' });
@@ -1987,7 +2161,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         ...terminalIds,
       ];
     }
-    pendingSelectRef.current = id;
+    // The loop-start node has nothing of its own to configure (it's a bare
+    // `noop`; its badge would misleadingly read "Noop" too) -- the
+    // author's next move is the tail's own expression popover, not this
+    // inspector, so don't steal focus with it.
+    if (kind !== 'loop') pendingSelectRef.current = id;
     setNodes((current) => [...current, ...added]);
     setEdges(nextEdges);
   }, []);
@@ -1995,6 +2173,12 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const onChangeStateKey = useCallback((sourceId, value) => {
     setEdges((current) => current.map((edge) => (
       edge.from === sourceId && edge.router ? { ...edge, state_key: value } : edge
+    )));
+  }, []);
+
+  const updateLoopGuard = useCallback((fromId, patch) => {
+    setEdges((current) => current.map((edge) => (
+      edge.from === fromId && edge.loop_guard ? { ...edge, loop_guard: { ...edge.loop_guard, ...patch } } : edge
     )));
   }, []);
 
@@ -2068,6 +2252,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     deleteNode,
     insertAt,
     onChangeStateKey,
+    updateLoopGuard,
     onRemoveBranching: removeBranching,
     onAddBranch,
     onJoinBranches,
@@ -2079,7 +2264,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRenameBranch,
     settings: meta.settings,
     edges,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -2088,7 +2273,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   // filling in a step they just inserted has not made a mistake worth a red
   // banner. `lastSavedRef` is deliberately left alone so the moment the last
   // field lands the signature still differs and the save goes out on its own.
-  const incomplete = useMemo(() => incompleteNodes(nodes), [nodes]);
+  const incomplete = useMemo(
+    () => incompleteNodes(nodes).length + incompleteLoopEdges(edges).length,
+    [nodes, edges],
+  );
   const lastSavedRef = useRef(null);
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
@@ -2102,7 +2290,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       setSaveState(saveStatusWhenInSync);
       return undefined;
     }
-    if (incomplete.length) {
+    if (incomplete) {
       setSaveError(null);
       setSaveState('incomplete');
       return undefined;
@@ -2126,6 +2314,12 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
   const selectedRouterEdge = selectedNode
     ? edges.find((edge) => edge.from === selectedNode.id && edge.router)
+    : null;
+  // A loop's own expression/inputs live on its tail's edge, not on this
+  // node's config -- this is how the currently-selected node is recognized
+  // as a loop's start: some edge's `loop_guard` targets it.
+  const selectedGuardEdge = selectedNode
+    ? edges.find((edge) => edge.loop_guard && edge.to === selectedNode.id)
     : null;
   const validationErrors = useMemo(
     () => validateWorkingGraph(nodes, edges, meta.entry),
@@ -2163,7 +2357,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
                   {saveState === 'saving' ? 'Saving…'
                     : saveState === 'saved' ? 'Saved'
-                      : saveState === 'incomplete' ? `Not saved · ${incomplete.length} step${incomplete.length === 1 ? '' : 's'} incomplete`
+                    : saveState === 'incomplete' ? `Not saved · ${incomplete} step${incomplete === 1 ? '' : 's'} incomplete`
                         : 'Save failed'}
                 </span>
               ) : null}
@@ -2233,6 +2427,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 <NodeInspector
                   node={selectedNode}
                   routerEdge={selectedRouterEdge}
+                  guardEdge={selectedGuardEdge}
                   onClose={() => closeInspector(selectedNode)}
                   onDismiss={() => { setSelectedNodeId(null); setInspectorPosition(null); }}
                   isNew={selectedNodeIsNew}
