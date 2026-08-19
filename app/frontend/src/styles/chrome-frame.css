@@ -7527,6 +7527,7 @@ body,
 .routine-connector__menu-item .canvas-dock-icon.a2a { color: #f97316; background: color-mix(in oklab, #f97316 18%, transparent); }
 .routine-connector__menu-item .canvas-dock-icon.human { color: #f43f5e; background: color-mix(in oklab, #f43f5e 18%, transparent); }
 .routine-connector__menu-item .canvas-dock-icon.foreach { color: #06b6d4; background: color-mix(in oklab, #06b6d4 18%, transparent); }
+.routine-connector__menu-item .canvas-dock-icon.loop { color: #d29922; background: color-mix(in oklab, #d29922 18%, transparent); font-size: 15px; }
 .routine-connector__menu-item .canvas-dock-icon.routine { color: #8b5cf6; background: color-mix(in oklab, #8b5cf6 18%, transparent); }
 .routine-connector__menu-item .canvas-dock-icon.noop { color: #6b7280; background: color-mix(in oklab, #6b7280 22%, transparent); }
 
@@ -7652,11 +7653,12 @@ body,
   display: none;
 }
 
-/* Retry loop: same idea as .routine-foreach, but boxes a *cycle* -- the
-   chain segment from the node it loops back to through the back-edge --
-   instead of leaving a floating "loops back to" chip with nothing visually
-   tying it to the steps it actually repeats. Amber, not teal, so the two
-   scope kinds read as distinct at a glance. */
+/* Retry loop: same idea as .routine-foreach/.routine-fork's own box -- one
+   border, not a box nested inside a box -- around the cycle's body (the
+   chain segment from the node it loops back to through the back-edge). The
+   header ("RETRY LOOP") and the box's own closing edge already say "this
+   repeats"; there is no separate "back to X" line. Amber, not teal, so the
+   two scope kinds read as distinct at a glance. */
 .routine-loop {
   width: max-content;
   min-width: min(480px, 100%);
@@ -7670,6 +7672,7 @@ body,
 }
 
 .routine-loop__head {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7686,6 +7689,16 @@ body,
   text-transform: uppercase;
 }
 
+.routine-loop__eyebrow--guarded {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.routine-loop__eyebrow--unset {
+  color: #b8860b;
+  font-style: italic;
+}
+
 .routine-loop__badge {
   padding: 3px 8px;
   color: #f0c04b;
@@ -7700,11 +7713,7 @@ body,
   display: flex;
   flex-direction: column;
   align-items: center;
-  min-height: 78px;
-  padding: 9px 12px 4px;
-  background: color-mix(in oklab, var(--color-bg-primary) 72%, transparent);
-  border: 1px dashed color-mix(in oklab, #d29922 45%, var(--color-border));
-  border-radius: 10px;
+  min-height: 60px;
 }
 
 .routine-loop__body .routine-connector {
@@ -7713,14 +7722,6 @@ body,
 
 .routine-loop__body > .routine-cap--end {
   display: none;
-}
-
-.routine-loop__back {
-  margin-top: 6px;
-  color: #f0c04b;
-  font-size: 11px;
-  font-style: italic;
-  text-align: center;
 }
 
 /* Router fork: a CSS-only switch box. Its rails rely on flex centring rather
