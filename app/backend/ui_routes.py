@@ -4342,6 +4342,28 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
                 "graph": AgentGraphModel(**graph_payload).model_dump(by_alias=True),
             },
         )
+        # The `store` trigger that fired this reconcile pass also appended a
+        # row to `routine_graph_revisions` (or no-opped on identical content,
+        # e.g. a Restore -- see AgentGraph.jsx's revisions panel). Push the
+        # refreshed list so an already-open Revisions panel picks up a new
+        # entry live instead of only on its next manual Refresh.
+        try:
+            revisions = await asyncio.to_thread(
+                get_default_document_store().list_routine_revisions, agent_id
+            )
+        except Exception:
+            logger.debug("Failed to list routine revisions for %r", agent_id, exc_info=True)
+        else:
+            broadcast_ui_event(
+                "agent.routine.revisions.loaded",
+                {
+                    "agent_id": agent_id,
+                    "revisions": [
+                        {"revision_id": revision.revision_id, "captured_at": revision.captured_at}
+                        for revision in revisions
+                    ],
+                },
+            )
 
     if roster_changed:
         await _broadcast_agent_profiles_safe()
