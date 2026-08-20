@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
-  buildInputSuggestions,
-  filterInputSuggestions,
+  buildStatePathSuggestions,
+  filterStatePathSuggestions,
   forkJoin,
   forkLaneEdgePosition,
+  getExpressionAutocompleteContext,
   getInputsAutocompleteContext,
   incompleteLoopEdges,
   incompleteNodes,
@@ -691,7 +692,7 @@ describe('predecessorsOf', () => {
   it('never includes the node itself, even inside a loop cycle', () => {
     const edges = [
       { from: 'start', to: 'tail', level: 'normal' },
-      { from: 'tail', to: 'start', level: 'normal', loop_guard: { expression: 'x', inputs: {}, on_false: 'exit' } },
+      { from: 'tail', to: 'start', level: 'normal', loop_guard: { expression: 'x', on_false: 'exit' } },
     ];
     const predecessors = predecessorsOf('start', edges);
     expect(predecessors.has('start')).toBe(false);
@@ -719,7 +720,7 @@ describe('predecessorsOf', () => {
   });
 });
 
-describe('buildInputSuggestions', () => {
+describe('buildStatePathSuggestions', () => {
   const nodes = [
     { id: 'classify_intent', kind: 'classify', label: 'Classify intent', config: { response_schema: { properties: { label: { type: 'string' }, confidence: { type: 'number' } } } } },
     { id: 'compute_score', kind: 'eval', label: 'Compute score', config: {} },
@@ -731,19 +732,19 @@ describe('buildInputSuggestions', () => {
   ];
 
   it('always offers the seeded keys and declared routine inputs first', () => {
-    const suggestions = buildInputSuggestions('this_node', nodes, edges, { host: 'target host' });
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, { host: 'target host' });
     expect(suggestions.map((s) => s.path).slice(0, 3)).toEqual(['request', 'context', 'host']);
   });
 
   it('offers a bare key for a predecessor with no declared schema', () => {
-    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, null);
     const paths = suggestions.map((s) => s.path);
     expect(paths).toContain('compute_score');
     expect(paths).not.toContain('compute_score.result');
   });
 
   it('drills into a predecessors response_schema properties', () => {
-    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, null);
     const paths = suggestions.map((s) => s.path);
     expect(paths).toContain('classify_intent');
     expect(paths).toContain('classify_intent.label');
@@ -751,7 +752,7 @@ describe('buildInputSuggestions', () => {
   });
 
   it('derives the local alias name from the last dotted segment', () => {
-    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, null);
     const label = suggestions.find((s) => s.path === 'classify_intent.label');
     expect(label.name).toBe('label');
     const bare = suggestions.find((s) => s.path === 'classify_intent');
@@ -759,7 +760,7 @@ describe('buildInputSuggestions', () => {
   });
 
   it('never suggests the node currently being edited', () => {
-    const suggestions = buildInputSuggestions('this_node', nodes, edges, null);
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, null);
     expect(suggestions.map((s) => s.path)).not.toContain('this_node');
   });
 });
@@ -793,7 +794,7 @@ describe('getInputsAutocompleteContext', () => {
   });
 });
 
-describe('filterInputSuggestions', () => {
+describe('filterStatePathSuggestions', () => {
   const suggestions = [
     { path: 'classify_intent.label', name: 'label' },
     { path: 'classify_intent', name: 'classify_intent' },
@@ -801,13 +802,49 @@ describe('filterInputSuggestions', () => {
   ];
 
   it('filters by substring match on the path, case-insensitively', () => {
-    const filtered = filterInputSuggestions(suggestions, 'CLASS');
+    const filtered = filterStatePathSuggestions(suggestions, 'CLASS');
     expect(filtered.map((s) => s.path)).toEqual(['classify_intent.label', 'classify_intent']);
   });
 
   it('ranks a startsWith match ahead of a mid-string match', () => {
     const withMidMatch = [...suggestions, { path: 'x_compute_score', name: 'x_compute_score' }];
-    const filtered = filterInputSuggestions(withMidMatch, 'compute');
+    const filtered = filterStatePathSuggestions(withMidMatch, 'compute');
     expect(filtered.map((s) => s.path)).toEqual(['compute_score', 'x_compute_score']);
+  });
+});
+
+describe('getExpressionAutocompleteContext', () => {
+  it('returns null until at least one identifier character is typed', () => {
+    expect(getExpressionAutocompleteContext('count + ', 8)).toBeNull();
+    expect(getExpressionAutocompleteContext('', 0)).toBeNull();
+  });
+
+  it('detects a bare identifier under the caret', () => {
+    const context = getExpressionAutocompleteContext('cou', 3);
+    expect(context).toEqual({ query: 'cou', tokenStart: 0, tokenEnd: 3 });
+  });
+
+  it('detects a dotted attribute chain in progress', () => {
+    const context = getExpressionAutocompleteContext('classify_intent.la', 19);
+    expect(context).toEqual({ query: 'classify_intent.la', tokenStart: 0, tokenEnd: 19 });
+  });
+
+  it('only considers the identifier chain ending at the caret, not earlier text', () => {
+    const text = 'count < 3 and clas';
+    const context = getExpressionAutocompleteContext(text, text.length);
+    expect(context).toEqual({ query: 'clas', tokenStart: text.indexOf('clas'), tokenEnd: text.length });
+  });
+
+  it('returns null right after a closed string or number literal', () => {
+    expect(getExpressionAutocompleteContext('attempt == "retry"', 19)).toBeNull();
+    expect(getExpressionAutocompleteContext('count < 3', 9)).toBeNull();
+  });
+
+  it('returns null while the caret sits inside an unterminated string literal', () => {
+    expect(getExpressionAutocompleteContext('attempt == "re', 14)).toBeNull();
+  });
+
+  it('returns null right after a dot with nothing typed yet', () => {
+    expect(getExpressionAutocompleteContext('classify_intent.', 16)).toBeNull();
   });
 });
