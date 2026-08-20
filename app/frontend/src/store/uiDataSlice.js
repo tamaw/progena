@@ -180,12 +180,16 @@ export {
   fetchAgentSkillContent,
   updateAgentSkillContent,
   fetchRoutineRuns,
+  fetchRoutineRevisions,
+  fetchRoutineRevision,
   selectAgentProfiles,
   selectAgentProfilesState,
   selectActiveAgentProfile,
   selectActiveAgentProfileState,
   selectAgentSkillContent,
   selectAgentRoutineRuns,
+  selectAgentRoutineRevisions,
+  selectAgentRoutineRevisionContent,
 } from './uiData/agents';
 
 export {
