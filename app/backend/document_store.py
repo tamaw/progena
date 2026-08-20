@@ -54,6 +54,24 @@ class CheckpointThreadSnapshot:
     messages: list[Any]
 
 
+@dataclass(frozen=True)
+class RoutineRunSummary:
+    """One routine execution, reconstructed from its checkpoint thread.
+
+    ``thread_id`` follows ``routine:<routine_id>:<revision_id>:<run_id>``
+    (see ``app.progenitor.routines.subagent.create_routine_subagent``);
+    ``revision_id``/``run_id`` are parsed out of it, not stored separately.
+    """
+
+    thread_id: str
+    routine_id: str
+    revision_id: str | None
+    run_id: str | None
+    started_at: str | None
+    last_checkpoint_at: str | None
+    checkpoint_count: int
+
+
 _MESSAGES_CHANNEL = "messages"
 
 
@@ -129,6 +147,8 @@ class BackendDocumentStore(Protocol):
         *,
         checkpoint_id: str | None = None,
     ) -> CheckpointThreadSnapshot | None: ...
+
+    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]: ...
 
     def close(self) -> None: ...
 
@@ -238,6 +258,24 @@ class InMemoryDocumentStore:
         if checkpoint_id and snapshot.checkpoint_id != checkpoint_id:
             return None
         return snapshot
+
+    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]:
+        prefix = f"routine:{routine_id}:"
+        summaries = [
+            RoutineRunSummary(
+                thread_id=snapshot.thread_id,
+                routine_id=routine_id,
+                revision_id=(snapshot.thread_id.split(":", 3) + [None, None])[2],
+                run_id=(snapshot.thread_id.split(":", 3) + [None, None, None])[3],
+                started_at=snapshot.checkpoint_ts,
+                last_checkpoint_at=snapshot.checkpoint_ts,
+                checkpoint_count=1,
+            )
+            for snapshot in self._checkpoint_threads.values()
+            if snapshot.thread_id.startswith(prefix)
+        ]
+        summaries.sort(key=lambda summary: summary.last_checkpoint_at or "", reverse=True)
+        return summaries[:limit] if limit > 0 else summaries
 
     def upsert_checkpoint_thread_snapshot(self, snapshot: CheckpointThreadSnapshot) -> None:
         self._checkpoint_threads[snapshot.thread_id] = snapshot
@@ -764,6 +802,57 @@ class PostgresDocumentStore:
             checkpoint_ts=str(row["checkpoint_ts"]) if row.get("checkpoint_ts") else None,
             messages=messages,
         )
+
+    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]:
+        """Every distinct routine-run checkpoint thread for one routine.
+
+        A run's thread_id is ``routine:<routine_id>:<revision_id>:<run_id>``
+        (see ``app.progenitor.routines.subagent.create_routine_subagent``).
+        Groups raw checkpoint rows by thread_id -- one row per run, newest
+        last-checkpoint first -- rather than reconstructing full message
+        history, which the Runs panel doesn't need.
+        """
+        escaped = routine_id.translate({ord("\\"): "\\\\", ord("%"): "\\%", ord("_"): "\\_"})
+        pattern = f"routine:{escaped}:%"
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    thread_id,
+                    min((checkpoint->>'ts')::timestamptz) AS started_at,
+                    max((checkpoint->>'ts')::timestamptz) AS last_checkpoint_at,
+                    count(*) AS checkpoint_count
+                FROM checkpoints
+                WHERE thread_id LIKE %s ESCAPE '\\'
+                GROUP BY thread_id
+                ORDER BY last_checkpoint_at DESC
+                LIMIT %s
+                """,
+                (pattern, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        summaries: list[RoutineRunSummary] = []
+        for row in rows:
+            thread_id = row.get("thread_id")
+            if not isinstance(thread_id, str):
+                continue
+            parts = thread_id.split(":", 3)
+            revision_id = parts[2] if len(parts) > 2 else None
+            run_id = parts[3] if len(parts) > 3 else None
+            summaries.append(
+                RoutineRunSummary(
+                    thread_id=thread_id,
+                    routine_id=routine_id,
+                    revision_id=revision_id,
+                    run_id=run_id,
+                    started_at=str(row["started_at"]) if row.get("started_at") else None,
+                    last_checkpoint_at=(
+                        str(row["last_checkpoint_at"]) if row.get("last_checkpoint_at") else None
+                    ),
+                    checkpoint_count=int(row["checkpoint_count"] or 0),
+                )
+            )
+        return summaries
 
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:

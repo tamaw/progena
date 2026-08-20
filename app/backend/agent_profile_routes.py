@@ -30,6 +30,7 @@ from app.progenitor.schemas import load_schema
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
+from .document_store import BackendDocumentStore
 from .request_utils import BroadcastUiEvent
 from .request_utils import request_correlation_id as _request_correlation_id
 
@@ -242,6 +243,7 @@ async def broadcast_agent_profiles_snapshot(
 def create_agent_profile_router(
     *,
     get_agent_store: Callable[[], AgentStore | None],
+    get_document_store: Callable[[], BackendDocumentStore],
     broadcast_ui_event: BroadcastUiEvent,
 ) -> APIRouter:
     router = APIRouter()
@@ -480,6 +482,41 @@ def create_agent_profile_router(
             request_id=request_id,
         )
         return acknowledgement_response(request_id, ["agent.graph.updated"])
+
+    @router.get(
+        "/agent-profiles/{agent_id}/runs", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def list_routine_runs(
+        agent_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Publish recent execution runs for one routine.
+
+        A run is a distinct checkpoint thread named
+        ``routine:<agent_id>:<revision_id>:<run_id>`` (see
+        ``app.progenitor.routines.subagent.create_routine_subagent``); this
+        reads the ``checkpoints`` table grouped by that thread_id rather than
+        any bespoke run-history storage.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        runs = await asyncio.to_thread(get_document_store().list_routine_runs, agent_id)
+        payload = {
+            "agent_id": agent_id,
+            "runs": [
+                {
+                    "thread_id": run.thread_id,
+                    "revision_id": run.revision_id,
+                    "run_id": run.run_id,
+                    "started_at": run.started_at,
+                    "last_checkpoint_at": run.last_checkpoint_at,
+                    "checkpoint_count": run.checkpoint_count,
+                }
+                for run in runs
+            ],
+        }
+        broadcast_ui_event("agent.routine.runs.loaded", payload, request_id=request_id)
+        return acknowledgement_response(request_id, ["agent.routine.runs.loaded"])
 
     @router.delete(
         "/agent-profiles/{agent_id}", status_code=202, response_model=UiRequestAcknowledgement
