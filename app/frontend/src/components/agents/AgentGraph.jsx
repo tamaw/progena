@@ -700,27 +700,38 @@ function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSel
   );
 }
 
-// `text` is a local buffer, not a derivation of `config.inputs` on every
-// render -- `textToInputs` silently drops any line that doesn't have a
-// colon yet (that's how it recognizes "not a real entry"), so deriving the
-// textarea's value straight from `inputsToText(textToInputs(rawText))` on
-// every keystroke would erase an in-progress, colon-less line the instant
-// it re-rendered. The buffer resets from `config.inputs` only when `id`
-// changes (a different node is now selected) or `config.inputs` changed for
-// a reason other than this field's own last edit (e.g. the "Edit as JSON"
-// panel) -- tracked by comparing object identity against what this field
-// itself last emitted.
-function InputsField({ id, config, updateNodeConfig }) {
+// Shared by every "text <-> structured value" field (Inputs, response_schema
+// field lists, routine input/output maps) whose parser drops an in-progress
+// line -- that's how each one recognizes "not a real entry yet" (no colon,
+// no name). Deriving the textarea's value fresh from `toText(fromText(raw))`
+// on every render, as these fields did before this hook existed, erases
+// whatever the author is mid-typing (a name with no colon after it yet, a
+// colon with nothing after it yet) the instant it re-renders -- keystrokes
+// before the FIRST fully-formed line just vanish, which is indistinguishable
+// from "I can't type in this field" (confirmed live: typing into a fresh
+// response_schema field did nothing at all, every character wiped before
+// the next keystroke could build on it).
+//
+// The buffer resets from `value` only when `id` changes (a different node
+// is now selected) or `value` changed for a reason other than this field's
+// own last edit (e.g. the "Edit as JSON" panel) -- tracked by comparing
+// object/array identity against what this field itself last emitted.
+// `toText` must be pure/stable (called during render).
+function useBufferedFieldText(id, value, toText) {
   const [trackedId, setTrackedId] = useState(id);
-  const [trackedInputs, setTrackedInputs] = useState(config?.inputs);
-  const [text, setText] = useState(() => inputsToText(config?.inputs));
-  if (trackedId !== id || config?.inputs !== trackedInputs) {
+  const [trackedValue, setTrackedValue] = useState(value);
+  const [text, setText] = useState(() => toText(value));
+  if (trackedId !== id || value !== trackedValue) {
     setTrackedId(id);
-    setTrackedInputs(config?.inputs);
-    const nextText = inputsToText(config?.inputs);
+    setTrackedValue(value);
+    const nextText = toText(value);
     if (nextText !== text) setText(nextText);
   }
+  return [text, setText, setTrackedValue];
+}
 
+function InputsField({ id, config, updateNodeConfig }) {
+  const [text, setText, setTrackedInputs] = useBufferedFieldText(id, config?.inputs, inputsToText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
@@ -801,14 +812,21 @@ export function textToSchemaFields(text) {
 }
 
 function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
+  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], schemaFieldsToText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
       <textarea
         className="agents-graph-node__prompt"
-        value={schemaFieldsToText(config?.[field])}
+        value={text}
         placeholder={'category: enum(billing, technical, other)\nsummary: string # one sentence recap of the request'}
-        onChange={(event) => updateNodeConfig(id, { [field]: textToSchemaFields(event.target.value) })}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          const parsed = textToSchemaFields(nextText);
+          setTrackedValue(parsed);
+          updateNodeConfig(id, { [field]: parsed });
+        }}
       />
     </label>
   );
@@ -816,14 +834,21 @@ function ResponseSchemaField({ id, config, field, label, updateNodeConfig }) {
 
 
 function KeyValueMapField({ id, config, field, label, placeholder, updateNodeConfig }) {
+  const [text, setText, setTrackedValue] = useBufferedFieldText(id, config?.[field], inputsToText);
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">{label}</span>
       <textarea
         className="agents-graph-node__prompt"
-        value={inputsToText(config?.[field])}
+        value={text}
         placeholder={placeholder}
-        onChange={(event) => updateNodeConfig(id, { [field]: textToInputs(event.target.value) })}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          const parsed = textToInputs(nextText);
+          setTrackedValue(parsed);
+          updateNodeConfig(id, { [field]: parsed });
+        }}
       />
     </label>
   );
