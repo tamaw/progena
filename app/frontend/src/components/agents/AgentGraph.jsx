@@ -1085,8 +1085,13 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
   const handleGuardConfig = (_nodeId, patch) => updateLoopGuard(guardEdge.from, patch);
   const unmet = missingRequirements(node);
   const guardIncomplete = guardEdge && !guardConfig.expression?.trim();
-  const missing = [...unmet.flat(), ...(guardIncomplete ? ['expression'] : [])];
-  const missingSet = missing.length ? new Set(missing) : EMPTY_MISSING;
+  // One requirement, not one field: a one-of group ("a template or a file")
+  // is a single unmet requirement offering two ways to satisfy it -- counting
+  // every alternative name via a flattened list told the author "2 fields
+  // are required" when only one alternative (the other is a legacy field
+  // never shown in this UI) was even visible to fill in.
+  const missingCount = unmet.length + (guardIncomplete ? 1 : 0);
+  const missingSet = missingCount ? new Set([...unmet.flat(), ...(guardIncomplete ? ['expression'] : [])]) : EMPTY_MISSING;
   // Held open until the step can actually be saved. Closing here would strand
   // an unsaveable step somewhere in the chain with the whole graph withheld
   // behind it, so the only ways out are filling the fields or deleting it.
@@ -1167,11 +1172,11 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
       </header>
       <MissingFieldsContext.Provider value={missingSet}>
       <div className="routine-node-inspector__body">
-        {missing.length ? (
+        {missingCount ? (
           <p className="routine-node-inspector__required-hint" role="status">
-            {missing.length === 1
+            {missingCount === 1
               ? 'One field is required before this step can be saved.'
-              : `${missing.length} fields are required before this step can be saved.`}
+              : `${missingCount} fields are required before this step can be saved.`}
             {' '}
             {isNew ? 'Fill it in, or close to discard this step.' : 'Fill it in, or close to discard your changes.'}
           </p>
