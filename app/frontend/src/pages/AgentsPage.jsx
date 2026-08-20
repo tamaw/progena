@@ -332,6 +332,7 @@ export function AgentWorkspace({ page }) {
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
   const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
+  const [routineRevisionsOpen, setRoutineRevisionsOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -778,7 +779,7 @@ export function AgentWorkspace({ page }) {
               {graphDetailPending ? (
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
+                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen || routineRevisionsOpen ? 'is-editing' : ''}`}>
                   <AgentGraphTab
                     key={selectedAgent.id}
                     agent={selectedAgent}
@@ -789,11 +790,14 @@ export function AgentWorkspace({ page }) {
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
-                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); }}
                     onCloseJson={() => setGraphEditorOpen(false)}
                     runsOpen={routineRunsOpen}
-                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
+                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); setRoutineRevisionsOpen(false); }}
                     onCloseRuns={() => setRoutineRunsOpen(false)}
+                    revisionsOpen={routineRevisionsOpen}
+                    onOpenRevisions={() => { setRoutineRevisionsOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); }}
+                    onCloseRevisions={() => setRoutineRevisionsOpen(false)}
                   />
                 </div>
               )}

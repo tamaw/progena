@@ -30,6 +30,14 @@ export const initialState = {
     // side-panel opens and cached by agent id (see `fetchRoutineRuns` /
     // `agent.routine.runs.loaded`).
     runsByAgentId: {},
+    // Revision history for a routine, fetched lazily when the Revisions
+    // side-panel opens and cached by agent id (see `fetchRoutineRevisions` /
+    // `agent.routine.revisions.loaded`).
+    revisionsByAgentId: {},
+    // One revision's full graph document, fetched on click and cached by
+    // `<agentId>:<revisionId>` (see `fetchRoutineRevision` /
+    // `agent.routine.revision.loaded`).
+    revisionContentByKey: {},
   },
 };
 
@@ -107,6 +115,16 @@ export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns
   { requestId },
 ));
 
+export const fetchRoutineRevisions = createAcknowledgedThunk('uiData/fetchRoutineRevisions', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions`,
+  { requestId },
+));
+
+export const fetchRoutineRevision = createAcknowledgedThunk('uiData/fetchRoutineRevision', ({ agentsUrl, agentId, revisionId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/revisions/${encodeURIComponent(revisionId)}`,
+  { requestId },
+));
+
 export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
   {
@@ -167,6 +185,16 @@ export const eventHandlers = {
       state.agents.runsByAgentId[payload.agent_id] = Array.isArray(payload.runs) ? payload.runs : [];
     }
   },
+  'agent.routine.revisions.loaded': (state, payload) => {
+    if (typeof payload?.agent_id === 'string' && payload.agent_id) {
+      state.agents.revisionsByAgentId[payload.agent_id] = Array.isArray(payload.revisions) ? payload.revisions : [];
+    }
+  },
+  'agent.routine.revision.loaded': (state, payload) => {
+    if (typeof payload?.agent_id === 'string' && payload.agent_id && typeof payload?.revision_id === 'string' && payload.revision_id) {
+      state.agents.revisionContentByKey[`${payload.agent_id}:${payload.revision_id}`] = payload.graph;
+    }
+  },
 };
 
 export function buildExtraReducers(builder) {
@@ -192,3 +220,5 @@ export const selectActiveAgentProfile = (state) => state.uiData.agents.active.de
 export const selectActiveAgentProfileState = (state) => state.uiData.agents.active;
 export const selectAgentSkillContent = (state, skillPath) => state.uiData.agents.skillsByPath[skillPath];
 export const selectAgentRoutineRuns = (state, agentId) => state.uiData.agents.runsByAgentId[agentId];
+export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agents.revisionsByAgentId[agentId];
+export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];

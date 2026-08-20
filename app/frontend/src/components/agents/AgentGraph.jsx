@@ -12,7 +12,15 @@ import { useDispatch, useSelector } from 'react-redux';
 import { createPortal } from 'react-dom';
 import Select from '../common/Select';
 import { useConfig } from '../../context/ConfigContext';
-import { fetchRoutineRuns, selectAgentProfiles, selectAgentRoutineRuns } from '../../store/uiDataSlice';
+import {
+  fetchRoutineRevision,
+  fetchRoutineRevisions,
+  fetchRoutineRuns,
+  selectAgentProfiles,
+  selectAgentRoutineRevisionContent,
+  selectAgentRoutineRevisions,
+  selectAgentRoutineRuns,
+} from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
@@ -2150,7 +2158,7 @@ export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
-function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
+function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -2905,8 +2913,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         />
       ) : runsOpen ? (
         <RoutineRunsPanel key={agent.id} agentId={agent.id} onClose={onCloseRuns} />
+      ) : revisionsOpen ? (
+        <RoutineRevisionsPanel key={agent.id} agentId={agent.id} onClose={onCloseRevisions} />
       ) : (
-        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); }} />
+        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); }} />
       )}
     </>
   );
@@ -2934,6 +2944,7 @@ function ChevronRightSmall() {
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
   { id: 'runs', label: 'Runs', title: 'Routine run history' },
+  { id: 'revisions', label: 'Revisions', title: 'Routine revision history' },
 ];
 
 function GraphSideDock({ onSelect }) {
@@ -2956,7 +2967,7 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
+export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -2972,6 +2983,9 @@ export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onSho
       runsOpen={runsOpen}
       onOpenRuns={onOpenRuns}
       onCloseRuns={onCloseRuns}
+      revisionsOpen={revisionsOpen}
+      onOpenRevisions={onOpenRevisions}
+      onCloseRevisions={onCloseRevisions}
     />
   );
 }
@@ -3165,6 +3179,119 @@ function RoutineRunsPanel({ agentId, onClose }) {
           </li>
         ))}
       </ul>
+    </aside>
+  );
+}
+
+// Read-only, syntax-highlighted rendering of one revision's graph document --
+// same highlight.js technique as JsonCodeEditor, minus the editable textarea
+// layer, since a past revision is never itself editable here.
+function RevisionJsonView({ value }) {
+  const highlighted = useMemo(() => {
+    try {
+      return hljs.highlight(value, { language: 'json' }).value;
+    } catch {
+      return escapeHtmlText(value);
+    }
+  }, [value]);
+
+  return (
+    <pre className="agents-graph-revisions__json">
+      <code className="hljs language-json" dangerouslySetInnerHTML={{ __html: highlighted }} />
+    </pre>
+  );
+}
+
+// Every captured revision of this routine's graph document (see
+// app.backend.document_store.PostgresDocumentStore._ensure_routine_revision_history
+// -- a Postgres trigger appends one immutable row on every write to the
+// routine's live document). Clicking a revision loads and renders its full
+// graph JSON below the list; content is cached per revision id so re-clicking
+// an already-viewed revision is instant.
+function RoutineRevisionsPanel({ agentId, onClose }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const revisions = useSelector((state) => selectAgentRoutineRevisions(state, agentId));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [selectedRevisionId, setSelectedRevisionId] = useState(null);
+  const [revisionLoading, setRevisionLoading] = useState(false);
+  const [revisionError, setRevisionError] = useState(null);
+  const content = useSelector((state) => selectAgentRoutineRevisionContent(state, agentId, selectedRevisionId));
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    dispatch(fetchRoutineRevisions({ agentsUrl, agentId }))
+      .unwrap()
+      .catch((fetchError) => setError(fetchError.message || 'Failed to load revisions'))
+      .finally(() => setLoading(false));
+  }, [agentId, agentsUrl, dispatch]);
+
+  useEffect(() => {
+    if (!revisions) {
+      load();
+    }
+    // Only auto-load the first time this agent's revisions are uncached; a
+    // manual refresh re-fetches explicitly via `load`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  const selectRevision = useCallback((revisionId) => {
+    setSelectedRevisionId(revisionId);
+    setRevisionError(null);
+    setRevisionLoading(true);
+    dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId }))
+      .unwrap()
+      .catch((fetchError) => setRevisionError(fetchError.message || 'Failed to load revision'))
+      .finally(() => setRevisionLoading(false));
+  }, [agentId, agentsUrl, dispatch]);
+
+  return (
+    <aside className="agents-graph-editor agents-graph-revisions">
+      <button
+        type="button"
+        className="agents-graph-editor__collapse"
+        onClick={onClose}
+        title="Collapse"
+        aria-label="Collapse revision history"
+      >
+        <ChevronRightSmall />
+      </button>
+      <header className="agents-graph-editor__head">
+        <h2>Revisions</h2>
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={load} disabled={loading}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </header>
+      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+      {!error && revisions && revisions.length === 0 && !loading ? (
+        <p className="agents-graph-runs__empty">No revisions recorded yet.</p>
+      ) : null}
+      <ul className="agents-graph-revisions__list">
+        {(revisions || []).map((revision) => (
+          <li key={revision.revision_id}>
+            <button
+              type="button"
+              className={`agents-graph-revisions__item${selectedRevisionId === revision.revision_id ? ' is-selected' : ''}`}
+              onClick={() => selectRevision(revision.revision_id)}
+            >
+              <span className="agents-graph-runs__run-id">{revision.revision_id.slice(0, 8)}</span>
+              <span className="agents-graph-runs__age" title={revision.captured_at || ''}>{formatAge(revision.captured_at) || '—'}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+      {selectedRevisionId ? (
+        <div className="agents-graph-revisions__viewer">
+          {revisionLoading ? <p className="agents-graph-runs__empty">Loading revision…</p> : null}
+          {revisionError ? <p className="agents-graph-editor__error">{revisionError}</p> : null}
+          {!revisionLoading && !revisionError && content ? (
+            <RevisionJsonView value={JSON.stringify(content, null, 2)} />
+          ) : null}
+        </div>
+      ) : null}
     </aside>
   );
 }
