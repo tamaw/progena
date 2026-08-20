@@ -8,11 +8,13 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { createPortal } from 'react-dom';
 import Select from '../common/Select';
-import { selectAgentProfiles } from '../../store/uiDataSlice';
+import { useConfig } from '../../context/ConfigContext';
+import { fetchRoutineRuns, selectAgentProfiles, selectAgentRoutineRuns } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
+import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
@@ -2148,7 +2150,7 @@ export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
-function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
+function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -2901,8 +2903,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           onSave={handleJsonApply}
           onClose={onCloseJson}
         />
+      ) : runsOpen ? (
+        <RoutineRunsPanel key={agent.id} agentId={agent.id} onClose={onCloseRuns} />
       ) : (
-        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); }} />
+        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); }} />
       )}
     </>
   );
@@ -2929,6 +2933,7 @@ function ChevronRightSmall() {
 
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
+  { id: 'runs', label: 'Runs', title: 'Routine run history' },
 ];
 
 function GraphSideDock({ onSelect }) {
@@ -2951,7 +2956,7 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson }) {
+export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -2964,6 +2969,9 @@ export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onSho
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}
       onCloseJson={onCloseJson}
+      runsOpen={runsOpen}
+      onOpenRuns={onOpenRuns}
+      onCloseRuns={onCloseRuns}
     />
   );
 }
@@ -3087,6 +3095,76 @@ function AgentGraphEditor({ graph, onSave, onClose }) {
           {saving ? 'Saving…' : 'Apply changes'}
         </button>
       </div>
+    </aside>
+  );
+}
+
+// Recent executions of this routine, reconstructed from LangGraph checkpoint
+// threads named `routine:<routine_id>:<revision_id>:<run_id>` (see
+// app.progenitor.routines.subagent.create_routine_subagent). Lazily fetched
+// the first time the panel opens for a given agent; a manual refresh re-asks
+// since nothing pushes live updates here yet.
+function RoutineRunsPanel({ agentId, onClose }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    dispatch(fetchRoutineRuns({ agentsUrl, agentId }))
+      .unwrap()
+      .catch((fetchError) => setError(fetchError.message || 'Failed to load runs'))
+      .finally(() => setLoading(false));
+  }, [agentId, agentsUrl, dispatch]);
+
+  useEffect(() => {
+    if (!runs) {
+      load();
+    }
+    // Only auto-load the first time this agent's runs are uncached; a
+    // manual refresh (or a later run) re-fetches explicitly via `load`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  return (
+    <aside className="agents-graph-editor agents-graph-runs">
+      <button
+        type="button"
+        className="agents-graph-editor__collapse"
+        onClick={onClose}
+        title="Collapse"
+        aria-label="Collapse run history"
+      >
+        <ChevronRightSmall />
+      </button>
+      <header className="agents-graph-editor__head">
+        <h2>Runs</h2>
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={load} disabled={loading}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </header>
+      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+      {!error && runs && runs.length === 0 && !loading ? (
+        <p className="agents-graph-runs__empty">No runs recorded yet.</p>
+      ) : null}
+      <ul className="agents-graph-runs__list">
+        {(runs || []).map((run) => (
+          <li key={run.thread_id} className="agents-graph-runs__item">
+            <div className="agents-graph-runs__item-head">
+              <span className="agents-graph-runs__run-id">{(run.run_id || '').slice(0, 8) || 'unknown'}</span>
+              <span className="agents-graph-runs__age" title={run.last_checkpoint_at || ''}>{formatAge(run.last_checkpoint_at) || '—'}</span>
+            </div>
+            <div className="agents-graph-runs__item-meta">
+              <span>revision {(run.revision_id || 'unpinned').slice(0, 8)}</span>
+              <span>{run.checkpoint_count} step{run.checkpoint_count === 1 ? '' : 's'}</span>
+            </div>
+          </li>
+        ))}
+      </ul>
     </aside>
   );
 }

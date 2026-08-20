@@ -26,6 +26,10 @@ export const initialState = {
     // `/skills/...` path (see `fetchAgentSkillContent` /
     // `agent.skill.content.updated`).
     skillsByPath: {},
+    // Recent execution runs for a routine, fetched lazily when the Runs
+    // side-panel opens and cached by agent id (see `fetchRoutineRuns` /
+    // `agent.routine.runs.loaded`).
+    runsByAgentId: {},
   },
 };
 
@@ -98,6 +102,11 @@ export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgent
   { requestId },
 ));
 
+export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/runs`,
+  { requestId },
+));
+
 export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
   {
@@ -153,6 +162,11 @@ export const eventHandlers = {
       state.agents.skillsByPath[payload.path] = payload;
     }
   },
+  'agent.routine.runs.loaded': (state, payload) => {
+    if (typeof payload?.agent_id === 'string' && payload.agent_id) {
+      state.agents.runsByAgentId[payload.agent_id] = Array.isArray(payload.runs) ? payload.runs : [];
+    }
+  },
 };
 
 export function buildExtraReducers(builder) {
@@ -177,3 +191,4 @@ export const selectAgentProfilesState = (state) => state.uiData.agents;
 export const selectActiveAgentProfile = (state) => state.uiData.agents.active.detail;
 export const selectActiveAgentProfileState = (state) => state.uiData.agents.active;
 export const selectAgentSkillContent = (state, skillPath) => state.uiData.agents.skillsByPath[skillPath];
+export const selectAgentRoutineRuns = (state, agentId) => state.uiData.agents.runsByAgentId[agentId];

@@ -331,6 +331,7 @@ export function AgentWorkspace({ page }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
+  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -777,7 +778,7 @@ export function AgentWorkspace({ page }) {
               {graphDetailPending ? (
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen ? 'is-editing' : ''}`}>
+                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
                   <AgentGraphTab
                     key={selectedAgent.id}
                     agent={selectedAgent}
@@ -788,8 +789,11 @@ export function AgentWorkspace({ page }) {
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
-                    onOpenJson={() => setGraphEditorOpen(true)}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); }}
                     onCloseJson={() => setGraphEditorOpen(false)}
+                    runsOpen={routineRunsOpen}
+                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); }}
+                    onCloseRuns={() => setRoutineRunsOpen(false)}
                   />
                 </div>
               )}
