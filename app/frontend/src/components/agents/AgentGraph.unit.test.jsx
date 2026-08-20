@@ -7,7 +7,6 @@ import {
   forkJoin,
   forkLaneEdgePosition,
   getExpressionAutocompleteContext,
-  getInputsAutocompleteContext,
   incompleteLoopEdges,
   incompleteNodes,
   isFlowEdge,
@@ -765,34 +764,6 @@ describe('buildStatePathSuggestions', () => {
   });
 });
 
-describe('getInputsAutocompleteContext', () => {
-  it('returns null before any character is typed after the colon', () => {
-    expect(getInputsAutocompleteContext('host: ', 6)).toBeNull();
-    expect(getInputsAutocompleteContext('host:', 5)).toBeNull();
-  });
-
-  it('detects a path in progress after a colon (mode: path)', () => {
-    const context = getInputsAutocompleteContext('host: parse_j', 13);
-    expect(context).toMatchObject({ query: 'parse_j', mode: 'path', tokenEnd: 13 });
-    expect(context.tokenStart).toBe(6);
-  });
-
-  it('detects a bare token on a colonless line (mode: line)', () => {
-    const context = getInputsAutocompleteContext('clas', 4);
-    expect(context).toMatchObject({ query: 'clas', mode: 'line', tokenStart: 0, tokenEnd: 4, replaceStart: 0 });
-  });
-
-  it('only considers the current line, not earlier completed lines', () => {
-    const text = 'host: parse_json.host\ncla';
-    const context = getInputsAutocompleteContext(text, text.length);
-    expect(context).toMatchObject({ query: 'cla', mode: 'line' });
-    expect(context.tokenStart).toBe(text.indexOf('cla'));
-  });
-
-  it('returns null on a line with a colon but nothing typed after it, even mid-text', () => {
-    expect(getInputsAutocompleteContext('host: \nother line', 6)).toBeNull();
-  });
-});
 
 describe('filterStatePathSuggestions', () => {
   const suggestions = [
@@ -814,9 +785,13 @@ describe('filterStatePathSuggestions', () => {
 });
 
 describe('getExpressionAutocompleteContext', () => {
-  it('returns null until at least one identifier character is typed', () => {
-    expect(getExpressionAutocompleteContext('count + ', 8)).toBeNull();
-    expect(getExpressionAutocompleteContext('', 0)).toBeNull();
+  it('returns an empty-query context with nothing typed -- the caller opens the menu on focus, not on this', () => {
+    expect(getExpressionAutocompleteContext('', 0)).toEqual({ query: '', tokenStart: 0, tokenEnd: 0 });
+  });
+
+  it('returns an empty-query context right after whitespace or an operator', () => {
+    expect(getExpressionAutocompleteContext('count + ', 8)).toEqual({ query: '', tokenStart: 8, tokenEnd: 8 });
+    expect(getExpressionAutocompleteContext('count + ', 6)).toEqual({ query: '', tokenStart: 6, tokenEnd: 6 });
   });
 
   it('detects a bare identifier under the caret', () => {
@@ -825,8 +800,9 @@ describe('getExpressionAutocompleteContext', () => {
   });
 
   it('detects a dotted attribute chain in progress', () => {
-    const context = getExpressionAutocompleteContext('classify_intent.la', 19);
-    expect(context).toEqual({ query: 'classify_intent.la', tokenStart: 0, tokenEnd: 19 });
+    const text = 'classify_intent.la';
+    const context = getExpressionAutocompleteContext(text, text.length);
+    expect(context).toEqual({ query: 'classify_intent.la', tokenStart: 0, tokenEnd: text.length });
   });
 
   it('only considers the identifier chain ending at the caret, not earlier text', () => {
@@ -836,7 +812,8 @@ describe('getExpressionAutocompleteContext', () => {
   });
 
   it('returns null right after a closed string or number literal', () => {
-    expect(getExpressionAutocompleteContext('attempt == "retry"', 19)).toBeNull();
+    const stringText = 'attempt == "retry"';
+    expect(getExpressionAutocompleteContext(stringText, stringText.length)).toBeNull();
     expect(getExpressionAutocompleteContext('count < 3', 9)).toBeNull();
   });
 
@@ -844,7 +821,13 @@ describe('getExpressionAutocompleteContext', () => {
     expect(getExpressionAutocompleteContext('attempt == "re', 14)).toBeNull();
   });
 
-  it('returns null right after a dot with nothing typed yet', () => {
-    expect(getExpressionAutocompleteContext('classify_intent.', 16)).toBeNull();
+  it('a dangling dot keeps it as part of the query, narrowing to that predecessors own properties', () => {
+    const text = 'classify_intent.';
+    const context = getExpressionAutocompleteContext(text, text.length);
+    expect(context).toEqual({ query: 'classify_intent.', tokenStart: 0, tokenEnd: text.length });
+  });
+
+  it('clamps a caret position past the end of the text instead of misreading it', () => {
+    expect(getExpressionAutocompleteContext('count', 999)).toEqual({ query: 'count', tokenStart: 0, tokenEnd: 5 });
   });
 });

@@ -330,27 +330,45 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
 // sitting inside a string or number literal correctly gets no suggestions:
 // an unterminated-string tokenize error, or the caret landing right after a
 // closed str/num token, both mean "not actually typing an identifier here".
-// Backward-only, same convention as chatInputModel.js's mention detector and
-// getInputsAutocompleteContext below -- whatever's already typed past the
-// caret on the same token is left alone.
+// Anywhere else -- nothing typed yet, right after whitespace, right after an
+// operator -- returns an EMPTY query rather than null, so the menu can open
+// the moment the field is focused (the caller gates that on focus, not on
+// this function) and show every candidate before narrowing as the author
+// types. A DANGLING dot ("classify_intent.") is its own case: the query
+// includes the trailing dot, which narrows suggestions to that node's own
+// properties via a plain substring match (nothing else contains "x.") without
+// needing any special-cased "drill into a specific node" branch. Backward-
+// only, same convention as chatInputModel.js's mention detector -- whatever's
+// already typed past the caret on the same token is left alone.
 // eslint-disable-next-line react-refresh/only-export-components
 export function getExpressionAutocompleteContext(text, caret) {
   const source = typeof text === 'string' ? text : '';
-  const position = Number.isFinite(caret) ? caret : source.length;
+  const position = Math.min(Number.isFinite(caret) ? caret : source.length, source.length);
   const tokenized = tokenize(source.slice(0, position));
   if (tokenized.error) return null;
   const tokens = tokenized.tokens;
-  let i = tokens.length - 2; // skip the trailing synthetic eof token
-  if (i < 0 || tokens[i].type !== 'name') return null;
-  let start = tokens[i].start;
-  i -= 1;
-  while (i >= 1) {
-    const dot = tokens[i];
-    const name = tokens[i - 1];
-    if (dot.type !== 'op' || dot.value !== '.' || dot.end !== start) break;
-    if (name.type !== 'name' || name.end !== dot.start) break;
-    start = name.start;
-    i -= 2;
+  const lastIndex = tokens.length - 2; // skip the trailing synthetic eof token
+  if (lastIndex < 0) return { query: '', tokenStart: position, tokenEnd: position };
+  const last = tokens[lastIndex];
+  if (last.end !== position) return { query: '', tokenStart: position, tokenEnd: position };
+  if (last.type === 'str' || last.type === 'num') return null;
+  const danglingDot = last.type === 'op' && last.value === '.';
+  if (last.type !== 'name' && !danglingDot) {
+    return { query: '', tokenStart: position, tokenEnd: position };
+  }
+  let start = last.start;
+  let i = lastIndex - 1;
+  let expectName = danglingDot;
+  while (i >= 0) {
+    const tok = tokens[i];
+    if (expectName) {
+      if (tok.type !== 'name' || tok.end !== start) break;
+    } else {
+      if (tok.type !== 'op' || tok.value !== '.' || tok.end !== start) break;
+    }
+    start = tok.start;
+    expectName = !expectName;
+    i -= 1;
   }
   return { query: source.slice(start, position), tokenStart: start, tokenEnd: position };
 }
@@ -367,8 +385,9 @@ export function getExpressionAutocompleteContext(text, caret) {
 // `text-decoration-color` (independent of the (transparent) text color, so
 // the squiggly shows without a second copy of the glyphs).
 //
-// `autocomplete` layers the same caret-anchored state-path menu InputsField
-// uses on top -- expressions resolve names directly against full routine
+// `autocomplete` layers a caret-anchored state-path menu on top -- open the
+// moment the field is focused (showing every candidate), narrowing as the
+// author types. Expressions resolve names directly against full routine
 // state now (see expression.py's `ast.Attribute` handling), so there's no
 // separate `inputs` binding step left to author; the same predecessor/
 // response_schema suggestions just get typed straight into the expression.
@@ -380,6 +399,7 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
   const highlightRef = useRef(null);
   const errorLayerRef = useRef(null);
   const textareaRef = useRef(null);
+  const [focused, setFocused] = useState(false);
   const [caret, setCaret] = useState(0);
   const [rawActiveIndex, setRawActiveIndex] = useState(0);
   const [dismissedAt, setDismissedAt] = useState(null);
@@ -405,8 +425,8 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
     [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
   );
   const context = useMemo(
-    () => (autocomplete ? getExpressionAutocompleteContext(value, caret) : null),
-    [autocomplete, value, caret],
+    () => (autocomplete && focused ? getExpressionAutocompleteContext(value, caret) : null),
+    [autocomplete, focused, value, caret],
   );
   const filtered = useMemo(
     () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
@@ -454,7 +474,13 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
       setRawActiveIndex((current) => current - 1);
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
+    } else if (event.key === 'Enter') {
+      // Tab deliberately does NOT accept here (unlike InputsField's old
+      // line-based menu) -- with the menu now open for the whole time a
+      // field is focused rather than only after typing a character, always
+      // treating Tab as "accept" would trap normal keyboard navigation:
+      // an author could no longer Tab out of an empty/finished expression
+      // without first dismissing the menu.
       event.preventDefault();
       accept(filtered[activeIndex]);
     } else if (event.key === 'Escape') {
@@ -503,7 +529,12 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
           onKeyDown={handleKeyDown}
           onKeyUp={syncCaret}
           onClick={syncCaret}
-          onBlur={() => setDismissedAt(context?.tokenStart ?? null)}
+          onFocus={(event) => {
+            setFocused(true);
+            setDismissedAt(null);
+            setCaret(event.target.selectionStart);
+          }}
+          onBlur={() => setFocused(false)}
           spellCheck={false}
           aria-required={required || undefined}
           aria-invalid={issue.ok ? undefined : true}
@@ -580,36 +611,6 @@ function textToInputs(text) {
 
 const EMPTY_SUGGESTIONS = [];
 
-// Where does the "path" token being typed on a `name: path` line start/end,
-// and does it warrant a whole `name: path` line vs just the trailing path
-// segment? Two trigger shapes, both requiring at least one already-typed
-// character (an empty query never opens the menu):
-//  - `mode: 'path'`  -- the line already has a colon; only the fragment
-//    after it (and any single leading space) is the query, and only that
-//    fragment gets replaced on accept.
-//  - `mode: 'line'`  -- no colon on the line yet (a fresh line, or one the
-//    author started typing a path into directly); the whole line is the
-//    query, and accepting fills in a generated `name: ` prefix too.
-// eslint-disable-next-line react-refresh/only-export-components
-export function getInputsAutocompleteContext(text, caret) {
-  if (typeof text !== 'string') return null;
-  const position = Number.isFinite(caret) ? caret : text.length;
-  const lineStart = text.lastIndexOf('\n', position - 1) + 1;
-  const line = text.slice(lineStart, position);
-  const afterColon = line.match(/:\s*([A-Za-z0-9_.]*)$/);
-  if (afterColon && afterColon[1]) {
-    const tokenStart = lineStart + line.length - afterColon[1].length;
-    return { query: afterColon[1], tokenStart, tokenEnd: position, replaceStart: tokenStart, mode: 'path' };
-  }
-  if (!line.includes(':')) {
-    const bare = line.match(/([A-Za-z0-9_.]*)$/);
-    if (bare && bare[1]) {
-      const tokenStart = lineStart + line.length - bare[1].length;
-      return { query: bare[1], tokenStart, tokenEnd: position, replaceStart: lineStart, mode: 'line' };
-    }
-  }
-  return null;
-}
 
 // `startsWith` matches first, `includes` matches after, both case-
 // insensitive against the dotted path text (not the display source/label).
@@ -687,20 +688,17 @@ function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSel
   );
 }
 
-// `autocomplete` opts a call site into the caret-anchored path menu (eval/
-// condition/switch config today; agent config and Loop's loop_guard reuse
-// this same field without it for now). `text` is a local buffer, not a
-// derivation of `config.inputs` on every render -- `textToInputs` silently
-// drops any line that doesn't have a colon yet (that's how it recognizes
-// "not a real entry"), so deriving the textarea's value straight from
-// `inputsToText(textToInputs(rawText))` on every keystroke would erase an
-// in-progress, colon-less line the instant it re-rendered. The buffer resets
-// from `config.inputs` only when `id` changes (a different node is now
-// selected) or `config.inputs` changed for a reason other than this field's
-// own last edit (e.g. the "Edit as JSON" panel) -- tracked by comparing
-// object identity against what this field itself last emitted.
-function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
-  const graph = useContext(GraphEditContext);
+// `text` is a local buffer, not a derivation of `config.inputs` on every
+// render -- `textToInputs` silently drops any line that doesn't have a
+// colon yet (that's how it recognizes "not a real entry"), so deriving the
+// textarea's value straight from `inputsToText(textToInputs(rawText))` on
+// every keystroke would erase an in-progress, colon-less line the instant
+// it re-rendered. The buffer resets from `config.inputs` only when `id`
+// changes (a different node is now selected) or `config.inputs` changed for
+// a reason other than this field's own last edit (e.g. the "Edit as JSON"
+// panel) -- tracked by comparing object identity against what this field
+// itself last emitted.
+function InputsField({ id, config, updateNodeConfig }) {
   const [trackedId, setTrackedId] = useState(id);
   const [trackedInputs, setTrackedInputs] = useState(config?.inputs);
   const [text, setText] = useState(() => inputsToText(config?.inputs));
@@ -711,101 +709,21 @@ function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
     if (nextText !== text) setText(nextText);
   }
 
-  const textareaRef = useRef(null);
-  const [caret, setCaret] = useState(0);
-  const [rawActiveIndex, setRawActiveIndex] = useState(0);
-  const [dismissedAt, setDismissedAt] = useState(null);
-  const [panelPos, setPanelPos] = useState(null);
-
-  const suggestions = useMemo(
-    () => (autocomplete ? buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
-    [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
-  );
-  const context = useMemo(
-    () => (autocomplete ? getInputsAutocompleteContext(text, caret) : null),
-    [autocomplete, text, caret],
-  );
-  const filtered = useMemo(
-    () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
-    [suggestions, context],
-  );
-  const activeIndex = filtered.length ? ((rawActiveIndex % filtered.length) + filtered.length) % filtered.length : 0;
-  const menuOpen = !!context && filtered.length > 0 && dismissedAt !== context.tokenStart;
-
-  useLayoutEffect(() => {
-    if (!menuOpen || !textareaRef.current) return;
-    const rect = textareaRef.current.getBoundingClientRect();
-    const coords = getCaretCoordinates(textareaRef.current, context.tokenStart);
-    setPanelPos({
-      top: rect.top - textareaRef.current.scrollTop + coords.top + coords.height + 4,
-      left: rect.left - textareaRef.current.scrollLeft + coords.left,
-    });
-  }, [menuOpen, context?.tokenStart, text]);
-
-  function commitText(nextText) {
-    setText(nextText);
-    const parsed = textToInputs(nextText);
-    setTrackedInputs(parsed);
-    updateNodeConfig(id, { inputs: parsed });
-  }
-
-  function accept(item) {
-    if (!item || !context) return;
-    const insertion = context.mode === 'line' ? `${item.name}: ${item.path}` : item.path;
-    const nextText = `${text.slice(0, context.replaceStart)}${insertion}${text.slice(context.tokenEnd)}`;
-    const nextCaret = context.replaceStart + insertion.length;
-    commitText(nextText);
-    setDismissedAt(null);
-    setRawActiveIndex(0);
-    requestAnimationFrame(() => {
-      const textarea = textareaRef.current;
-      if (!textarea) return;
-      textarea.focus();
-      textarea.setSelectionRange(nextCaret, nextCaret);
-      setCaret(nextCaret);
-    });
-  }
-
-  function handleKeyDown(event) {
-    if (!menuOpen) return;
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      setRawActiveIndex((current) => current + 1);
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      setRawActiveIndex((current) => current - 1);
-    } else if (event.key === 'Enter' || event.key === 'Tab') {
-      event.preventDefault();
-      accept(filtered[activeIndex]);
-    } else if (event.key === 'Escape') {
-      event.preventDefault();
-      event.stopPropagation();
-      setDismissedAt(context.tokenStart);
-    }
-  }
-
-  const syncCaret = (event) => setCaret(event.target.selectionStart);
-
   return (
     <label className="agents-graph-node__field">
       <span className="agents-graph-node__field-label">Inputs (name: path, e.g. host: parse_json.host)</span>
       <textarea
-        ref={textareaRef}
         className="agents-graph-node__prompt"
         value={text}
         placeholder="host: parse_json.host"
         onChange={(event) => {
-          commitText(event.target.value);
-          setCaret(event.target.selectionStart);
+          const nextText = event.target.value;
+          setText(nextText);
+          const parsed = textToInputs(nextText);
+          setTrackedInputs(parsed);
+          updateNodeConfig(id, { inputs: parsed });
         }}
-        onKeyDown={handleKeyDown}
-        onKeyUp={syncCaret}
-        onClick={syncCaret}
-        onBlur={() => setDismissedAt(context?.tokenStart ?? null)}
       />
-      {menuOpen ? (
-        <StatePathSuggestionsMenu items={filtered} activeIndex={activeIndex} position={panelPos} onHover={setRawActiveIndex} onSelect={accept} />
-      ) : null}
     </label>
   );
 }
