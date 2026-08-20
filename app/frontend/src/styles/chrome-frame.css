@@ -6437,11 +6437,12 @@ body,
 }
 
 /* Routine Runs panel -- shares .agents-graph-editor shell chrome (width,
-   collapse rail, header) with the JSON editor; only the body differs. */
-.agents-graph-runs {
-  overflow-y: auto;
-}
-
+   collapse rail, header) with the JSON editor; only the body differs.
+   Scroll is scoped to .agents-graph-runs__list, NOT this outer <aside> --
+   the collapse button (.agents-graph-editor__collapse) straddles the seam
+   via a negative transform, rendering *outside* this box's edge, and an
+   overflow: auto here would clip it out of the hit-test area entirely,
+   making it unclickable. */
 .agents-graph-runs__empty {
   margin: 0;
   color: var(--color-text-tertiary);
@@ -6452,6 +6453,9 @@ body,
   list-style: none;
   margin: 0;
   padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 6px;
