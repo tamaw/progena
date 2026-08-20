@@ -56,10 +56,19 @@ describe('checkExpressionSyntax', () => {
     expect(result.message).toMatch(/function calls/);
   });
 
-  it('rejects attribute access, flagging the dot', () => {
-    const result = checkExpressionSyntax('x.upper');
+  it('accepts a dotted attribute chain', () => {
+    expect(checkExpressionSyntax('parse.host')).toEqual({ ok: true });
+    expect(checkExpressionSyntax('assess.repo.owner.name')).toEqual({ ok: true });
+  });
+
+  it('rejects a call after an attribute chain, flagging the parenthesis', () => {
+    const result = checkExpressionSyntax('x.upper()');
     expect(result.ok).toBe(false);
-    expect(result.message).toMatch(/attribute access/);
+    expect(result.message).toMatch(/function calls/);
+  });
+
+  it('rejects a dangling dot with nothing after it', () => {
+    expect(checkExpressionSyntax('x.').ok).toBe(false);
   });
 
   it('rejects subscripting, flagging the bracket', () => {

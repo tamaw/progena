@@ -5,6 +5,9 @@
 // than a real interpreter. This is NOT a general Python parser: it exists only to
 // flag the same expressions the backend would reject, in the browser, before a
 // round trip, so `ExpressionField` can underline the offending span while typing.
+// Dotted attribute access (`a.b.c`) is allowed -- the backend walks it as a
+// dict-key lookup (`ast.Attribute` in `_eval_node`), never real `getattr`, so
+// it only ever reaches into nested JSON-shaped state, not methods or dunders.
 // Keep the grammar here in lockstep with `_ALLOWED_BINOPS`/`_ALLOWED_COMPARES`/
 // `_eval_node` in expression.py -- see `tests/progenitor/routines/test_expression.py`
 // for the backend's own accept/reject list this mirrors.
@@ -228,12 +231,29 @@ function parse(tokens) {
     }
   }
 
+  // `.` chains freely (`a.b.c`) -- matches expression.py's `ast.Attribute`
+  // handling, a dict-only walk (never real Python `getattr`) added after
+  // this checker was first written. Still rejects calls/subscripts
+  // immediately, whether right after the atom itself or after any `.name`
+  // in the chain (`a.b()`, `a[0]`).
   function parseAtomWithPostfixCheck() {
     parseAtom();
-    const tok = peek();
-    if (tok.type === 'op' && (tok.value === '.' || tok.value === '(' || tok.value === '[')) {
-      const kind = tok.value === '.' ? 'attribute access' : tok.value === '(' ? 'function calls' : 'subscripting';
-      throw new ExprIssue(`${kind} aren't supported in restricted expressions`, tok.start, tok.end);
+    for (;;) {
+      const tok = peek();
+      if (tok.type === 'op' && tok.value === '.') {
+        advance();
+        const attr = peek();
+        if (attr.type !== 'name') {
+          throw new ExprIssue("expected an attribute name after '.'", attr.start, Math.max(attr.end, attr.start + 1));
+        }
+        advance();
+        continue;
+      }
+      if (tok.type === 'op' && (tok.value === '(' || tok.value === '[')) {
+        const kind = tok.value === '(' ? 'function calls' : 'subscripting';
+        throw new ExprIssue(`${kind} aren't supported in restricted expressions`, tok.start, tok.end);
+      }
+      break;
     }
   }
 
