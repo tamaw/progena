@@ -13,6 +13,7 @@ pinned thread never recompiles or re-queries after its first call.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -39,6 +40,7 @@ def create_routine_subagent(
     agent_registry: dict[str, Any],
     routine_registry: dict[str, Any],
     tool_registry: Any = None,
+    checkpointer: Any | None = None,
 ) -> CompiledSubAgent:
     """Build a ``CompiledSubAgent``-shaped dict that proxies to routine ``routine_id``."""
 
@@ -88,10 +90,23 @@ def create_routine_subagent(
                     routine_registry=routine_registry,
                     tool_registry=tool_registry,
                     base_system_prompt=None,
+                    checkpointer=checkpointer,
                 )
                 if revision_id is not None:
                     cache[revision_id] = compiled
-            result = await compiled.ainvoke({"messages": state.get("messages") or []})
+            # One thread_id per top-level run, not per node/call -- lets
+            # "every checkpoint row for this run" be found later by a plain
+            # `thread_id LIKE 'routine:<routine_id>:%'` scan (see the Runs
+            # panel), and folds in the revision actually executed so a run
+            # against a stale pinned revision is distinguishable from one
+            # against latest. Nested `agent`/`routine` node calls inside this
+            # run are NOT given their own prefix -- they're steps of this run,
+            # not separate runs.
+            run_thread_id = f"routine:{routine_id}:{revision_id or 'unpinned'}:{uuid.uuid4().hex}"
+            result = await compiled.ainvoke(
+                {"messages": state.get("messages") or []},
+                config={"configurable": {"thread_id": run_thread_id}},
+            )
         except (ValueError, KeyError, NotImplementedError) as exc:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' failed: {exc}")]}
 

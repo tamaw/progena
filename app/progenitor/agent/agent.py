@@ -391,6 +391,7 @@ async def create_progenitor_agent(
             agent_registry=agent_registry,
             routine_registry=routine_registry,
             tool_registry=tool_registry,
+            checkpointer=checkpointer,
         )
         routine_subagents.append(routine_spec)
         agent_specs_by_name[routine_id] = routine_spec
