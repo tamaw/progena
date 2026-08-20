@@ -782,6 +782,26 @@ describe('filterStatePathSuggestions', () => {
     const filtered = filterStatePathSuggestions(withMidMatch, 'compute');
     expect(filtered.map((s) => s.path)).toEqual(['compute_score', 'x_compute_score']);
   });
+
+  it('keeps the bare object itself in the list on a dangling-dot query, even for a schema-less node', () => {
+    const bareOnly = [
+      { path: 'request', name: 'request' },
+      { path: 'context', name: 'context' },
+      { path: 'prompt', name: 'prompt' },
+    ];
+    const filtered = filterStatePathSuggestions(bareOnly, 'prompt.');
+    expect(filtered.map((s) => s.path)).toEqual(['prompt']);
+  });
+
+  it('ranks a dangling-dots bare-object fallback after real property matches', () => {
+    const filtered = filterStatePathSuggestions(suggestions, 'classify_intent.');
+    expect(filtered.map((s) => s.path)).toEqual(['classify_intent.label', 'classify_intent']);
+  });
+
+  it('does not fall back to a bare match for a query that is not dangling-dot-terminated', () => {
+    const filtered = filterStatePathSuggestions(suggestions, 'compute_score');
+    expect(filtered.map((s) => s.path)).toEqual(['compute_score']);
+  });
 });
 
 describe('getExpressionAutocompleteContext', () => {
