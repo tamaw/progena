@@ -3310,8 +3310,10 @@ function RoutineRevisionsPanel({
     if (!revisions) {
       load();
     }
-    // Only auto-load the first time this agent's revisions are uncached; a
-    // manual refresh re-fetches explicitly via `load`.
+    // Only load the first time this agent's revisions are uncached -- a
+    // live push (agent.routine.revisions.loaded) keeps the list current
+    // after that, see _reconcile_routine_agent in ui_routes.py, so there
+    // is no manual refresh affordance.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
@@ -3344,9 +3346,6 @@ function RoutineRevisionsPanel({
       </button>
       <header className="agents-graph-editor__head">
         <h2>Revisions</h2>
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={load} disabled={loading}>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
       </header>
       {error ? <p className="agents-graph-editor__error">{error}</p> : null}
       {!error && revisions && revisions.length === 0 && !loading ? (
