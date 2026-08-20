@@ -614,11 +614,23 @@ const EMPTY_SUGGESTIONS = [];
 
 // `startsWith` matches first, `includes` matches after, both case-
 // insensitive against the dotted path text (not the display source/label).
+// A dangling-dot query ("classify_intent.") also keeps the bare object
+// itself in the list even though it doesn't literally contain the trailing
+// dot -- accepting it undoes the dot (replaces the whole "classify_intent."
+// span with just "classify_intent"), which matters most for a node with no
+// declared response_schema: `prompt.` has no `.property` entries to narrow
+// to at all, so without this the menu would just show nothing once you
+// typed the dot, even though `prompt` itself is a perfectly good state
+// reference on its own.
 // eslint-disable-next-line react-refresh/only-export-components
 export function filterStatePathSuggestions(suggestions, query) {
   const q = (query || '').toLowerCase();
+  const bareMatch = q.endsWith('.') ? q.slice(0, -1) : null;
   return suggestions
-    .filter((item) => item.path.toLowerCase().includes(q))
+    .filter((item) => {
+      const path = item.path.toLowerCase();
+      return path.includes(q) || path === bareMatch;
+    })
     .sort((a, b) => {
       const aStarts = a.path.toLowerCase().startsWith(q) ? 0 : 1;
       const bStarts = b.path.toLowerCase().startsWith(q) ? 0 : 1;
