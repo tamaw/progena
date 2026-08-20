@@ -2735,13 +2735,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const viewingRevision = useSelector((state) => (
     viewingRevisionId ? selectAgentRoutineRevisionContent(state, agent.id, viewingRevisionId) : null
   ));
-  // The single-revision fetch returns just the graph document (no
-  // captured_at) -- the list fetch is where that timestamp actually lives.
-  const viewingRevisionSummary = useSelector((state) => {
-    if (!viewingRevisionId) return null;
-    const list = selectAgentRoutineRevisions(state, agent.id);
-    return list?.find((revision) => revision.revision_id === viewingRevisionId) || null;
-  });
   const isViewingRevision = Boolean(viewingRevisionId);
   const displayNodes = useMemo(
     () => (isViewingRevision ? (viewingRevision?.nodes || []) : nodes),
@@ -2888,25 +2881,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         <div className="agents-graph-shell">
           <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
-              {isViewingRevision ? (
-                <div className="agents-graph-revision-banner" role="status">
-                  <span className="agents-graph-revision-banner__label">
-                    Viewing revision {viewingRevisionId.slice(0, 8)}
-                    {viewingRevisionSummary?.captured_at ? ` · ${formatAge(viewingRevisionSummary.captured_at)} ago` : ''}
-                  </span>
-                  <button
-                    type="button"
-                    className="repo-btn repo-btn--ghost"
-                    onClick={() => setRestoreConfirmOpen(true)}
-                    disabled={!viewingRevision}
-                  >
-                    Restore this revision
-                  </button>
-                  <button type="button" className="repo-btn" onClick={() => setViewingRevisionId(null)}>
-                    Return to current
-                  </button>
-                </div>
-              ) : (
+              {isViewingRevision ? null : (
                 <>
                   {saveState !== 'idle' ? (
                     <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
@@ -3013,6 +2988,8 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
           onClose={onCloseRevisions}
           viewingRevisionId={viewingRevisionId}
           onSelectRevision={setViewingRevisionId}
+          canRestore={Boolean(viewingRevision)}
+          onRequestRestore={() => setRestoreConfirmOpen(true)}
         />
       ) : (
         <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); }} />
@@ -3299,11 +3276,22 @@ function RoutineRunsPanel({ agentId, onClose }) {
 // in the canvas above (locked read-only -- see GraphCanvas's readOnly
 // context flag), not a JSON dump: `viewingRevisionId`/`onSelectRevision`
 // are owned by GraphCanvas so the canvas and this list stay in sync.
-function RoutineRevisionsPanel({ agentId, onClose, viewingRevisionId, onSelectRevision }) {
+function RoutineRevisionsPanel({
+  agentId,
+  onClose,
+  viewingRevisionId,
+  onSelectRevision,
+  canRestore,
+  onRequestRestore,
+}) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
   const revisions = useSelector((state) => selectAgentRoutineRevisions(state, agentId));
+  // Whole cache map (not a per-revision selector) so `selectRevision` can
+  // check "already fetched" without violating the rules of hooks inside a
+  // list render -- a revision is only ever fetched once per mount.
+  const revisionContentByKey = useSelector((state) => state.uiData.agents.revisionContentByKey);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [revisionLoading, setRevisionLoading] = useState(false);
@@ -3330,12 +3318,18 @@ function RoutineRevisionsPanel({ agentId, onClose, viewingRevisionId, onSelectRe
   const selectRevision = useCallback((revisionId) => {
     onSelectRevision(revisionId);
     setRevisionError(null);
+    // Already cached from an earlier click -- render immediately, no
+    // re-fetch and no loading flash on every re-select.
+    if (revisionContentByKey[`${agentId}:${revisionId}`]) {
+      setRevisionLoading(false);
+      return;
+    }
     setRevisionLoading(true);
     dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId }))
       .unwrap()
       .catch((fetchError) => setRevisionError(fetchError.message || 'Failed to load revision'))
       .finally(() => setRevisionLoading(false));
-  }, [agentId, agentsUrl, dispatch, onSelectRevision]);
+  }, [agentId, agentsUrl, dispatch, onSelectRevision, revisionContentByKey]);
 
   return (
     <aside className="agents-graph-editor agents-graph-revisions">
@@ -3355,24 +3349,42 @@ function RoutineRevisionsPanel({ agentId, onClose, viewingRevisionId, onSelectRe
         </button>
       </header>
       {error ? <p className="agents-graph-editor__error">{error}</p> : null}
-      {revisionLoading ? <p className="agents-graph-runs__empty">Loading revision…</p> : null}
-      {revisionError ? <p className="agents-graph-editor__error">{revisionError}</p> : null}
       {!error && revisions && revisions.length === 0 && !loading ? (
         <p className="agents-graph-runs__empty">No revisions recorded yet.</p>
       ) : null}
       <ul className="agents-graph-revisions__list">
-        {(revisions || []).map((revision) => (
-          <li key={revision.revision_id}>
-            <button
-              type="button"
-              className={`agents-graph-revisions__item${viewingRevisionId === revision.revision_id ? ' is-selected' : ''}`}
-              onClick={() => selectRevision(revision.revision_id)}
-            >
-              <span className="agents-graph-runs__run-id">{revision.revision_id.slice(0, 8)}</span>
-              <span className="agents-graph-runs__age" title={revision.captured_at || ''}>{formatAge(revision.captured_at) || '—'}</span>
-            </button>
-          </li>
-        ))}
+        {(revisions || []).map((revision) => {
+          const isSelected = viewingRevisionId === revision.revision_id;
+          return (
+            <li key={revision.revision_id}>
+              <button
+                type="button"
+                className={`agents-graph-revisions__item${isSelected ? ' is-selected' : ''}`}
+                onClick={() => selectRevision(revision.revision_id)}
+              >
+                <span className="agents-graph-runs__run-id">{revision.revision_id.slice(0, 8)}</span>
+                <span className="agents-graph-runs__age" title={revision.captured_at || ''}>{formatAge(revision.captured_at) || '—'}</span>
+              </button>
+              {isSelected ? (
+                <div className="agents-graph-revisions__actions">
+                  {revisionLoading ? <span className="agents-graph-runs__empty">Loading…</span> : null}
+                  {revisionError ? <span className="agents-graph-editor__error">{revisionError}</span> : null}
+                  <button
+                    type="button"
+                    className="repo-btn repo-btn--ghost"
+                    onClick={onRequestRestore}
+                    disabled={!canRestore}
+                  >
+                    Restore this revision
+                  </button>
+                  <button type="button" className="repo-btn" onClick={() => onSelectRevision(null)}>
+                    Return to current
+                  </button>
+                </div>
+              ) : null}
+            </li>
+          );
+        })}
       </ul>
     </aside>
   );

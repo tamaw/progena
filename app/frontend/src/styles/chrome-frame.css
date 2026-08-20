@@ -6497,8 +6497,10 @@ body,
    JSON/Runs. Same overflow lesson as .agents-graph-runs__list: scroll is
    scoped to this inner list, never the outer <aside>, or it clips the
    seam-straddling collapse chevron out of the hit-test area. Selecting a
-   revision renders it in the main canvas (see .agents-graph-revision-banner
-   below), not in this panel, so the list simply fills the panel body. */
+   revision renders it read-only in the main canvas (see GraphCanvas's
+   viewingRevisionId/readOnly) and expands its own list item in place
+   with Restore/Return controls (.agents-graph-revisions__actions below) --
+   no separate canvas-floating banner or main-content selection UI. */
 .agents-graph-revisions__list {
   list-style: none;
   margin: 0;
@@ -6535,26 +6537,17 @@ body,
   background: var(--color-accent-soft);
 }
 
-/* Canvas-floating banner shown instead of the save/validation/run-result
-   pills while a past revision is locked into view (see GraphCanvas's
-   viewingRevisionId/readOnly). Restore copies the revision into the live
-   editable draft; Return to current just drops back to it unmodified. */
-.agents-graph-revision-banner {
+/* Expanded in place under the selected item's button. Restore copies the
+   revision into the live editable draft; Return to current just drops
+   back to it unmodified (both live in the list, not the main canvas). */
+.agents-graph-revisions__actions {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  background: var(--color-accent-soft);
-  border: 1px solid var(--color-accent);
-  font-size: 11.5px;
-  color: var(--color-text-primary);
+  padding: 8px 10px 2px;
 }
 
-.agents-graph-revision-banner__label {
-  font-weight: 600;
-  white-space: nowrap;
-}
 
 .agents-status-pill,
 .agents-chip {
