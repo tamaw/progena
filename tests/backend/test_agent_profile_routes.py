@@ -403,6 +403,87 @@ def test_runs_route_publishes_run_summaries():
     assert newest["thread_id"] == "routine:alpha:rev-newer:run-b"
 
 
+def test_revisions_route_publishes_revision_summaries():
+    """Two revisions of one routine surface newest first, scoped to that routine."""
+    doc_store = InMemoryDocumentStore()
+    doc_store.upsert_routine_revision(
+        "alpha", "rev-older", {"id": "alpha", "nodes": []}, captured_at="2026-01-01T00:00:00+00:00"
+    )
+    doc_store.upsert_routine_revision(
+        "alpha",
+        "rev-newer",
+        {"id": "alpha", "nodes": [{"id": "n1"}]},
+        captured_at="2026-01-02T00:00:00+00:00",
+    )
+    # A revision for a different routine must never leak into alpha's list.
+    doc_store.upsert_routine_revision(
+        "beta", "rev-x", {"id": "beta", "nodes": []}, captured_at="2026-01-03T00:00:00+00:00"
+    )
+    events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def broadcast(event_type, payload, **kwargs):
+        events.append((event_type, payload, kwargs))
+        return None
+
+    app = FastAPI()
+    _install_request_id_middleware(app)
+    app.include_router(
+        create_agent_profile_router(
+            get_agent_store=lambda: FakeAgentStore(),
+            get_document_store=lambda: doc_store,
+            broadcast_ui_event=broadcast,
+        ),
+        prefix="/api/ui",
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/ui/agent-profiles/alpha/revisions")
+
+    assert_acknowledged(response, ["agent.routine.revisions.loaded"])
+    payload = events[-1][1]
+    assert payload["agent_id"] == "alpha"
+    revision_ids = [revision["revision_id"] for revision in payload["revisions"]]
+    assert revision_ids == ["rev-newer", "rev-older"]  # newest captured_at first
+
+
+def test_get_routine_revision_publishes_full_graph():
+    doc_store = InMemoryDocumentStore()
+    doc_store.upsert_routine_revision(
+        "alpha",
+        "rev-older",
+        {"id": "alpha", "nodes": [{"id": "n1"}]},
+        captured_at="2026-01-01T00:00:00+00:00",
+    )
+    events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def broadcast(event_type, payload, **kwargs):
+        events.append((event_type, payload, kwargs))
+        return None
+
+    app = FastAPI()
+    _install_request_id_middleware(app)
+    app.include_router(
+        create_agent_profile_router(
+            get_agent_store=lambda: FakeAgentStore(),
+            get_document_store=lambda: doc_store,
+            broadcast_ui_event=broadcast,
+        ),
+        prefix="/api/ui",
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/ui/agent-profiles/alpha/revisions/rev-older")
+
+    assert_acknowledged(response, ["agent.routine.revision.loaded"])
+    payload = events[-1][1]
+    assert payload["agent_id"] == "alpha"
+    assert payload["revision_id"] == "rev-older"
+    assert payload["graph"] == {"id": "alpha", "nodes": [{"id": "n1"}]}
+
+    missing = client.get("/api/ui/agent-profiles/alpha/revisions/does-not-exist")
+    assert missing.status_code == 404
+
+
 def test_store_unavailable_returns_503():
     app = FastAPI()
     _install_request_id_middleware(app)

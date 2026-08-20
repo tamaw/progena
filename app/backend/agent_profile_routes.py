@@ -518,6 +518,59 @@ def create_agent_profile_router(
         broadcast_ui_event("agent.routine.runs.loaded", payload, request_id=request_id)
         return acknowledgement_response(request_id, ["agent.routine.runs.loaded"])
 
+    @router.get(
+        "/agent-profiles/{agent_id}/revisions",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def list_routine_revisions(
+        agent_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Publish every captured revision of one routine's graph document.
+
+        Reads ``routine_graph_revisions`` (a Postgres trigger appends one
+        immutable row there on every write to the routine's live document);
+        newest first.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        revisions = await asyncio.to_thread(get_document_store().list_routine_revisions, agent_id)
+        payload = {
+            "agent_id": agent_id,
+            "revisions": [
+                {"revision_id": revision.revision_id, "captured_at": revision.captured_at}
+                for revision in revisions
+            ],
+        }
+        broadcast_ui_event("agent.routine.revisions.loaded", payload, request_id=request_id)
+        return acknowledgement_response(request_id, ["agent.routine.revisions.loaded"])
+
+    @router.get(
+        "/agent-profiles/{agent_id}/revisions/{revision_id}",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def get_routine_revision(
+        agent_id: str,
+        revision_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Publish one revision's full graph document, for the Revisions panel to render."""
+        request_id = _request_correlation_id(request, x_request_id)
+        graph = await asyncio.to_thread(
+            get_document_store().get_routine_revision, agent_id, revision_id
+        )
+        if graph is None:
+            raise HTTPException(status_code=404, detail="Revision not found")
+        broadcast_ui_event(
+            "agent.routine.revision.loaded",
+            {"agent_id": agent_id, "revision_id": revision_id, "graph": graph},
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agent.routine.revision.loaded"])
+
     @router.delete(
         "/agent-profiles/{agent_id}", status_code=202, response_model=UiRequestAcknowledgement
     )

@@ -72,6 +72,21 @@ class RoutineRunSummary:
     checkpoint_count: int
 
 
+@dataclass(frozen=True)
+class RoutineRevisionSummary:
+    """One immutable snapshot of a routine's graph document.
+
+    Rows come from ``routine_graph_revisions`` (see
+    ``app.backend.document_store.PostgresDocumentStore._ensure_routine_revision_history``),
+    which a Postgres trigger appends to on every write to a routine's live
+    document -- newest-first here mirrors the trigger's own capture order.
+    """
+
+    revision_id: str
+    routine_id: str
+    captured_at: str | None
+
+
 _MESSAGES_CHANNEL = "messages"
 
 
@@ -150,6 +165,12 @@ class BackendDocumentStore(Protocol):
 
     def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]: ...
 
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]: ...
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
+
     def close(self) -> None: ...
 
 
@@ -159,6 +180,9 @@ class InMemoryDocumentStore:
     def __init__(self) -> None:
         self._documents: dict[tuple[str, str], StoredDocument] = {}
         self._checkpoint_threads: dict[str, CheckpointThreadSnapshot] = {}
+        self._routine_revisions: dict[
+            tuple[str, str], tuple[RoutineRevisionSummary, dict[str, Any]]
+        ] = {}
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -276,6 +300,36 @@ class InMemoryDocumentStore:
         ]
         summaries.sort(key=lambda summary: summary.last_checkpoint_at or "", reverse=True)
         return summaries[:limit] if limit > 0 else summaries
+
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]:
+        summaries = [
+            summary
+            for (rid, _revision_id), (summary, _graph) in self._routine_revisions.items()
+            if rid == routine_id
+        ]
+        summaries.sort(key=lambda summary: summary.captured_at or "", reverse=True)
+        return summaries[:limit] if limit > 0 else summaries
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
+        entry = self._routine_revisions.get((routine_id, revision_id))
+        return entry[1] if entry is not None else None
+
+    def upsert_routine_revision(
+        self,
+        routine_id: str,
+        revision_id: str,
+        graph: dict[str, Any],
+        *,
+        captured_at: str | None = None,
+    ) -> None:
+        self._routine_revisions[(routine_id, revision_id)] = (
+            RoutineRevisionSummary(
+                revision_id=revision_id, routine_id=routine_id, captured_at=captured_at
+            ),
+            graph,
+        )
 
     def upsert_checkpoint_thread_snapshot(self, snapshot: CheckpointThreadSnapshot) -> None:
         self._checkpoint_threads[snapshot.thread_id] = snapshot
@@ -853,6 +907,49 @@ class PostgresDocumentStore:
                 )
             )
         return summaries
+
+    def list_routine_revisions(
+        self, routine_id: str, *, limit: int = 50
+    ) -> list[RoutineRevisionSummary]:
+        """Every captured revision of one routine's graph document, newest first.
+
+        Mirrors ``app.progenitor.routines.revisions.PostgresRoutineRevisionReader``,
+        reading the same ``routine_graph_revisions`` table this store's own
+        ``_ensure_routine_revision_history`` DDL/trigger populates.
+        """
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT revision_id, captured_at
+                FROM routine_graph_revisions
+                WHERE routine_id = %s
+                ORDER BY captured_at DESC, revision_id DESC
+                LIMIT %s
+                """,
+                (routine_id, limit),
+            )
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [
+            RoutineRevisionSummary(
+                revision_id=row["revision_id"],
+                routine_id=routine_id,
+                captured_at=str(row["captured_at"]) if row.get("captured_at") else None,
+            )
+            for row in rows
+        ]
+
+    def get_routine_revision(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
+        with self._cursor() as cur:
+            cur.execute(
+                """
+                SELECT graph
+                FROM routine_graph_revisions
+                WHERE routine_id = %s AND revision_id = %s
+                """,
+                (routine_id, revision_id),
+            )
+            row = cast(dict[str, Any] | None, cur.fetchone())
+        return cast(dict[str, Any], row["graph"]) if row is not None else None
 
 
 def store_database_url(store: BackendDocumentStore | None) -> str | None:
