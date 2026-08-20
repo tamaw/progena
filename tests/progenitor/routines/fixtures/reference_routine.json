@@ -21,10 +21,7 @@
       "output_key": "domain_check",
       "config": {
         "language": "python",
-        "inputs": {
-          "host": "parse_json.host"
-        },
-        "expression": "host == 'github.com'"
+        "expression": "parse_json.host == 'github.com'"
       }
     },
     {
@@ -53,14 +50,7 @@
       "output_key": "route_decision",
       "config": {
         "language": "python",
-        "inputs": {
-          "accessible": "assess_json.accessible",
-          "cloned": "assess_json.cloned",
-          "dirty": "assess_json.dirty",
-          "behind": "assess_json.behind",
-          "override_dirty": "parse_json.override_dirty"
-        },
-        "expression": "'no_access' if not accessible else ('not_cloned' if not cloned else (('dirty_override' if override_dirty else 'dirty') if dirty else ('behind' if behind else 'up_to_date')))"
+        "expression": "'no_access' if not assess_json.accessible else ('not_cloned' if not assess_json.cloned else (('dirty_override' if parse_json.override_dirty else 'dirty') if assess_json.dirty else ('behind' if assess_json.behind else 'up_to_date')))"
       }
     },
     {

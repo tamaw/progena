@@ -296,16 +296,12 @@ def _resolve_inputs(
     node_id: str,
     inputs_config: dict[str, str],
     data: dict[str, Any],
-    defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     namespace: dict[str, Any] = {}
     for local_name, path in inputs_config.items():
         try:
             namespace[local_name] = resolve_data_path(data, path)
         except KeyError as exc:
-            if defaults is not None and local_name in defaults:
-                namespace[local_name] = defaults[local_name]
-                continue
             raise KeyError(f"node {node_id}: {exc}") from exc
     return namespace
 
@@ -443,12 +439,15 @@ def _build_eval_node(node: RoutineNode) -> Any:
     expression = config.get("expression")
     if not expression:
         raise ValueError(f"eval node {node.id}: config needs 'expression'")
-    inputs_config = config.get("inputs") or {}
     defaults = config.get("defaults") or {}
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
-        namespace = _resolve_inputs(node.id, inputs_config, data, defaults)
+        # `defaults` only ever fills a top-level name genuinely missing from
+        # `data` -- a plain merge (not exception-driven fallback) is exactly
+        # right here since dict union always lets the right-hand `data`
+        # value win on a shared key, never masking something real.
+        namespace = {**defaults, **data}
         result = evaluate_expression(expression, namespace)
         return {"data": {output_key: result}}
 
@@ -463,12 +462,10 @@ def _build_condition_node(node: RoutineNode) -> Any:
     expression = config.get("expression")
     if not expression:
         raise ValueError(f"condition node {node.id}: config needs 'expression'")
-    inputs_config = config.get("inputs") or {}
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
-        namespace = _resolve_inputs(node.id, inputs_config, data)
-        result = bool(evaluate_expression(expression, namespace))
+        result = bool(evaluate_expression(expression, data))
         return {"data": {output_key: result}}
 
     return run
@@ -485,12 +482,10 @@ def _build_switch_node(node: RoutineNode) -> Any:
     expression = config.get("expression")
     if not expression:
         raise ValueError(f"switch node {node.id}: config needs 'expression'")
-    inputs_config = config.get("inputs") or {}
 
     async def run(state: RoutineState) -> dict[str, Any]:
         data = state.get("data", {})
-        namespace = _resolve_inputs(node.id, inputs_config, data)
-        result = evaluate_expression(expression, namespace)
+        result = evaluate_expression(expression, data)
         return {"data": {output_key: result}}
 
     return run
@@ -938,8 +933,7 @@ def _build_loop_guard(
     false_target = guard.on_false or terminal_target
 
     def route(state: RoutineState) -> str | list[str]:
-        namespace = _resolve_inputs(f"edge {edge.from_}", guard.inputs, state.get("data", {}))
-        allowed = evaluate_expression(guard.expression, namespace)
+        allowed = evaluate_expression(guard.expression, state.get("data", {}))
         if not isinstance(allowed, bool):
             raise ValueError(f"loop_guard from {edge.from_} must evaluate to a boolean")
         if not allowed:
