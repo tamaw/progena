@@ -13,7 +13,7 @@ import { createPortal } from 'react-dom';
 import Select from '../common/Select';
 import { selectAgentProfiles } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
-import { checkExpressionSyntax } from '../../lib/restrictedExpression';
+import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
 // The Routines graph itself is NOT a free canvas though (see rationale below),
@@ -198,9 +198,9 @@ function uniqueBranchValue(branches) {
 function makeNode(kind) {
   const config = {
     prompt: { prompt_template: '' },
-    eval: { expression: '', inputs: {} },
-    condition: { expression: '', inputs: {} },
-    switch: { expression: '', inputs: {} },
+    eval: { expression: '' },
+    condition: { expression: '' },
+    switch: { expression: '' },
     split: {},
     classify: { rubric_prompt: '', response_schema: {} },
     agent: { agent_name: '', prompt_template: '' },
@@ -324,22 +324,66 @@ function ConfigField({ id, config, field, label, placeholder, multiline, updateN
   );
 }
 
-// `expression` fields (eval/condition/switch config, Loop's loop_guard) hold a
-// restricted Python expression -- worth highlighting the same way the "Edit as
-// JSON" panel does: a transparent <textarea> stacked over a highlight.js
-// `<pre>` so syntax colors show through while the caret still lands in a real,
-// editable, screen-reader-visible textarea underneath. A second, equally
-// transparent `<pre>` sits between the two: same text, but every character is
-// `color: transparent` except the span `checkExpressionSyntax` flags as the
-// first construct outside `expression.py`'s whitelist, which gets a red wavy
-// underline via `text-decoration-color` (independent of the (transparent)
-// text color, so the squiggly shows without a second copy of the glyphs).
-function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig }) {
+// What identifier/dotted-attribute chain, if any, ends right at the caret --
+// tokenizes the text up to `caret` with the exact tokenizer
+// `checkExpressionSyntax` uses (see lib/restrictedExpression.js), so a caret
+// sitting inside a string or number literal correctly gets no suggestions:
+// an unterminated-string tokenize error, or the caret landing right after a
+// closed str/num token, both mean "not actually typing an identifier here".
+// Backward-only, same convention as chatInputModel.js's mention detector and
+// getInputsAutocompleteContext below -- whatever's already typed past the
+// caret on the same token is left alone.
+// eslint-disable-next-line react-refresh/only-export-components
+export function getExpressionAutocompleteContext(text, caret) {
+  const source = typeof text === 'string' ? text : '';
+  const position = Number.isFinite(caret) ? caret : source.length;
+  const tokenized = tokenize(source.slice(0, position));
+  if (tokenized.error) return null;
+  const tokens = tokenized.tokens;
+  let i = tokens.length - 2; // skip the trailing synthetic eof token
+  if (i < 0 || tokens[i].type !== 'name') return null;
+  let start = tokens[i].start;
+  i -= 1;
+  while (i >= 1) {
+    const dot = tokens[i];
+    const name = tokens[i - 1];
+    if (dot.type !== 'op' || dot.value !== '.' || dot.end !== start) break;
+    if (name.type !== 'name' || name.end !== dot.start) break;
+    start = name.start;
+    i -= 2;
+  }
+  return { query: source.slice(start, position), tokenStart: start, tokenEnd: position };
+}
+
+// `Expression` fields (eval/condition/switch config, Loop's loop_guard) hold
+// a restricted Python expression -- worth highlighting the same way the
+// "Edit as JSON" panel does: a transparent <textarea> stacked over a
+// highlight.js `<pre>` so syntax colors show through while the caret still
+// lands in a real, editable, screen-reader-visible textarea underneath. A
+// second, equally transparent `<pre>` sits between the two: same text, but
+// every character is `color: transparent` except the span
+// `checkExpressionSyntax` flags as the first construct outside
+// `expression.py`'s whitelist, which gets a red wavy underline via
+// `text-decoration-color` (independent of the (transparent) text color, so
+// the squiggly shows without a second copy of the glyphs).
+//
+// `autocomplete` layers the same caret-anchored state-path menu InputsField
+// uses on top -- expressions resolve names directly against full routine
+// state now (see expression.py's `ast.Attribute` handling), so there's no
+// separate `inputs` binding step left to author; the same predecessor/
+// response_schema suggestions just get typed straight into the expression.
+function ExpressionField({ id, config, field, label, placeholder, updateNodeConfig, autocomplete = false }) {
   const missing = useContext(MissingFieldsContext);
+  const graph = useContext(GraphEditContext);
   const value = config?.[field] || '';
   const required = missing.has(field);
   const highlightRef = useRef(null);
   const errorLayerRef = useRef(null);
+  const textareaRef = useRef(null);
+  const [caret, setCaret] = useState(0);
+  const [rawActiveIndex, setRawActiveIndex] = useState(0);
+  const [dismissedAt, setDismissedAt] = useState(null);
+  const [panelPos, setPanelPos] = useState(null);
   const highlighted = useMemo(() => {
     try {
       return hljs.highlight(value, { language: 'python' }).value;
@@ -355,7 +399,73 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
     const after = escapeHtmlText(value.slice(issue.end));
     return `${before}<span class="agents-graph-node__expr-error-span">${flagged}</span>${after}\n`;
   }, [issue, value]);
-  const onChange = (event) => updateNodeConfig(id, { [field]: event.target.value });
+
+  const suggestions = useMemo(
+    () => (autocomplete ? buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
+    [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
+  );
+  const context = useMemo(
+    () => (autocomplete ? getExpressionAutocompleteContext(value, caret) : null),
+    [autocomplete, value, caret],
+  );
+  const filtered = useMemo(
+    () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
+    [suggestions, context],
+  );
+  const activeIndex = filtered.length ? ((rawActiveIndex % filtered.length) + filtered.length) % filtered.length : 0;
+  const menuOpen = !!context && filtered.length > 0 && dismissedAt !== context.tokenStart;
+
+  useLayoutEffect(() => {
+    if (!menuOpen || !textareaRef.current) return;
+    const rect = textareaRef.current.getBoundingClientRect();
+    const coords = getCaretCoordinates(textareaRef.current, context.tokenStart);
+    setPanelPos({
+      top: rect.top - textareaRef.current.scrollTop + coords.top + coords.height + 4,
+      left: rect.left - textareaRef.current.scrollLeft + coords.left,
+    });
+  }, [menuOpen, context?.tokenStart, value]);
+
+  const onChange = (event) => {
+    updateNodeConfig(id, { [field]: event.target.value });
+    setCaret(event.target.selectionStart);
+  };
+
+  function accept(item) {
+    if (!item || !context) return;
+    const nextValue = `${value.slice(0, context.tokenStart)}${item.path}${value.slice(context.tokenEnd)}`;
+    const nextCaret = context.tokenStart + item.path.length;
+    updateNodeConfig(id, { [field]: nextValue });
+    setDismissedAt(null);
+    setRawActiveIndex(0);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(nextCaret, nextCaret);
+      setCaret(nextCaret);
+    });
+  }
+
+  function handleKeyDown(event) {
+    if (!menuOpen) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setRawActiveIndex((current) => current + 1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setRawActiveIndex((current) => current - 1);
+    } else if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault();
+      accept(filtered[activeIndex]);
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      setDismissedAt(context.tokenStart);
+    }
+  }
+
+  const syncCaret = (event) => setCaret(event.target.selectionStart);
+
   function syncScroll(event) {
     const { scrollTop, scrollLeft } = event.target;
     if (highlightRef.current) {
@@ -384,17 +494,25 @@ function ExpressionField({ id, config, field, label, placeholder, updateNodeConf
           <pre ref={errorLayerRef} className="agents-graph-node__expr-error" aria-hidden="true" dangerouslySetInnerHTML={{ __html: errorHtml }} />
         ) : null}
         <textarea
+          ref={textareaRef}
           className="agents-graph-node__expr-textarea"
           value={value}
           placeholder={placeholder}
           onChange={onChange}
           onScroll={syncScroll}
+          onKeyDown={handleKeyDown}
+          onKeyUp={syncCaret}
+          onClick={syncCaret}
+          onBlur={() => setDismissedAt(context?.tokenStart ?? null)}
           spellCheck={false}
           aria-required={required || undefined}
           aria-invalid={issue.ok ? undefined : true}
         />
       </div>
       {issue.ok ? null : <span className="agents-graph-node__expr-error-hint" role="alert">{issue.message}</span>}
+      {menuOpen ? (
+        <StatePathSuggestionsMenu items={filtered} activeIndex={activeIndex} position={panelPos} onHover={setRawActiveIndex} onSelect={accept} />
+      ) : null}
     </label>
   );
 }
@@ -496,7 +614,7 @@ export function getInputsAutocompleteContext(text, caret) {
 // `startsWith` matches first, `includes` matches after, both case-
 // insensitive against the dotted path text (not the display source/label).
 // eslint-disable-next-line react-refresh/only-export-components
-export function filterInputSuggestions(suggestions, query) {
+export function filterStatePathSuggestions(suggestions, query) {
   const q = (query || '').toLowerCase();
   return suggestions
     .filter((item) => item.path.toLowerCase().includes(q))
@@ -544,10 +662,10 @@ function getCaretCoordinates(textarea, position) {
 // Caret-anchored, keeps focus in the textarea throughout (onMouseDown
 // preventDefault on every option -- a real mousedown would blur the
 // textarea before the click landed, closing the menu out from under it).
-function InputSuggestionsMenu({ items, activeIndex, position, onHover, onSelect }) {
+function StatePathSuggestionsMenu({ items, activeIndex, position, onHover, onSelect }) {
   if (!position) return null;
   return createPortal(
-    <div className="app-listbox__panel agents-graph-node__inputs-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
+    <div className="app-listbox__panel agents-graph-node__suggest-menu" style={{ position: 'fixed', top: position.top, left: position.left }}>
       <ul className="app-listbox__list" role="listbox" aria-label="State path suggestions">
         {items.map((item, index) => (
           <li key={item.path} role="option" aria-selected={index === activeIndex} data-index={index}>
@@ -559,7 +677,7 @@ function InputSuggestionsMenu({ items, activeIndex, position, onHover, onSelect 
               onClick={() => onSelect(item)}
             >
               <span className="app-listbox__option-label">{item.path}</span>
-              <span className="agents-graph-node__inputs-menu-source">{item.source}</span>
+              <span className="agents-graph-node__suggest-menu-source">{item.source}</span>
             </button>
           </li>
         ))}
@@ -600,7 +718,7 @@ function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
   const [panelPos, setPanelPos] = useState(null);
 
   const suggestions = useMemo(
-    () => (autocomplete ? buildInputSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
+    () => (autocomplete ? buildStatePathSuggestions(id, graph?.nodes, graph?.edges, graph?.inputSchema) : EMPTY_SUGGESTIONS),
     [autocomplete, id, graph?.nodes, graph?.edges, graph?.inputSchema],
   );
   const context = useMemo(
@@ -608,7 +726,7 @@ function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
     [autocomplete, text, caret],
   );
   const filtered = useMemo(
-    () => (context ? filterInputSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
+    () => (context ? filterStatePathSuggestions(suggestions, context.query) : EMPTY_SUGGESTIONS),
     [suggestions, context],
   );
   const activeIndex = filtered.length ? ((rawActiveIndex % filtered.length) + filtered.length) % filtered.length : 0;
@@ -686,7 +804,7 @@ function InputsField({ id, config, updateNodeConfig, autocomplete = false }) {
         onBlur={() => setDismissedAt(context?.tokenStart ?? null)}
       />
       {menuOpen ? (
-        <InputSuggestionsMenu items={filtered} activeIndex={activeIndex} position={panelPos} onHover={setRawActiveIndex} onSelect={accept} />
+        <StatePathSuggestionsMenu items={filtered} activeIndex={activeIndex} position={panelPos} onHover={setRawActiveIndex} onSelect={accept} />
       ) : null}
     </label>
   );
@@ -818,7 +936,7 @@ function NumberField({ id, config, field, label, placeholder, updateNodeConfig, 
 }
 
 // Kind-specific config fields, mirroring app.progenitor.routines.graph's per-kind
-// config shape (prompt_template/system_prompt, expression/inputs, rubric_prompt/
+// config shape (prompt_template/system_prompt, expression, rubric_prompt/
 // response_schema, agent_name + prompt_template/inputs). `noop` has no config.
 function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig }) {
   if (kind === 'prompt') {
@@ -831,10 +949,7 @@ function NodeConfigBody({ id, kind, config, updateNodeConfig, replaceNodeConfig 
   }
   if (kind === 'eval' || kind === 'condition' || kind === 'switch') {
     return (
-      <>
-        <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} />
-        <InputsField id={id} config={config} updateNodeConfig={updateNodeConfig} autocomplete />
-      </>
+      <ExpressionField id={id} config={config} field="expression" label="Expression" placeholder="Restricted Python expression…" updateNodeConfig={updateNodeConfig} autocomplete />
     );
   }
   if (kind === 'classify') {
@@ -1005,12 +1120,12 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 
   if (!node) return null;
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
-  // A loop's expression/inputs live on its tail's edge (`loop_guard`), not
-  // on this node's own config -- there's no separate node kind for it (see
-  // insertAt's `kind === 'loop'` comment), so `config`/`updateNodeConfig`
+  // A loop's own guard expression lives on its tail's edge (`loop_guard`),
+  // not on this node's own config -- there's no separate node kind for it
+  // (see insertAt's `kind === 'loop'` comment), so `config`/`updateNodeConfig`
   // here are a shim over `updateLoopGuard` instead of `node.config`. Reuses
-  // ConfigField/InputsField exactly as Eval/Condition do; the guard just
-  // isn't state this node's own config actually holds.
+  // ExpressionField exactly as Eval/Condition do; the guard just isn't
+  // state this node's own config actually holds.
   const guardConfig = guardEdge?.loop_guard;
   const handleGuardConfig = (_nodeId, patch) => updateLoopGuard(guardEdge.from, patch);
   const unmet = missingRequirements(node);
@@ -1107,10 +1222,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
           </p>
         ) : null}
         {guardEdge ? (
-          <>
-            <ExpressionField id={node.id} config={guardConfig} field="expression" label="Continue while" placeholder="e.g. attempt < 3" updateNodeConfig={handleGuardConfig} />
-            <InputsField id={node.id} config={guardConfig} updateNodeConfig={handleGuardConfig} />
-          </>
+          <ExpressionField id={guardEdge.from} config={guardConfig} field="expression" label="Continue while" placeholder="e.g. attempt < 3" updateNodeConfig={handleGuardConfig} autocomplete />
         ) : null}
         <NodeConfigBody
           id={node.id}
@@ -1432,17 +1544,20 @@ export function predecessorsOf(nodeId, edges) {
   return predecessors;
 }
 
-// The candidate `inputs` paths a node at `nodeId` could point at: the routine's
-// own declared invocation inputs, the two always-seeded keys, and every
-// predecessor's output key -- plus, for a predecessor carrying a
-// `response_schema` (Select/classify always; prompt/agent when authored with
-// one), a `<output_key>.<property>` entry per schema field, since
-// `resolve_data_path` already walks nested dicts (`app/progenitor/routines/
-// factory.py`'s `_resolve_inputs`) with no synthetic flattening needed.
-// `eval`/`switch`/`condition` predecessors offer only their bare key -- their
-// result has no declared shape to drill into.
+// The candidate state paths a node at `nodeId` could reference -- Expression
+// (eval/condition/switch/loop_guard) resolves these as direct name/attribute
+// access; Inputs (agent) still binds them under an author-chosen local alias.
+// Either way: the routine's own declared invocation inputs, the two
+// always-seeded keys, and every predecessor's output key -- plus, for a
+// predecessor carrying a `response_schema` (Select/classify always; prompt/
+// agent when authored with one), a `<output_key>.<property>` entry per
+// schema field, since both consumers already walk nested dicts
+// (`app/progenitor/routines/factory.py`'s `resolve_data_path`/
+// `expression.py`'s `ast.Attribute` handling) with no synthetic flattening
+// needed. `eval`/`switch`/`condition` predecessors offer only their bare key
+// -- their result has no declared shape to drill into.
 // eslint-disable-next-line react-refresh/only-export-components
-export function buildInputSuggestions(nodeId, nodes, edges, inputSchema) {
+export function buildStatePathSuggestions(nodeId, nodes, edges, inputSchema) {
   const nodesById = new Map((nodes || []).map((node) => [node.id, node]));
   const seen = new Set();
   const suggestions = [];
@@ -2446,17 +2561,18 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       // increment commits before its outgoing (guarded) edge evaluates, so
       // the guard always sees the fresh count.
       //
-      // The only thing `eval` needed to cover this case was a fallback for
-      // its own not-yet-written prior output on the loop's first visit --
-      // `config.defaults` supplies that (see EvalNodeConfig.defaults) --
-      // so `resolve_data_path`'s strict KeyError-on-missing behavior (which
-      // exists to catch author typos elsewhere) doesn't apply here.
+      // `tailId` is the node's own state key -- expressions resolve names
+      // directly against state now (no separate `inputs` binding step), so
+      // the expression just references it by name. The only thing `eval`
+      // needed to cover this case was a fallback for its own not-yet-
+      // written prior output on the loop's first visit -- `config.defaults`
+      // supplies that (see EvalNodeConfig.defaults).
       const tailId = uniqueNodeId('count', [...nodesRef.current, ...added]);
       added.push({
         ...makeNode('eval'),
         id: tailId,
         label: '↺ Continue',
-        config: { expression: `${tailId} + 1`, inputs: { [tailId]: tailId }, defaults: { [tailId]: 0 } },
+        config: { expression: `${tailId} + 1`, defaults: { [tailId]: 0 } },
       });
       nextEdges.push({ from: id, to: tailId, level: 'normal' });
       // A loop spliced in front of a shared join reaches it directly
@@ -2470,7 +2586,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         level: 'normal',
         loop_guard: {
           expression: `${tailId} < 3`,
-          inputs: { [tailId]: tailId },
           ...(exitTarget ? { on_false: exitTarget } : {}),
         },
       });
@@ -2685,7 +2800,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   const selectedRouterEdge = selectedNode
     ? edges.find((edge) => edge.from === selectedNode.id && edge.router)
     : null;
-  // A loop's own expression/inputs live on its tail's edge, not on this
+  // A loop's own guard expression lives on its tail's edge, not on this
   // node's config -- this is how the currently-selected node is recognized
   // as a loop's start: some edge's `loop_guard` targets it.
   const selectedGuardEdge = selectedNode

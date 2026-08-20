@@ -22,7 +22,11 @@ class ExprIssue extends Error {
   }
 }
 
-function tokenize(source) {
+// Exported for reuse by AgentGraph.jsx's Expression-field autocomplete, which
+// needs to know exactly what token (if any) precedes the caret -- string/
+// number literals in particular, so it never offers state-path suggestions
+// while the author is typing inside a quoted string.
+export function tokenize(source) {
   const tokens = [];
   const n = source.length;
   let i = 0;
