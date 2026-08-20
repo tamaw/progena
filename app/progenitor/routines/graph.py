@@ -85,12 +85,13 @@ class CachePolicyConfig(BaseModel):
 
 
 class LoopGuardConfig(BaseModel):
-    """A deterministic guard for a normal edge."""
+    """A deterministic guard for a normal edge. `expression` resolves names
+    directly against the routine's own `data` state -- see EvalNodeConfig's
+    `defaults` comment for the same top-level-only fallback semantics."""
 
     model_config = ConfigDict(extra="forbid")
 
     expression: str = Field(min_length=1)
-    inputs: dict[str, str] = Field(default_factory=dict)
     on_false: str | None = None
 
 
@@ -107,22 +108,27 @@ class PromptNodeConfig(BaseModel):
 
 
 class EvalNodeConfig(BaseModel):
-    """Deterministic expression evaluation; returns the raw result."""
+    """Deterministic expression evaluation; returns the raw result.
+
+    `expression` resolves names directly against the routine's own `data`
+    state (`a.b` walks a nested dict the same way a config-authored dotted
+    path does elsewhere -- see expression.py's `ast.Attribute` handling) --
+    there is no separate `inputs` binding step; whatever key an upstream
+    node wrote to is just referenced by that name."""
 
     model_config = ConfigDict(extra="forbid")
 
     language: Literal["python"] | None = None
     expression: str | None = None
     expression_file: str | None = None
-    inputs: dict[str, str] = Field(default_factory=dict)
-    # Per-input fallback used when `resolve_data_path` would otherwise raise
-    # for that leg -- the strict KeyError-on-missing behavior exists to
-    # catch author typos, but a node whose expression legitimately needs to
-    # work seedless on its first visit (e.g. an iteration counter reading
-    # its own not-yet-written prior output) needs an escape hatch. Scoped to
-    # `eval` only: `condition`/`switch`/`loop_guard` never hit this case,
-    # since anything they'd reference is always written earlier in the same
-    # visit.
+    # Per-top-level-name fallback used when `expression` references a state
+    # key that doesn't exist yet -- the strict KeyError-on-missing behavior
+    # exists to catch author typos, but a node whose expression legitimately
+    # needs to work seedless on its first visit (e.g. an iteration counter
+    # reading its own not-yet-written prior output) needs an escape hatch.
+    # Scoped to `eval` only, and to the top-level name (not a nested `.`
+    # segment): `condition`/`switch`/`loop_guard` never hit this case, since
+    # anything they'd reference is always written earlier in the same visit.
     defaults: dict[str, Any] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
@@ -137,7 +143,6 @@ class ConditionNodeConfig(BaseModel):
     language: Literal["python"] | None = None
     expression: str | None = None
     expression_file: str | None = None
-    inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None
@@ -152,7 +157,6 @@ class SwitchNodeConfig(BaseModel):
     language: Literal["python"] | None = None
     expression: str | None = None
     expression_file: str | None = None
-    inputs: dict[str, str] = Field(default_factory=dict)
     retry: RetryPolicyConfig | None = None
     timeout: float | None = Field(default=None, ge=0)
     cache: bool | CachePolicyConfig | None = None

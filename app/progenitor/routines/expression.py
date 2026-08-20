@@ -1,11 +1,14 @@
-"""Restricted expression evaluator for routine 'eval'/'condition' nodes.
+"""Restricted expression evaluator for routine 'eval'/'condition'/'switch' nodes.
 
 Evaluates a small, explicitly whitelisted subset of Python expression syntax via
 ``ast.parse(mode="eval")`` plus a recursive walk of the parsed tree — never
-``eval()``/``exec()`` on the source. Anything outside the whitelist (calls, attribute
-access, subscripting, imports, comprehensions, lambdas, ...) raises
+``eval()``/``exec()`` on the source. Anything outside the whitelist (calls,
+subscripting, imports, comprehensions, lambdas, ...) raises
 ``UnsafeExpressionError`` rather than silently failing closed/open, so a graph author
 gets a clear compile-time-ish signal instead of a confusing downstream error.
+Dotted attribute access (``a.b.c``) is allowed, but only ever as a dict-key walk --
+never Python's real ``getattr`` -- so it can only reach into nested JSON-shaped state
+objects, not methods, dunder attributes, or anything else on an arbitrary object.
 """
 
 from __future__ import annotations
@@ -58,6 +61,24 @@ def _eval_node(node: ast.AST, namespace: dict[str, Any]) -> Any:
         if node.id not in namespace:
             raise KeyError(f"expression references undefined name: {node.id}")
         return namespace[node.id]
+
+    if isinstance(node, ast.Attribute):
+        # `a.b.c` walks nested dicts exactly the way a config-authored dotted
+        # path (`resolve_data_path`) already does -- this is a parallel,
+        # AST-native version of the same walk, not a generic Python
+        # `getattr`. Only ever indexes into a dict via `.get`-equivalent
+        # lookup; a non-dict base has no attributes this evaluator will ever
+        # resolve, which is what keeps this from becoming a route to method
+        # calls, dunder access, or anything else on an arbitrary object.
+        base = _eval_node(node.value, namespace)
+        if not isinstance(base, dict):
+            raise UnsafeExpressionError(
+                f"cannot access '.{node.attr}' on a {type(base).__name__} -- "
+                "attribute access only walks nested state objects"
+            )
+        if node.attr not in base:
+            raise KeyError(f"expression references undefined nested field: .{node.attr}")
+        return base[node.attr]
 
     if isinstance(node, ast.BinOp):
         op_fn = _ALLOWED_BINOPS.get(type(node.op))

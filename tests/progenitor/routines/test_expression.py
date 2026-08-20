@@ -22,6 +22,17 @@ class TestAllowedConstructs:
         with pytest.raises(KeyError):
             evaluate_expression("missing", {})
 
+    def test_nested_attribute_access(self):
+        assert evaluate_expression("parse.host", {"parse": {"host": "github.com"}}) == "github.com"
+
+    def test_chained_nested_attribute_access(self):
+        namespace = {"assess": {"repo": {"owner": {"name": "octocat"}}}}
+        assert evaluate_expression("assess.repo.owner.name", namespace) == "octocat"
+
+    def test_nested_attribute_access_missing_key_raises_keyerror(self):
+        with pytest.raises(KeyError):
+            evaluate_expression("parse.host", {"parse": {}})
+
     def test_arithmetic(self):
         assert evaluate_expression("1 + 2 * 3", {}) == 7
         assert evaluate_expression("7 // 2", {}) == 3
@@ -102,7 +113,11 @@ class TestRejectedConstructs:
         with pytest.raises(UnsafeExpressionError):
             evaluate_expression("len(x)", {"x": [1, 2]})
 
-    def test_rejects_attribute_access(self):
+    def test_rejects_attribute_access_on_a_non_dict(self):
+        # `.` walks nested dicts (see test_nested_attribute_access above) --
+        # never Python's real `getattr`, so a non-dict base has nothing this
+        # evaluator will resolve, closing off methods/dunders regardless of
+        # what ends up in state.
         with pytest.raises(UnsafeExpressionError):
             evaluate_expression("x.upper", {"x": "hi"})
 

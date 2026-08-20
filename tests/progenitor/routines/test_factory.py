@@ -614,7 +614,8 @@ class TestResponseSchemaRef:
 
 class TestInputSchema:
     """input_schema declares extra top-level channels a caller can pass alongside
-    messages; the seed node copies each into data so config.inputs paths reach them."""
+    messages; the seed node copies each into data so an expression can reference
+    it directly by name."""
 
     async def test_declared_field_reaches_data_and_messages_survive(self):
         payload = {
@@ -628,7 +629,7 @@ class TestInputSchema:
                     "id": "a",
                     "kind": "eval",
                     "output_key": "echo",
-                    "config": {"expression": "candidate", "inputs": {"candidate": "candidate"}},
+                    "config": {"expression": "candidate"},
                 }
             ],
             "edges": [],

@@ -317,7 +317,6 @@ async def test_loop_guard_routes_false_result_without_running_guarded_target() -
                 "level": "normal",
                 "loop_guard": {
                     "expression": "count < 2",
-                    "inputs": {"count": "count"},
                     "on_false": "fallback",
                 },
             }
@@ -336,9 +335,9 @@ async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_gu
     """The pattern AgentGraph.jsx's `insertAt` auto-wires for a fresh Loop:
     start -> tail(eval, self-incrementing) -> (guard) -> start, exiting once
     the guard's own bound is reached. There is no dedicated counter node --
-    `eval`'s `config.defaults` lets its own `inputs` resolution fall back to
-    0 instead of raising, specifically so the same expression node can read
-    its own not-yet-written prior output on its first visit."""
+    `eval`'s `config.defaults` lets its own top-level name resolution fall
+    back to 0 instead of raising, specifically so the same expression node
+    can read its own not-yet-written prior output on its first visit."""
     routine = graph(
         {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
         {
@@ -347,7 +346,6 @@ async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_gu
             "output_key": "tail",
             "config": {
                 "expression": "tail + 1",
-                "inputs": {"tail": "tail"},
                 "defaults": {"tail": 0},
             },
         },
@@ -360,7 +358,6 @@ async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_gu
                 "level": "normal",
                 "loop_guard": {
                     "expression": "tail < 3",
-                    "inputs": {"tail": "tail"},
                     "on_false": "after",
                 },
             },
@@ -377,7 +374,9 @@ async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_gu
 @pytest.mark.asyncio
 async def test_eval_node_default_only_applies_when_the_input_path_is_missing() -> None:
     """The fallback in `config.defaults` must not mask a genuinely present
-    value -- it only fires when `resolve_data_path` would otherwise raise."""
+    value -- a plain `{**defaults, **data}` merge always lets the real
+    `data` value win on a shared key, defaults only fills in what's
+    actually missing."""
     routine = graph(
         {
             "id": "hits",
@@ -385,7 +384,6 @@ async def test_eval_node_default_only_applies_when_the_input_path_is_missing() -
             "output_key": "hits",
             "config": {
                 "expression": "hits + 1",
-                "inputs": {"hits": "hits"},
                 "defaults": {"hits": 0},
             },
         },
@@ -401,6 +399,35 @@ async def test_eval_node_default_only_applies_when_the_input_path_is_missing() -
     )
 
     assert result["data"]["hits"] == 6
+
+
+def test_eval_condition_switch_and_loop_guard_reject_a_legacy_inputs_field() -> None:
+    """`inputs` used to be the only way an eval/condition/switch expression or
+    a loop_guard could reach state -- now expressions reference state
+    directly (bare Name, or `a.b` for a nested dict), so `inputs` is a
+    rejected, unrecognized property on all four rather than a silently
+    ignored one."""
+    for config in (
+        {"expression": "x", "inputs": {"x": "x"}},
+        {"language": "python", "expression": "x", "inputs": {"x": "x"}},
+    ):
+        for kind in ("eval", "condition", "switch"):
+            with pytest.raises(ValueError, match="schema validation failed"):
+                graph({"id": "a", "kind": kind, "output_key": "a", "config": config})
+
+    with pytest.raises(ValueError, match="schema validation failed"):
+        graph(
+            {"id": "a", "kind": "noop", "output_key": "a", "config": {}},
+            {"id": "b", "kind": "noop", "output_key": "b", "config": {}},
+            edges=[
+                {
+                    "from": "a",
+                    "to": "b",
+                    "level": "normal",
+                    "loop_guard": {"expression": "x", "inputs": {"x": "x"}},
+                }
+            ],
+        )
 
 
 @pytest.mark.asyncio
@@ -454,7 +481,7 @@ async def test_send_fanout_and_native_subgraph() -> None:
             "id": "child",
             "kind": "eval",
             "output_key": "child",
-            "config": {"expression": "item + 1", "inputs": {"item": "item"}},
+            "config": {"expression": "item + 1"},
         },
     )
     parent = graph(
