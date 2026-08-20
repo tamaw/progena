@@ -17,6 +17,7 @@ from app.backend.agent_profile_routes import (
     create_agent_profile_router,
     validate_agent_graph,
 )
+from app.backend.document_store import InMemoryDocumentStore
 
 _DEFAULT_GRAPH = {
     "status": "Draft",
@@ -141,7 +142,11 @@ def harness(monkeypatch):
     app = FastAPI()
     _install_request_id_middleware(app)
     app.include_router(
-        create_agent_profile_router(get_agent_store=lambda: store, broadcast_ui_event=broadcast),
+        create_agent_profile_router(
+            get_agent_store=lambda: store,
+            get_document_store=lambda: InMemoryDocumentStore(),
+            broadcast_ui_event=broadcast,
+        ),
         prefix="/api/ui",
     )
     return TestClient(app), events
@@ -338,12 +343,74 @@ def test_graph_update_rejected_for_a2a(harness):
     assert client.patch("/api/ui/agent-profiles/a2a-observe/graph", json=payload).status_code == 409
 
 
+def test_runs_route_publishes_run_summaries():
+    """Two distinct routine-run checkpoint threads surface as two runs, newest first."""
+    from app.backend.document_store import CheckpointThreadSnapshot
+
+    doc_store = InMemoryDocumentStore()
+    doc_store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="routine:alpha:rev-older:run-a",
+            checkpoint_id="c1",
+            checkpoint_ts="2026-01-01T00:00:00+00:00",
+            messages=[],
+        )
+    )
+    doc_store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="routine:alpha:rev-newer:run-b",
+            checkpoint_id="c2",
+            checkpoint_ts="2026-01-02T00:00:00+00:00",
+            messages=[],
+        )
+    )
+    # A checkpoint thread for a different routine must never leak into alpha's list.
+    doc_store.upsert_checkpoint_thread_snapshot(
+        CheckpointThreadSnapshot(
+            thread_id="routine:beta:rev-x:run-c",
+            checkpoint_id="c3",
+            checkpoint_ts="2026-01-03T00:00:00+00:00",
+            messages=[],
+        )
+    )
+    events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def broadcast(event_type, payload, **kwargs):
+        events.append((event_type, payload, kwargs))
+        return None
+
+    app = FastAPI()
+    _install_request_id_middleware(app)
+    app.include_router(
+        create_agent_profile_router(
+            get_agent_store=lambda: FakeAgentStore(),
+            get_document_store=lambda: doc_store,
+            broadcast_ui_event=broadcast,
+        ),
+        prefix="/api/ui",
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/ui/agent-profiles/alpha/runs")
+
+    assert_acknowledged(response, ["agent.routine.runs.loaded"])
+    payload = events[-1][1]
+    assert payload["agent_id"] == "alpha"
+    run_ids = [run["run_id"] for run in payload["runs"]]
+    assert run_ids == ["run-b", "run-a"]  # newest last_checkpoint_at first
+    newest = payload["runs"][0]
+    assert newest["revision_id"] == "rev-newer"
+    assert newest["thread_id"] == "routine:alpha:rev-newer:run-b"
+
+
 def test_store_unavailable_returns_503():
     app = FastAPI()
     _install_request_id_middleware(app)
     app.include_router(
         create_agent_profile_router(
-            get_agent_store=lambda: None, broadcast_ui_event=lambda *a, **k: None
+            get_agent_store=lambda: None,
+            get_document_store=lambda: InMemoryDocumentStore(),
+            broadcast_ui_event=lambda *a, **k: None,
         ),
         prefix="/api/ui",
     )

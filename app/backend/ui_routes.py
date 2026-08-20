@@ -4891,6 +4891,7 @@ router.include_router(
 router.include_router(
     create_agent_profile_router(
         get_agent_store=get_agent_store,
+        get_document_store=get_default_document_store,
         broadcast_ui_event=broadcast_ui_event,
     )
 )
