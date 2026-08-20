@@ -2159,6 +2159,14 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
+  // Snapshotted alongside `saveState` (never read live from the `incomplete`
+  // memo at render time) -- `saveState` only updates once the autosave
+  // effect below runs, one render behind the `incomplete` count itself, so
+  // rendering the live count next to a stale 'incomplete' saveState could
+  // briefly show a self-contradictory "Not saved · 0 steps incomplete" the
+  // instant the last field is fixed, before the effect catches up. Both are
+  // set in the same effect run now, so they can never disagree.
+  const [incompleteCount, setIncompleteCount] = useState(0);
   const [selectedNodeId, setSelectedNodeId] = useState(null);
   const [inspectorPosition, setInspectorPosition] = useState(null);
   // Mirrors confirmedNodeIdsRef for the currently open node only, captured
@@ -2732,6 +2740,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     }
     if (incomplete) {
       setSaveError(null);
+      setIncompleteCount(incomplete);
       setSaveState('incomplete');
       return undefined;
     }
@@ -2797,7 +2806,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
                   {saveState === 'saving' ? 'Saving…'
                     : saveState === 'saved' ? 'Saved'
-                    : saveState === 'incomplete' ? `Not saved · ${incomplete} step${incomplete === 1 ? '' : 's'} incomplete`
+                    : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
                         : 'Save failed'}
                 </span>
               ) : null}
