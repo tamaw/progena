@@ -11,6 +11,7 @@ import {
 import { useDispatch, useSelector } from 'react-redux';
 import { createPortal } from 'react-dom';
 import Select from '../common/Select';
+import PopupModal from '../common/PopupModal';
 import { useConfig } from '../../context/ConfigContext';
 import {
   fetchRoutineRevision,
@@ -1021,7 +1022,7 @@ function RoutingFooter({ id, kind, routerEdge }) {
 
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node }) {
-  const { selectNode, selectedNodeId, edges } = useContext(GraphEditContext);
+  const { selectNode, selectedNodeId, edges, readOnly } = useContext(GraphEditContext);
   // A step can arrive incomplete from the JSON editor or the runtime, not just
   // from the picker, so the chain has to say which one is holding the save.
   const incomplete = !isNodeComplete(node);
@@ -1032,14 +1033,14 @@ function StepCard({ node }) {
   const displayKind = isLoopStart ? 'loop' : node.kind;
   return (
     <div
-      className={`canvas-node agents-graph-node agents-graph-node--${displayKind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}${incomplete ? ' routine-step-card--incomplete' : ''}`}
+      className={`canvas-node agents-graph-node agents-graph-node--${displayKind} routine-step-card${selectedNodeId === node.id ? ' selected' : ''}${incomplete ? ' routine-step-card--incomplete' : ''}${readOnly ? ' routine-step-card--readonly' : ''}`}
       data-node-id={node.id}
       style={{ '--node-color': GRAPH_KIND_COLORS[displayKind] || '#8b949e' }}
-      role="button"
-      tabIndex={0}
+      role={readOnly ? undefined : 'button'}
+      tabIndex={readOnly ? undefined : 0}
       aria-label={`${node.label || node.id} ${isLoopStart ? 'Loop' : (GRAPH_KIND_LABELS[node.kind] || node.kind)} step${incomplete ? ', incomplete' : ''}`}
-      onClick={(event) => selectNode(node.id, event)}
-      onKeyDown={(event) => {
+      onClick={readOnly ? undefined : (event) => selectNode(node.id, event)}
+      onKeyDown={readOnly ? undefined : (event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           selectNode(node.id, event);
@@ -1232,7 +1233,7 @@ function ChainChip({ kind, label }) {
 // The `+` on every connector: click to open a kind picker and insert a step
 // at exactly that point in the chain.
 function ConnectorInsert({ slot }) {
-  const { insertAt, onJoinBranches } = useContext(GraphEditContext);
+  const { insertAt, onJoinBranches, readOnly } = useContext(GraphEditContext);
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
@@ -1257,35 +1258,39 @@ function ConnectorInsert({ slot }) {
   return (
     <div className="routine-connector" ref={wrapRef}>
       <span className="routine-connector__line" aria-hidden="true" />
-      <button
-        type="button"
-        className="routine-connector__btn"
-        onClick={() => setOpen((current) => !current)}
-        aria-label="Insert step here"
-        aria-expanded={open}
-      >
-        <span className="routine-connector__btn-glyph" aria-hidden="true">+</span>
-      </button>
-      {open ? (
-        <div className="routine-connector__menu" role="menu">
-          {GRAPH_NODE_KINDS.map((item) => (
-            <button
-              key={item.kind}
-              type="button"
-              role="menuitem"
-              className="routine-connector__menu-item"
-              onClick={() => {
-                if (slot.kind === 'join') onJoinBranches(slot.sourceId, item.kind);
-                else insertAt(slot, item.kind);
-                setOpen(false);
-              }}
-            >
-              <span className={`canvas-dock-icon ${item.kind}`}><KindIcon kind={item.kind} /></span>
-              {item.label}
-            </button>
-          ))}
-        </div>
-      ) : null}
+      {readOnly ? null : (
+        <>
+          <button
+            type="button"
+            className="routine-connector__btn"
+            onClick={() => setOpen((current) => !current)}
+            aria-label="Insert step here"
+            aria-expanded={open}
+          >
+            <span className="routine-connector__btn-glyph" aria-hidden="true">+</span>
+          </button>
+          {open ? (
+            <div className="routine-connector__menu" role="menu">
+              {GRAPH_NODE_KINDS.map((item) => (
+                <button
+                  key={item.kind}
+                  type="button"
+                  role="menuitem"
+                  className="routine-connector__menu-item"
+                  onClick={() => {
+                    if (slot.kind === 'join') onJoinBranches(slot.sourceId, item.kind);
+                    else insertAt(slot, item.kind);
+                    setOpen(false);
+                  }}
+                >
+                  <span className={`canvas-dock-icon ${item.kind}`}><KindIcon kind={item.kind} /></span>
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }
@@ -1915,13 +1920,14 @@ function ForkBlock({ fork, node }) {
     onRemoveDefault,
     onRenameBranch,
     edges,
+    readOnly,
   } = useContext(GraphEditContext);
   const [collapsed, setCollapsed] = useState(() => new Set());
   const { sourceId, edge, branches, defaultTree, joinTree, editable = true, fixedBranches = false, unconditional = false } = fork;
   // A fixed fork's arms are dictated by the node kind, so it grows no lanes
   // and its headers are labels rather than editable chips. It can still be
   // joined -- that's about what happens *after* the fork, not its shape.
-  const canGrowLanes = editable && !fixedBranches;
+  const canGrowLanes = editable && !fixedBranches && !readOnly;
   const lanes = [
     ...branches.map(({ value, tree }) => ({
       value,
@@ -1980,7 +1986,7 @@ function ForkBlock({ fork, node }) {
                   onRename={(next) => onRenameBranch(sourceId, lane.value, next)}
                   onRemove={() => (lane.isDefault ? onRemoveDefault(sourceId) : onRemoveBranch(sourceId, lane.value))}
                   collapsed={isCollapsed}
-                  readOnly={!editable || fixedBranches}
+                  readOnly={readOnly || !editable || fixedBranches}
                   hideLabel={unconditional}
                   onToggleCollapse={() => toggleCollapse(lane.value)}
                 />
@@ -2028,7 +2034,7 @@ function ForkBlock({ fork, node }) {
 // pointed at them) never silently vanish -- they surface here so the author
 // can rewire or delete them explicitly instead of losing data invisibly.
 function UnreachableTray({ nodes }) {
-  const { deleteNode } = useContext(GraphEditContext);
+  const { deleteNode, readOnly } = useContext(GraphEditContext);
   if (!nodes.length) return null;
   return (
     <div className="routine-unreachable">
@@ -2038,7 +2044,9 @@ function UnreachableTray({ nodes }) {
           <div key={node.id} className="routine-unreachable__item">
             <span className={`canvas-dock-icon ${node.kind}`}><KindIcon kind={node.kind} /></span>
             <span>{node.label || node.id}</span>
-            <button type="button" onClick={() => deleteNode(node.id)} title="Delete" aria-label="Delete">×</button>
+            {readOnly ? null : (
+              <button type="button" onClick={() => deleteNode(node.id)} title="Delete" aria-label="Delete">×</button>
+            )}
           </div>
         ))}
       </div>
@@ -2708,6 +2716,68 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     }));
   }, []);
 
+  // Read-only revision preview: set by picking a revision in the Revisions
+  // panel. RoutineRevisionsPanel dispatches the fetch; this only reads the
+  // resulting Redux cache entry, so both stay in sync off the same source.
+  // null means "showing the live/editable draft" (the normal state).
+  const [viewingRevisionId, setViewingRevisionId] = useState(null);
+  // Reset back to the live draft whenever the Revisions panel closes --
+  // adjusted during render (React's documented pattern for state that
+  // must follow a prop change), not inside a useEffect, so there's no
+  // extra render showing stale locked content before the reset lands.
+  const [revisionsWereOpen, setRevisionsWereOpen] = useState(revisionsOpen);
+  if (revisionsOpen !== revisionsWereOpen) {
+    setRevisionsWereOpen(revisionsOpen);
+    if (!revisionsOpen && viewingRevisionId !== null) {
+      setViewingRevisionId(null);
+    }
+  }
+  const viewingRevision = useSelector((state) => (
+    viewingRevisionId ? selectAgentRoutineRevisionContent(state, agent.id, viewingRevisionId) : null
+  ));
+  // The single-revision fetch returns just the graph document (no
+  // captured_at) -- the list fetch is where that timestamp actually lives.
+  const viewingRevisionSummary = useSelector((state) => {
+    if (!viewingRevisionId) return null;
+    const list = selectAgentRoutineRevisions(state, agent.id);
+    return list?.find((revision) => revision.revision_id === viewingRevisionId) || null;
+  });
+  const isViewingRevision = Boolean(viewingRevisionId);
+  const displayNodes = useMemo(
+    () => (isViewingRevision ? (viewingRevision?.nodes || []) : nodes),
+    [isViewingRevision, viewingRevision, nodes],
+  );
+  const displayEdges = useMemo(
+    () => (isViewingRevision ? (viewingRevision?.edges || []) : edges),
+    [isViewingRevision, viewingRevision, edges],
+  );
+  const displayEntry = isViewingRevision ? (viewingRevision?.entry ?? null) : meta.entry;
+
+  // Restoring copies the revision into the live editable state as a dirty
+  // draft -- it does NOT persist by itself. The existing autosave effect
+  // below picks up the resulting nodes/edges/meta change exactly like any
+  // other edit and PATCHes it on its normal debounce, so restoring an old
+  // revision becomes current the same way any other edit does.
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const handleRestoreRevision = useCallback(() => {
+    if (!viewingRevision) return;
+    const nextMeta = {
+      status: viewingRevision.status || 'Draft',
+      version: viewingRevision.version || '2.0.0',
+      summary: viewingRevision.summary || '',
+      entry: viewingRevision.entry || (viewingRevision.nodes || [])[0]?.id || null,
+      settings: viewingRevision.settings || {},
+      input_schema: viewingRevision.input_schema || null,
+      output_schema: viewingRevision.output_schema || null,
+      $defs: viewingRevision.$defs || {},
+    };
+    setMeta(nextMeta);
+    setNodes((viewingRevision.nodes || []).map((node) => ({ ...node })));
+    setEdges((viewingRevision.edges || []).map((edge) => ({ ...edge })));
+    setViewingRevisionId(null);
+    setRestoreConfirmOpen(false);
+  }, [viewingRevision]);
+
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -2724,10 +2794,11 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
     onRemoveDefault,
     onRenameBranch,
     settings: meta.settings,
-    edges,
-    nodes,
+    edges: displayEdges,
+    nodes: displayNodes,
     inputSchema: meta.input_schema,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, edges, nodes, meta.input_schema]);
+    readOnly: isViewingRevision,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -2817,30 +2888,52 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         <div className="agents-graph-shell">
           <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
-              {saveState !== 'idle' ? (
-                <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
-                  {saveState === 'saving' ? 'Saving…'
-                    : saveState === 'saved' ? 'Saved'
-                    : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
-                        : 'Save failed'}
-                </span>
-              ) : null}
-              <span
-                className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
-                role="status"
-                aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
-              >
-                {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
-              </span>
-              {runResult ? (
-                <span
-                  className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
-                  role="status"
-                  aria-label={`Routine result: ${runResult.status}`}
-                >
-                  {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
-                </span>
-              ) : null}
+              {isViewingRevision ? (
+                <div className="agents-graph-revision-banner" role="status">
+                  <span className="agents-graph-revision-banner__label">
+                    Viewing revision {viewingRevisionId.slice(0, 8)}
+                    {viewingRevisionSummary?.captured_at ? ` · ${formatAge(viewingRevisionSummary.captured_at)} ago` : ''}
+                  </span>
+                  <button
+                    type="button"
+                    className="repo-btn repo-btn--ghost"
+                    onClick={() => setRestoreConfirmOpen(true)}
+                    disabled={!viewingRevision}
+                  >
+                    Restore this revision
+                  </button>
+                  <button type="button" className="repo-btn" onClick={() => setViewingRevisionId(null)}>
+                    Return to current
+                  </button>
+                </div>
+              ) : (
+                <>
+                  {saveState !== 'idle' ? (
+                    <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
+                      {saveState === 'saving' ? 'Saving…'
+                        : saveState === 'saved' ? 'Saved'
+                        : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
+                            : 'Save failed'}
+                    </span>
+                  ) : null}
+                  <span
+                    className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
+                    role="status"
+                    aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
+                  >
+                    {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
+                  </span>
+                  {runResult ? (
+                    <span
+                      className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
+                      role="status"
+                      aria-label={`Routine result: ${runResult.status}`}
+                    >
+                      {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
+                    </span>
+                  ) : null}
+                </>
+              )}
               <DetailHeaderActions menuLabel="Routine actions">
                 {onShowProfile ? (
                   <DetailHeaderAction
@@ -2885,7 +2978,7 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                   }
                 }}
               >
-                <RoutineChain nodes={nodes} edges={edges} entry={meta.entry} />
+                <RoutineChain nodes={displayNodes} edges={displayEdges} entry={displayEntry} />
               </div>
               {selectedNode && inspectorPosition ? (
                 <NodeInspector
@@ -2914,10 +3007,26 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
       ) : runsOpen ? (
         <RoutineRunsPanel key={agent.id} agentId={agent.id} onClose={onCloseRuns} />
       ) : revisionsOpen ? (
-        <RoutineRevisionsPanel key={agent.id} agentId={agent.id} onClose={onCloseRevisions} />
+        <RoutineRevisionsPanel
+          key={agent.id}
+          agentId={agent.id}
+          onClose={onCloseRevisions}
+          viewingRevisionId={viewingRevisionId}
+          onSelectRevision={setViewingRevisionId}
+        />
       ) : (
         <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); }} />
       )}
+      {restoreConfirmOpen ? (
+        <PopupModal
+          eyebrow="Restore revision"
+          title={`Restore revision ${(viewingRevisionId || '').slice(0, 8)}?`}
+          message="This replaces your current draft with the selected revision. Any unsaved changes to the current draft will be lost. The restored graph is not saved until you edit it further -- it autosaves the same way any other change does."
+          confirmLabel="Restore"
+          onClose={() => setRestoreConfirmOpen(false)}
+          onConfirm={handleRestoreRevision}
+        />
+      ) : null}
     </>
   );
 }
@@ -3183,42 +3292,22 @@ function RoutineRunsPanel({ agentId, onClose }) {
   );
 }
 
-// Read-only, syntax-highlighted rendering of one revision's graph document --
-// same highlight.js technique as JsonCodeEditor, minus the editable textarea
-// layer, since a past revision is never itself editable here.
-function RevisionJsonView({ value }) {
-  const highlighted = useMemo(() => {
-    try {
-      return hljs.highlight(value, { language: 'json' }).value;
-    } catch {
-      return escapeHtmlText(value);
-    }
-  }, [value]);
-
-  return (
-    <pre className="agents-graph-revisions__json">
-      <code className="hljs language-json" dangerouslySetInnerHTML={{ __html: highlighted }} />
-    </pre>
-  );
-}
-
 // Every captured revision of this routine's graph document (see
 // app.backend.document_store.PostgresDocumentStore._ensure_routine_revision_history
 // -- a Postgres trigger appends one immutable row on every write to the
-// routine's live document). Clicking a revision loads and renders its full
-// graph JSON below the list; content is cached per revision id so re-clicking
-// an already-viewed revision is instant.
-function RoutineRevisionsPanel({ agentId, onClose }) {
+// routine's live document). Clicking a revision renders its actual graph
+// in the canvas above (locked read-only -- see GraphCanvas's readOnly
+// context flag), not a JSON dump: `viewingRevisionId`/`onSelectRevision`
+// are owned by GraphCanvas so the canvas and this list stay in sync.
+function RoutineRevisionsPanel({ agentId, onClose, viewingRevisionId, onSelectRevision }) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
   const revisions = useSelector((state) => selectAgentRoutineRevisions(state, agentId));
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [selectedRevisionId, setSelectedRevisionId] = useState(null);
   const [revisionLoading, setRevisionLoading] = useState(false);
   const [revisionError, setRevisionError] = useState(null);
-  const content = useSelector((state) => selectAgentRoutineRevisionContent(state, agentId, selectedRevisionId));
 
   const load = useCallback(() => {
     setLoading(true);
@@ -3239,14 +3328,14 @@ function RoutineRevisionsPanel({ agentId, onClose }) {
   }, [agentId]);
 
   const selectRevision = useCallback((revisionId) => {
-    setSelectedRevisionId(revisionId);
+    onSelectRevision(revisionId);
     setRevisionError(null);
     setRevisionLoading(true);
     dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId }))
       .unwrap()
       .catch((fetchError) => setRevisionError(fetchError.message || 'Failed to load revision'))
       .finally(() => setRevisionLoading(false));
-  }, [agentId, agentsUrl, dispatch]);
+  }, [agentId, agentsUrl, dispatch, onSelectRevision]);
 
   return (
     <aside className="agents-graph-editor agents-graph-revisions">
@@ -3266,6 +3355,8 @@ function RoutineRevisionsPanel({ agentId, onClose }) {
         </button>
       </header>
       {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+      {revisionLoading ? <p className="agents-graph-runs__empty">Loading revision…</p> : null}
+      {revisionError ? <p className="agents-graph-editor__error">{revisionError}</p> : null}
       {!error && revisions && revisions.length === 0 && !loading ? (
         <p className="agents-graph-runs__empty">No revisions recorded yet.</p>
       ) : null}
@@ -3274,7 +3365,7 @@ function RoutineRevisionsPanel({ agentId, onClose }) {
           <li key={revision.revision_id}>
             <button
               type="button"
-              className={`agents-graph-revisions__item${selectedRevisionId === revision.revision_id ? ' is-selected' : ''}`}
+              className={`agents-graph-revisions__item${viewingRevisionId === revision.revision_id ? ' is-selected' : ''}`}
               onClick={() => selectRevision(revision.revision_id)}
             >
               <span className="agents-graph-runs__run-id">{revision.revision_id.slice(0, 8)}</span>
@@ -3283,15 +3374,6 @@ function RoutineRevisionsPanel({ agentId, onClose }) {
           </li>
         ))}
       </ul>
-      {selectedRevisionId ? (
-        <div className="agents-graph-revisions__viewer">
-          {revisionLoading ? <p className="agents-graph-runs__empty">Loading revision…</p> : null}
-          {revisionError ? <p className="agents-graph-editor__error">{revisionError}</p> : null}
-          {!revisionLoading && !revisionError && content ? (
-            <RevisionJsonView value={JSON.stringify(content, null, 2)} />
-          ) : null}
-        </div>
-      ) : null}
     </aside>
   );
 }
