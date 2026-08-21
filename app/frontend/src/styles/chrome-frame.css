@@ -6899,6 +6899,16 @@ body,
   backdrop-filter: blur(10px);
 }
 
+/* Save/validation/run-result status -- split from the actions pill above
+   (.agents-graph-floating) and anchored bottom-left instead of sharing its
+   row. Kept the icon buttons from shifting horizontally every time this
+   text's length changes ("Saving…" vs "Not saved · 2 steps incomplete"
+   vs "Valid graph" vs an N-issue validation message, etc). */
+.agents-graph-floating--status {
+  top: auto;
+  bottom: 14px;
+}
+
 .agents-graph-floating span,
 .agents-graph-floating button {
   display: inline-flex;

@@ -2881,34 +2881,6 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
         <div className="agents-graph-shell">
           <div ref={canvasRef} className="canvas-surface agents-graph-canvas routine-canvas">
             <div className="agents-graph-floating">
-              {isViewingRevision ? null : (
-                <>
-                  {saveState !== 'idle' ? (
-                    <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
-                      {saveState === 'saving' ? 'Saving…'
-                        : saveState === 'saved' ? 'Saved'
-                        : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
-                            : 'Save failed'}
-                    </span>
-                  ) : null}
-                  <span
-                    className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
-                    role="status"
-                    aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
-                  >
-                    {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
-                  </span>
-                  {runResult ? (
-                    <span
-                      className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
-                      role="status"
-                      aria-label={`Routine result: ${runResult.status}`}
-                    >
-                      {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
-                    </span>
-                  ) : null}
-                </>
-              )}
               <DetailHeaderActions menuLabel="Routine actions">
                 {onShowProfile ? (
                   <DetailHeaderAction
@@ -2939,6 +2911,34 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 ) : null}
               </DetailHeaderActions>
             </div>
+            {isViewingRevision ? null : (
+              <div className="agents-graph-floating agents-graph-floating--status">
+                {saveState !== 'idle' ? (
+                  <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
+                    {saveState === 'saving' ? 'Saving…'
+                      : saveState === 'saved' ? 'Saved'
+                      : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
+                          : 'Save failed'}
+                  </span>
+                ) : null}
+                <span
+                  className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
+                  role="status"
+                  aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
+                >
+                  {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
+                </span>
+                {runResult ? (
+                  <span
+                    className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
+                    role="status"
+                    aria-label={`Routine result: ${runResult.status}`}
+                  >
+                    {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
+                  </span>
+                ) : null}
+              </div>
+            )}
               <GraphEditContext.Provider value={editContext}>
               <div
                 className="routine-canvas__scroll"
