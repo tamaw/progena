@@ -681,7 +681,7 @@ function WorkflowNodeHandles({
 }) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
   const outputProperties = nodePortProperties(outputSchema, outputFallback);
-  const top = (index) => `${54 + index * 23}px`;
+  const top = (index) => `${61 + index * 28}px`;
   return (
     <>
       {inputProperties.map(({ name }, index) => (
