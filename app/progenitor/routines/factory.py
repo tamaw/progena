@@ -252,6 +252,17 @@ def normalize_message_content(content: Any) -> str:
     return str(content)
 
 
+def _message_with_usage(text: str, source: BaseMessage | None) -> AIMessage:
+    """A fresh AIMessage carrying `text` (already normalized off `source`,
+    which may be a Responses-API block list `source.content` isn't) --
+    preserves `source`'s usage_metadata rather than dropping it, so
+    _instrument_node_callable's uniform token-usage extraction (reads
+    `messages`, see factory.py) still sees a real LLM call's usage even
+    though this node reconstructs the message instead of returning `source`
+    verbatim."""
+    return AIMessage(content=text, usage_metadata=getattr(source, "usage_metadata", None))
+
+
 def extract_json_object(text: str) -> dict[str, Any] | None:
     """Best-effort JSON-object extraction: fenced block, then a balanced-brace scan."""
     candidates: list[str] = []
@@ -447,7 +458,10 @@ def _build_prompt_node(
         parsed_text = extract_json_object(text)
         if parsed_text is not None:
             result[f"{output_key}_json"] = parsed_text
-        return {"messages": [AIMessage(content=text)], "data": result}
+        return {
+            "messages": [_message_with_usage(text, response)],
+            "data": result,
+        }
 
     return run
 
@@ -559,7 +573,11 @@ def _build_classify_node(
                 f"classify node {node.id}: structured response failed schema "
                 f"validation: {outcome['parsing_error']}"
             )
-        return {"data": {output_key: parsed}}
+        # `raw` carries usage_metadata -- threaded through `messages` like
+        # every other model-calling node kind, purely so
+        # _instrument_node_callable's uniform token-usage extraction (which
+        # reads off `messages`, not any per-kind hook) sees it too.
+        return {"messages": [outcome["raw"]], "data": {output_key: parsed}}
 
     return run
 
@@ -613,7 +631,8 @@ def _build_agent_node(
             {"messages": [HumanMessage(content=rendered)]}, **invoke_kwargs
         )
         target_messages = result.get("messages") or []
-        text = normalize_message_content(target_messages[-1].content) if target_messages else ""
+        target_message = target_messages[-1] if target_messages else None
+        text = normalize_message_content(target_message.content) if target_message else ""
 
         if response_schema is not None:
             parsed = extract_json_object(text)
@@ -625,14 +644,17 @@ def _build_agent_node(
                     f"agent node {node.id}: structured response failed schema validation: "
                     f"{validation_error}"
                 )
-            return {"messages": [AIMessage(content=text)], "data": {output_key: parsed}}
+            return {
+                "messages": [_message_with_usage(text, target_message)],
+                "data": {output_key: parsed},
+            }
 
         output: dict[str, Any] = {output_key: text}
         parsed = extract_json_object(text)
         if parsed is not None:
             output[f"{output_key}_json"] = parsed
 
-        return {"messages": [AIMessage(content=text)], "data": output}
+        return {"messages": [_message_with_usage(text, target_message)], "data": output}
 
     return run
 
@@ -880,15 +902,51 @@ def _build_node_callable(
     raise ValueError(f"unknown node kind: {node.kind}")
 
 
+def _extract_token_usage(result: dict[str, Any] | None) -> dict[str, int] | None:
+    """Sums ``usage_metadata`` off every ``AIMessage`` a node returned in
+    ``messages`` -- the same uniform choke point as duration, so no node
+    kind has to opt in individually. Every model-calling node builder
+    already threads its raw response through ``messages`` (prompt/classify/
+    agent/a2a/routine); kinds with no LLM call (eval/condition/switch/split/
+    noop/human/foreach-send) correctly report no tokens by having no
+    messages at all. Returns ``None`` -- not a zeroed dict -- when nothing
+    carried usage data, so a display layer can tell "no LLM call" apart
+    from "LLM call, provider didn't report usage".
+    """
+    if not isinstance(result, dict):
+        return None
+    messages = result.get("messages")
+    if not messages:
+        return None
+    input_tokens = output_tokens = total_tokens = 0
+    found = False
+    for message in messages:
+        usage = getattr(message, "usage_metadata", None)
+        if not usage:
+            continue
+        found = True
+        input_tokens += usage.get("input_tokens") or 0
+        output_tokens += usage.get("output_tokens") or 0
+        total_tokens += usage.get("total_tokens") or 0
+    if not found:
+        return None
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def _instrument_node_callable(node_id: str, fn: Any) -> Any:
-    """Wrap a node's runnable to record wall-clock duration into run_meta,
-    uniformly for every node kind -- independent of what the node itself
-    returns, so it can never be skipped by omission the way a per-kind
-    opt-in would be. Preserves the inner callable's calling convention: some
-    node builders accept an optional ``runtime`` second parameter and
-    LangGraph decides whether to pass it based on the callable's own
-    signature, so this wrapper inspects that signature once at wrap time and
-    forwards the same way.
+    """Wrap a node's runnable to record wall-clock duration (and, when the
+    node made a real LLM call, token usage) into run_meta, uniformly for
+    every node kind -- independent of what the node itself returns, so it
+    can never be skipped by omission the way a per-kind opt-in would be.
+    Preserves the inner callable's calling convention: some node builders
+    accept an optional ``runtime`` second parameter and LangGraph decides
+    whether to pass it based on the callable's own signature, so this
+    wrapper inspects that signature once at wrap time and forwards the
+    same way.
     """
     takes_runtime = len(inspect.signature(fn).parameters) >= 2
 
@@ -898,9 +956,11 @@ def _instrument_node_callable(node_id: str, fn: Any) -> Any:
         result = await (fn(state, runtime) if takes_runtime else fn(state))
         duration_ms = (time.monotonic() - started) * 1000
         update = dict(result) if isinstance(result, dict) else {}
-        update["run_meta"] = {
-            node_id: [{"started_at": started_at, "duration_ms": round(duration_ms, 2)}]
-        }
+        entry: dict[str, Any] = {"started_at": started_at, "duration_ms": round(duration_ms, 2)}
+        tokens = _extract_token_usage(result)
+        if tokens is not None:
+            entry["tokens"] = tokens
+        update["run_meta"] = {node_id: [entry]}
         return update
 
     return wrapped
