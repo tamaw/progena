@@ -31,25 +31,34 @@ def example_graph(example_payload):
 
 
 class FakeModel:
-    """Returns queued responses in order, one per ``.ainvoke`` call."""
+    """Returns queued responses in order, one per ``.ainvoke`` call.
 
-    def __init__(self, responses: list[str]):
+    ``usage`` is an optional list of ``UsageMetadata``-shaped dicts, one per
+    queued response -- omit to leave every response's ``usage_metadata`` at
+    its default ``None`` (the "no reported usage" case)."""
+
+    def __init__(self, responses: list[str], usage: list[dict] | None = None):
         self._responses = list(responses)
+        self._usage = list(usage) if usage is not None else None
         self.calls: list[list] = []
 
     async def ainvoke(self, messages):
         self.calls.append(messages)
-        return AIMessage(content=self._responses.pop(0))
+        content = self._responses.pop(0)
+        usage_metadata = self._usage.pop(0) if self._usage is not None else None
+        return AIMessage(content=content, usage_metadata=usage_metadata)
 
 
 class FakeStructuredModel:
     """Stands in for a BaseChatModel whose ``with_structured_output(...)`` is
     exercised (method='json_schema', strict=True, include_raw=True) -- returns
     queued parsed values in order, one per bound Runnable's ``.ainvoke`` call.
-    A queued ``None`` simulates a schema-validation failure."""
+    A queued ``None`` simulates a schema-validation failure. ``usage`` mirrors
+    FakeModel's: an optional list of UsageMetadata dicts, one per response."""
 
-    def __init__(self, parsed_responses: list[dict | None]):
+    def __init__(self, parsed_responses: list[dict | None], usage: list[dict] | None = None):
         self._responses = list(parsed_responses)
+        self._usage = list(usage) if usage is not None else None
         self.calls: list[list] = []
         self.bind_calls: list[dict] = []
 
@@ -66,7 +75,11 @@ class FakeStructuredModel:
             async def ainvoke(_self, messages):
                 outer.calls.append(messages)
                 parsed = outer._responses.pop(0)
-                raw = AIMessage(content=json.dumps(parsed) if parsed is not None else "")
+                usage_metadata = outer._usage.pop(0) if outer._usage is not None else None
+                raw = AIMessage(
+                    content=json.dumps(parsed) if parsed is not None else "",
+                    usage_metadata=usage_metadata,
+                )
                 error = None if parsed is not None else ValueError("simulated schema violation")
                 return {"raw": raw, "parsed": parsed, "parsing_error": error}
 
@@ -76,13 +89,14 @@ class FakeStructuredModel:
 class FakeAgent:
     """Stands in for the ``agent_registry["repo-manager"]`` compiled target."""
 
-    def __init__(self, response: str):
+    def __init__(self, response: str, usage: dict | None = None):
         self._response = response
+        self._usage = usage
         self.calls: list[dict] = []
 
     async def ainvoke(self, state, **kwargs):
         self.calls.append(state)
-        return {"messages": [AIMessage(content=self._response)]}
+        return {"messages": [AIMessage(content=self._response, usage_metadata=self._usage)]}
 
 
 def _parse_response(
@@ -859,3 +873,99 @@ class TestRunMetaInstrumentation:
 
         assert model.attempts == 3
         assert len(result["run_meta"]["step"]) == 1
+
+    async def test_prompt_node_records_token_usage(self):
+        """A real LLM call's usage_metadata lands under run_meta[node]['tokens']."""
+        payload = _single_prompt_step_payload()
+        graph = validate_routine_graph_payload(payload)
+        model = FakeModel(
+            ["hi"], usage=[{"input_tokens": 12, "output_tokens": 4, "total_tokens": 16}]
+        )
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+
+        assert result["run_meta"]["step"][0]["tokens"] == {
+            "input_tokens": 12,
+            "output_tokens": 4,
+            "total_tokens": 16,
+        }
+
+    async def test_classify_node_records_token_usage(self):
+        """classify threads its raw structured-output AIMessage through
+        `messages` (see _build_classify_node) purely so this uniform
+        extraction sees its usage too -- classify's own return value never
+        exposed `messages` before this."""
+        payload = _single_classify_step_payload_with_schema(_RESULT_SCHEMA)
+        graph = validate_routine_graph_payload(payload)
+        model = FakeStructuredModel(
+            [{"result": True}], usage=[{"input_tokens": 5, "output_tokens": 1, "total_tokens": 6}]
+        )
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+
+        assert result["run_meta"]["gate"][0]["tokens"] == {
+            "input_tokens": 5,
+            "output_tokens": 1,
+            "total_tokens": 6,
+        }
+        assert result["data"]["gate"] == {"result": True}
+
+    async def test_node_with_no_llm_call_reports_no_tokens_key(self):
+        """eval never calls a model -- run_meta has no 'tokens' key at all,
+        not a zeroed one, distinguishing "no LLM call" from "unmetered"."""
+        payload = {
+            "id": "timed",
+            "name": "timed",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "eval", "output_key": "result", "config": {"expression": "1"}}
+            ],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert "tokens" not in result["run_meta"]["a"][0]
+
+    async def test_llm_call_with_unreported_usage_also_omits_tokens_key(self):
+        """The provider not reporting usage_metadata (FakeModel's default)
+        must not be conflated with zero tokens spent."""
+        payload = _single_prompt_step_payload()
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel(["hi"]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+
+        assert "tokens" not in result["run_meta"]["step"][0]
+
+    async def test_agent_node_records_token_usage(self):
+        """agent delegates to a compiled sub-agent whose own last message
+        carries usage_metadata -- preserved even though the node
+        reconstructs its own AIMessage from the extracted text (see
+        _message_with_usage)."""
+        config = {"agent_name": "repo-manager", "prompt_template": "{request}"}
+        payload = {
+            "id": "agent-tokens",
+            "name": "agent-tokens",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "call",
+            "nodes": [{"id": "call", "kind": "agent", "output_key": "result", "config": config}],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        agent = FakeAgent(
+            "done", usage={"input_tokens": 20, "output_tokens": 8, "total_tokens": 28}
+        )
+        runnable = compile_routine_graph(
+            graph, model=FakeModel([]), agent_registry={"repo-manager": agent}
+        )
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert result["run_meta"]["call"][0]["tokens"] == {
+            "input_tokens": 20,
+            "output_tokens": 8,
+            "total_tokens": 28,
+        }
