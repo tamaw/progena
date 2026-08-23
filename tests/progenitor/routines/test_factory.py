@@ -756,3 +756,106 @@ class TestRoutineDelegationContract:
         target_messages = result.get("messages") or []
         assert target_messages, "messages must survive output_schema projection"
         assert target_messages[0].content == "delegated call"
+
+
+class TestRunMetaInstrumentation:
+    """Every node kind gets wall-clock duration recorded into run_meta,
+    regardless of what it returns -- a single choke point at graph
+    construction time, not a per-kind opt-in a node builder could omit."""
+
+    async def test_single_node_records_duration(self):
+        payload = {
+            "id": "timed",
+            "name": "timed",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "a",
+            "nodes": [
+                {
+                    "id": "a",
+                    "kind": "eval",
+                    "output_key": "result",
+                    "config": {"expression": "1 + 1"},
+                }
+            ],
+            "edges": [],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert set(result["run_meta"]) == {"a"}
+        entries = result["run_meta"]["a"]
+        assert len(entries) == 1
+        assert entries[0]["duration_ms"] >= 0
+        assert "started_at" in entries[0]
+        # The node's own return value is untouched alongside run_meta.
+        assert result["data"]["result"] == 2
+
+    async def test_multiple_nodes_each_get_their_own_entry(self):
+        payload = {
+            "id": "timed-chain",
+            "name": "timed-chain",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "a",
+            "nodes": [
+                {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}},
+                {"id": "b", "kind": "eval", "output_key": "b", "config": {"expression": "2"}},
+            ],
+            "edges": [{"from": "a", "to": "b", "level": "normal"}],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        assert set(result["run_meta"]) == {"a", "b"}
+        assert len(result["run_meta"]["a"]) == 1
+        assert len(result["run_meta"]["b"]) == 1
+
+    async def test_looped_node_accumulates_one_entry_per_iteration(self):
+        payload = {
+            "id": "timed-loop",
+            "name": "timed-loop",
+            "description": "",
+            "version": "2.0.0",
+            "entry": "count",
+            "nodes": [
+                {
+                    "id": "count",
+                    "kind": "eval",
+                    "output_key": "count",
+                    "config": {"expression": "count + 1", "defaults": {"count": 0}},
+                },
+            ],
+            "edges": [
+                {
+                    "from": "count",
+                    "to": "count",
+                    "level": "normal",
+                    "loop_guard": {"expression": "count < 3"},
+                }
+            ],
+        }
+        graph = validate_routine_graph_payload(payload)
+        runnable = compile_routine_graph(graph, model=FakeModel([]))
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="go")]})
+
+        # "count" ran 3 times (loop_guard false on the 3rd) -- run_meta
+        # accumulated one entry per iteration, not just the final one.
+        assert len(result["run_meta"]["count"]) == 3
+        assert result["data"]["count"] == 3
+
+    async def test_retry_only_records_the_attempt_that_actually_completed(self):
+        """A raised exception never produces a state update to merge (that's
+        LangGraph's own retry/state model, not a choice this wrapper makes)
+        -- so failed attempts can't be recorded via this state-channel
+        mechanism, only the attempt that actually returned."""
+        payload = _single_prompt_step_payload(node_retry={"max_retries": 2, "initial_interval": 0})
+        graph = validate_routine_graph_payload(payload)
+        model = FlakyModel(fail_times=2, response="ok")
+        runnable = compile_routine_graph(graph, model=model)
+        result = await runnable.ainvoke({"messages": [HumanMessage(content="hi")]})
+
+        assert model.attempts == 3
+        assert len(result["run_meta"]["step"]) == 1
