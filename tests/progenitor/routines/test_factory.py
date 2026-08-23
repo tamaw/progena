@@ -647,7 +647,7 @@ class TestInputSchema:
                 }
             ],
             "edges": [],
-            "input_schema": {"candidate": "string"},
+            "input_schema": {"type": "object", "properties": {"candidate": {"type": "string"}}},
         }
         graph = validate_routine_graph_payload(payload)
         runnable = compile_routine_graph(graph, model=FakeModel([]))
