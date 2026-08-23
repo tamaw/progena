@@ -32,7 +32,7 @@ from app.progenitor.utils import utcnow_isoformat
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
-from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
+from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore, store_database_url
 from .request_utils import BroadcastUiEvent
 from .request_utils import request_correlation_id as _request_correlation_id
 
@@ -551,6 +551,62 @@ def create_agent_profile_router(
             request_id=request_id,
         )
         return acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
+
+    @router.get(
+        "/agent-profiles/{agent_id}/run-state",
+        status_code=202,
+        response_model=UiRequestAcknowledgement,
+    )
+    async def get_routine_run_state(
+        agent_id: str,
+        thread_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Read a routine run's live per-node timing/token/output state.
+
+        Reads the given thread_id's latest checkpoint directly -- the same
+        Postgres-backed LangGraph checkpointer the runtime writes to, opened
+        short-lived here (mirrors PostgresRoutineRevisionReader's "rare
+        operation, no persistent connection" shape) since the backend
+        process holds no long-lived checkpointer of its own. Returns
+        run_meta (per-node duration, see factory.py's
+        _instrument_node_callable) and data (each node's output_key value)
+        as of that checkpoint.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        agent = await asyncio.to_thread(store.get_agent, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        if not thread_id.startswith(f"routine:{agent_id}:"):
+            raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
+
+        database_url = store_database_url(get_document_store())
+        payload: dict[str, Any] = {
+            "agent_id": agent_id,
+            "thread_id": thread_id,
+            "found": False,
+            "run_meta": {},
+            "data": {},
+        }
+        if database_url:
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+            async with AsyncPostgresSaver.from_conn_string(database_url) as checkpointer:
+                tup = await checkpointer.aget_tuple({"configurable": {"thread_id": thread_id}})
+                if tup is not None:
+                    channel_values = tup.checkpoint.get("channel_values", {})
+                    payload["found"] = True
+                    payload["run_meta"] = channel_values.get("run_meta") or {}
+                    payload["data"] = channel_values.get("data") or {}
+
+        broadcast_ui_event(
+            "agent.routine.run_state.loaded",
+            payload,
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agent.routine.run_state.loaded"])
 
     @router.get(
         "/agent-profiles/{agent_id}/runs", status_code=202, response_model=UiRequestAcknowledgement

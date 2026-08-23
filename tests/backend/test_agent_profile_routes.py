@@ -484,6 +484,43 @@ def test_get_routine_revision_publishes_full_graph():
     assert missing.status_code == 404
 
 
+def test_run_state_no_database_url_returns_not_found_gracefully(harness):
+    """InMemoryDocumentStore has no database_url -- no Postgres attempted,
+    just an honest 'found: False' rather than a crash or fake data."""
+    client, events = harness
+    response = client.get(
+        "/api/ui/agent-profiles/alpha/run-state",
+        params={"thread_id": "routine:alpha:rev-a:some-session"},
+    )
+    assert_acknowledged(response, ["agent.routine.run_state.loaded"])
+    payload = events[-1][1]
+    assert payload == {
+        "agent_id": "alpha",
+        "thread_id": "routine:alpha:rev-a:some-session",
+        "found": False,
+        "run_meta": {},
+        "data": {},
+    }
+
+
+def test_run_state_rejects_thread_id_from_a_different_routine(harness):
+    client, _ = harness
+    response = client.get(
+        "/api/ui/agent-profiles/alpha/run-state",
+        params={"thread_id": "routine:beta:rev-a:some-session"},
+    )
+    assert response.status_code == 400
+
+
+def test_run_state_missing_agent_returns_404(harness):
+    client, _ = harness
+    response = client.get(
+        "/api/ui/agent-profiles/missing/run-state",
+        params={"thread_id": "routine:missing:rev-a:some-session"},
+    )
+    assert response.status_code == 404
+
+
 def test_store_unavailable_returns_503():
     app = FastAPI()
     _install_request_id_middleware(app)
