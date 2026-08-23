@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   addForkLane,
   buildStatePathSuggestions,
+  deriveActiveNodeIds,
   filterStatePathSuggestions,
   forkJoin,
   forkLaneEdgePosition,
@@ -23,6 +24,44 @@ import {
   textToSchemaFields,
   validateWorkingGraph,
 } from './AgentGraph';
+
+describe('deriveActiveNodeIds', () => {
+  const nodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+
+  it('offers only entry when nothing has completed yet', () => {
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(deriveActiveNodeIds(nodes, edges, 'a', new Set())).toEqual(new Set(['a']));
+  });
+
+  it('advances to the next node once its predecessor completed', () => {
+    const edges = [
+      { from: 'a', to: 'b', level: 'normal' },
+      { from: 'b', to: 'c', level: 'normal' },
+    ];
+    expect(deriveActiveNodeIds(nodes, edges, 'a', new Set(['a']))).toEqual(new Set(['b']));
+  });
+
+  it('offers nothing once every reachable node has completed', () => {
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(deriveActiveNodeIds(nodes, edges, 'a', new Set(['a', 'b']))).toEqual(new Set());
+  });
+
+  it('offers every branch of a router fork whose source just completed -- honest uncertainty, not a guess', () => {
+    const edges = [
+      {
+        from: 'a',
+        level: 'route',
+        router: true,
+        branches: { yes: 'b', no: 'c' },
+      },
+    ];
+    expect(deriveActiveNodeIds(nodes, edges, 'a', new Set(['a']))).toEqual(new Set(['b', 'c']));
+  });
+
+  it('returns nothing for an entry the node list does not contain', () => {
+    expect(deriveActiveNodeIds(nodes, [], 'missing', new Set())).toEqual(new Set());
+  });
+});
 
 // Regression coverage for the router-fork rail bug: the "+ Add branch" slot
 // is always appended after every real lane when the fork is editable (see
