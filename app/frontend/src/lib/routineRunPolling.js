@@ -34,6 +34,23 @@ export function randomSessionId() {
   return `${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
 }
 
+/** Splits a `routine:<routine_id>:<revision_id>:<run_id>` thread_id --
+ * mirrors the backend's `_parse_routine_thread_id` (subagent.py) exactly,
+ * including its `'unpinned'` sentinel for a run against the live (not
+ * revision-pinned) document. Used to find the revision a run's cached
+ * timing/token/output data was executed against, so it can be diffed
+ * against the current draft graph for staleness (see
+ * lib/routineGraphDiff.js's diffRoutineGraphs). Returns `null` for
+ * anything that doesn't parse, rather than throwing -- called on
+ * whatever's in `runState.thread_id` at any point in the poll lifecycle. */
+export function parseRunThreadId(threadId) {
+  if (typeof threadId !== 'string') return null;
+  const parts = threadId.split(':');
+  if (parts.length !== 4 || parts[0] !== 'routine') return null;
+  const [, routineId, revisionId] = parts;
+  return { routineId, revisionId: revisionId === 'unpinned' ? null : revisionId };
+}
+
 /** Finds the run whose thread_id was minted for `sessionId` among the
  * `/runs` list's entries (each `routine:<id>:<revision>:<run_id>`) --
  * `run_id` is exactly the trailing segment, set to `sessionId` by the `/run`
