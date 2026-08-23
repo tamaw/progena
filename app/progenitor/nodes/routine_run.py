@@ -40,7 +40,11 @@ async def routine_run_node(
     a fresh run each time (see subagent.py's ``_run``); target_node stops
     execution right before that node via LangGraph's ``interrupt_before``.
     Omitting both is a normal, complete, one-shot run -- what the plain
-    "Run" button sends today.
+    "Run" button sends today. ``metadata.parameters`` (optional) is a flat
+    ``{name: value}`` object matching the routine's declared
+    ``input_schema.properties`` -- passed straight through to the runnable,
+    which threads it into the seed node's top-level invoke keys (see
+    subagent.py's ``_run``).
     """
     metadata = state.get("current_input_metadata") or {}
     routine_id = str(metadata.get("routine_id") or "").strip()
@@ -54,15 +58,17 @@ async def routine_run_node(
 
     session_id = str(metadata.get("session_id") or "").strip() or None
     target_node = str(metadata.get("target_node") or "").strip() or None
+    parameters = metadata.get("parameters")
 
     try:
-        result = await runnable.ainvoke(
-            {
-                "messages": [],
-                "_interactive_session_id": session_id,
-                "_interactive_target_node": target_node,
-            }
-        )
+        invoke_input: dict[str, Any] = {
+            "messages": [],
+            "_interactive_session_id": session_id,
+            "_interactive_target_node": target_node,
+        }
+        if isinstance(parameters, dict) and parameters:
+            invoke_input["parameters"] = parameters
+        result = await runnable.ainvoke(invoke_input)
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
         return {"cycle_error": f"routine '{routine_id}' failed: {exc}"}

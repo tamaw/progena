@@ -14,7 +14,7 @@
     "nodes": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/node" } },
     "edges": { "type": "array", "items": { "$ref": "#/$defs/edge" } },
     "settings": { "$ref": "#/$defs/settings" },
-    "input_schema": { "$ref": "#/$defs/dataFieldMap" },
+    "input_schema": { "$ref": "#/$defs/inputSchemaObject" },
     "output_schema": { "$ref": "#/$defs/dataFieldMap" },
     "$defs": {
       "type": "object",
@@ -408,6 +408,10 @@
         "cache": { "type": "boolean" }
       }
     },
-    "dataFieldMap": { "type": ["object", "null"], "additionalProperties": { "type": "string" } }
+    "dataFieldMap": { "type": ["object", "null"], "additionalProperties": { "type": "string" } },
+    "inputSchemaObject": {
+      "type": ["object", "null"],
+      "description": "A real JSON Schema object (type/properties/required/etc.) describing values a caller supplies before Run -- the same convention node-level response_schema uses, validated at invocation time via jsonschema rather than shape-checked here."
+    }
   }
 }

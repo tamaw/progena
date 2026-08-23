@@ -28,6 +28,7 @@ from app.progenitor.routines.graph import (
     validate_routine_graph_payload,
 )
 from app.progenitor.schemas import load_schema
+from app.progenitor.structured import validate_against_schema
 from app.progenitor.utils import utcnow_isoformat
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
@@ -44,7 +45,7 @@ class AgentGraphModel(BaseModel):
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     settings: dict[str, Any] = {}
-    input_schema: dict[str, str] | None = None
+    input_schema: dict[str, Any] | None = None
     output_schema: dict[str, str] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
@@ -123,7 +124,7 @@ class AgentGraphUpdateRequest(BaseModel):
     status: str | None = None
     summary: str | None = None
     settings: dict[str, Any] = {}
-    input_schema: dict[str, str] | None = None
+    input_schema: dict[str, Any] | None = None
     output_schema: dict[str, str] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
@@ -136,6 +137,11 @@ class RunRoutineRequest(BaseModel):
     # one revision to resume rather than restart.
     session_id: str | None = None
     target_node: str | None = None
+    # Values for the routine's declared input_schema.properties, e.g.
+    # {"customer_id": "abc123"} -- validated against input_schema server-side
+    # before the run is enqueued (see run_routine). Threaded through task
+    # metadata -> routine_run_node -> the seed node's top-level invoke keys.
+    parameters: dict[str, Any] | None = None
 
 
 # Allowed node "kind" values for the editable routine graph. These are executable
@@ -174,7 +180,7 @@ def validate_agent_graph_document(
     name: str,
     description: str,
     settings: dict[str, Any] | None = None,
-    input_schema: dict[str, str] | None = None,
+    input_schema: dict[str, Any] | None = None,
     output_schema: dict[str, str] | None = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
@@ -522,6 +528,15 @@ def create_agent_profile_router(
         if agent is None:
             raise HTTPException(status_code=404, detail="Agent not found")
 
+        input_schema = (agent.get("graph") or {}).get("input_schema")
+        if input_schema:
+            validation_error = validate_against_schema(body.parameters or {}, input_schema)
+            if validation_error is not None:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Run parameters failed validation: {validation_error}",
+                )
+
         doc_store = get_document_store()
         # NOTE: the bare name here, not "background_tasks.json" -- that
         # suffixed form is a different backend's on-disk filename, unrelated
@@ -535,6 +550,8 @@ def create_agent_profile_router(
             metadata["session_id"] = body.session_id
         if body.target_node:
             metadata["target_node"] = body.target_node
+        if body.parameters:
+            metadata["parameters"] = body.parameters
         tasks.append(
             {
                 "id": f"routine-run-{uuid.uuid4().hex}",

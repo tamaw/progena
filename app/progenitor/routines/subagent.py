@@ -160,8 +160,17 @@ def create_routine_subagent(
             if session_id:
                 existing_state = await compiled.aget_state(run_config)
                 resume_existing = bool(existing_state and existing_state.values)
+            parameters = state.get("parameters")
+            seed_input: dict[str, Any] = {"messages": state.get("messages") or []}
+            if isinstance(parameters, dict):
+                # Top-level keys, not nested under "parameters": the seed
+                # node (factory.py's _seed_node) reads state.get(field) for
+                # each name declared in input_schema.properties, matching
+                # how the compiled graph's own input_schema TypedDict
+                # declares them (see _input_schema_type).
+                seed_input.update(parameters)
             result = await compiled.ainvoke(
-                None if resume_existing else {"messages": state.get("messages") or []},
+                None if resume_existing else seed_input,
                 config=run_config,
                 interrupt_before=[target_node] if target_node else None,
             )
