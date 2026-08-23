@@ -31,7 +31,17 @@ async def routine_run_node(
     state: ProgenitorState,
     runtime: Runtime[HeartbeatContext],
 ) -> dict[str, Any]:
-    """Invoke one routine's compiled subagent runnable directly."""
+    """Invoke one routine's compiled subagent runnable directly.
+
+    ``metadata.session_id``/``metadata.target_node`` (optional) thread
+    through to the runnable as ``_interactive_session_id``/
+    ``_interactive_target_node`` -- a stable session_id reused across
+    repeated calls resumes the same checkpointed thread instead of starting
+    a fresh run each time (see subagent.py's ``_run``); target_node stops
+    execution right before that node via LangGraph's ``interrupt_before``.
+    Omitting both is a normal, complete, one-shot run -- what the plain
+    "Run" button sends today.
+    """
     metadata = state.get("current_input_metadata") or {}
     routine_id = str(metadata.get("routine_id") or "").strip()
     if not routine_id:
@@ -42,14 +52,31 @@ async def routine_run_node(
     if runnable is None:
         return {"cycle_error": f"routine_run: unknown or unregistered routine '{routine_id}'"}
 
+    session_id = str(metadata.get("session_id") or "").strip() or None
+    target_node = str(metadata.get("target_node") or "").strip() or None
+
     try:
-        result = await runnable.ainvoke({"messages": []})
+        result = await runnable.ainvoke(
+            {
+                "messages": [],
+                "_interactive_session_id": session_id,
+                "_interactive_target_node": target_node,
+            }
+        )
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
         return {"cycle_error": f"routine '{routine_id}' failed: {exc}"}
 
-    if isinstance(result, dict) and result.get("__interrupt__"):
-        # A human node paused this run. It's checkpointed and resumable, but
-        # nothing consumes that yet -- tracked separately, not a failure here.
-        logger.info("routine_run node interrupted for %r (human node)", routine_id)
+    messages = result.get("messages") if isinstance(result, dict) else None
+    if messages:
+        # subagent.py's _run already converts a human-node interrupt into an
+        # informative message (question + resume thread_id) rather than
+        # returning a raw __interrupt__ -- log its final message so an
+        # interrupted or failed run is at least visible somewhere until the
+        # Runs panel / node UI surfaces it directly.
+        logger.info(
+            "routine_run node finished for %r: %s",
+            routine_id,
+            getattr(messages[-1], "content", messages[-1]),
+        )
     return {}
