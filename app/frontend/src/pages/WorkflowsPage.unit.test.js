@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NODE_MENU_CATEGORIES, flowToWorkflow, payloadMappingProperties, schemaProperties, triggerPayloadMappingProperties, workflowToFlow } from './WorkflowsPage';
+import { NODE_MENU_CATEGORIES, flowToWorkflow, payloadMappingProperties, schemaProperties, workflowToFlow } from './WorkflowsPage';
 
 describe('workflowToFlow', () => {
   it('maps default ports to React Flow implicit handles', () => {
@@ -258,10 +258,13 @@ describe('node interface properties', () => {
     ]);
   });
 
-  it('uses trigger payload fields as mappable output ports', () => {
-    expect(triggerPayloadMappingProperties({
+  it('uses the same payload mapping for trigger envelopes', () => {
+    expect(payloadMappingProperties({
       oneOf: [{
+        type: 'object',
         properties: {
+          event_type: { const: 'kanban.card.created' },
+          timestamp: { type: 'string' },
           payload: {
             type: 'object',
             properties: {
