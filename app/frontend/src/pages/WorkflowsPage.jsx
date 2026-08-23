@@ -667,12 +667,45 @@ function schemaType(definition) {
   return 'any';
 }
 
-function WorkflowNodeOptionsModal({ node, upstreamNode, onChange, onClose }) {
-  const [bindingName, setBindingName] = useState('');
-  const [bindingPath, setBindingPath] = useState('/');
-  const inputProperties = schemaProperties(node.data?.inputSchema);
-  const outputProperties = schemaProperties(node.data?.outputSchema);
-  const bindings = Object.entries(node.data?.inputs || {});
+function nodePortProperties(schema, fallback = []) {
+  const properties = schemaProperties(schema);
+  return properties.length ? properties : fallback.map((name) => ({ name, definition: {}, required: false }));
+}
+
+function WorkflowNodePorts({
+  inputSchema,
+  outputSchema,
+  inputs = {},
+  outputFallback = ['output'],
+  outputHandle = (name) => `out:/${name}`,
+}) {
+  const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
+  const outputProperties = nodePortProperties(outputSchema, outputFallback);
+  return (
+    <div className="workflow-node-ports">
+      <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
+        {inputProperties.length ? inputProperties.map(({ name, definition }) => (
+          <div className="workflow-node-port" key={`input-${name}`}>
+            <Handle type="target" position={Position.Left} id={`in:${name}`} className="workflow-node-port__handle" />
+            <span>{name}</span>
+            <small>{schemaType(definition)}</small>
+          </div>
+        )) : <span className="workflow-node-ports__empty">No inputs</span>}
+      </div>
+      <div className="workflow-node-ports__column workflow-node-ports__column--outputs">
+        {outputProperties.map(({ name, definition }) => (
+          <div className="workflow-node-port" key={`output-${name}`}>
+            <small>{schemaType(definition)}</small>
+            <span>{name}</span>
+            <Handle type="source" position={Position.Right} id={outputHandle(name)} className="workflow-node-port__handle" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function WorkflowNodeOptionsModal({ node, onChange, onClose }) {
   useEffect(() => {
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') onClose();
@@ -680,34 +713,10 @@ function WorkflowNodeOptionsModal({ node, upstreamNode, onChange, onClose }) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [onClose]);
-  const source = upstreamNode?.type === 'kanban_trigger' ? 'trigger' : 'previous_output';
-  const addBinding = () => {
-    const name = bindingName.trim();
-    if (!name || !bindingPath.startsWith('/')) return;
-    onChange(node.id, {
-      inputs: {
-        ...(node.data?.inputs || {}),
-        [name]: { source, path: bindingPath },
-      },
-    });
-    setBindingName('');
-    setBindingPath('/');
-  };
-  const removeBinding = (name) => {
-    const inputs = { ...(node.data?.inputs || {}) };
-    delete inputs[name];
-    onChange(node.id, { inputs });
-  };
 
   return createPortal(
     <div className="workflow-node-options-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="workflow-node-options"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="workflow-node-options-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+      <section className="workflow-node-options" role="dialog" aria-modal="true" aria-labelledby="workflow-node-options-title" onMouseDown={(event) => event.stopPropagation()}>
         <header className="workflow-node-options__head">
           <div>
             <span className="sidebar-modal__eyebrow">Node options</span>
@@ -717,103 +726,14 @@ function WorkflowNodeOptionsModal({ node, upstreamNode, onChange, onClose }) {
         </header>
         <div className="workflow-node-options__body">
           <section>
-            <h3>Inputs <span>{inputProperties.length}</span></h3>
-            {inputProperties.length ? (
-              <ul className="workflow-node-options__properties">
-                {inputProperties.map(({ name, definition, required }) => (
-                  <li key={name}>
-                    <code>{name}</code>
-                    <span>{schemaType(definition)}</span>
-                    {required ? <em>required</em> : null}
-                    {definition.description ? <p>{definition.description}</p> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="workflow-node-options__empty">No input contract is available yet.</p>}
-          </section>
-          <section>
-            <h3>Outputs <span>{outputProperties.length}</span></h3>
-            {outputProperties.length ? (
-              <ul className="workflow-node-options__properties">
-                {outputProperties.map(({ name, definition, required }) => (
-                  <li key={name}>
-                    <code>{name}</code>
-                    <span>{schemaType(definition)}</span>
-                    {required ? <em>required</em> : null}
-                    {definition.description ? <p>{definition.description}</p> : null}
-                  </li>
-                ))}
-              </ul>
-            ) : <p className="workflow-node-options__empty">No output contract is configured.</p>}
-          </section>
-          {['prompt', ...CAPABILITY_NODE_KINDS, 'mcp'].includes(node.type) ? (
-            <section>
-              <h3>Field mappings <span>{bindings.length}</span></h3>
-              <p className="workflow-node-options__hint">
-                Bind a named node input to a JSON Pointer from {upstreamNode ? 'the upstream output' : 'the workflow trigger'}.
-              </p>
-              {bindings.length ? (
-                <ul className="workflow-node-options__bindings">
-                  {bindings.map(([name, binding]) => (
-                    <li key={name}>
-                      <code>{name}</code>
-                      <span>{binding.source}{binding.path ? ` ${binding.path}` : ''}</span>
-                      <button type="button" onClick={() => removeBinding(name)} aria-label={`Remove ${name} mapping`}>Remove</button>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-              <div className="workflow-node-options__mapping-form">
-                <label>
-                  Input name
-                  <input value={bindingName} onChange={(event) => setBindingName(event.target.value)} placeholder="recipient" />
-                </label>
-                <label>
-                  Source path
-                  <input value={bindingPath} onChange={(event) => setBindingPath(event.target.value)} placeholder="/customer/email" />
-                </label>
-                <button type="button" onClick={addBinding} disabled={!bindingName.trim() || !bindingPath.startsWith('/')}>Add mapping</button>
-              </div>
-            </section>
-          ) : null}
-          <section>
             <h3>Configuration</h3>
             <div className="workflow-node-options__mapping-form">
-              <label>
-                Title
-                <input value={node.data?.title || ''} onChange={(event) => onChange(node.id, { title: event.target.value })} />
-              </label>
-              {node.type === 'mcp' ? (
-                <>
-                  <label>
-                    Server ID
-                    <input value={node.data?.serverId || ''} onChange={(event) => onChange(node.id, { serverId: event.target.value })} />
-                  </label>
-                  <label>
-                    Tool name
-                    <input value={node.data?.toolName || ''} onChange={(event) => onChange(node.id, { toolName: event.target.value })} />
-                  </label>
-                </>
-              ) : null}
+              <label>Title<input value={node.data?.title || ''} onChange={(event) => onChange(node.id, { title: event.target.value })} /></label>
+              {node.type === 'mcp' ? <><label>Server ID<input value={node.data?.serverId || ''} onChange={(event) => onChange(node.id, { serverId: event.target.value })} /></label><label>Tool name<input value={node.data?.toolName || ''} onChange={(event) => onChange(node.id, { toolName: event.target.value })} /></label></> : null}
             </div>
-            {node.type === 'kanban_trigger' ? (
-              <label className="workflow-node-options__field">
-                Event type
-                <Select value={node.data?.eventType} onChange={(eventType) => onChange(node.id, { eventType })} options={WORKFLOW_EVENT_TYPE_OPTIONS} ariaLabel="Kanban event type" />
-              </label>
-            ) : null}
-            {['prompt', ...CAPABILITY_NODE_KINDS].includes(node.type) ? (
-              <label className="workflow-node-options__field">
-                {node.type === 'ask_user' ? 'Question' : 'Instruction'}
-                <textarea value={node.data?.prompt || ''} onChange={(event) => onChange(node.id, { prompt: event.target.value })} rows={4} />
-              </label>
-            ) : null}
-            {node.type === 'condition' || node.type === 'approval' ? (
-              <label className="workflow-node-options__field">
-                {node.type === 'condition' ? 'Expression' : 'Message'}
-                <textarea value={node.data?.[node.type === 'condition' ? 'expression' : 'message'] || ''} onChange={(event) => onChange(node.id, { [node.type === 'condition' ? 'expression' : 'message']: event.target.value })} rows={3} />
-              </label>
-            ) : null}
+            {node.type === 'kanban_trigger' ? <label className="workflow-node-options__field">Event type<Select value={node.data?.eventType} onChange={(eventType) => onChange(node.id, { eventType })} options={WORKFLOW_EVENT_TYPE_OPTIONS} ariaLabel="Kanban event type" /></label> : null}
+            {['prompt', ...CAPABILITY_NODE_KINDS].includes(node.type) ? <label className="workflow-node-options__field">{node.type === 'ask_user' ? 'Question' : 'Instruction'}<textarea value={node.data?.prompt || ''} onChange={(event) => onChange(node.id, { prompt: event.target.value })} rows={4} /></label> : null}
+            {node.type === 'condition' || node.type === 'approval' ? <label className="workflow-node-options__field">{node.type === 'condition' ? 'Expression' : 'Message'}<textarea value={node.data?.[node.type === 'condition' ? 'expression' : 'message'] || ''} onChange={(event) => onChange(node.id, { [node.type === 'condition' ? 'expression' : 'message']: event.target.value })} rows={3} /></label> : null}
           </section>
         </div>
       </section>
@@ -823,7 +743,6 @@ function WorkflowNodeOptionsModal({ node, upstreamNode, onChange, onClose }) {
 }
 
 function PromptNode({ id, data, selected }) {
-  const capabilityField = CAPABILITY_FIELD[data.kind];
 
 
   const isRunning = data.currentNodeId === id;
@@ -842,8 +761,6 @@ function PromptNode({ id, data, selected }) {
         onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })}
       />
       <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className={`node-type-icon ${data.kind}`}>{data.kind === 'ask_user' ? 'U' : data.kind[0].toUpperCase()}</span>
           <WorkflowNodeTitle
@@ -874,51 +791,11 @@ function PromptNode({ id, data, selected }) {
           ) : null}
         </div>
         <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              {capabilityField ? (
-                <WorkflowReferencePicker
-                  source={capabilityField.source}
-                  label={capabilityField.label}
-                  value={data[capabilityField.dataKey]}
-                  onChange={(value) => data.onChange(id, {
-                    [capabilityField.dataKey]: value || '',
-                  })}
-                  onOptionChange={(option) => {
-                    if (data.kind !== 'routine' || !option) return;
-                    data.onChange(id, {
-                      routineId: option.value,
-                      routineRevision: option.revision,
-                    });
-                  }}
-                />
-              ) : null}
-              {data.kind === 'ask_user' ? (
-                <label className="workflow-graph-node__field">
-                  <span>Question</span>
-                  <textarea
-                    value={data.prompt}
-                    onChange={(event) => data.onChange(id, { prompt: event.target.value })}
-                    placeholder="Ask the user for the information needed to continue."
-                  />
-                </label>
-              ) : (
-                <label className="workflow-graph-node__field">
-                  <span>Instruction</span>
-                  <textarea
-                    value={data.prompt}
-                    onChange={(event) => data.onChange(id, { prompt: event.target.value })}
-                    placeholder="Handle this workflow event."
-                  />
-                </label>
-              )}
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              {data.agentName ? <span className="node-meta-chip prompt-agent">{data.agentName}</span> : null}
-              <div className="prompt-preview">{data.prompt || 'Empty prompt'}</div>
-            </div>
-          )}
+          <WorkflowNodePorts
+            inputSchema={data.inputSchema}
+            outputSchema={data.outputSchema}
+            inputs={data.inputs}
+          />
         </div>
       </div>
     </>
@@ -927,123 +804,41 @@ function PromptNode({ id, data, selected }) {
 
 
 function KanbanTriggerNode({ id, data, selected }) {
-  const expanded = data.expanded;
-  const isMoveTrigger = data.eventType === 'kanban.card.moved';
-
-  const updateEventType = (eventType) => {
-    data.onChange({
-      eventType,
-      ...(eventType === 'kanban.card.moved' ? {} : { fromColumn: '', toColumn: '' }),
-    });
-  };
-
   return (
     <>
-      <NodeResizer minWidth={280} minHeight={expanded ? 220 : 110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
       <div className={`canvas-node workflow-graph-node workflow-graph-node--trigger ${selected ? 'selected' : ''}`}>
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon event">K</span>
           <span className="node-title">Kanban trigger</span>
           <span className="node-status-badge workflow-graph-node__kind">Trigger</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onOpenOptions(id)}
-            title="Node options"
-            aria-label="Node options"
-          >
-            ⋯
-          </button>
+          <button type="button" className="node-expand-btn nodrag" onClick={() => data.onOpenOptions(id)} title="Node options" aria-label="Node options">⋯</button>
         </div>
         <div className="node-body">
-          {expanded ? (
-            <div className="node-body-expanded workflow-graph-node__body">
-              <label className="workflow-graph-node__field">
-                <span>Event type</span>
-                <Select value={data.eventType} onChange={updateEventType} options={WORKFLOW_EVENT_TYPE_OPTIONS} ariaLabel="Kanban event type" />
-              </label>
-              {isMoveTrigger ? (
-                <div className="workflow-graph-node__field-grid">
-                  <label className="workflow-graph-node__field">
-                    <span>From column</span>
-                    <Select value={data.fromColumn} onChange={(fromColumn) => data.onChange({ fromColumn })} options={WORKFLOW_KANBAN_COLUMNS} ariaLabel="From Kanban column" />
-                  </label>
-                  <label className="workflow-graph-node__field">
-                    <span>To column</span>
-                    <Select value={data.toColumn} onChange={(toColumn) => data.onChange({ toColumn })} options={WORKFLOW_KANBAN_COLUMNS} ariaLabel="To Kanban column" />
-                  </label>
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="node-body-compact">
-              <span className="node-meta-chip">{data.eventType}</span>
-              {isMoveTrigger && (data.fromColumn || data.toColumn) ? (
-                <div className="prompt-preview">{data.fromColumn || 'Any'} → {data.toColumn || 'Any'}</div>
-              ) : null}
-            </div>
-          )}
+          <WorkflowNodePorts inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
         </div>
-        <Handle type="source" position={Position.Right} className="canvas-handle" />
       </div>
     </>
   );
 }
 
 function WorkflowControlNode({ id, data, selected }) {
-  const expanded = data.expanded;
-  const labels = {
-    condition: 'Condition',
-    approval: 'Approval',
-  };
-  const label = labels[data.kind];
-  const field = data.kind === 'condition' ? 'expression' : 'message';
-  const value = data[field] || '';
+  const label = data.kind === 'condition' ? 'Condition' : 'Approval';
+  const outputFallback = data.kind === 'condition' ? ['true', 'false'] : ['approved', 'rejected'];
   return (
     <>
-      <NodeResizer minWidth={260} minHeight={expanded ? 180 : 110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
+      <NodeResizer minWidth={260} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
       <div className={`canvas-node workflow-graph-node workflow-graph-node--${data.kind} ${selected ? 'selected' : ''}`}>
-        <Handle type="target" position={Position.Left} className="canvas-handle" />
         <div className="node-title-bar drag-handle">
           <span className={`node-type-icon ${data.kind}`}>{data.kind[0].toUpperCase()}</span>
-          <WorkflowNodeTitle
-            expanded={expanded}
-            title={data.title}
-            placeholder={`${label} title`}
-            onChange={(event) => data.onChange(id, { title: event.target.value })}
-          />
+          <WorkflowNodeTitle expanded={false} title={data.title} placeholder={`${label} title`} onChange={(event) => data.onChange(id, { title: event.target.value })} />
           <span className="node-status-badge workflow-graph-node__kind">{label}</span>
-          <button
-            type="button"
-            className="node-expand-btn nodrag"
-            onClick={() => data.onOpenOptions(id)}
-            title="Node options"
-            aria-label="Node options"
-          >
-            ⋯
-          </button>
+          <button type="button" className="node-expand-btn nodrag" onClick={() => data.onOpenOptions(id)} title="Node options" aria-label="Node options">⋯</button>
           <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
         </div>
         <div className="node-body">
-          {expanded ? (
-            <textarea className="node-field-textarea" value={value} onChange={(event) => data.onChange(id, { [field]: event.target.value })} placeholder={label} rows={3} />
-          ) : (
-            <div className="node-body-compact">
-              <div className="prompt-preview">{value || `Empty ${label}`}</div>
-            </div>
-          )}
+          <WorkflowNodePorts inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} outputHandle={(name) => name} />
         </div>
-        {data.kind === 'condition' ? (
-          <>
-            <Handle type="source" position={Position.Right} id="true" style={{ top: '35%' }} className="canvas-handle" />
-            <Handle type="source" position={Position.Right} id="false" style={{ top: '65%' }} className="canvas-handle" />
-          </>
-        ) : data.kind === 'approval' ? (
-          <>
-            <Handle type="source" position={Position.Right} id="approved" style={{ top: '35%' }} className="canvas-handle" />
-            <Handle type="source" position={Position.Right} id="rejected" style={{ top: '65%' }} className="canvas-handle" />
-          </>
-        ) : null}
       </div>
     </>
   );
@@ -1714,7 +1509,9 @@ function WorkflowsInner() {
       return;
     }
     const target = nodesRef.current.find((node) => node.id === connection.target);
-    const targetUsesBindings = ['prompt', ...CAPABILITY_NODE_KINDS].includes(target?.type);
+    const targetUsesBindings = ['prompt', ...CAPABILITY_NODE_KINDS, 'mcp'].includes(target?.type);
+    const sourcePath = connection.sourceHandle?.replace(/^out:/, '') || '/';
+    const inputName = connection.targetHandle?.replace(/^in:/, '') || 'input';
     const nextNodes = nodesRef.current.map((node) => {
       if (node.id !== connection.target || ![
         'prompt', ...CAPABILITY_NODE_KINDS, 'mcp', 'condition', 'approval',
@@ -1729,9 +1526,9 @@ function WorkflowsInner() {
           ...(targetUsesBindings ? {
             inputs: {
               ...(node.data?.inputs || {}),
-              input: {
+              [inputName]: {
                 source: source?.type === 'kanban_trigger' ? 'trigger' : 'previous_output',
-                path: '/',
+                path: sourcePath,
               },
             },
           } : {}),

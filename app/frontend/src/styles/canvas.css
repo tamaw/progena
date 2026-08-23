@@ -1564,6 +1564,54 @@
   color: #a371f7;
 }
 
+
+.workflow-node-ports {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+  min-height: 56px;
+  padding: 8px 0;
+}
+
+.workflow-node-ports__column {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+
+.workflow-node-ports__column--outputs {
+  text-align: right;
+}
+
+.workflow-node-port {
+  align-items: center;
+  display: flex;
+  font-size: 0.78rem;
+  gap: 6px;
+  min-height: 18px;
+  position: relative;
+}
+
+.workflow-node-ports__column--outputs .workflow-node-port {
+  justify-content: flex-end;
+}
+
+.workflow-node-port small,
+.workflow-node-ports__empty {
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+}
+
+.workflow-node-port__handle {
+  background: var(--color-surface) !important;
+  border: 2px solid var(--color-text-muted) !important;
+  height: 10px !important;
+  position: absolute !important;
+  width: 10px !important;
+}
+
+.workflow-node-ports__column--inputs .workflow-node-port__handle { left: -15px !important; }
+.workflow-node-ports__column--outputs .workflow-node-port__handle { right: -15px !important; }
 .workflow-node-options-backdrop {
   align-items: center;
   background: color-mix(in srgb, var(--color-bg, #111) 72%, transparent);

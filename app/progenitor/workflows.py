@@ -706,8 +706,8 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
     if not node_ids:
         raise ValueError("workflow graph must contain at least one node")
 
-    inbound: dict[str, int] = dict.fromkeys(node_ids, 0)
-    outbound: dict[str, int] = dict.fromkeys(node_ids, 0)
+    inbound: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+    outbound: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
     adjacency: dict[str, list[str]] = defaultdict(list)
     for edge in definition.graph.edges:
         source_id, target_id = edge.from_.node, edge.to.node
@@ -715,11 +715,11 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
             raise ValueError(f"edge references unknown source node '{source_id}'")
         if target_id not in node_ids:
             raise ValueError(f"edge references unknown target node '{target_id}'")
-        outbound[source_id] += 1
-        inbound[target_id] += 1
+        outbound[source_id].add(target_id)
+        inbound[target_id].add(source_id)
         adjacency[source_id].append(target_id)
 
-    roots = [node_id for node_id, count in inbound.items() if count == 0]
+    roots = [node_id for node_id, sources in inbound.items() if not sources]
     if len(roots) != 1:
         raise ValueError("workflow graph must contain exactly one root node in v1")
     _assert_acyclic(node_ids, adjacency)
@@ -736,12 +736,12 @@ def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
 
     for node_id, node in definition.graph.nodes.items():
         branching = isinstance(node, WorkflowNodeCondition | WorkflowNodeApproval)
-        if inbound[node_id] > 1:
-            raise ValueError(f"node '{node_id}' may have at most one inbound edge in v1")
-        if not branching and outbound[node_id] > 1:
-            raise ValueError(f"node '{node_id}' may have at most one outbound edge in v1")
+        if len(inbound[node_id]) > 1:
+            raise ValueError(f"node '{node_id}' may have at most one inbound source in v1")
+        if not branching and len(outbound[node_id]) > 1:
+            raise ValueError(f"node '{node_id}' may have at most one outbound target in v1")
         if branching:
-            if outbound[node_id] > 2:
+            if len(outbound[node_id]) > 2:
                 raise ValueError(f"node '{node_id}' may have at most two outbound edges in v1")
             expected_ports = (
                 {"true", "false"}
