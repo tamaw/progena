@@ -1139,8 +1139,9 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
+  const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
   const labelInputRef = useRef(null);
   const inspectedNodeIdRef = useRef(node?.id);
@@ -1153,6 +1154,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
   if (inspectedNodeIdRef.current !== node?.id) {
     inspectedNodeIdRef.current = node?.id;
     if (isEditingLabel) setIsEditingLabel(false);
+    if (confirmRunOpen) setConfirmRunOpen(false);
   }
 
   useEffect(() => {
@@ -1325,10 +1327,37 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
       </div>
       </MissingFieldsContext.Provider>
       <footer className="routine-node-inspector__foot">
+        {readOnly ? null : (
+          <button
+            type="button"
+            className="routine-node-inspector__run-to-here"
+            title="Execute the routine from wherever this editor session last stopped, up to (not including) this step"
+            disabled={runStatus === 'discovering' || runStatus === 'running'}
+            onClick={() => {
+              if (nodeRequiresRunConfirmation(node.id, graphNodes, graphEdges, runMeta)) {
+                setConfirmRunOpen(true);
+              } else {
+                startRun(node.id);
+              }
+            }}
+          >
+            Run to here
+          </button>
+        )}
         <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onDismiss(); }}>
           Delete step
         </button>
       </footer>
+      {confirmRunOpen ? (
+        <PopupModal
+          eyebrow="Run to here"
+          title="This will call a live agent"
+          message="Reaching this step runs at least one step with a real side effect (a live agent/routine delegation, an A2A call, or a human approval gate) that hasn't run yet this session. Continue?"
+          confirmLabel="Run"
+          onClose={() => setConfirmRunOpen(false)}
+          onConfirm={() => { setConfirmRunOpen(false); startRun(node.id); }}
+        />
+      ) : null}
     </aside>
   );
 }
@@ -1636,6 +1665,32 @@ export function predecessorsOf(nodeId, edges) {
   };
   visit(nodeId);
   return predecessors;
+}
+
+// Node kinds with a real external side effect: a live agent/routine
+// delegation, an A2A call, or a human approval gate. Everything else
+// (eval/condition/switch/split/noop) is pure/deterministic -- re-running
+// it has no observable consequence outside this graph's own state.
+const SIDE_EFFECTING_KINDS = new Set(['agent', 'routine', 'a2a', 'human']);
+
+// Whether "run to here" for `targetNodeId` would, for the first time this
+// interactive session, execute a node with a real side effect --
+// `interrupt_before=[targetNodeId]` (see subagent.py) means everything
+// BEFORE the target runs, never the target itself, so predecessors are
+// what matters here, not the clicked node. A predecessor that already
+// carries a run_meta entry this session already had its side effect
+// happen once and won't happen again on this click (LangGraph resumes
+// past whatever's already checkpointed, see subagent.py's `_run`) -- only
+// a genuinely new execution needs a confirmation.
+// eslint-disable-next-line react-refresh/only-export-components
+export function nodeRequiresRunConfirmation(targetNodeId, nodes, edges, runMeta) {
+  const nodesById = new Map((nodes || []).map((node) => [node.id, node]));
+  const completed = new Set(Object.keys(runMeta || {}).filter((id) => (runMeta[id] || []).length > 0));
+  for (const id of predecessorsOf(targetNodeId, edges)) {
+    if (completed.has(id)) continue;
+    if (SIDE_EFFECTING_KINDS.has(nodesById.get(id)?.kind)) return true;
+  }
+  return false;
 }
 
 // One step forward: every node `nodeId`'s own outgoing flow edges could
@@ -2357,10 +2412,12 @@ function useRoutineRunPolling(agentId) {
   const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
   const runState = useSelector((state) => (threadId ? selectAgentRunState(state, threadId) : undefined)) || EMPTY_RUN_STATE;
 
+  const interactiveSessionIdRef = useRef(null);
   useEffect(() => {
     setSessionId(null);
     setThreadId(null);
     setStatus('idle');
+    interactiveSessionIdRef.current = null;
   }, [agentId]);
 
   // Phase 1: poll /runs, watch for the thread_id this session's Run click
@@ -2410,8 +2467,17 @@ function useRoutineRunPolling(agentId) {
     return () => clearTimeout(timer);
   }, [status, threadId, runState.run_meta, agentsUrl, agentId, dispatch]);
 
-  const startRun = useCallback(() => {
-    const newSessionId = randomSessionId();
+  // `targetNode` set means "run to (not including) this node", reusing a
+  // STABLE session_id across repeated clicks within this editor session --
+  // the backend's `_interactive_session_id` resume mechanism (see
+  // subagent.py's `_run`) needs the same session_id back on every call to
+  // continue the SAME checkpointed thread rather than restarting. Omitted
+  // (the top-level Run button) always mints a fresh session -- a full run
+  // is a distinct, complete execution every time, never a resume.
+  const startRun = useCallback((targetNode) => {
+    const newSessionId = targetNode
+      ? (interactiveSessionIdRef.current ??= randomSessionId())
+      : randomSessionId();
     stablePollsRef.current = 0;
     lastTotalRef.current = -1;
     startedAtMsRef.current = Date.now();
@@ -2419,6 +2485,11 @@ function useRoutineRunPolling(agentId) {
     setThreadId(null);
     setSessionId(newSessionId);
     setStatus('discovering');
+    fetch(`${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: newSessionId, ...(targetNode ? { target_node: targetNode } : {}) }),
+    }).catch(() => {});
     dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
     return newSessionId;
   }, [agentsUrl, agentId, dispatch]);
@@ -3121,7 +3192,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     activeNodeIds,
     estimatedActiveStartMs,
     staleNodeIds,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds]);
+    runStatus,
+    startRun,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRun]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -3237,7 +3310,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                   label="Run"
                   tooltip={isServerConfirmed ? 'Run routine' : 'Waiting for save to be confirmed…'}
                   ariaLabel="Run routine"
-                  onClick={() => onRun(startRun())}
+                  onClick={() => { startRun(); onRun(); }}
                   disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
                 />
                 {onDelete ? (

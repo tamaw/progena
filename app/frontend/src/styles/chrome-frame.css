@@ -7707,7 +7707,8 @@ body,
 
 .routine-node-inspector__foot {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 8px;
   padding: 9px 13px;
   border-top: 1px solid var(--color-border);
 }
@@ -7716,8 +7717,29 @@ body,
   width: auto;
   height: auto;
   padding: 5px 8px;
+  margin-left: auto;
   color: var(--color-error, #ef4444);
   font-size: 11px;
+}
+
+.routine-node-inspector__run-to-here {
+  padding: 5px 10px;
+  color: var(--color-text-primary);
+  background: var(--color-bg-tertiary, var(--color-bg-secondary));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.routine-node-inspector__run-to-here:hover:not(:disabled) {
+  border-color: var(--node-color);
+}
+
+.routine-node-inspector__run-to-here:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /* Start/End chrome -- never a schema node, purely "the chain begins/ends

@@ -15,6 +15,7 @@ import {
   joinTerminals,
   missingRequirements,
   missingRequiredConfig,
+  nodeRequiresRunConfirmation,
   predecessorsOf,
   reachableFrom,
   removeForkBranch,
@@ -24,6 +25,41 @@ import {
   textToSchemaFields,
   validateWorkingGraph,
 } from './AgentGraph';
+
+describe('nodeRequiresRunConfirmation', () => {
+  it('requires confirmation when a not-yet-run predecessor is a side-effecting kind', () => {
+    const nodes = [{ id: 'a', kind: 'agent' }, { id: 'b', kind: 'noop' }];
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(true);
+  });
+
+  it('does not require confirmation when every predecessor is pure/deterministic', () => {
+    const nodes = [{ id: 'a', kind: 'eval' }, { id: 'b', kind: 'noop' }];
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(false);
+  });
+
+  it('does not require confirmation for the target node itself, only its predecessors', () => {
+    // target_node stops BEFORE the clicked node runs -- an agent kind AT
+    // the target is never actually executed by this click.
+    const nodes = [{ id: 'a', kind: 'eval' }, { id: 'b', kind: 'agent' }];
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(false);
+  });
+
+  it('does not require confirmation once the side-effecting predecessor already ran this session', () => {
+    const nodes = [{ id: 'a', kind: 'agent' }, { id: 'b', kind: 'noop' }];
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    const runMeta = { a: [{ duration_ms: 10 }] };
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, runMeta)).toBe(false);
+  });
+
+  it('requires confirmation for a human node predecessor', () => {
+    const nodes = [{ id: 'a', kind: 'human' }, { id: 'b', kind: 'noop' }];
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(true);
+  });
+});
 
 describe('deriveActiveNodeIds', () => {
   const nodes = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
