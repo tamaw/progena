@@ -27,7 +27,7 @@ from ..routines.revisions import (
     NullRoutineRevisionReader,
     PostgresRoutineRevisionReader,
 )
-from ..routines.subagent import create_routine_subagent
+from ..routines.subagent import create_routine_subagent, resume_routine_thread
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
@@ -250,12 +250,18 @@ async def create_progenitor_agent(
         plugin_agent_segments=plugin_agent_segments,
     )
 
-    # Wrap Progenitor's system tools as DeepAgent-compatible tools
+    # Wrap Progenitor's system tools as DeepAgent-compatible tools. The
+    # resume_routine tool needs model/registries/checkpointer that don't
+    # exist yet at this point in construction (built below) -- this box is
+    # populated once they do; create_deepagent_tools reads it at call time,
+    # not at wrap time.
+    resume_routine_holder: dict[str, Any] = {}
     tools = create_deepagent_tools(
         tool_registry=tool_registry,
         llm_client=llm_client,
         state_manager=state_manager,
         live_state_provider=live_state_provider,
+        resume_routine_holder=resume_routine_holder,
     )
 
     custom_middleware = [
@@ -397,6 +403,21 @@ async def create_progenitor_agent(
         agent_specs_by_name[routine_id] = routine_spec
         routine_registry[routine_id] = routine_spec["runnable"]
         reserved_names.add(routine_id)
+
+    async def _resume_routine(thread_id: str, answer: Any) -> dict[str, Any]:
+        return await resume_routine_thread(
+            thread_id=thread_id,
+            answer=answer,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=agent_registry,
+            routine_registry=routine_registry,
+            tool_registry=tool_registry,
+            checkpointer=checkpointer,
+        )
+
+    resume_routine_holder["fn"] = _resume_routine
 
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
         *async_subagents,
