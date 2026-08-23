@@ -1,5 +1,7 @@
 import pytest
 
+from app.progenitor.schemas import load_schema
+from app.progenitor.structured import validate_against_schema
 from app.progenitor.workflows import (
     default_workflow_definition,
     ordered_workflow_node_ids,
@@ -155,3 +157,132 @@ def test_workflow_definition_validator_accepts_typed_capability_nodes(kind, fiel
 
     assert normalized["graph"]["nodes"][node_id]["kind"] == kind
     assert normalized["graph"]["nodes"][node_id][field] == value
+
+
+@pytest.mark.parametrize(
+    ("schema_name", "node"),
+    [
+        (
+            "node_prompt.workflow",
+            {
+                "kind": "prompt",
+                "title": "Prompt",
+                "prompt": "Handle the event.",
+                "agent_name": "progenitor",
+            },
+        ),
+        (
+            "node_saved_prompt.workflow",
+            {
+                "kind": "saved_prompt",
+                "title": "Saved prompt",
+                "prompt": "Handle the event.",
+                "agent_name": "progenitor",
+                "prompt_path": "/prompts/review",
+            },
+        ),
+        (
+            "node_agent.workflow",
+            {
+                "kind": "agent",
+                "title": "Agent",
+                "prompt": "Delegate the event.",
+                "agent_name": "progenitor",
+                "agent_id": "reviewer",
+            },
+        ),
+        (
+            "node_knowledge.workflow",
+            {
+                "kind": "knowledge",
+                "title": "Knowledge",
+                "prompt": "Search for context.",
+                "agent_name": "progenitor",
+                "knowledge_base_id": "product",
+            },
+        ),
+        (
+            "node_repository.workflow",
+            {
+                "kind": "repository",
+                "title": "Repository",
+                "prompt": "Review the code.",
+                "agent_name": "progenitor",
+                "repository_id": "progenitor",
+            },
+        ),
+        (
+            "node_kanban.workflow",
+            {
+                "kind": "kanban",
+                "title": "Kanban",
+                "prompt": "Handle the card.",
+                "agent_name": "progenitor",
+                "kanban_card_id": "card-42",
+            },
+        ),
+        (
+            "node_ask_user.workflow",
+            {
+                "kind": "ask_user",
+                "title": "Ask user",
+                "prompt": "Ask for a decision.",
+                "agent_name": "progenitor",
+            },
+        ),
+        (
+            "node_inbox.workflow",
+            {
+                "kind": "inbox",
+                "title": "Inbox",
+                "prompt": "Use the message.",
+                "agent_name": "progenitor",
+                "inbox_message_id": "message-42",
+            },
+        ),
+        (
+            "node_routine.workflow",
+            {
+                "kind": "routine",
+                "title": "Routine",
+                "prompt": "Run the routine.",
+                "agent_name": "progenitor",
+                "routine_id": "daily-review",
+                "routine_revision": 1,
+            },
+        ),
+        (
+            "node_condition.workflow",
+            {
+                "kind": "condition",
+                "title": "Condition",
+                "expression": "payload.card.priority == 'high'",
+            },
+        ),
+        (
+            "node_approval.workflow",
+            {"kind": "approval", "title": "Approval", "message": "Approve this action."},
+        ),
+        (
+            "node_mcp.workflow",
+            {"kind": "mcp", "title": "MCP", "server_id": "github", "tool_name": "create_issue"},
+        ),
+    ],
+)
+def test_current_workflow_node_schemas_are_independently_loadable(schema_name, node):
+    schema = load_schema(schema_name)
+    definition_schema = load_schema("definition.workflow")
+    definition_variant = next(
+        variant
+        for variant in definition_schema["properties"]["graph"]["properties"]["nodes"][
+            "additionalProperties"
+        ]["oneOf"]
+        if variant["properties"]["kind"]["const"] == node["kind"]
+    )
+
+    assert {
+        key: schema[key] for key in ("type", "additionalProperties", "required", "properties")
+    } == definition_variant
+
+    assert schema["properties"]["kind"]["const"] == node["kind"]
+    assert validate_against_schema(node, schema) is None

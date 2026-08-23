@@ -27,11 +27,20 @@ the native `write`/`edit` file tools.
 | `inbox_message.schema.v1.json` | A single inbox message (`inbox_message:<id>`) | object | `managing-inbox` |
 | `preferences.schema.v1.json` | The whole `preferences` document | object | `managing-preferences` |
 | `definition.workflow.schema.v1.json` | A whole `workflow:<id>` document | object | `managing-workflows` |
-| `trigger.workflow.schema.v1.json` | The `trigger` object within a workflow definition | object | `managing-workflows` |
-| `node_event.workflow.schema.v1.json` | One `event` node within a workflow definition | object | `managing-workflows` |
-| `node_prompt.workflow.schema.v1.json` | One `prompt` node within a workflow definition | object | `managing-workflows` |
-| `node_user.workflow.schema.v1.json` | One `user` node within a workflow definition | object | `managing-workflows` |
-| `node_code.workflow.schema.v1.json` | One `code` node within a workflow definition | object | `managing-workflows` |
+| `trigger.workflow.schema.v1.json` | The top-level workflow trigger | object | `managing-workflows` |
+| `node_prompt.workflow.schema.v1.json` | A `prompt` node | object | `managing-workflows` |
+| `node_saved_prompt.workflow.schema.v1.json` | A `saved_prompt` node | object | `managing-workflows` |
+| `node_agent.workflow.schema.v1.json` | An `agent` node | object | `managing-workflows` |
+| `node_knowledge.workflow.schema.v1.json` | A `knowledge` node | object | `managing-workflows` |
+| `node_repository.workflow.schema.v1.json` | A `repository` node | object | `managing-workflows` |
+| `node_kanban.workflow.schema.v1.json` | A `kanban` node | object | `managing-workflows` |
+| `node_ask_user.workflow.schema.v1.json` | An `ask_user` node | object | `managing-workflows` |
+| `node_inbox.workflow.schema.v1.json` | An `inbox` node | object | `managing-workflows` |
+| `node_routine.workflow.schema.v1.json` | A `routine` node | object | `managing-workflows` |
+| `node_condition.workflow.schema.v1.json` | A `condition` node | object | `managing-workflows` |
+| `node_approval.workflow.schema.v1.json` | An `approval` node | object | `managing-workflows` |
+| `node_mcp.workflow.schema.v1.json` | An `mcp` node | object | `managing-workflows` |
+| `node_event.workflow.schema.v1.json`, `node_user.workflow.schema.v1.json`, `node_code.workflow.schema.v1.json` | Legacy node shapes; not accepted by the current workflow definition | object | Historical documents only |
 
 **Most schemas here describe one entry, not a whole document** — that's the
 default for `mcp.json`/`schedule.json` (objects keyed by name/id: adding is
