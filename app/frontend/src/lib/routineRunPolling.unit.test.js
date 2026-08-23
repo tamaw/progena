@@ -3,9 +3,33 @@ import { describe, expect, it } from 'vitest';
 import {
   findRunBySessionId,
   latestCompletionMs,
+  parseRunThreadId,
   randomSessionId,
   totalRunMetaEntries,
 } from './routineRunPolling';
+
+describe('parseRunThreadId', () => {
+  it('splits a routine thread_id into routineId and revisionId', () => {
+    expect(parseRunThreadId('routine:tmp-retry-loop:abc123:session-1')).toEqual({
+      routineId: 'tmp-retry-loop',
+      revisionId: 'abc123',
+    });
+  });
+
+  it('maps the "unpinned" sentinel to a null revisionId', () => {
+    expect(parseRunThreadId('routine:tmp-retry-loop:unpinned:session-1')).toEqual({
+      routineId: 'tmp-retry-loop',
+      revisionId: null,
+    });
+  });
+
+  it('returns null for anything that does not parse, rather than throwing', () => {
+    expect(parseRunThreadId(null)).toBeNull();
+    expect(parseRunThreadId(undefined)).toBeNull();
+    expect(parseRunThreadId('not-a-thread-id')).toBeNull();
+    expect(parseRunThreadId('routine:only-two-parts')).toBeNull();
+  });
+});
 
 describe('randomSessionId', () => {
   it('produces distinct ids across calls', () => {

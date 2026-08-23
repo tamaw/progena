@@ -35,9 +35,11 @@ import {
   STATE_POLL_TIMEOUT_MS,
   findRunBySessionId,
   latestCompletionMs,
+  parseRunThreadId,
   randomSessionId,
   totalRunMetaEntries,
 } from '../../lib/routineRunPolling';
+import { diffRoutineGraphs, isNodeRunValid } from '../../lib/routineGraphDiff';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
 // The Routines graph itself is NOT a free canvas though (see rationale below),
@@ -1062,7 +1064,7 @@ function RunningTimer({ startedAtMs }) {
 // "estimated live" timer while it's presumed still executing. Renders
 // nothing at all otherwise (see StepCard), not a placeholder row.
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
@@ -1076,13 +1078,22 @@ function StepRunSummary({ nodeId }) {
   }
   const last = entries[entries.length - 1];
   const tokens = last.tokens?.total_tokens;
+  // Cached run details predate an edit made to this step (or something
+  // upstream of it) since -- still shown (still real data, just no longer
+  // guaranteed to reflect the current graph), just visually muted with a
+  // note instead of read as current. See lib/routineGraphDiff.js.
+  const stale = !isNodeRunValid(nodeId, staleNodeIds || EMPTY_MISSING);
   return (
     <div
-      className="routine-step-card__run"
-      title={entries.length > 1 ? `${entries.length} executions this run` : undefined}
+      className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}`}
+      title={[
+        entries.length > 1 ? `${entries.length} executions this run` : null,
+        stale ? 'Graph changed since this ran' : null,
+      ].filter(Boolean).join(' \u2014 ') || undefined}
     >
       <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
       {typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
+      {stale ? <span className="routine-step-card__run-stale-badge" aria-hidden="true">stale</span> : null}
     </div>
   );
 }
@@ -1128,7 +1139,7 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
   const labelInputRef = useRef(null);
@@ -1154,6 +1165,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
   if (!node) return null;
   const runEntries = runMeta?.[node.id];
   const lastRunEntry = runEntries?.[runEntries.length - 1];
+  const isRunStale = !isNodeRunValid(node.id, staleNodeIds || EMPTY_MISSING);
   const outputKey = node.output_key || node.id;
   const runOutputValue = runData?.[outputKey];
   const runOutputText = runOutputValue === undefined
@@ -1278,7 +1290,12 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
         />
         <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
         {runEntries?.length ? (
-          <div className="routine-node-inspector__run">
+          <div className={`routine-node-inspector__run${isRunStale ? ' routine-node-inspector__run--stale' : ''}`}>
+            {isRunStale ? (
+              <p className="routine-node-inspector__run-stale-notice" role="status">
+                Graph changed since this ran -- details below may no longer be accurate.
+              </p>
+            ) : null}
             <div className="routine-node-inspector__run-head">
               <span>Last run</span>
               {runEntries.length > 1 ? (
@@ -2406,6 +2423,14 @@ function useRoutineRunPolling(agentId) {
     return newSessionId;
   }, [agentsUrl, agentId, dispatch]);
 
+  // The revision this run's cached data was executed against -- null for a
+  // run against the live/unpinned document, or before the thread_id is
+  // even known yet. Used by GraphCanvas to fetch that revision's content
+  // and diff it against the current draft graph (see diffRoutineGraphs),
+  // so an edit made after this run doesn't leave its stale timing/tokens/
+  // output looking current.
+  const runRevisionId = useMemo(() => parseRunThreadId(threadId)?.revisionId ?? null, [threadId]);
+
   return {
     status,
     runMeta: runState.run_meta,
@@ -2414,13 +2439,40 @@ function useRoutineRunPolling(agentId) {
     // active node start" is the run's own click time; after that it's the
     // latest known finish across every node (see latestCompletionMs).
     estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? runStartedAtMs,
+    runRevisionId,
     startRun,
   };
 }
 
+// Which node ids' cached run details (timing/tokens/output) are stale
+// relative to the CURRENT draft graph -- the run executed against
+// `runRevisionId`'s pinned snapshot, and the draft may have been edited
+// since (see lib/routineGraphDiff.js). `runRevisionId` is null for a run
+// against the live/unpinned document (no revision reader configured) --
+// there is no earlier snapshot to diff against in that case, so nothing
+// is ever flagged stale for it; a documented limitation, not a soundness
+// claim. Mirrors RoutineRevisionsPanel's own cache-check-before-fetch
+// pattern against the same revisionContentByKey cache.
+function useRunStaleness(agentId, runRevisionId, currentGraph) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const baselineGraph = useSelector((state) => (
+    runRevisionId ? selectAgentRoutineRevisionContent(state, agentId, runRevisionId) : undefined
+  ));
+  useEffect(() => {
+    if (!runRevisionId || baselineGraph) return;
+    dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId: runRevisionId }));
+  }, [runRevisionId, baselineGraph, agentsUrl, agentId, dispatch]);
+  return useMemo(
+    () => (runRevisionId && baselineGraph ? diffRoutineGraphs(baselineGraph, currentGraph) : new Set()),
+    [runRevisionId, baselineGraph, currentGraph],
+  );
+}
+
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
-  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, startRun } = useRoutineRunPolling(agent.id);
+  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun } = useRoutineRunPolling(agent.id);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3039,6 +3091,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
       : new Set()),
     [runStatus, displayNodes, displayEdges, meta.entry, completedNodeIds],
   );
+  const currentGraphForStaleness = useMemo(
+    () => ({ entry: meta.entry, nodes, edges }),
+    [meta.entry, nodes, edges],
+  );
+  const staleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -3063,7 +3120,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     runData,
     activeNodeIds,
     estimatedActiveStartMs,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs]);
+    staleNodeIds,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
