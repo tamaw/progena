@@ -108,7 +108,7 @@ const DEFAULT_VIEWPORT = { x: 0, y: 0, zoom: 1 };
 // left it at, instead of forcing one fixed rectangle for both.
 const DEFAULT_NODE_SIZES = {
   kanban_trigger: {
-    data: { width: 320, height: 120 },
+    data: { width: 320, height: 220 },
     settings: { width: 340, height: 260 },
   },
   prompt: {
@@ -224,7 +224,9 @@ function resolveNodeSizes(kind, storedSize) {
   return {
     data: {
       width: storedSize?.data?.width || defaults.data.width,
-      height: storedSize?.data?.height || defaults.data.height,
+      height: kind === 'kanban_trigger'
+        ? Math.max(storedSize?.data?.height || 0, defaults.data.height)
+        : storedSize?.data?.height || defaults.data.height,
     },
     settings: {
       width: storedSize?.settings?.width || defaults.settings.width,
