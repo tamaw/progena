@@ -2449,10 +2449,8 @@ function AppRuntimeShell() {
       setActivePanel('quickChat');
     };
     window.addEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
-    window.addEventListener('progenitor:run-routine', handleOpenQuickChat);
     return () => {
       window.removeEventListener('progenitor:open-quick-chat', handleOpenQuickChat);
-      window.removeEventListener('progenitor:run-routine', handleOpenQuickChat);
     };
   }, []);
 

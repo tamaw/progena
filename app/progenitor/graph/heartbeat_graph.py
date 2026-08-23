@@ -132,6 +132,7 @@ from ..nodes.registry import (
     startup_refresh_registry_node,
 )
 from ..nodes.repo_scan import refresh_repo_scan_node
+from ..nodes.routine_run import routine_run_node
 from ..nodes.schedule import scheduled_completion_node, scheduler_tick_node
 from ..state.models import ProgenitorState, redact_secrets
 
@@ -139,7 +140,7 @@ logger = logging.getLogger(__name__)
 
 HeartbeatNode = Callable[[Any, Runtime[HeartbeatContext]], Awaitable[dict[str, Any]]]
 DequeueRoute = Literal["idle", "setup"]
-SetupRoute = Literal["end", "cycle", "isolated_cycle"]
+SetupRoute = Literal["end", "cycle", "isolated_cycle", "routine_run"]
 CycleRoute = Literal["error", "scheduled_completion"]
 
 
@@ -264,6 +265,7 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     graph.add_node("setup", _guard_maintenance_node("setup", cycle_setup_node))
     graph.add_node("cycle", cycle_node)
     graph.add_node("isolated_cycle", isolated_cycle_node)
+    graph.add_node("routine_run", routine_run_node)
     graph.add_node("error", _guard_maintenance_node("error", cycle_error_node))
     graph.add_node(
         "scheduled_completion",
@@ -310,6 +312,7 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
             "end": END,
             "cycle": "cycle",
             "isolated_cycle": "isolated_cycle",
+            "routine_run": "routine_run",
         },
     )
     graph.add_conditional_edges(
@@ -322,6 +325,14 @@ def create_runtime_heartbeat_graph() -> CompiledStateGraph[Any, HeartbeatContext
     )
     graph.add_conditional_edges(
         "isolated_cycle",
+        _route_after_cycle,
+        {
+            "error": "error",
+            "scheduled_completion": "scheduled_completion",
+        },
+    )
+    graph.add_conditional_edges(
+        "routine_run",
         _route_after_cycle,
         {
             "error": "error",
@@ -343,6 +354,9 @@ def _route_after_dequeue(state: ProgenitorState) -> DequeueRoute:
 def _route_after_setup(state: ProgenitorState) -> SetupRoute:
     if not state.get("current_input"):
         return "end"
+    metadata = state.get("current_input_metadata") or {}
+    if metadata.get("kind") == "routine_run":
+        return "routine_run"
     if state.get("is_isolated_thread"):
         return "isolated_cycle"
     return "cycle"

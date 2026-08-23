@@ -74,16 +74,20 @@ class Progenitor:
         of a stale in-process snapshot. ``repo_scan`` does the same for the
         heartbeat-derived git-state document -- the backend's on-demand
         "Fetch" action (``repo_service.fetch_and_rescan_repo``) writes it
-        directly too now, alongside the heartbeat. This is the single path
-        for both UI-driven and agent-driven config changes -- there is no
-        separate write-hook.
+        directly too now, alongside the heartbeat. ``background_tasks`` does
+        the same for the background-task queue -- the backend's routine
+        "Run" endpoint (``POST /agent-profiles/{id}/run``) enqueues onto it
+        directly, and without this the heartbeat's cached copy (seeded once
+        at boot) would never see backend-enqueued entries for the life of
+        the process. This is the single path for both UI-driven and
+        agent-driven config changes -- there is no separate write-hook.
         """
         try:
             data = json.loads(payload) if payload else {}
             key = data.get("key") if isinstance(data, dict) else None
         except (ValueError, TypeError):
             key = None
-        if key in ("repos", "repo_scan") and self.state_manager is not None:
+        if key in ("repos", "repo_scan", "background_tasks") and self.state_manager is not None:
             self.state_manager.invalidate_document(key)
         if self._mcp_scheduler is None and self._plugin_scheduler is None:
             return

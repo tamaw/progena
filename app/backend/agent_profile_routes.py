@@ -13,6 +13,7 @@ listener rather than the HTTP response body.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -27,10 +28,11 @@ from app.progenitor.routines.graph import (
     validate_routine_graph_payload,
 )
 from app.progenitor.schemas import load_schema
+from app.progenitor.utils import utcnow_isoformat
 
 from .agent_store import AgentStore, a2a_profiles_from_registry, acp_profiles_from_registry
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
-from .document_store import BackendDocumentStore
+from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 from .request_utils import BroadcastUiEvent
 from .request_utils import request_correlation_id as _request_correlation_id
 
@@ -482,6 +484,57 @@ def create_agent_profile_router(
             request_id=request_id,
         )
         return acknowledgement_response(request_id, ["agent.graph.updated"])
+
+    @router.post(
+        "/agent-profiles/{agent_id}/run", status_code=202, response_model=UiRequestAcknowledgement
+    )
+    async def run_routine(
+        agent_id: str,
+        request: Request,
+        x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+    ):
+        """Enqueue a real, deterministic execution of a routine graph.
+
+        Writes a background-task entry (``metadata.kind = "routine_run"``)
+        onto the same Postgres-backed queue the heartbeat runtime already
+        drains (``app.progenitor.state.background_store`` -- both processes
+        share the LangGraph ``store`` table via the same
+        ``("progenitor", "state")`` namespace / ``"progenitor.state"``
+        prefix). The heartbeat graph recognizes that marker and routes
+        straight to ``routine_run_node``, which calls the routine's already
+        -compiled subagent runnable directly -- no LLM turn decides whether
+        to run it, unlike the old client-side mock this replaces.
+        """
+        request_id = _request_correlation_id(request, x_request_id)
+        store = _require_store()
+        agent = await asyncio.to_thread(store.get_agent, agent_id)
+        if agent is None:
+            raise HTTPException(status_code=404, detail="Agent not found")
+
+        doc_store = get_document_store()
+        # NOTE: the bare name here, not "background_tasks.json" -- that
+        # suffixed form is a different backend's on-disk filename, unrelated
+        # to the Postgres `store` key StateManager._get_runtime_document
+        # actually reads (confirmed empirically: writing to the suffixed key
+        # left the real document empty and the runtime never saw the task).
+        existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
+        tasks = list(existing.payload) if existing is not None else []
+        tasks.append(
+            {
+                "id": f"routine-run-{uuid.uuid4().hex}",
+                "content": f'Run the "{agent_id}" routine graph.',
+                "metadata": {"kind": "routine_run", "routine_id": agent_id},
+                "created_at": utcnow_isoformat(),
+            }
+        )
+        doc_store.save_document(PROGENITOR_STATE_PREFIX, "background_tasks", tasks)
+
+        broadcast_ui_event(
+            "agent.routine.run.enqueued",
+            {"agent_id": agent_id},
+            request_id=request_id,
+        )
+        return acknowledgement_response(request_id, ["agent.routine.run.enqueued"])
 
     @router.get(
         "/agent-profiles/{agent_id}/runs", status_code=202, response_model=UiRequestAcknowledgement

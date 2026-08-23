@@ -2166,7 +2166,7 @@ export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
-function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -2939,15 +2939,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, runResult
                 >
                   {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
                 </span>
-                {runResult ? (
-                  <span
-                    className={`agents-graph-run-result agents-graph-run-result--${runResult.status}`}
-                    role="status"
-                    aria-label={`Routine result: ${runResult.status}`}
-                  >
-                    {runResult.status === 'error' ? `Simulated error after ${runResult.events} events` : `Result valid · ${runResult.events} events`}
-                  </span>
-                ) : null}
               </div>
             )}
               <GraphEditContext.Provider value={editContext}>
@@ -3064,7 +3055,7 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -3072,7 +3063,6 @@ export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, 
       confirmedGraph={confirmedGraph}
       onPersist={onPersist}
       onRun={onRun}
-      runResult={runResult}
       onShowProfile={onShowProfile}
       onDelete={onDelete}
       jsonOpen={jsonOpen}

@@ -427,6 +427,7 @@ async def create_progenitor_agent(
         checkpointer=checkpointer,
         state_schema=ProgenitorAgentState,
     )
+    agent.routine_registry = routine_registry  # type: ignore[attr-defined]
 
     logger.info(
         "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",
