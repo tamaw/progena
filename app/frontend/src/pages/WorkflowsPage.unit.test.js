@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NODE_MENU_CATEGORIES, flowToWorkflow, payloadMappingProperties, schemaProperties, workflowToFlow } from './WorkflowsPage';
+import { NODE_MENU_CATEGORIES, flowToWorkflow, payloadMappingProperties, schemaProperties, triggerPayloadMappingProperties, workflowToFlow } from './WorkflowsPage';
 
 describe('workflowToFlow', () => {
   it('maps default ports to React Flow implicit handles', () => {
@@ -245,8 +245,21 @@ describe('node interface properties', () => {
     ]);
   });
 
-  it('uses trigger payload fields as mappable output ports', () => {
+  it('uses payload paths for every node output property', () => {
     expect(payloadMappingProperties({
+      type: 'object',
+      properties: {
+        summary: { type: 'string' },
+        score: { type: 'number' },
+      },
+    })).toEqual([
+      expect.objectContaining({ name: 'summary', path: '/payload/summary' }),
+      expect.objectContaining({ name: 'score', path: '/payload/score' }),
+    ]);
+  });
+
+  it('uses trigger payload fields as mappable output ports', () => {
+    expect(triggerPayloadMappingProperties({
       oneOf: [{
         properties: {
           payload: {

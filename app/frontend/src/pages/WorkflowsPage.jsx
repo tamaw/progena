@@ -675,10 +675,19 @@ function nodePortProperties(schema, fallback = []) {
   return properties.length ? properties : fallback.map((name) => ({ name, definition: {}, required: false }));
 }
 
-function payloadMappingProperties(schema) {
-  if (!schema || typeof schema !== 'object') return [];
+function payloadMappingProperties(schema, excluded = []) {
+  const excludedNames = new Set(excluded);
+  return schemaProperties(schema)
+    .filter(({ name }) => !excludedNames.has(name))
+    .map((property) => ({
+      ...property,
+      path: `/payload/${property.name}`,
+    }));
+}
+
+function triggerPayloadMappingProperties(schema) {
   const mappings = new Map();
-  const variants = Array.isArray(schema.oneOf) ? schema.oneOf : [schema];
+  const variants = Array.isArray(schema?.oneOf) ? schema.oneOf : [schema];
   variants.forEach((variant) => {
     const payload = variant?.properties?.payload;
     if (payload?.type !== 'object' || !payload.properties) return;
@@ -693,16 +702,29 @@ function payloadMappingProperties(schema) {
   });
   return [...mappings.values()];
 }
+
+function WorkflowNodeOutputProperties(schema, fallback = ['payload']) {
+  const properties = payloadMappingProperties(schema);
+  return properties.length
+    ? properties
+    : fallback.map((name) => ({
+      name,
+      path: `/payload`,
+      definition: {},
+      required: false,
+    }));
+}
+
 function WorkflowNodeHandles({
   inputSchema,
   outputSchema,
   inputs = {},
-  outputFallback = ['output'],
+  outputFallback = ['payload'],
   outputProperties: suppliedOutputProperties,
   outputHandle = (property) => `out:${property.path || `/${property.name}`}`,
 }) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
-  const outputProperties = suppliedOutputProperties || nodePortProperties(outputSchema, outputFallback);
+  const outputProperties = suppliedOutputProperties || WorkflowNodeOutputProperties(outputSchema, outputFallback);
   const top = (index) => `${61 + index * 28}px`;
   return (
     <>
@@ -715,16 +737,15 @@ function WorkflowNodeHandles({
     </>
   );
 }
-
 function WorkflowNodePorts({
   inputSchema,
   outputSchema,
   inputs = {},
-  outputFallback = ['output'],
+  outputFallback = ['payload'],
   outputProperties: suppliedOutputProperties,
 }) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
-  const outputProperties = suppliedOutputProperties || nodePortProperties(outputSchema, outputFallback);
+  const outputProperties = suppliedOutputProperties || WorkflowNodeOutputProperties(outputSchema, outputFallback);
   return (
     <div className="workflow-node-ports">
       <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
@@ -847,7 +868,7 @@ function PromptNode({ id, data, selected }) {
 
 
 function KanbanTriggerNode({ id, data, selected }) {
-  const outputProperties = payloadMappingProperties(data.outputSchema);
+  const outputProperties = triggerPayloadMappingProperties(data.outputSchema);
   return (
     <>
       <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
@@ -2140,7 +2161,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, payloadMappingProperties, schemaProperties };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, payloadMappingProperties, schemaProperties, triggerPayloadMappingProperties };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

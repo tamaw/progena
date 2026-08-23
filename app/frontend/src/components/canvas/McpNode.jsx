@@ -35,7 +35,8 @@ export default function McpNode({ id, data, selected }) {
 
   const inputSchema = selectedTool?.inputSchema || selectedTool?.input_schema || null;
   const inputProperties = Object.entries(inputSchema?.properties || {}).map(([name, schema]) => [name, schema || {}]);
-  const outputProperties = Object.entries(data.outputSchema?.properties || {}).map(([name, schema]) => [name, schema || {}]);
+  const outputProperties = Object.entries(data.outputSchema?.properties || {})
+    .map(([name, schema]) => [name, schema || {}, `/payload/${name}`]);
 
   const isRunning = data.currentNodeId === id;
   const isCompleted = Array.isArray(data.completedNodeIds) && data.completedNodeIds.includes(id);
@@ -93,7 +94,7 @@ export default function McpNode({ id, data, selected }) {
               )) : <span className="workflow-node-ports__empty">No inputs</span>}
             </div>
             <div className="workflow-node-ports__column workflow-node-ports__column--outputs">
-              {(outputProperties.length ? outputProperties : [['output', {}]]).map(([name, schema]) => (
+              {(outputProperties.length ? outputProperties : [['payload', {}, '/payload']]).map(([name, schema]) => (
                 <div className="workflow-node-port" key={name}>
                   <small>{schema.type || 'any'}</small>
                   <span>{name}</span>
@@ -104,10 +105,10 @@ export default function McpNode({ id, data, selected }) {
         </div>
       </div>
       {inputProperties.map(([name], index) => (
-        <Handle key={`input-${name}`} type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: `${54 + index * 23}px` }} />
+        <Handle key={`input-${name}`} type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: `${61 + index * 28}px` }} />
       ))}
-      {(outputProperties.length ? outputProperties : [['output', {}]]).map(([name], index) => (
-        <Handle key={`output-${name}`} type="source" position={Position.Right} id={`out:/${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: `${54 + index * 23}px` }} />
+      {(outputProperties.length ? outputProperties : [['payload', {}, '/payload']]).map(([name, , path], index) => (
+        <Handle key={`output-${name}`} type="source" position={Position.Right} id={`out:${path}`} className="canvas-handle workflow-node-external-handle" style={{ top: `${61 + index * 28}px` }} />
       ))}
     </>
   );
