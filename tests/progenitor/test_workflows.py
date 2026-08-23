@@ -133,6 +133,42 @@ def test_ordered_workflow_nodes_uses_graph_root_not_event_node():
     ]
 
 
+def test_workflow_definition_accepts_multiple_property_edges_between_one_node_pair():
+    payload = default_workflow_definition()
+    source_id = next(iter(payload["graph"]["nodes"]))
+    target_id = "prompt_consumer"
+    source = payload["graph"]["nodes"][source_id]
+    source["output_schema"] = {
+        "type": "object",
+        "properties": {"title": {"type": "string"}, "priority": {"type": "string"}},
+    }
+    payload["graph"]["nodes"][target_id] = {
+        "kind": "prompt",
+        "title": "Consumer",
+        "prompt": "Use the connected fields.",
+        "agent_name": "progenitor",
+        "inputs": {
+            "title": {"source": "previous_output", "path": "/title"},
+            "priority": {"source": "previous_output", "path": "/priority"},
+        },
+    }
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": source_id, "port": "out:/title"},
+            "to": {"node": target_id, "port": "in:title"},
+        },
+        {
+            "from": {"node": source_id, "port": "out:/priority"},
+            "to": {"node": target_id, "port": "in:priority"},
+        },
+    ]
+
+    normalized = validate_workflow_definition_payload(payload)
+
+    assert len(normalized["graph"]["edges"]) == 2
+    assert normalized["graph"]["nodes"][target_id]["inputs"]["priority"]["path"] == "/priority"
+
+
 @pytest.mark.parametrize(
     ("kind", "field", "value"),
     [
