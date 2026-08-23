@@ -1139,7 +1139,7 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
@@ -1328,21 +1328,34 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
       </MissingFieldsContext.Provider>
       <footer className="routine-node-inspector__foot">
         {readOnly ? null : (
-          <button
-            type="button"
-            className="routine-node-inspector__run-to-here"
-            title="Execute the routine from wherever this editor session last stopped, up to (not including) this step"
-            disabled={runStatus === 'discovering' || runStatus === 'running'}
-            onClick={() => {
-              if (nodeRequiresRunConfirmation(node.id, graphNodes, graphEdges, runMeta)) {
-                setConfirmRunOpen(true);
-              } else {
-                startRun(node.id);
-              }
-            }}
-          >
-            Run to here
-          </button>
+          <div className="routine-node-inspector__run-actions">
+            <button
+              type="button"
+              className="routine-node-inspector__run-to-here"
+              title="Execute the routine from wherever this editor session last stopped, up to (not including) this step"
+              disabled={runStatus === 'discovering' || runStatus === 'running'}
+              onClick={() => {
+                if (nodeRequiresRunConfirmation(node.id, graphNodes, graphEdges, runMeta)) {
+                  setConfirmRunOpen(true);
+                } else {
+                  startRun(node.id);
+                }
+              }}
+            >
+              Run to here
+            </button>
+            {hasInteractiveSession ? (
+              <button
+                type="button"
+                className="routine-node-inspector__reset-run"
+                title={'Abandon this editor session\u2019s progress -- the next "Run to here" click starts over from the beginning instead of resuming'}
+                disabled={runStatus === 'discovering' || runStatus === 'running'}
+                onClick={resetInteractiveSession}
+              >
+                Reset run
+              </button>
+            ) : null}
+          </div>
         )}
         <button type="button" className="agents-graph-node__delete" onClick={() => { deleteNode(node.id); onDismiss(); }}>
           Delete step
@@ -2413,11 +2426,17 @@ function useRoutineRunPolling(agentId) {
   const runState = useSelector((state) => (threadId ? selectAgentRunState(state, threadId) : undefined)) || EMPTY_RUN_STATE;
 
   const interactiveSessionIdRef = useRef(null);
+  // Mirrors `interactiveSessionIdRef` for render -- whether a "Reset run"
+  // affordance has anything to reset. Set true the first time startRun()
+  // mints/reuses an interactive session (see below); cleared by an
+  // explicit reset or by switching routines.
+  const [hasInteractiveSession, setHasInteractiveSession] = useState(false);
   useEffect(() => {
     setSessionId(null);
     setThreadId(null);
     setStatus('idle');
     interactiveSessionIdRef.current = null;
+    setHasInteractiveSession(false);
   }, [agentId]);
 
   // Phase 1: poll /runs, watch for the thread_id this session's Run click
@@ -2478,6 +2497,7 @@ function useRoutineRunPolling(agentId) {
     const newSessionId = targetNode
       ? (interactiveSessionIdRef.current ??= randomSessionId())
       : randomSessionId();
+    if (targetNode) setHasInteractiveSession(true);
     stablePollsRef.current = 0;
     lastTotalRef.current = -1;
     startedAtMsRef.current = Date.now();
@@ -2493,6 +2513,17 @@ function useRoutineRunPolling(agentId) {
     dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
     return newSessionId;
   }, [agentsUrl, agentId, dispatch]);
+
+  // Abandons the current interactive ("Run to here") session -- the next
+  // "Run to here" click mints a brand new session_id/thread_id instead of
+  // resuming the abandoned one. Does not touch the top-level Run button's
+  // own (always-fresh) sessions, and is not itself a side effect -- it
+  // only forgets a client-side pointer, the old thread's checkpoints stay
+  // exactly where they are (still visible in the Runs panel).
+  const resetInteractiveSession = useCallback(() => {
+    interactiveSessionIdRef.current = null;
+    setHasInteractiveSession(false);
+  }, []);
 
   // The revision this run's cached data was executed against -- null for a
   // run against the live/unpinned document, or before the thread_id is
@@ -2512,6 +2543,8 @@ function useRoutineRunPolling(agentId) {
     estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? runStartedAtMs,
     runRevisionId,
     startRun,
+    hasInteractiveSession,
+    resetInteractiveSession,
   };
 }
 
@@ -2543,7 +2576,7 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
 
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
-  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun } = useRoutineRunPolling(agent.id);
+  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession } = useRoutineRunPolling(agent.id);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3194,7 +3227,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     staleNodeIds,
     runStatus,
     startRun,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRun]);
+    hasInteractiveSession,
+    resetInteractiveSession,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRun, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
