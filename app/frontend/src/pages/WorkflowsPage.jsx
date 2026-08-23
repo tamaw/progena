@@ -686,7 +686,7 @@ function WorkflowNodePorts({
       <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
         {inputProperties.length ? inputProperties.map(({ name, definition }) => (
           <div className="workflow-node-port" key={`input-${name}`}>
-            <Handle type="target" position={Position.Left} id={`in:${name}`} className="workflow-node-port__handle" />
+            <Handle type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-port__handle" />
             <span>{name}</span>
             <small>{schemaType(definition)}</small>
           </div>
@@ -697,7 +697,7 @@ function WorkflowNodePorts({
           <div className="workflow-node-port" key={`output-${name}`}>
             <small>{schemaType(definition)}</small>
             <span>{name}</span>
-            <Handle type="source" position={Position.Right} id={outputHandle(name)} className="workflow-node-port__handle" />
+            <Handle type="source" position={Position.Right} id={outputHandle(name)} className="canvas-handle workflow-node-port__handle" />
           </div>
         ))}
       </div>

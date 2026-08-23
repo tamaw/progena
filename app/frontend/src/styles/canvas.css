@@ -1603,15 +1603,17 @@
 }
 
 .workflow-node-port__handle {
-  background: var(--color-surface) !important;
-  border: 2px solid var(--color-text-muted) !important;
-  height: 10px !important;
+  cursor: crosshair;
   position: absolute !important;
-  width: 10px !important;
 }
 
 .workflow-node-ports__column--inputs .workflow-node-port__handle { left: -15px !important; }
 .workflow-node-ports__column--outputs .workflow-node-port__handle { right: -15px !important; }
+
+.workflow-node-port:hover .workflow-node-port__handle {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--workflow-node-color) 30%, transparent);
+  transform: translate(-50%, -50%) scale(1.2);
+}
 .workflow-node-options-backdrop {
   align-items: center;
   background: color-mix(in srgb, var(--color-bg, #111) 72%, transparent);
