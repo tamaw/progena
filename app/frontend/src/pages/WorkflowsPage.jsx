@@ -672,7 +672,7 @@ function nodePortProperties(schema, fallback = []) {
   return properties.length ? properties : fallback.map((name) => ({ name, definition: {}, required: false }));
 }
 
-function WorkflowNodePorts({
+function WorkflowNodeHandles({
   inputSchema,
   outputSchema,
   inputs = {},
@@ -681,12 +681,27 @@ function WorkflowNodePorts({
 }) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
   const outputProperties = nodePortProperties(outputSchema, outputFallback);
+  const top = (index) => `${54 + index * 23}px`;
+  return (
+    <>
+      {inputProperties.map(({ name }, index) => (
+        <Handle key={`input-${name}`} type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
+      ))}
+      {outputProperties.map(({ name }, index) => (
+        <Handle key={`output-${name}`} type="source" position={Position.Right} id={outputHandle(name)} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
+      ))}
+    </>
+  );
+}
+
+function WorkflowNodePorts({ inputSchema, outputSchema, inputs = {}, outputFallback = ['output'] }) {
+  const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
+  const outputProperties = nodePortProperties(outputSchema, outputFallback);
   return (
     <div className="workflow-node-ports">
       <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
         {inputProperties.length ? inputProperties.map(({ name, definition }) => (
           <div className="workflow-node-port" key={`input-${name}`}>
-            <Handle type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-port__handle" />
             <span>{name}</span>
             <small>{schemaType(definition)}</small>
           </div>
@@ -697,7 +712,6 @@ function WorkflowNodePorts({
           <div className="workflow-node-port" key={`output-${name}`}>
             <small>{schemaType(definition)}</small>
             <span>{name}</span>
-            <Handle type="source" position={Position.Right} id={outputHandle(name)} className="canvas-handle workflow-node-port__handle" />
           </div>
         ))}
       </div>
@@ -798,6 +812,7 @@ function PromptNode({ id, data, selected }) {
           />
         </div>
       </div>
+      <WorkflowNodeHandles inputSchema={data.inputSchema} outputSchema={data.outputSchema} inputs={data.inputs} />
     </>
   );
 }
@@ -818,6 +833,7 @@ function KanbanTriggerNode({ id, data, selected }) {
           <WorkflowNodePorts inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
         </div>
       </div>
+      <WorkflowNodeHandles inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
     </>
   );
 }
@@ -837,9 +853,10 @@ function WorkflowControlNode({ id, data, selected }) {
           <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
         </div>
         <div className="node-body">
-          <WorkflowNodePorts inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} outputHandle={(name) => name} />
+          <WorkflowNodePorts inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} />
         </div>
       </div>
+      <WorkflowNodeHandles inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} outputHandle={(name) => name} />
     </>
   );
 }
