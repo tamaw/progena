@@ -673,31 +673,56 @@ function nodePortProperties(schema, fallback = []) {
   return properties.length ? properties : fallback.map((name) => ({ name, definition: {}, required: false }));
 }
 
+function payloadMappingProperties(schema) {
+  if (!schema || typeof schema !== 'object') return [];
+  const mappings = new Map();
+  const variants = Array.isArray(schema.oneOf) ? schema.oneOf : [schema];
+  variants.forEach((variant) => {
+    const payload = variant?.properties?.payload;
+    if (payload?.type !== 'object' || !payload.properties) return;
+    Object.entries(payload.properties).forEach(([name, definition]) => {
+      if (['event_type', 'timestamp', 'source'].includes(name)) return;
+      mappings.set(name, {
+        name,
+        path: `/payload/${name}`,
+        definition: definition && typeof definition === 'object' ? definition : {},
+      });
+    });
+  });
+  return [...mappings.values()];
+}
 function WorkflowNodeHandles({
   inputSchema,
   outputSchema,
   inputs = {},
   outputFallback = ['output'],
-  outputHandle = (name) => `out:/${name}`,
+  outputProperties: suppliedOutputProperties,
+  outputHandle = (property) => `out:${property.path || `/${property.name}`}`,
 }) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
-  const outputProperties = nodePortProperties(outputSchema, outputFallback);
+  const outputProperties = suppliedOutputProperties || nodePortProperties(outputSchema, outputFallback);
   const top = (index) => `${61 + index * 28}px`;
   return (
     <>
       {inputProperties.map(({ name }, index) => (
         <Handle key={`input-${name}`} type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
       ))}
-      {outputProperties.map(({ name }, index) => (
-        <Handle key={`output-${name}`} type="source" position={Position.Right} id={outputHandle(name)} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
+      {outputProperties.map((property, index) => (
+        <Handle key={`output-${property.name}`} type="source" position={Position.Right} id={outputHandle(property)} className="canvas-handle workflow-node-external-handle" style={{ top: top(index) }} />
       ))}
     </>
   );
 }
 
-function WorkflowNodePorts({ inputSchema, outputSchema, inputs = {}, outputFallback = ['output'] }) {
+function WorkflowNodePorts({
+  inputSchema,
+  outputSchema,
+  inputs = {},
+  outputFallback = ['output'],
+  outputProperties: suppliedOutputProperties,
+}) {
   const inputProperties = nodePortProperties(inputSchema, Object.keys(inputs));
-  const outputProperties = nodePortProperties(outputSchema, outputFallback);
+  const outputProperties = suppliedOutputProperties || nodePortProperties(outputSchema, outputFallback);
   return (
     <div className="workflow-node-ports">
       <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
@@ -820,6 +845,7 @@ function PromptNode({ id, data, selected }) {
 
 
 function KanbanTriggerNode({ id, data, selected }) {
+  const outputProperties = payloadMappingProperties(data.outputSchema);
   return (
     <>
       <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
@@ -830,10 +856,10 @@ function KanbanTriggerNode({ id, data, selected }) {
           <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
         </div>
         <div className="node-body">
-          <WorkflowNodePorts inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
+          <WorkflowNodePorts inputSchema={null} outputSchema={data.outputSchema} outputFallback={['payload']} outputProperties={outputProperties} />
         </div>
       </div>
-      <WorkflowNodeHandles inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
+      <WorkflowNodeHandles inputSchema={null} outputSchema={data.outputSchema} outputFallback={['payload']} outputProperties={outputProperties} />
     </>
   );
 }
@@ -856,7 +882,7 @@ function WorkflowControlNode({ id, data, selected }) {
           <WorkflowNodePorts inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} />
         </div>
       </div>
-      <WorkflowNodeHandles inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} outputHandle={(name) => name} />
+      <WorkflowNodeHandles inputSchema={data.inputSchema} outputSchema={data.outputSchema} outputFallback={outputFallback} outputHandle={(property) => property.name} />
     </>
   );
 }
@@ -2112,7 +2138,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, schemaProperties };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, payloadMappingProperties, schemaProperties };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

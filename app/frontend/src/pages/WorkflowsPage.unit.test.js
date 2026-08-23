@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NODE_MENU_CATEGORIES, flowToWorkflow, schemaProperties, workflowToFlow } from './WorkflowsPage';
+import { NODE_MENU_CATEGORIES, flowToWorkflow, payloadMappingProperties, schemaProperties, workflowToFlow } from './WorkflowsPage';
 
 describe('workflowToFlow', () => {
   it('maps default ports to React Flow implicit handles', () => {
@@ -242,6 +242,27 @@ describe('node interface properties', () => {
       expect.objectContaining({ name: 'event_type', required: true }),
       expect.objectContaining({ name: 'payload', required: false }),
       expect.objectContaining({ name: 'source', required: false }),
+    ]);
+  });
+
+  it('uses trigger payload fields as mappable output ports', () => {
+    expect(payloadMappingProperties({
+      oneOf: [{
+        properties: {
+          payload: {
+            type: 'object',
+            properties: {
+              event_type: { const: 'kanban.card.created' },
+              timestamp: { type: 'string' },
+              card: { type: 'object' },
+              task: { type: 'object' },
+            },
+          },
+        },
+      }],
+    })).toEqual([
+      expect.objectContaining({ name: 'card', path: '/payload/card' }),
+      expect.objectContaining({ name: 'task', path: '/payload/task' }),
     ]);
   });
 });
