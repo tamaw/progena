@@ -233,7 +233,7 @@ async def test_executor_chains_a_validated_structured_output_into_next_node():
         "title": "Consume structured output",
         "prompt": "Use the supplied summary.",
         "agent_name": "progenitor",
-        "inputs": {"input": {"source": "previous_output", "path": "/"}},
+        "inputs": {"input": {"source": "previous_output", "path": "/payload"}},
         "input_schema": output_schema,
         "output_schema": None,
     }
@@ -427,7 +427,7 @@ async def test_executor_runs_mcp_node_and_persists_normalized_output():
 
     assert completed.completed_node_ids == [prompt_id, mcp_id]
     assert calls == [("test-server", "greet", {"name": "world"})]
-    assert json.loads(completed.last_output) == {"text": "Hello, world!"}
+    assert json.loads(completed.last_output) == {"payload": {"text": "Hello, world!"}}
     audit = completed.step_audit[-1]
     assert audit["kind"] == "mcp"
     assert audit["references"] == {"server_id": "test-server", "tool_name": "greet"}
@@ -543,7 +543,7 @@ async def test_executor_chains_mcp_output_to_next_prompt_node():
         "title": "Second",
         "prompt": "Consume previous output.",
         "agent_name": "progenitor",
-        "inputs": {"greeting": {"source": "previous_output", "path": "/text"}},
+        "inputs": {"greeting": {"source": "previous_output", "path": "/payload/text"}},
     }
     workflow["graph"]["edges"] = [
         {"from": {"node": prompt_id, "port": "default"}, "to": {"node": mcp_id, "port": "default"}},

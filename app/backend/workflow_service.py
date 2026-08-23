@@ -437,9 +437,12 @@ def _pointer_value(value: Any, path: str) -> Any:
 def _workflow_input_value(
     trigger_event: Mapping[str, Any], previous_output: str, *, is_root: bool
 ) -> Any:
-    """Return the typed value crossing the current workflow edge."""
+    """Return the typed payload crossing the current workflow edge."""
     if is_root:
         return dict(trigger_event)
+    payload = _pointer_value(previous_output, "/payload")
+    if payload is not None:
+        return payload
     try:
         return json.loads(previous_output)
     except json.JSONDecodeError:
@@ -475,12 +478,17 @@ def evaluate_workflow_condition(
     previous_output: str,
 ) -> bool:
     """Evaluate the deliberately small, non-code condition language."""
-
     raw = expression.strip()
+    previous_payload = _pointer_value(previous_output, "/payload")
+    trigger_payload = trigger_event.get("payload")
     context: dict[str, Any] = {
-        "payload": trigger_event.get("payload")
-        if isinstance(trigger_event.get("payload"), Mapping)
-        else {},
+        "payload": (
+            previous_payload
+            if previous_payload is not None
+            else trigger_payload
+            if isinstance(trigger_payload, Mapping)
+            else {}
+        ),
         "event_type": str(trigger_event.get("event_type") or ""),
         "previous_output": previous_output,
     }
@@ -517,6 +525,15 @@ def _validate_prompt_output(node: WorkflowNodePrompt, output_text: str) -> None:
     error = validate_against_schema(output, node.output_schema)
     if error:
         raise ValueError(f"prompt node '{node.title}' output failed schema validation: {error}")
+
+
+def _workflow_payload_output(output_text: str) -> str:
+    """Wrap every non-routing node result in the shared payload envelope."""
+    try:
+        payload = json.loads(output_text)
+    except json.JSONDecodeError:
+        payload = output_text
+    return json.dumps({"payload": payload}, ensure_ascii=False, default=str)
 
 
 def _trigger_column_filter_matches(trigger: WorkflowTrigger, event: Mapping[str, Any]) -> bool:
@@ -1180,7 +1197,7 @@ class WorkflowExecutor:
                             raise ValueError(
                                 f"mcp node '{node.title}' output failed schema validation: {error}"
                             )
-                    output_text = _bounded_text(output_text)
+                    output_text = _bounded_text(_workflow_payload_output(output_text))
                 else:
                     effective_node = _resolve_routine_node(store, workflow_node_as_prompt(node))
                     _validate_node_input(
@@ -1205,7 +1222,7 @@ class WorkflowExecutor:
                     )
                     output_text = prompt_result.response
                     _validate_prompt_output(effective_node, output_text)
-                    output_text = _bounded_text(output_text)
+                    output_text = _bounded_text(_workflow_payload_output(output_text))
                     thread_id = prompt_result.thread_id or thread_id
             except Exception as exc:
                 self._mark_failed(store, latest_run, error=str(exc))
