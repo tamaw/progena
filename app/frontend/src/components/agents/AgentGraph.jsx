@@ -2166,7 +2166,7 @@ export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
-function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
@@ -2839,6 +2839,17 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
   }, [nodes, edges, meta, incomplete]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
+  // Run must match what the server actually has, not just what this tab
+  // optimistically believes it sent -- `confirmedGraph` is the live
+  // Redux-tracked agent graph, updated only by the `agent.graph.updated`
+  // SSE round-trip (see AgentsPage's `selectedGraph`), so comparing its
+  // signature to the working copy's is the same "did the save round-trip
+  // land" check the autosave chip already implies, made explicit for Run.
+  const isServerConfirmed = useMemo(
+    () => JSON.stringify(workingGraph)
+      === JSON.stringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
+    [workingGraph, confirmedGraph],
+  );
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) || null;
   const selectedRouterEdge = selectedNode
     ? edges.find((edge) => edge.from === selectedNode.id && edge.router)
@@ -2894,10 +2905,10 @@ function GraphCanvas({ agent, graph, onPersist, onRun, runResult, onShowProfile,
                 <DetailHeaderAction
                   icon={<PlayActionIcon />}
                   label="Run"
-                  tooltip="Run routine"
+                  tooltip={isServerConfirmed ? 'Run routine' : 'Waiting for save to be confirmed…'}
                   ariaLabel="Run routine"
                   onClick={() => onRun(workingGraph)}
-                  disabled={validationErrors.length > 0}
+                  disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
                 />
                 {onDelete ? (
                   <DetailHeaderAction
@@ -3053,11 +3064,12 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, runResult, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   return (
     <GraphCanvas
       agent={agent}
       graph={graph}
+      confirmedGraph={confirmedGraph}
       onPersist={onPersist}
       onRun={onRun}
       runResult={runResult}
