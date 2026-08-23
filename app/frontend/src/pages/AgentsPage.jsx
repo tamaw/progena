@@ -504,7 +504,6 @@ export function AgentWorkspace({ page }) {
   const detailTabs = [];
   const effectiveDetailTab = isRoutines ? 'Graph' : 'Details';
 
-  const [runResult, setRunResult] = useState(null);
   // Reflect the active agent in the URL so the view is refreshable and shareable
   // (e.g. /agents/subagent-code-reviewer/details or /routines/subagent-...).
   useEffect(() => {
@@ -608,21 +607,19 @@ export function AgentWorkspace({ page }) {
     }
   }
 
-  const handleRunRoutine = useCallback((workingGraph = selectedGraph) => {
-    const nodes = workingGraph.nodes || [];
-    const hasSimulatedFailure = nodes.some((node) => String(node.config?.expression || '').includes('raise '));
-    const result = {
-      status: hasSimulatedFailure ? 'error' : 'completed',
-      events: nodes.length,
-      revision: workingGraph.settings?.checkpoint?.namespace || effectiveAgentId,
-    };
-    setRunResult(result);
-    window.dispatchEvent(new CustomEvent('progenitor:run-routine', {
-      detail: {
-        prompt: `Run the "${effectiveAgentId}" routine graph and report its simulated ${result.status} result.`,
-      },
-    }));
-  }, [effectiveAgentId, selectedGraph]);
+  const handleRunRoutine = useCallback(() => {
+    if (!effectiveAgentId) return;
+    // POST enqueues a real background-task entry (metadata.kind ==
+    // "routine_run") the runtime heartbeat drains deterministically --
+    // routine_run_node invokes the compiled subagent runnable directly, no
+    // LLM turn decides whether to run it. This intentionally does not await
+    // a result inline: the run is real work with its own checkpoints: the
+    // Runs panel (opened below) is the source of truth for its outcome.
+    fetch(`${agentsUrl}/${encodeURIComponent(effectiveAgentId)}/run`, { method: 'POST' }).catch(() => {});
+    setRoutineRunsOpen(true);
+    setGraphEditorOpen(false);
+    setRoutineRevisionsOpen(false);
+  }, [agentsUrl, effectiveAgentId]);
 
 
   return (
@@ -787,7 +784,6 @@ export function AgentWorkspace({ page }) {
                     confirmedGraph={selectedGraph}
                     onPersist={handleSaveGraph}
                     onRun={handleRunRoutine}
-                    runResult={runResult}
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
