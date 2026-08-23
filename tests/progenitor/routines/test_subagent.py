@@ -58,6 +58,7 @@ class _FakeRevisionReader:
         self._latest = latest
         self.fetch_calls: list[tuple[str, str]] = []
         self.fetch_latest_calls: list[str] = []
+        self.fetch_revision_id_for_content_calls: list[str] = []
 
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None:
         self.fetch_latest_calls.append(routine_id)
@@ -68,6 +69,15 @@ class _FakeRevisionReader:
     async def fetch(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
         self.fetch_calls.append((routine_id, revision_id))
         return self._revisions.get(revision_id)
+
+    async def fetch_revision_id_for_content(
+        self, routine_id: str, graph: dict[str, Any]
+    ) -> str | None:
+        self.fetch_revision_id_for_content_calls.append(routine_id)
+        for revision_id, content in self._revisions.items():
+            if content == graph:
+                return revision_id
+        return None
 
 
 class _FakeStateManager:
@@ -103,6 +113,63 @@ async def test_runs_latest_and_pins_revision():
 
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-a"}
     assert result["messages"][-1].content == "rev-a output"
+
+
+@pytest.mark.asyncio
+async def test_unpinned_run_prefers_live_document_over_fetch_latest():
+    """Reproduces the real bug this fixes: `routine_graph_revisions` is a
+    content-hash-deduplicated audit log (`ON CONFLICT ... DO NOTHING`), so
+    if live content ever reverts to a byte-identical prior state, the row
+    with the newest `captured_at` -- what `fetch_latest` returns -- is no
+    longer necessarily what's live. An unpinned run must compile and
+    execute the live document, never `fetch_latest`'s answer, and must
+    never even call `fetch_latest` when a live document exists."""
+    reader = _FakeRevisionReader(
+        {"rev-stale-but-newest-captured": _graph_doc("STALE content, must not run")},
+        latest="rev-stale-but-newest-captured",
+    )
+    live_doc = _graph_doc("live content, must run")
+    spec = _spec(reader, state_manager=_FakeStateManager(live_doc))
+
+    result = await spec["runnable"].ainvoke(
+        {"messages": [HumanMessage("do it")], ROUTINE_REVISIONS_STATE_KEY: {}}
+    )
+
+    assert result["messages"][-1].content == "live content, must run"
+    assert reader.fetch_latest_calls == []
+
+
+@pytest.mark.asyncio
+async def test_unpinned_run_tags_itself_with_the_matching_revision_id():
+    """The live document is always what's compiled/executed; the matching
+    revision_id (if the exact content has been captured) only *tags* the
+    run -- for the Runs panel and the canvas's run-staleness diffing."""
+    live_doc = _graph_doc("captured content")
+    reader = _FakeRevisionReader({"rev-captured": live_doc})
+    spec = _spec(reader, state_manager=_FakeStateManager(live_doc))
+
+    result = await spec["runnable"].ainvoke(
+        {"messages": [HumanMessage("do it")], ROUTINE_REVISIONS_STATE_KEY: {}}
+    )
+
+    assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-captured"}
+    assert reader.fetch_revision_id_for_content_calls == [ROUTINE_ID]
+
+
+@pytest.mark.asyncio
+async def test_unpinned_run_with_uncaptured_live_content_runs_untagged():
+    """A just-edited, not-yet-captured live document still runs correctly
+    -- it simply has no revision_id to tag itself with."""
+    live_doc = _graph_doc("brand new, uncaptured content")
+    reader = _FakeRevisionReader({})
+    spec = _spec(reader, state_manager=_FakeStateManager(live_doc))
+
+    result = await spec["runnable"].ainvoke(
+        {"messages": [HumanMessage("do it")], ROUTINE_REVISIONS_STATE_KEY: {}}
+    )
+
+    assert result["messages"][-1].content == "brand new, uncaptured content"
+    assert ROUTINE_REVISIONS_STATE_KEY not in result
 
 
 @pytest.mark.asyncio
