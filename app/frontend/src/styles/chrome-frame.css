@@ -7742,6 +7742,32 @@ body,
   cursor: default;
 }
 
+.routine-node-inspector__run-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.routine-node-inspector__reset-run {
+  padding: 5px 10px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.routine-node-inspector__reset-run:hover:not(:disabled) {
+  color: var(--color-text-primary);
+  border-color: var(--color-border);
+}
+
+.routine-node-inspector__reset-run:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Start/End chrome -- never a schema node, purely "the chain begins/ends
    here". A branching routine can render multiple Ends; that's real. */
 .routine-cap {
