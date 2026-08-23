@@ -14,8 +14,10 @@ DeepAgent subagent delegation is a separate task.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, TypedDict, cast
 
@@ -29,6 +31,7 @@ from langgraph.runtime import Runtime
 from langgraph.types import CachePolicy, Command, RetryPolicy, Send, interrupt
 
 from ..structured import validate_against_schema
+from ..utils import utcnow_isoformat
 from .expression import evaluate_expression
 from .graph import (
     ROUTINE_NODE_RETRY_DEFAULTS,
@@ -53,9 +56,27 @@ def _merge_data(existing: dict[str, Any] | None, update: dict[str, Any] | None) 
     return merged
 
 
+def _merge_run_meta(
+    existing: dict[str, list[dict[str, Any]]] | None,
+    update: dict[str, list[dict[str, Any]]] | None,
+) -> dict[str, list[dict[str, Any]]]:
+    """Per-node-id list of execution records, appended to (never replaced) --
+    a looped node accumulates one entry per iteration, not just its latest."""
+    merged = {node_id: list(entries) for node_id, entries in (existing or {}).items()}
+    for node_id, entries in (update or {}).items():
+        merged.setdefault(node_id, []).extend(entries)
+    return merged
+
+
 class RoutineState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
     data: Annotated[dict[str, Any], _merge_data]
+    # Wall-clock timing per node execution, recorded uniformly for every
+    # node kind by _instrument_node_callable below -- independent of what
+    # any individual node builder does or returns, so it can never be
+    # skipped by omission the way a per-kind opt-in would be. Keyed by
+    # node_id, one entry appended per execution (see _merge_run_meta).
+    run_meta: Annotated[dict[str, list[dict[str, Any]]], _merge_run_meta]
 
 
 def _node_config(node: RoutineNode) -> dict[str, Any]:
@@ -859,6 +880,32 @@ def _build_node_callable(
     raise ValueError(f"unknown node kind: {node.kind}")
 
 
+def _instrument_node_callable(node_id: str, fn: Any) -> Any:
+    """Wrap a node's runnable to record wall-clock duration into run_meta,
+    uniformly for every node kind -- independent of what the node itself
+    returns, so it can never be skipped by omission the way a per-kind
+    opt-in would be. Preserves the inner callable's calling convention: some
+    node builders accept an optional ``runtime`` second parameter and
+    LangGraph decides whether to pass it based on the callable's own
+    signature, so this wrapper inspects that signature once at wrap time and
+    forwards the same way.
+    """
+    takes_runtime = len(inspect.signature(fn).parameters) >= 2
+
+    async def wrapped(state: RoutineState, runtime: Any = None) -> dict[str, Any]:
+        started = time.monotonic()
+        started_at = utcnow_isoformat()
+        result = await (fn(state, runtime) if takes_runtime else fn(state))
+        duration_ms = (time.monotonic() - started) * 1000
+        update = dict(result) if isinstance(result, dict) else {}
+        update["run_meta"] = {
+            node_id: [{"started_at": started_at, "duration_ms": round(duration_ms, 2)}]
+        }
+        return update
+
+    return wrapped
+
+
 def _branch_key(value: Any) -> str:
     """Branch keys are authored in a JSON document, so a boolean routes on
     JSON's ``true``/``false`` rather than Python's ``str(True)`` -> ``"True"``.
@@ -1029,14 +1076,17 @@ def compile_routine_graph(
             node_options["destinations"] = (recovery_target,)
         builder.add_node(
             node.id,
-            _build_node_callable(
-                node,
-                model=model,
-                base_system_prompt=base_system_prompt,
-                agent_registry=agent_registry,
-                routine_registry=routine_registry,
-                tool_registry=tool_registry,
-                defs=graph.defs,
+            _instrument_node_callable(
+                node.id,
+                _build_node_callable(
+                    node,
+                    model=model,
+                    base_system_prompt=base_system_prompt,
+                    agent_registry=agent_registry,
+                    routine_registry=routine_registry,
+                    tool_registry=tool_registry,
+                    defs=graph.defs,
+                ),
             ),
             **node_options,
         )
