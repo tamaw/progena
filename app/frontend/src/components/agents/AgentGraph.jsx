@@ -1776,7 +1776,7 @@ export function buildStatePathSuggestions(nodeId, nodes, edges, inputSchema) {
   };
   add('request', { source: 'Seeded', hint: 'the routine invocation request' });
   add('context', { source: 'Seeded', hint: 'accumulated context' });
-  Object.keys(inputSchema || {}).forEach((name) => add(name, { source: 'Routine input', hint: inputSchema[name] }));
+  Object.entries(inputSchema?.properties || {}).forEach(([name, def]) => add(name, { source: 'Routine input', hint: def?.type }));
   predecessorsOf(nodeId, edges).forEach((id) => {
     const node = nodesById.get(id);
     if (!node) return;
@@ -2407,7 +2407,7 @@ const EMPTY_RUN_STATE = { run_meta: {}, data: {}, found: false };
 // `agentId` scopes everything: switching routines drops any in-flight poll
 // for the previous one immediately, so a stale sub-header never keeps
 // ticking for a routine the author has navigated away from.
-function useRoutineRunPolling(agentId) {
+function useRoutineRunPolling(agentId, parameters) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
@@ -2508,11 +2508,15 @@ function useRoutineRunPolling(agentId) {
     fetch(`${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ session_id: newSessionId, ...(targetNode ? { target_node: targetNode } : {}) }),
+      body: JSON.stringify({
+        session_id: newSessionId,
+        ...(targetNode ? { target_node: targetNode } : {}),
+        ...(parameters && Object.keys(parameters).length ? { parameters } : {}),
+      }),
     }).catch(() => {});
     dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
     return newSessionId;
-  }, [agentsUrl, agentId, dispatch]);
+  }, [agentsUrl, agentId, dispatch, parameters]);
 
   // Abandons the current interactive ("Run to here") session -- the next
   // "Run to here" click mints a brand new session_id/thread_id instead of
@@ -2574,9 +2578,13 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
   );
 }
 
-function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions, parametersOpen, onOpenParameters, onCloseParameters }) {
   const persistRef = useRef(onPersist);
-  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession } = useRoutineRunPolling(agent.id);
+  // Values the user fills in for the routine's declared input_schema.properties
+  // (see RoutineParametersPanel) -- session-local only, never persisted to the
+  // graph document; startRun sends the current snapshot with every POST.
+  const [parameterValues, setParameterValues] = useState({});
+  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession } = useRoutineRunPolling(agent.id, parameterValues);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3242,6 +3250,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     () => incompleteNodes(nodes).length + incompleteLoopEdges(edges).length,
     [nodes, edges],
   );
+  // Declared input_schema.required names with no (or blank) value filled in
+  // yet -- gates the Run button the same way `incomplete` gates it for node
+  // config, so a routine that needs parameters can't be run silently empty.
+  const missingRequiredParams = useMemo(
+    () => (meta.input_schema?.required || []).filter((name) => {
+      const value = parameterValues[name];
+      return value === undefined || value === null || value === '';
+    }),
+    [meta.input_schema, parameterValues],
+  );
   const lastSavedRef = useRef(null);
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
@@ -3343,10 +3361,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                 <DetailHeaderAction
                   icon={<PlayActionIcon />}
                   label="Run"
-                  tooltip={isServerConfirmed ? 'Run routine' : 'Waiting for save to be confirmed…'}
+                  tooltip={
+                    !isServerConfirmed ? 'Waiting for save to be confirmed…'
+                      : missingRequiredParams.length > 0 ? `Fill in ${missingRequiredParams.length} required parameter${missingRequiredParams.length === 1 ? '' : 's'} first`
+                      : 'Run routine'
+                  }
                   ariaLabel="Run routine"
                   onClick={() => { startRun(); onRun(); }}
-                  disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
+                  disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
                 {onDelete ? (
                   <DetailHeaderAction
@@ -3431,8 +3453,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
           canRestore={Boolean(viewingRevision)}
           onRequestRestore={() => setRestoreConfirmOpen(true)}
         />
+      ) : parametersOpen ? (
+        <RoutineParametersPanel
+          key={agent.id}
+          inputSchema={meta.input_schema}
+          values={parameterValues}
+          onChange={setParameterValues}
+          onClose={onCloseParameters}
+        />
       ) : (
-        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); }} />
+        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); if (id === 'parameters') onOpenParameters(); }} />
       )}
       {restoreConfirmOpen ? (
         <PopupModal
@@ -3471,6 +3501,7 @@ const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
   { id: 'runs', label: 'Runs', title: 'Routine run history' },
   { id: 'revisions', label: 'Revisions', title: 'Routine revision history' },
+  { id: 'parameters', label: 'Params', title: 'Routine parameters' },
 ];
 
 function GraphSideDock({ onSelect }) {
@@ -3493,7 +3524,7 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions, parametersOpen, onOpenParameters, onCloseParameters }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -3512,6 +3543,9 @@ export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, 
       revisionsOpen={revisionsOpen}
       onOpenRevisions={onOpenRevisions}
       onCloseRevisions={onCloseRevisions}
+      parametersOpen={parametersOpen}
+      onOpenParameters={onOpenParameters}
+      onCloseParameters={onCloseParameters}
     />
   );
 }
@@ -3705,6 +3739,121 @@ function RoutineRunsPanel({ agentId, onClose }) {
           </li>
         ))}
       </ul>
+    </aside>
+  );
+}
+
+// Values the user fills in for the routine's declared input_schema.properties
+// before hitting Run -- session-local (GraphCanvas's parameterValues state),
+// never persisted to the graph document. The schema itself (properties/
+// required) is authored the same way node-level response_schema is: via the
+// JSON editor, not a bespoke properties-builder UI here -- this panel only
+// renders what's already declared and collects values for it.
+function parameterControlValue(value) {
+  return value === undefined || value === null ? '' : value;
+}
+
+function ParameterControl({ name, def, value, onChange }) {
+  if (Array.isArray(def?.enum) && def.enum.length) {
+    return (
+      <Select
+        value={value === undefined ? '' : String(value)}
+        onChange={(next) => onChange(next === '' ? undefined : next)}
+        options={def.enum.map((option) => ({ value: String(option), label: String(option) }))}
+        placeholder="Select…"
+        ariaLabel={name}
+        className="agents-graph-parameters__input"
+      />
+    );
+  }
+  if (def?.type === 'boolean') {
+    return (
+      <input
+        type="checkbox"
+        className="agents-graph-parameters__checkbox"
+        checked={value === true}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    );
+  }
+  if (def?.type === 'number' || def?.type === 'integer') {
+    return (
+      <input
+        type="number"
+        className="agents-graph-parameters__input"
+        value={parameterControlValue(value)}
+        step={def.type === 'integer' ? 1 : 'any'}
+        onChange={(event) => onChange(event.target.value === '' ? undefined : Number(event.target.value))}
+      />
+    );
+  }
+  return (
+    <input
+      type="text"
+      className="agents-graph-parameters__input"
+      value={parameterControlValue(value)}
+      placeholder={def?.type ? `(${def.type})` : undefined}
+      onChange={(event) => onChange(event.target.value)}
+    />
+  );
+}
+
+function RoutineParametersPanel({ inputSchema, values, onChange, onClose }) {
+  const properties = inputSchema?.properties || {};
+  const required = new Set(inputSchema?.required || []);
+  const names = Object.keys(properties);
+
+  const setValue = (name, raw) => {
+    onChange((current) => {
+      if (raw === undefined || raw === '') {
+        if (!(name in (current || {}))) return current;
+        const next = { ...current };
+        delete next[name];
+        return next;
+      }
+      return { ...current, [name]: raw };
+    });
+  };
+
+  return (
+    <aside className="agents-graph-editor agents-graph-parameters">
+      <button
+        type="button"
+        className="agents-graph-editor__collapse"
+        onClick={onClose}
+        title="Collapse"
+        aria-label="Collapse parameters"
+      >
+        <ChevronRightSmall />
+      </button>
+      <header className="agents-graph-editor__head">
+        <h2>Parameters</h2>
+        {names.length ? (
+          <button type="button" className="repo-btn repo-btn--ghost" onClick={() => onChange({})}>Clear</button>
+        ) : null}
+      </header>
+      {names.length === 0 ? (
+        <p className="agents-graph-parameters__empty">
+          This routine has no declared input_schema. Add one via the JSON editor -- a JSON Schema object with `properties` (and optionally `required`) -- to collect values here before Run.
+        </p>
+      ) : (
+        <div className="agents-graph-parameters__list">
+          {names.map((name) => {
+            const def = properties[name] || {};
+            const isRequired = required.has(name);
+            return (
+              <label key={name} className={`agents-graph-node__field${isRequired ? ' agents-graph-node__field--required' : ''}`}>
+                <span className="agents-graph-node__field-label">
+                  {name}
+                  {isRequired ? <span className="agents-graph-node__required" title="Required to run this routine">Required</span> : null}
+                </span>
+                {def.description ? <span className="agents-graph-parameters__hint">{def.description}</span> : null}
+                <ParameterControl name={name} def={def} value={values?.[name]} onChange={(next) => setValue(name, next)} />
+              </label>
+            );
+          })}
+        </div>
+      )}
     </aside>
   );
 }

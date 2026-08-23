@@ -333,6 +333,7 @@ export function AgentWorkspace({ page }) {
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
   const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
   const [routineRevisionsOpen, setRoutineRevisionsOpen] = useState(false);
+  const [routineParametersOpen, setRoutineParametersOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState('');
@@ -552,6 +553,10 @@ export function AgentWorkspace({ page }) {
       edges: parsed.edges,
       status: parsed.status,
       summary: parsed.summary,
+      settings: parsed.settings,
+      input_schema: parsed.input_schema,
+      output_schema: parsed.output_schema,
+      $defs: parsed.$defs,
     })).unwrap();
   }
 
@@ -773,7 +778,7 @@ export function AgentWorkspace({ page }) {
               {graphDetailPending ? (
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen || routineRevisionsOpen ? 'is-editing' : ''}`}>
+                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen || routineRevisionsOpen || routineParametersOpen ? 'is-editing' : ''}`}>
                   <AgentGraphTab
                     key={selectedAgent.id}
                     agent={selectedAgent}
@@ -784,14 +789,17 @@ export function AgentWorkspace({ page }) {
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
-                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); }}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); setRoutineParametersOpen(false); }}
                     onCloseJson={() => setGraphEditorOpen(false)}
                     runsOpen={routineRunsOpen}
-                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); setRoutineRevisionsOpen(false); }}
+                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); setRoutineRevisionsOpen(false); setRoutineParametersOpen(false); }}
                     onCloseRuns={() => setRoutineRunsOpen(false)}
                     revisionsOpen={routineRevisionsOpen}
-                    onOpenRevisions={() => { setRoutineRevisionsOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); }}
+                    onOpenRevisions={() => { setRoutineRevisionsOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); setRoutineParametersOpen(false); }}
                     onCloseRevisions={() => setRoutineRevisionsOpen(false)}
+                    parametersOpen={routineParametersOpen}
+                    onOpenParameters={() => { setRoutineParametersOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); }}
+                    onCloseParameters={() => setRoutineParametersOpen(false)}
                   />
                 </div>
               )}
