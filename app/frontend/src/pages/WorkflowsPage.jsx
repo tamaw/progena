@@ -316,6 +316,7 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
     expanded: false,
     dataSize: sizes.data,
     settingsSize: sizes.settings,
+    bindingSource: 'previous_output',
     onToggleExpanded: callbacks.onToggleExpanded,
     onOpenOptions: callbacks.onOpenOptions,
     onResize: callbacks.onResize,
@@ -323,6 +324,7 @@ function buildNodeData(kind, node, callbacks, latestRun, sizes) {
   if (kind === 'kanban_trigger') {
     return {
       ...shared,
+      bindingSource: 'trigger',
       kind,
       title: 'Kanban trigger',
       eventType: node.eventType || WORKFLOW_EVENT_TYPES[0],
@@ -675,24 +677,23 @@ function nodePortProperties(schema, fallback = []) {
   return properties.length ? properties : fallback.map((name) => ({ name, definition: {}, required: false }));
 }
 
-function payloadMappingProperties(schema, excluded = []) {
-  const excludedNames = new Set(excluded);
-  return schemaProperties(schema)
-    .filter(({ name }) => !excludedNames.has(name))
-    .map((property) => ({
-      ...property,
-      path: `/payload/${property.name}`,
-    }));
-}
-
-function triggerPayloadMappingProperties(schema) {
+function payloadMappingProperties(schema) {
+  if (!schema || typeof schema !== 'object') return [];
   const mappings = new Map();
-  const variants = Array.isArray(schema?.oneOf) ? schema.oneOf : [schema];
+  const variants = Array.isArray(schema.oneOf) ? schema.oneOf : [schema];
   variants.forEach((variant) => {
-    const payload = variant?.properties?.payload;
-    if (payload?.type !== 'object' || !payload.properties) return;
-    Object.entries(payload.properties).forEach(([name, definition]) => {
-      if (['event_type', 'timestamp', 'source'].includes(name)) return;
+    const properties = variant?.properties;
+    if (variant?.type !== 'object' || !properties || typeof properties !== 'object') return;
+    const payload = properties.payload;
+    const isWorkflowEnvelope = (
+      payload?.type === 'object'
+      && payload.properties
+      && 'event_type' in properties
+      && 'timestamp' in properties
+    );
+    const mappedProperties = isWorkflowEnvelope ? payload.properties : properties;
+    Object.entries(mappedProperties).forEach(([name, definition]) => {
+      if (isWorkflowEnvelope && ['event_type', 'timestamp', 'source'].includes(name)) return;
       mappings.set(name, {
         name,
         path: `/payload/${name}`,
@@ -868,7 +869,7 @@ function PromptNode({ id, data, selected }) {
 
 
 function KanbanTriggerNode({ id, data, selected }) {
-  const outputProperties = triggerPayloadMappingProperties(data.outputSchema);
+  const outputProperties = payloadMappingProperties(data.outputSchema);
   return (
     <>
       <NodeResizer minWidth={280} minHeight={110} isVisible={selected} onResizeEnd={(_event, params) => data.onResize(id, { width: params.width, height: params.height })} />
@@ -1570,10 +1571,6 @@ function WorkflowsInner() {
     }
     const source = nodesRef.current.find((node) => node.id === connection.source);
     const sourceSchema = cloneValue(source?.data?.outputSchema);
-    if (!sourceSchema) {
-      show('error', 'Missing output contract', 'Connect a node only after it has an output schema.');
-      return;
-    }
     const target = nodesRef.current.find((node) => node.id === connection.target);
     const targetUsesBindings = ['prompt', ...CAPABILITY_NODE_KINDS, 'mcp'].includes(target?.type);
     const sourcePath = connection.sourceHandle?.replace(/^out:/, '') || '/';
@@ -1593,7 +1590,7 @@ function WorkflowsInner() {
             inputs: {
               ...(node.data?.inputs || {}),
               [inputName]: {
-                source: source?.type === 'kanban_trigger' ? 'trigger' : 'previous_output',
+                source: source?.data?.bindingSource || 'previous_output',
                 path: sourcePath,
               },
             },
@@ -2161,7 +2158,7 @@ function WorkflowsInner() {
 
 // This helper is exported for the focused workflow graph unit test.
 // eslint-disable-next-line react-refresh/only-export-components
-export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, payloadMappingProperties, schemaProperties, triggerPayloadMappingProperties };
+export { flowToWorkflow, workflowToFlow, NODE_MENU_CATEGORIES, payloadMappingProperties, schemaProperties };
 export default function WorkflowsPage() {
   return (
     <ReactFlowProvider>

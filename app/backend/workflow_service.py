@@ -440,13 +440,7 @@ def _workflow_input_value(
     """Return the typed payload crossing the current workflow edge."""
     if is_root:
         return dict(trigger_event)
-    payload = _pointer_value(previous_output, "/payload")
-    if payload is not None:
-        return payload
-    try:
-        return json.loads(previous_output)
-    except json.JSONDecodeError:
-        return previous_output
+    return _pointer_value(previous_output, "/payload")
 
 
 def _validate_node_input(node: Any, value: Any) -> None:
@@ -483,11 +477,9 @@ def evaluate_workflow_condition(
     trigger_payload = trigger_event.get("payload")
     context: dict[str, Any] = {
         "payload": (
-            previous_payload
-            if previous_payload is not None
-            else trigger_payload
-            if isinstance(trigger_payload, Mapping)
-            else {}
+            trigger_payload
+            if not previous_output and isinstance(trigger_payload, Mapping)
+            else previous_payload
         ),
         "event_type": str(trigger_event.get("event_type") or ""),
         "previous_output": previous_output,
