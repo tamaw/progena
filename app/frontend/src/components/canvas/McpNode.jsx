@@ -86,7 +86,7 @@ export default function McpNode({ id, data, selected }) {
             <div className="workflow-node-ports__column workflow-node-ports__column--inputs">
               {inputProperties.length ? inputProperties.map(([name, schema]) => (
                 <div className="workflow-node-port" key={name}>
-                  <Handle type="target" position={Position.Left} id={`in:${name}`} className="workflow-node-port__handle" />
+                  <Handle type="target" position={Position.Left} id={`in:${name}`} className="canvas-handle workflow-node-port__handle" />
                   <span>{name}</span>
                   <small>{schema.type || 'any'}</small>
                 </div>
@@ -97,7 +97,7 @@ export default function McpNode({ id, data, selected }) {
                 <div className="workflow-node-port" key={name}>
                   <small>{schema.type || 'any'}</small>
                   <span>{name}</span>
-                  <Handle type="source" position={Position.Right} id={`out:/${name}`} className="workflow-node-port__handle" />
+                  <Handle type="source" position={Position.Right} id={`out:/${name}`} className="canvas-handle workflow-node-port__handle" />
                 </div>
               ))}
             </div>
