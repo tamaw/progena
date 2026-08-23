@@ -17,14 +17,27 @@ import {
   fetchRoutineRevision,
   fetchRoutineRevisions,
   fetchRoutineRuns,
+  fetchRunState,
   selectAgentProfiles,
   selectAgentRoutineRevisionContent,
   selectAgentRoutineRevisions,
   selectAgentRoutineRuns,
+  selectAgentRunState,
 } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
+import {
+  DISCOVERY_POLL_INTERVAL_MS,
+  DISCOVERY_TIMEOUT_MS,
+  SETTLE_STABLE_POLLS,
+  STATE_POLL_INTERVAL_MS,
+  STATE_POLL_TIMEOUT_MS,
+  findRunBySessionId,
+  latestCompletionMs,
+  randomSessionId,
+  totalRunMetaEntries,
+} from '../../lib/routineRunPolling';
 // Reuse the shared canvas chrome (dock icons, JSON-editor panel/side-dock) so
 // this still shares CSS with the Workflows canvas where the visuals overlap.
 // The Routines graph itself is NOT a free canvas though (see rationale below),
@@ -1020,6 +1033,59 @@ function RoutingFooter({ id, kind, routerEdge }) {
   );
 }
 
+
+function formatSeconds(ms) {
+  const seconds = ms / 1000;
+  return `${seconds < 10 ? seconds.toFixed(1) : Math.round(seconds)}s`;
+}
+
+// Ticks once a second while a node is presumed active (see
+// deriveActiveNodeIds/estimatedActiveStartMs) -- isolated in its own
+// component so only this one card re-renders each tick, not the whole
+// canvas. This is a client-side estimate, not a real measured duration: it
+// starts from the latest known finish time across the whole run (or the
+// Run click itself, before anything has finished), since LangGraph's
+// checkpointer only ever records a node's real duration_ms AFTER it
+function RunningTimer({ startedAtMs }) {
+  const [elapsedMs, setElapsedMs] = useState(0);
+  useEffect(() => {
+    const tick = () => setElapsedMs(Math.max(0, Date.now() - startedAtMs));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [startedAtMs]);
+  return <>{formatSeconds(elapsedMs)}…</>;
+}
+
+// The sub-header under a step's title once run data exists for it -- a
+// finalized "Xs · N tok" once its own checkpoint has landed, or a ticking
+// "estimated live" timer while it's presumed still executing. Renders
+// nothing at all otherwise (see StepCard), not a placeholder row.
+function StepRunSummary({ nodeId }) {
+  const { runMeta, activeNodeIds, estimatedActiveStartMs } = useContext(GraphEditContext);
+  const entries = runMeta?.[nodeId];
+  const isActive = activeNodeIds?.has(nodeId);
+  if (!entries?.length) {
+    if (!isActive) return null;
+    return (
+      <div className="routine-step-card__run routine-step-card__run--active">
+        <span className="routine-step-card__run-dot" aria-hidden="true" />
+        <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
+      </div>
+    );
+  }
+  const last = entries[entries.length - 1];
+  const tokens = last.tokens?.total_tokens;
+  return (
+    <div
+      className="routine-step-card__run"
+      title={entries.length > 1 ? `${entries.length} executions this run` : undefined}
+    >
+      <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
+      {typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
+    </div>
+  );
+}
 // Compact map card. Editing lives in NodeInspector so the chain stays readable.
 function StepCard({ node }) {
   const { selectNode, selectedNodeId, edges, readOnly } = useContext(GraphEditContext);
@@ -1054,6 +1120,7 @@ function StepCard({ node }) {
         </span>
         {incomplete ? <span className="routine-step-card__incomplete" title="Required fields are empty">!</span> : null}
       </div>
+      <StepRunSummary nodeId={node.id} />
     </div>
   );
 }
@@ -1061,7 +1128,7 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
   const labelInputRef = useRef(null);
@@ -1085,6 +1152,13 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
   }, [isEditingLabel]);
 
   if (!node) return null;
+  const runEntries = runMeta?.[node.id];
+  const lastRunEntry = runEntries?.[runEntries.length - 1];
+  const outputKey = node.output_key || node.id;
+  const runOutputValue = runData?.[outputKey];
+  const runOutputText = runOutputValue === undefined
+    ? undefined
+    : (typeof runOutputValue === 'string' ? runOutputValue : JSON.stringify(runOutputValue, null, 2));
   const handleConfig = (nodeId, patch) => updateNode(nodeId, { config: { ...node.config, ...patch } });
   // A loop's own guard expression lives on its tail's edge (`loop_guard`),
   // not on this node's own config -- there's no separate node kind for it
@@ -1203,6 +1277,34 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
           replaceNodeConfig={(config) => updateNode(node.id, { config })}
         />
         <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
+        {runEntries?.length ? (
+          <div className="routine-node-inspector__run">
+            <div className="routine-node-inspector__run-head">
+              <span>Last run</span>
+              {runEntries.length > 1 ? (
+                <span className="routine-node-inspector__run-count">{runEntries.length} executions this run</span>
+              ) : null}
+            </div>
+            <dl className="routine-node-inspector__run-stats">
+              <div>
+                <dt>Duration</dt>
+                <dd>{formatSeconds(lastRunEntry.duration_ms)}</dd>
+              </div>
+              {lastRunEntry.tokens ? (
+                <div>
+                  <dt>Tokens</dt>
+                  <dd>{lastRunEntry.tokens.total_tokens} ({lastRunEntry.tokens.input_tokens} in / {lastRunEntry.tokens.output_tokens} out)</dd>
+                </div>
+              ) : null}
+            </dl>
+            {runOutputText !== undefined ? (
+              <div className="routine-node-inspector__run-output">
+                <span className="routine-node-inspector__run-output-label">Output written to &quot;{outputKey}&quot;</span>
+                <pre>{runOutputText}</pre>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       </MissingFieldsContext.Provider>
       <footer className="routine-node-inspector__foot">
@@ -1517,6 +1619,52 @@ export function predecessorsOf(nodeId, edges) {
   };
   visit(nodeId);
   return predecessors;
+}
+
+// One step forward: every node `nodeId`'s own outgoing flow edges could
+// hand off to next, router branches included. The reverse of
+// `predecessorsOf`'s single-hop core, factored out because
+// `deriveActiveNodeIds` below only ever needs one hop at a time (it starts
+// from a whole *set* of completed nodes, not a single id to walk outward
+// from).
+function nodeSuccessors(nodeId, edges) {
+  const targets = new Set();
+  (edges || []).filter(isFlowEdge).forEach((edge) => {
+    if (!edgeSourceIds(edge).includes(nodeId)) return;
+    if (edge.router) {
+      routerTargets(edge).forEach((target) => target && targets.add(target));
+    } else {
+      edgeTargetIds(edge).forEach((target) => target && targets.add(target));
+      if (edge.loop_guard?.on_false) targets.add(edge.loop_guard.on_false);
+    }
+  });
+  return targets;
+}
+
+// Best-effort "which node(s) are probably executing right now" purely from
+// static graph shape plus which node ids already have a run_meta entry --
+// see lib/routineRunPolling.js's module doc for why this has to be
+// *inferred* client-side rather than read off a real backend signal.
+// `completedNodeIds` empty means the run just started: only `entry` can be
+// active. A branch/fan-out can legitimately put more than one node id in
+// the returned set -- we genuinely don't know which branch fired yet, and
+// ticking every candidate is more honest than guessing one. A node already
+// in `completedNodeIds` is never re-offered as active even if a loop will
+// run it again -- this is a known, documented limitation (see
+// AgentGraph.jsx's useRoutineRunPolling), not a soundness claim.
+// eslint-disable-next-line react-refresh/only-export-components
+export function deriveActiveNodeIds(nodes, edges, entry, completedNodeIds) {
+  const nodeIds = new Set((nodes || []).map((node) => node.id));
+  if (!entry || !nodeIds.has(entry)) return new Set();
+  if (!completedNodeIds || completedNodeIds.size === 0) return new Set([entry]);
+  const active = new Set();
+  completedNodeIds.forEach((id) => {
+    if (!nodeIds.has(id)) return;
+    nodeSuccessors(id, edges).forEach((targetId) => {
+      if (nodeIds.has(targetId) && !completedNodeIds.has(targetId)) active.add(targetId);
+    });
+  });
+  return active;
 }
 
 // The candidate state paths a node at `nodeId` could reference -- Expression
@@ -2166,8 +2314,113 @@ export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
 
+const EMPTY_RUN_STATE = { run_meta: {}, data: {}, found: false };
+
+// Drives the poll loop behind the routine canvas's live run feedback --
+// see lib/routineRunPolling.js's module doc for the two-phase discovery
+// design and why this has to poll rather than react to a push event.
+// `agentId` scopes everything: switching routines drops any in-flight poll
+// for the previous one immediately, so a stale sub-header never keeps
+// ticking for a routine the author has navigated away from.
+function useRoutineRunPolling(agentId) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const [sessionId, setSessionId] = useState(null);
+  const [threadId, setThreadId] = useState(null);
+  // idle -> discovering (found the run's thread_id yet?) -> running (live
+  // run_meta polling) -> settled (stopped polling, last state stays shown).
+  const [status, setStatus] = useState('idle');
+  const startedAtMsRef = useRef(null);
+  // Mirrors `startedAtMsRef` for render -- refs can't be read during render
+  // (React rule), so the value the hook actually returns to callers comes
+  // from this state instead; the ref stays for the effects' own timeout
+  // math above, where reading a ref is fine.
+  const [runStartedAtMs, setRunStartedAtMs] = useState(null);
+  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
+  const runState = useSelector((state) => (threadId ? selectAgentRunState(state, threadId) : undefined)) || EMPTY_RUN_STATE;
+
+  useEffect(() => {
+    setSessionId(null);
+    setThreadId(null);
+    setStatus('idle');
+  }, [agentId]);
+
+  // Phase 1: poll /runs, watch for the thread_id this session's Run click
+  // minted -- see findRunBySessionId.
+  useEffect(() => {
+    if (status !== 'discovering' || !sessionId) return undefined;
+    const found = findRunBySessionId(runs, sessionId);
+    if (found) {
+      setThreadId(found.thread_id);
+      setStatus('running');
+      return undefined;
+    }
+    if (Date.now() - startedAtMsRef.current > DISCOVERY_TIMEOUT_MS) {
+      setStatus('settled');
+      return undefined;
+    }
+    const timer = setTimeout(() => dispatch(fetchRoutineRuns({ agentsUrl, agentId })), DISCOVERY_POLL_INTERVAL_MS);
+    return () => clearTimeout(timer);
+    // Re-runs on every `runs` change too, so a fetch already in flight from
+    // the previous tick's dispatch gets checked the moment it lands instead
+    // of waiting for the next timer tick.
+  }, [status, sessionId, runs, agentsUrl, agentId, dispatch]);
+
+  // Phase 2: poll /run-state on the now-known thread_id; settle once the
+  // total executed-node count stops growing for SETTLE_STABLE_POLLS polls
+  // in a row (the only "is it done" signal available -- see module doc).
+  const stablePollsRef = useRef(0);
+  const lastTotalRef = useRef(-1);
+  useEffect(() => {
+    if (status !== 'running' || !threadId) return undefined;
+    const total = totalRunMetaEntries(runState.run_meta);
+    if (total === lastTotalRef.current) {
+      stablePollsRef.current += 1;
+    } else {
+      stablePollsRef.current = 0;
+      lastTotalRef.current = total;
+    }
+    if (stablePollsRef.current >= SETTLE_STABLE_POLLS && total > 0) {
+      setStatus('settled');
+      return undefined;
+    }
+    if (Date.now() - startedAtMsRef.current > STATE_POLL_TIMEOUT_MS) {
+      setStatus('settled');
+      return undefined;
+    }
+    const timer = setTimeout(() => dispatch(fetchRunState({ agentsUrl, agentId, threadId })), STATE_POLL_INTERVAL_MS);
+    return () => clearTimeout(timer);
+  }, [status, threadId, runState.run_meta, agentsUrl, agentId, dispatch]);
+
+  const startRun = useCallback(() => {
+    const newSessionId = randomSessionId();
+    stablePollsRef.current = 0;
+    lastTotalRef.current = -1;
+    startedAtMsRef.current = Date.now();
+    setRunStartedAtMs(startedAtMsRef.current);
+    setThreadId(null);
+    setSessionId(newSessionId);
+    setStatus('discovering');
+    dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
+    return newSessionId;
+  }, [agentsUrl, agentId, dispatch]);
+
+  return {
+    status,
+    runMeta: runState.run_meta,
+    runData: runState.data,
+    // Once nothing has completed yet, the best estimate for "when did the
+    // active node start" is the run's own click time; after that it's the
+    // latest known finish across every node (see latestCompletionMs).
+    estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? runStartedAtMs,
+    startRun,
+  };
+}
+
 function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions }) {
   const persistRef = useRef(onPersist);
+  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, startRun } = useRoutineRunPolling(agent.id);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -2771,6 +3024,21 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     setRestoreConfirmOpen(false);
   }, [viewingRevision]);
 
+  // Which node ids have at least one recorded execution this run, and --
+  // derived from that -- which node(s) are probably executing right now
+  // (see deriveActiveNodeIds). Recomputed off `runMeta` itself, not
+  // `runStatus`, so the sub-headers keep updating on every poll tick while
+  // `status` stays 'running'.
+  const completedNodeIds = useMemo(
+    () => new Set(Object.keys(runMeta || {}).filter((id) => (runMeta[id] || []).length > 0)),
+    [runMeta],
+  );
+  const activeNodeIds = useMemo(
+    () => (runStatus === 'running' || runStatus === 'discovering'
+      ? deriveActiveNodeIds(displayNodes, displayEdges, meta.entry, completedNodeIds)
+      : new Set()),
+    [runStatus, displayNodes, displayEdges, meta.entry, completedNodeIds],
+  );
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -2791,7 +3059,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     nodes: displayNodes,
     inputSchema: meta.input_schema,
     readOnly: isViewingRevision,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision]);
+    runMeta,
+    runData,
+    activeNodeIds,
+    estimatedActiveStartMs,
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -2907,7 +3179,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                   label="Run"
                   tooltip={isServerConfirmed ? 'Run routine' : 'Waiting for save to be confirmed…'}
                   ariaLabel="Run routine"
-                  onClick={() => onRun(workingGraph)}
+                  onClick={() => onRun(startRun())}
                   disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
                 />
                 {onDelete ? (

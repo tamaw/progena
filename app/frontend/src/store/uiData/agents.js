@@ -38,6 +38,11 @@ export const initialState = {
     // `<agentId>:<revisionId>` (see `fetchRoutineRevision` /
     // `agent.routine.revision.loaded`).
     revisionContentByKey: {},
+    // A run's live per-node timing/token/output state, polled while a run
+    // is in flight and cached by thread_id (see `fetchRunState` /
+    // `agent.routine.run_state.loaded`, and lib/routineRunPolling.js which
+    // drives the poll loop).
+    runStateByThreadId: {},
   },
 };
 
@@ -125,6 +130,11 @@ export const fetchRoutineRevision = createAcknowledgedThunk('uiData/fetchRoutine
   { requestId },
 ));
 
+export const fetchRunState = createAcknowledgedThunk('uiData/fetchRunState', ({ agentsUrl, agentId, threadId }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/run-state?thread_id=${encodeURIComponent(threadId)}`,
+  { requestId },
+));
+
 export const updateAgentSkillContent = createAcknowledgedThunk('uiData/updateAgentSkillContent', ({ agentsUrl, skillPath, content }, { requestId }) => requestAcknowledged(
   `${agentsUrl}/skills?path=${encodeURIComponent(skillPath)}`,
   {
@@ -195,6 +205,11 @@ export const eventHandlers = {
       state.agents.revisionContentByKey[`${payload.agent_id}:${payload.revision_id}`] = payload.graph;
     }
   },
+  'agent.routine.run_state.loaded': (state, payload) => {
+    if (typeof payload?.thread_id === 'string' && payload.thread_id) {
+      state.agents.runStateByThreadId[payload.thread_id] = payload;
+    }
+  },
 };
 
 export function buildExtraReducers(builder) {
@@ -222,3 +237,4 @@ export const selectAgentSkillContent = (state, skillPath) => state.uiData.agents
 export const selectAgentRoutineRuns = (state, agentId) => state.uiData.agents.runsByAgentId[agentId];
 export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agents.revisionsByAgentId[agentId];
 export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];
+export const selectAgentRunState = (state, threadId) => (threadId ? state.uiData.agents.runStateByThreadId[threadId] : undefined);
