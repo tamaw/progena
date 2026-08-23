@@ -1568,16 +1568,17 @@
 
 .workflow-node-ports {
   display: grid;
-  gap: 12px;
-  grid-template-columns: 1fr 1fr;
-  min-height: 56px;
-  padding: 8px 0;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-height: 84px;
+  padding: 12px 18px 14px;
 }
 
 .workflow-node-ports__column {
-  display: grid;
   align-content: start;
-  gap: 5px;
+  display: grid;
+  gap: 4px;
+  grid-auto-rows: 24px;
 }
 
 .workflow-node-ports__column--outputs {
@@ -1586,21 +1587,29 @@
 
 .workflow-node-port {
   align-items: center;
+  color: var(--color-text);
   display: flex;
-  font-size: 0.78rem;
-  gap: 6px;
-  min-height: 18px;
+  font-size: 0.82rem;
+  gap: 7px;
+  line-height: 1;
+  min-height: 24px;
   position: relative;
 }
 
 .workflow-node-ports__column--outputs .workflow-node-port {
+  font-weight: 600;
   justify-content: flex-end;
 }
 
 .workflow-node-port small,
 .workflow-node-ports__empty {
   color: var(--color-text-muted);
-  font-size: 0.68rem;
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+
+.workflow-node-ports__empty {
+  align-self: center;
 }
 
 .workflow-node-options-backdrop {
