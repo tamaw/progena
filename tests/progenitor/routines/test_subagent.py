@@ -13,6 +13,7 @@ from app.progenitor.agent.state import ProgenitorAgentState
 from app.progenitor.routines.subagent import (
     ROUTINE_REVISIONS_STATE_KEY,
     create_routine_subagent,
+    resume_routine_thread,
 )
 
 ROUTINE_ID = "routine-demo"
@@ -73,6 +74,10 @@ class _FakeStateManager:
     def __init__(self, graph_doc: dict[str, Any] | None = None):
         self._graph_doc = graph_doc
         self.calls = 0
+
+    async def get_routine_graph(self, routine_id: str) -> dict[str, Any] | None:
+        self.calls += 1
+        return self._graph_doc
 
 
 def _spec(reader, state_manager=None, model=None, agent_registry=None):
@@ -222,3 +227,101 @@ async def test_through_deep_agent():
 
     assert any(isinstance(m, ToolMessage) for m in result["messages"])
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-a"}
+
+
+def _graph_doc_with_human() -> dict[str, Any]:
+    """A single human node that asks a question and echoes the answer back."""
+    return {
+        "id": ROUTINE_ID,
+        "name": "Routine Demo",
+        "description": "test routine",
+        "version": "2.0.0",
+        "entry": "ask",
+        "nodes": [
+            {
+                "id": "ask",
+                "kind": "human",
+                "output_key": "answer",
+                "config": {"message": "What is your favorite color?"},
+            }
+        ],
+        "edges": [],
+    }
+
+
+@pytest.mark.asyncio
+async def test_interrupt_surfaces_question_and_thread_id_instead_of_swallowing_it():
+    from langgraph.checkpoint.memory import MemorySaver
+
+    reader = _FakeRevisionReader({"rev-a": _graph_doc_with_human()}, latest="rev-a")
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=_EchoModel(),
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=MemorySaver(),
+    )
+    result = await spec["runnable"].ainvoke({"messages": [HumanMessage(content="go")]})
+
+    content = result["messages"][-1].content
+    assert "waiting for a human answer" in content
+    assert "What is your favorite color?" in content
+    assert f"routine:{ROUTINE_ID}:rev-a:" in content
+    # Not treated as a completed run -- no revision pin recorded for an
+    # interrupted (not yet finished) invocation.
+    assert ROUTINE_REVISIONS_STATE_KEY not in result
+
+
+@pytest.mark.asyncio
+async def test_resume_routine_thread_completes_after_interrupt():
+    import re
+
+    from langgraph.checkpoint.memory import MemorySaver
+
+    checkpointer = MemorySaver()
+    reader = _FakeRevisionReader({"rev-a": _graph_doc_with_human()}, latest="rev-a")
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=_EchoModel(),
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=checkpointer,
+    )
+    first = await spec["runnable"].ainvoke({"messages": [HumanMessage(content="go")]})
+    match = re.search(r"thread_id=('routine:[^']+')", first["messages"][-1].content)
+    assert match is not None
+    thread_id = match.group(1).strip("'")
+
+    resumed = await resume_routine_thread(
+        thread_id=thread_id,
+        answer="blue",
+        model=_EchoModel(),
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=checkpointer,
+    )
+
+    assert resumed["status"] == "completed"
+    assert resumed["thread_id"] == thread_id
+
+
+@pytest.mark.asyncio
+async def test_resume_routine_thread_rejects_malformed_thread_id():
+    with pytest.raises(ValueError, match="not a routine run thread_id"):
+        await resume_routine_thread(
+            thread_id="not-a-routine-thread",
+            answer="blue",
+            model=_EchoModel(),
+            state_manager=_FakeStateManager(),
+            revision_reader=_FakeRevisionReader({}),
+            agent_registry={},
+            routine_registry={},
+        )

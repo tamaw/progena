@@ -20,6 +20,7 @@ from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.runnables import RunnableLambda
+from langgraph.types import Command
 
 from .factory import compile_routine_graph
 from .graph import validate_routine_graph_payload
@@ -110,9 +111,102 @@ def create_routine_subagent(
         except (ValueError, KeyError, NotImplementedError) as exc:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' failed: {exc}")]}
 
+        interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
+        if interrupts:
+            # A human node paused execution -- it's checkpointed and
+            # resumable under run_thread_id, not a failure. Surface the
+            # question plus the exact thread_id so the caller can answer it
+            # via the resume_routine tool (see resume_routine_thread below);
+            # silently returning empty here would look like a no-op success.
+            payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+            question = payload.get("message") if isinstance(payload, dict) else str(payload)
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            f"Routine '{routine_id}' is waiting for a human answer: {question}\n"
+                            f"Resume it with resume_routine(thread_id={run_thread_id!r}, answer=<your answer>)."
+                        )
+                    )
+                ]
+            }
+
         update: dict[str, Any] = {"messages": result.get("messages") or []}
         if revision_id is not None:
             update[ROUTINE_REVISIONS_STATE_KEY] = {routine_id: revision_id}
         return update
 
     return {"name": routine_id, "description": description, "runnable": RunnableLambda(_run)}
+
+
+def _parse_routine_thread_id(thread_id: str) -> tuple[str, str | None]:
+    """Split a ``routine:<routine_id>:<revision_id>:<uuid>`` thread_id.
+
+    Returns ``(routine_id, revision_id)``; ``revision_id`` is ``None`` when
+    the run was against the live (unpinned) document (see the ``'unpinned'``
+    sentinel written by ``create_routine_subagent``'s ``_run``).
+    """
+    parts = thread_id.split(":")
+    if len(parts) != 4 or parts[0] != "routine":
+        raise ValueError(f"not a routine run thread_id: {thread_id!r}")
+    _, routine_id, revision_id, _run_uuid = parts
+    return routine_id, (None if revision_id == "unpinned" else revision_id)
+
+
+async def resume_routine_thread(
+    *,
+    thread_id: str,
+    answer: Any,
+    model: BaseChatModel,
+    state_manager: Any,
+    revision_reader: RoutineRevisionReader,
+    agent_registry: dict[str, Any],
+    routine_registry: dict[str, Any],
+    tool_registry: Any = None,
+    checkpointer: Any | None = None,
+) -> dict[str, Any]:
+    """Resume a routine run paused at a human node, given its exact thread_id.
+
+    Shared primitive: this is also what the interactive node-level run/edit
+    feature resumes through, since both cases are "continue this checkpointed
+    thread with a `Command(resume=...)`" -- only how the answer/edit gets
+    produced differs. Recompiles the routine fresh (resume is rare; no need
+    to share create_routine_subagent's per-invocation compile cache).
+    """
+    routine_id, revision_id = _parse_routine_thread_id(thread_id)
+    graph_doc: dict[str, Any] | None = None
+    if revision_id is not None:
+        graph_doc = await revision_reader.fetch(routine_id, revision_id)
+    if graph_doc is None:
+        graph_doc = await state_manager.get_routine_graph(routine_id)
+    if graph_doc is None:
+        raise ValueError(f"routine {routine_id!r} has no stored graph to resume against")
+
+    graph = validate_routine_graph_payload(graph_doc)
+    compiled = compile_routine_graph(
+        graph,
+        model=model,
+        agent_registry=agent_registry,
+        routine_registry=routine_registry,
+        tool_registry=tool_registry,
+        base_system_prompt=None,
+        checkpointer=checkpointer,
+    )
+    result = await compiled.ainvoke(
+        Command(resume=answer),
+        config={"configurable": {"thread_id": thread_id}},
+    )
+    interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
+    if interrupts:
+        payload = interrupts[0].value if hasattr(interrupts[0], "value") else interrupts[0]
+        question = payload.get("message") if isinstance(payload, dict) else str(payload)
+        return {
+            "status": "interrupted",
+            "thread_id": thread_id,
+            "question": question,
+        }
+    return {
+        "status": "completed",
+        "thread_id": thread_id,
+        "messages": [str(getattr(m, "content", m)) for m in (result.get("messages") or [])],
+    }
