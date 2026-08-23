@@ -157,11 +157,11 @@ export default function McpNode({ id, data, selected }) {
           <button
             type="button"
             className="node-expand-btn nodrag"
-            onClick={() => data.onToggleExpanded(id)}
-            title={expanded ? 'Show data' : 'Show settings'}
-            aria-label={expanded ? 'Show data' : 'Show settings'}
+            onClick={() => data.onOpenOptions(id)}
+            title="Node options"
+            aria-label="Node options"
           >
-            {expanded ? '▲' : '▼'}
+            ⋯
           </button>
           {data.canDelete ? (
             <button

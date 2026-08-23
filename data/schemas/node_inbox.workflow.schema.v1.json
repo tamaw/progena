@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "node_inbox.workflow.schema.v1.json",
+  "title": "Workflow Inbox Node",
+  "description": "The 'inbox' node configuration accepted in a v1 workflow graph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "kind",
+    "title",
+    "prompt",
+    "agent_name",
+    "inbox_message_id"
+  ],
+  "properties": {
+    "kind": {
+      "const": "inbox"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "prompt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "agent_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "inbox_message_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "references": {
+      "$ref": "#/$defs/references"
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/binding"
+      }
+    },
+    "input_schema": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "output_schema": {
+      "type": [
+        "object",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "edgeEndpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "node",
+        "port"
+      ],
+      "properties": {
+        "node": {
+          "type": "string",
+          "minLength": 1
+        },
+        "port": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "literal",
+            "trigger",
+            "previous_output",
+            "reference"
+          ]
+        },
+        "value": {},
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reference": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "skill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "name"
+      ],
+      "properties": {
+        "source": {
+          "enum": [
+            "native",
+            "plugin"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "segment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "references": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "prompt"
+          }
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "agent"
+          }
+        },
+        "repository_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "repository"
+          }
+        },
+        "knowledge_base_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "knowledge_base"
+          }
+        },
+        "kanban_card_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inbox_message_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "inbox_message"
+          }
+        },
+        "mcp_tool": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "required": [
+            "server_id",
+            "tool_name"
+          ],
+          "properties": {
+            "server_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tool_name": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "routine": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "x-ui": {
+            "control": "reference-picker",
+            "source": "routine"
+          },
+          "additionalProperties": false,
+          "required": [
+            "id",
+            "revision"
+          ],
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "skills": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/skill"
+          }
+        }
+      }
+    }
+  }
+}

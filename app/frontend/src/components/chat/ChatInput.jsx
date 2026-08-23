@@ -68,6 +68,7 @@ const ChatInput = forwardRef(function ChatInput({
   const fileInputRef = useRef(null);
   const agentProfiles = useSelector(selectAgentProfiles);
   const agentProfilesState = useSelector(selectAgentProfilesState);
+  const agentProfilesRequestUrlRef = useRef(null);
   const slashQuery = enableSlashCommands ? getSlashQuery(message) : null;
   const mentionContext = getAgentMentionContext(message, selectionStart);
   const filteredSlashCommands = useMemo(() => {
@@ -114,11 +115,24 @@ const ChatInput = forwardRef(function ChatInput({
   }, [autoFocus, disabled, focusToken, isGenerating]);
 
   useEffect(() => {
-    if (agentProfilesState.loaded || agentProfilesState.loading) {
+    const agentsUrl = getApiUrl('agentProfiles');
+    if (
+      agentProfilesState.loaded
+      || agentProfilesState.loading
+      || agentProfilesState.error
+      || agentProfilesRequestUrlRef.current === agentsUrl
+    ) {
       return;
     }
-    dispatch(fetchAgentProfiles({ agentsUrl: getApiUrl('agentProfiles') }));
-  }, [agentProfilesState.loaded, agentProfilesState.loading, dispatch, getApiUrl]);
+    agentProfilesRequestUrlRef.current = agentsUrl;
+    dispatch(fetchAgentProfiles({ agentsUrl }));
+  }, [
+    agentProfilesState.error,
+    agentProfilesState.loaded,
+    agentProfilesState.loading,
+    dispatch,
+    getApiUrl,
+  ]);
 
   const executeSlashCommand = (command) => {
     if (command.requiresArguments) {

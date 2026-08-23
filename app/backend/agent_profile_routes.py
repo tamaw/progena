@@ -189,11 +189,12 @@ def _nonempty_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
-    """Backend-owned subagents (editable) + A2A and ACP agents read through from
-    Progenitor's registry document (live status + card, no backend rows)."""
+def build_agent_profiles(store: AgentStore | None) -> AgentProfilesResponse:
+    """Build profiles from optional editable rows and the runtime registry."""
     records = (
-        list(store.list_agents()) + a2a_profiles_from_registry() + acp_profiles_from_registry()
+        (list(store.list_agents()) if store is not None else [])
+        + a2a_profiles_from_registry()
+        + acp_profiles_from_registry()
     )
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
@@ -260,8 +261,7 @@ def create_agent_profile_router(
         view (status + agent card) without the backend fetching cards itself.
         """
         request_id = _request_correlation_id(request, x_request_id)
-        store = _require_store()
-        response = await asyncio.to_thread(build_agent_profiles, store)
+        response = await asyncio.to_thread(build_agent_profiles, get_agent_store())
         broadcast_ui_event("agents.snapshot", response.model_dump(), request_id=request_id)
         return acknowledgement_response(request_id, ["agents.snapshot"])
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { flowToWorkflow, workflowToFlow } from './WorkflowsPage';
+import { NODE_MENU_CATEGORIES, flowToWorkflow, schemaProperties, workflowToFlow } from './WorkflowsPage';
 
 describe('workflowToFlow', () => {
   it('maps default ports to React Flow implicit handles', () => {
@@ -138,6 +138,28 @@ describe('workflowToFlow', () => {
     expect(persisted.graph.nodes.prompt_1).not.toHaveProperty('prompt_path');
   });
 
+  it('renders a completed node as done even when the run retains its last node id', () => {
+    const flow = workflowToFlow({
+      graph: {
+        nodes: {
+          prompt_1: { kind: 'prompt', title: 'Notify', prompt: 'Notify the user.', agent_name: 'progenitor' },
+        },
+        edges: [],
+      },
+      ui: { nodes: {} },
+      trigger: { event_type: 'kanban.card.moved' },
+    }, {}, {
+      status: 'completed',
+      current_node_id: 'prompt_1',
+      completed_node_ids: ['prompt_1'],
+    });
+
+    expect(flow.nodes.find((node) => node.id === 'prompt_1')?.data).toMatchObject({
+      currentNodeId: null,
+      completedNodeIds: ['prompt_1'],
+    });
+  });
+
   it('renders the persisted Kanban trigger as a non-prompt canvas node', () => {
     const workflow = {
       trigger: {
@@ -177,5 +199,49 @@ describe('workflowToFlow', () => {
     expect(persisted.graph.nodes).toMatchObject(workflow.graph.nodes);
     expect(persisted.graph.edges).toEqual([]);
     expect(persisted.trigger).toEqual(workflow.trigger);
+  });
+});
+
+describe('workflow node menu', () => {
+  it('groups every addable dock node and exposes triggers and agents', () => {
+    const categories = Object.fromEntries(NODE_MENU_CATEGORIES.map((category) => [category.id, category]));
+    const addableKinds = NODE_MENU_CATEGORIES.flatMap((category) => category.items)
+      .filter((item) => !item.disabled)
+      .map((item) => item.kind);
+
+    expect(categories.triggers.items).toContainEqual(expect.objectContaining({ label: 'Kanban event', disabled: true }));
+    expect(categories.agents.items.map((item) => item.kind)).toEqual(['prompt', 'call-agent']);
+    expect(addableKinds).toEqual(expect.arrayContaining([
+      'prompt', 'call-agent', 'knowledge-search', 'repository-task', 'kanban-task',
+      'mcp-tool', 'ask-user', 'inbox-message', 'routine', 'condition', 'approval',
+    ]));
+  });
+});
+
+describe('node interface properties', () => {
+  it('merges object properties from alternative schema branches', () => {
+    expect(schemaProperties({
+      oneOf: [
+        {
+          type: 'object',
+          required: ['event_type'],
+          properties: {
+            event_type: { const: 'kanban.card.created' },
+            payload: { type: 'object' },
+          },
+        },
+        {
+          type: 'object',
+          properties: {
+            event_type: { const: 'kanban.card.created' },
+            source: { type: 'string' },
+          },
+        },
+      ],
+    })).toEqual([
+      expect.objectContaining({ name: 'event_type', required: true }),
+      expect.objectContaining({ name: 'payload', required: false }),
+      expect.objectContaining({ name: 'source', required: false }),
+    ]);
   });
 });
