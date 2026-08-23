@@ -19,7 +19,7 @@ from typing import Any
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
-from langchain_core.runnables import RunnableLambda
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.types import Command
 
 from .factory import compile_routine_graph
@@ -103,10 +103,37 @@ def create_routine_subagent(
             # against latest. Nested `agent`/`routine` node calls inside this
             # run are NOT given their own prefix -- they're steps of this run,
             # not separate runs.
-            run_thread_id = f"routine:{routine_id}:{revision_id or 'unpinned'}:{uuid.uuid4().hex}"
+            #
+            # An interactive (node-level step/edit) caller instead passes a
+            # stable `_interactive_session_id` via state, kept constant across
+            # repeated clicks within one editor session so each click resumes
+            # the SAME thread's checkpoint history rather than starting over.
+            # It only stays valid within one revision, by design: revision_id
+            # is baked into the thread_id, so a save (new revision) naturally
+            # produces a new thread with no history -- carrying prior state
+            # forward across a revision change is the checkpoint-copy-forward
+            # seeding this primitive does not yet do (tracked separately).
+            session_id = state.get("_interactive_session_id")
+            target_node = state.get("_interactive_target_node")
+            run_thread_id = (
+                f"routine:{routine_id}:{revision_id or 'unpinned'}:{session_id}"
+                if session_id
+                else f"routine:{routine_id}:{revision_id or 'unpinned'}:{uuid.uuid4().hex}"
+            )
+            run_config: RunnableConfig = {"configurable": {"thread_id": run_thread_id}}
+            # A stable thread already carrying checkpoint history must be
+            # resumed (input=None) rather than re-invoked with fresh input --
+            # LangGraph treats non-None input as a brand-new run regardless
+            # of existing history, which would silently discard everything
+            # already checkpointed under this thread_id.
+            resume_existing = False
+            if session_id:
+                existing_state = await compiled.aget_state(run_config)
+                resume_existing = bool(existing_state and existing_state.values)
             result = await compiled.ainvoke(
-                {"messages": state.get("messages") or []},
-                config={"configurable": {"thread_id": run_thread_id}},
+                None if resume_existing else {"messages": state.get("messages") or []},
+                config=run_config,
+                interrupt_before=[target_node] if target_node else None,
             )
         except (ValueError, KeyError, NotImplementedError) as exc:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' failed: {exc}")]}

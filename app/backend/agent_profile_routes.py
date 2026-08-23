@@ -128,6 +128,16 @@ class AgentGraphUpdateRequest(BaseModel):
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
+class RunRoutineRequest(BaseModel):
+    # Both optional: omitted -> a normal, complete, one-shot run (what the
+    # plain Run button sends). Present -> a step-to-node run against a
+    # stable per-editor-session thread (see routine_run_node/subagent.py's
+    # _run) -- session_id must stay identical across repeated calls within
+    # one revision to resume rather than restart.
+    session_id: str | None = None
+    target_node: str | None = None
+
+
 # Allowed node "kind" values for the editable routine graph. These are executable
 # step kinds, compiled into a LangGraph runnable by
 # ``app.progenitor.routines.factory``. Re-exported here for callers that imported
@@ -491,6 +501,7 @@ def create_agent_profile_router(
     async def run_routine(
         agent_id: str,
         request: Request,
+        body: RunRoutineRequest = RunRoutineRequest(),
         x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     ):
         """Enqueue a real, deterministic execution of a routine graph.
@@ -519,11 +530,16 @@ def create_agent_profile_router(
         # left the real document empty and the runtime never saw the task).
         existing = doc_store.get_document(PROGENITOR_STATE_PREFIX, "background_tasks", [])
         tasks = list(existing.payload) if existing is not None else []
+        metadata: dict[str, Any] = {"kind": "routine_run", "routine_id": agent_id}
+        if body.session_id:
+            metadata["session_id"] = body.session_id
+        if body.target_node:
+            metadata["target_node"] = body.target_node
         tasks.append(
             {
                 "id": f"routine-run-{uuid.uuid4().hex}",
                 "content": f'Run the "{agent_id}" routine graph.',
-                "metadata": {"kind": "routine_run", "routine_id": agent_id},
+                "metadata": metadata,
                 "created_at": utcnow_isoformat(),
             }
         )

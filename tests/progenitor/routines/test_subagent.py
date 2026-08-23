@@ -325,3 +325,133 @@ async def test_resume_routine_thread_rejects_malformed_thread_id():
             agent_registry={},
             routine_registry={},
         )
+
+
+def _graph_doc_chain() -> dict[str, Any]:
+    """Three sequential prompt nodes, a -> b -> c, each echoing a distinct marker."""
+    return {
+        "id": ROUTINE_ID,
+        "name": "Routine Demo",
+        "description": "test routine",
+        "version": "2.0.0",
+        "entry": "a",
+        "nodes": [
+            {
+                "id": "a",
+                "kind": "prompt",
+                "output_key": "a",
+                "config": {"prompt_template": "step-a"},
+            },
+            {
+                "id": "b",
+                "kind": "prompt",
+                "output_key": "b",
+                "config": {"prompt_template": "step-b"},
+            },
+            {
+                "id": "c",
+                "kind": "prompt",
+                "output_key": "c",
+                "config": {"prompt_template": "step-c"},
+            },
+        ],
+        "edges": [
+            {"from": "a", "to": "b", "level": "normal"},
+            {"from": "b", "to": "c", "level": "normal"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_interactive_target_node_stops_before_it_runs():
+    from langgraph.checkpoint.memory import MemorySaver
+
+    model = _EchoModel()
+    reader = _FakeRevisionReader({"rev-a": _graph_doc_chain()}, latest="rev-a")
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=model,
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=MemorySaver(),
+    )
+    await spec["runnable"].ainvoke(
+        {
+            "messages": [HumanMessage(content="go")],
+            "_interactive_session_id": "sess-1",
+            "_interactive_target_node": "b",
+        }
+    )
+    # Only "a" ran -- "b"/"c" never invoked the model.
+    assert len(model.calls) == 1
+    assert model.calls[0][-1].content == "step-a"
+
+
+@pytest.mark.asyncio
+async def test_interactive_session_id_resumes_instead_of_restarting():
+    from langgraph.checkpoint.memory import MemorySaver
+
+    model = _EchoModel()
+    reader = _FakeRevisionReader({"rev-a": _graph_doc_chain()}, latest="rev-a")
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=model,
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=MemorySaver(),
+    )
+    await spec["runnable"].ainvoke(
+        {
+            "messages": [HumanMessage(content="go")],
+            "_interactive_session_id": "sess-1",
+            "_interactive_target_node": "b",
+        }
+    )
+    assert len(model.calls) == 1  # only "a" ran so far
+
+    result = await spec["runnable"].ainvoke(
+        {
+            "messages": [HumanMessage(content="go")],
+            "_interactive_session_id": "sess-1",
+        }
+    )
+    # "b" and "c" ran -- "a" was NOT re-invoked, proving this resumed the
+    # same checkpointed thread rather than starting a fresh run from input.
+    assert len(model.calls) == 3
+    assert model.calls[1][-1].content == "step-b"
+    assert model.calls[2][-1].content == "step-c"
+    assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-a"}
+
+
+@pytest.mark.asyncio
+async def test_interactive_session_id_is_reflected_in_thread_id():
+    from langgraph.checkpoint.memory import MemorySaver
+
+    reader = _FakeRevisionReader({"rev-a": _graph_doc_chain()}, latest="rev-a")
+    checkpointer = MemorySaver()
+    spec = create_routine_subagent(
+        routine_id=ROUTINE_ID,
+        description="test routine",
+        model=_EchoModel(),
+        state_manager=_FakeStateManager(),
+        revision_reader=reader,
+        agent_registry={},
+        routine_registry={},
+        checkpointer=checkpointer,
+    )
+    await spec["runnable"].ainvoke(
+        {"messages": [HumanMessage(content="go")], "_interactive_session_id": "sess-xyz"}
+    )
+    checkpoints = [
+        c
+        async for c in checkpointer.alist(
+            {"configurable": {"thread_id": f"routine:{ROUTINE_ID}:rev-a:sess-xyz"}}
+        )
+    ]
+    assert len(checkpoints) > 0
