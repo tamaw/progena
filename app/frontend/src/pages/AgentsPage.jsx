@@ -784,6 +784,7 @@ export function AgentWorkspace({ page }) {
                     key={selectedAgent.id}
                     agent={selectedAgent}
                     graph={selectedGraph}
+                    confirmedGraph={selectedGraph}
                     onPersist={handleSaveGraph}
                     onRun={handleRunRoutine}
                     runResult={runResult}
