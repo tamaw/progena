@@ -362,6 +362,11 @@
   height: 100%;
 }
 
+.workflow-graph-node,
+.workflow-graph-node .node-body {
+  overflow: visible;
+}
+
 .workflow-graph-node--prompt {
   --workflow-node-color: #58a6ff;
 }
@@ -1604,11 +1609,13 @@
 
 .workflow-node-port__handle {
   cursor: crosshair;
+  height: 14px !important;
   position: absolute !important;
+  width: 14px !important;
 }
 
-.workflow-node-ports__column--inputs .workflow-node-port__handle { left: -15px !important; }
-.workflow-node-ports__column--outputs .workflow-node-port__handle { right: -15px !important; }
+.workflow-node-ports__column--inputs .workflow-node-port__handle { left: 0 !important; }
+.workflow-node-ports__column--outputs .workflow-node-port__handle { right: 0 !important; }
 
 .workflow-node-port:hover .workflow-node-port__handle {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--workflow-node-color) 30%, transparent);
