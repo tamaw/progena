@@ -6899,6 +6899,34 @@ body,
   backdrop-filter: blur(10px);
 }
 
+/* This pill is pinned to the canvas's own top-left corner (left: 16px), and
+   the canvas surface it sits in (.routine-canvas) is overflow: hidden for
+   panning -- a centred data-tooltip bubble on Details/Run/Delete is wider
+   than its icon button and would spill left past the canvas edge, getting
+   silently clipped (invisible, not merely mis-stacked). Mirror the
+   .detail-header-action right-edge anchor (detail-header.css) but to the
+   left, so the bubble only ever grows rightward, into the canvas; the caret
+   stays centred under the icon. */
+.agents-graph-floating .detail-header-action[data-tooltip]::before {
+  transform: translate(-50%, -3px);
+}
+
+.agents-graph-floating .detail-header-action[data-tooltip]::after {
+  left: 0;
+  right: auto;
+  transform: translate(0, -3px);
+}
+
+.agents-graph-floating .detail-header-action[data-tooltip]:hover::before,
+.agents-graph-floating .detail-header-action[data-tooltip]:focus-visible::before {
+  transform: translate(-50%, 0);
+}
+
+.agents-graph-floating .detail-header-action[data-tooltip]:hover::after,
+.agents-graph-floating .detail-header-action[data-tooltip]:focus-visible::after {
+  transform: translate(0, 0);
+}
+
 /* Save/validation/run-result status -- split from the actions pill above
    (.agents-graph-floating) and anchored bottom-left instead of sharing its
    row. Kept the icon buttons from shifting horizontally every time this
