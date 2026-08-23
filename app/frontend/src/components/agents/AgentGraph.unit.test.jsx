@@ -806,7 +806,7 @@ describe('buildStatePathSuggestions', () => {
   ];
 
   it('always offers the seeded keys and declared routine inputs first', () => {
-    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, { host: 'target host' });
+    const suggestions = buildStatePathSuggestions('this_node', nodes, edges, { properties: { host: { type: 'string', description: 'target host' } } });
     expect(suggestions.map((s) => s.path).slice(0, 3)).toEqual(['request', 'context', 'host']);
   });
 

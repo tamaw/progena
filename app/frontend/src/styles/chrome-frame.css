@@ -6493,6 +6493,39 @@ body,
   font-size: 11.5px;
 }
 
+/* Routine Parameters panel -- shares .agents-graph-editor shell chrome with
+   JSON/Runs/Revisions. Same overflow lesson: scroll is scoped to
+   .agents-graph-parameters__list, never the outer <aside>. Reuses the
+   NodeInspector's .agents-graph-node__field/-label/__required classes for
+   labels (they carry no --node-color dependency), with its own input/hint
+   styling since it lives outside any .canvas-node. */
+.agents-graph-parameters__empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+}
+
+.agents-graph-parameters__list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+}
+
+.agents-graph-parameters__hint {
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.agents-graph-parameters__checkbox {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--color-accent);
+}
+
 /* Routine Revisions panel -- shares .agents-graph-editor shell chrome with
    JSON/Runs. Same overflow lesson as .agents-graph-runs__list: scroll is
    scoped to this inner list, never the outer <aside>, or it clips the
@@ -7044,7 +7077,8 @@ body,
 
 /* Step content inputs. */
 .agents-graph-node__prompt,
-.agents-graph-node__toolinput {
+.agents-graph-node__toolinput,
+.agents-graph-parameters__input {
   width: 100%;
   padding: 6px 8px;
   color: var(--color-text-secondary);
@@ -7074,6 +7108,14 @@ body,
   outline: none;
   border-color: color-mix(in oklab, var(--node-color) 55%, var(--color-border));
   box-shadow: 0 0 0 2px color-mix(in oklab, var(--node-color) 22%, transparent);
+}
+
+/* Not inside a .canvas-node, so no --node-color custom property to key off
+   -- use the plain accent color like every other non-canvas form control. */
+.agents-graph-parameters__input:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
 /* Expression field: a transparent <textarea> over a highlight.js <pre>, same
