@@ -362,6 +362,10 @@
   height: 100%;
 }
 
+.workflow-graph-node {
+  overflow: visible;
+}
+
 
 .workflow-graph-node--prompt {
   --workflow-node-color: #58a6ff;

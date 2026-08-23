@@ -7,6 +7,7 @@ import {
   selectMcpServerDetail,
 } from '../../store/uiDataSlice';
 import WorkflowNodeTitle from './WorkflowNodeTitle';
+import { ConfigureActionIcon } from '../layout/DetailHeader';
 
 
 export default function McpNode({ id, data, selected }) {
@@ -63,12 +64,12 @@ export default function McpNode({ id, data, selected }) {
           <span className={`node-status-badge workflow-graph-node__kind ${statusClass}`}>{statusLabel}</span>
           <button
             type="button"
-            className="node-expand-btn nodrag"
+            className="node-options-btn nodrag"
             onClick={() => data.onOpenOptions(id)}
-            title="Node options"
-            aria-label="Node options"
+            aria-label="Configure node"
+            data-tooltip="Configure node"
           >
-            ⋯
+            <ConfigureActionIcon />
           </button>
           {data.canDelete ? (
             <button

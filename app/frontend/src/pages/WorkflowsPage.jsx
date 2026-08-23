@@ -59,6 +59,7 @@ import { usePaneCollapse } from '../components/layout/usePaneCollapse';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
 import {
+  ConfigureActionIcon,
   DeleteActionIcon,
   DetailHeaderAction,
   DetailHeaderActions,
@@ -786,12 +787,12 @@ function PromptNode({ id, data, selected }) {
           <span className={`node-status-badge workflow-graph-node__kind ${statusClass}`}>{statusLabel}</span>
           <button
             type="button"
-            className="node-expand-btn nodrag"
+            className="node-options-btn nodrag"
             onClick={() => data.onOpenOptions(id)}
-            title="Node options"
-            aria-label="Node options"
+            aria-label="Configure node"
+            data-tooltip="Configure node"
           >
-            ⋯
+            <ConfigureActionIcon />
           </button>
           {data.canDelete ? (
             <button
@@ -826,8 +827,7 @@ function KanbanTriggerNode({ id, data, selected }) {
         <div className="node-title-bar drag-handle">
           <span className="node-type-icon event">K</span>
           <span className="node-title">Kanban trigger</span>
-          <span className="node-status-badge workflow-graph-node__kind">Trigger</span>
-          <button type="button" className="node-expand-btn nodrag" onClick={() => data.onOpenOptions(id)} title="Node options" aria-label="Node options">⋯</button>
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
         </div>
         <div className="node-body">
           <WorkflowNodePorts inputSchema={null} outputSchema={data.outputSchema} outputFallback={['event']} />
@@ -849,7 +849,7 @@ function WorkflowControlNode({ id, data, selected }) {
           <span className={`node-type-icon ${data.kind}`}>{data.kind[0].toUpperCase()}</span>
           <WorkflowNodeTitle expanded={false} title={data.title} placeholder={`${label} title`} onChange={(event) => data.onChange(id, { title: event.target.value })} />
           <span className="node-status-badge workflow-graph-node__kind">{label}</span>
-          <button type="button" className="node-expand-btn nodrag" onClick={() => data.onOpenOptions(id)} title="Node options" aria-label="Node options">⋯</button>
+          <button type="button" className="node-options-btn nodrag" onClick={() => data.onOpenOptions(id)} aria-label="Configure node" data-tooltip="Configure node"><ConfigureActionIcon /></button>
           <button type="button" className="node-delete-btn" onClick={() => data.onDelete(id)} aria-label={`Delete ${label}`}>×</button>
         </div>
         <div className="node-body">
