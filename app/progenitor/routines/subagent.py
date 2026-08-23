@@ -4,10 +4,13 @@ Wraps a routine id in a ``{"name", "description", "runnable"}`` spec shaped
 for ``deepagents.middleware.subagents``, so ``task(subagent_type="<routine-id>", ...)``
 resolves and runs the routine's compiled graph. Resolves the graph revision to
 run in this order per invocation: the pin already present in the calling
-thread's ``routine_revisions`` state, else the latest revision from
-:mod:`app.progenitor.routines.revisions`, else the live (unpinned) document
-from the state manager. Compiled graphs are cached by ``revision_id`` so a
-pinned thread never recompiles or re-queries after its first call.
+thread's ``routine_revisions`` state (falling back to the latest captured
+revision, then the live document, if that pin no longer exists); otherwise
+-- the common case -- the live document from the state manager, tagged
+(not sourced) with whatever revision_id in
+:mod:`app.progenitor.routines.revisions` matches its exact content, if
+any. Compiled graphs are cached by ``revision_id`` so a pinned thread never
+recompiles or re-queries after its first call.
 """
 
 from __future__ import annotations
@@ -56,24 +59,51 @@ def create_routine_subagent(
 
         if pinned and pinned in cache:
             revision_id = pinned
-        else:
-            if pinned:
-                fetched = await revision_reader.fetch(routine_id, pinned)
-                if fetched is not None:
-                    revision_id = pinned
-                    graph_doc = fetched
-                else:
-                    logger.warning(
-                        "Routine %r pinned revision %r not found; falling back to latest",
-                        routine_id,
-                        pinned,
-                    )
-            if revision_id is None:
+        elif pinned:
+            fetched = await revision_reader.fetch(routine_id, pinned)
+            if fetched is not None:
+                revision_id = pinned
+                graph_doc = fetched
+            else:
+                logger.warning(
+                    "Routine %r pinned revision %r not found; falling back to latest",
+                    routine_id,
+                    pinned,
+                )
                 row = await revision_reader.fetch_latest(routine_id)
                 if row is not None:
                     revision_id, graph_doc = row
-            if revision_id is None and graph_doc is None:
-                graph_doc = await state_manager.get_routine_graph(routine_id)
+                if revision_id is None and graph_doc is None:
+                    graph_doc = await state_manager.get_routine_graph(routine_id)
+        else:
+            # Unpinned: run against the LIVE document, not whichever
+            # revision `routine_graph_revisions` happens to have captured
+            # most recently. Revision capture is a content-hash-
+            # deduplicated audit log (`ON CONFLICT (routine_id,
+            # revision_id) DO NOTHING` -- see document_store.py's trigger):
+            # if the live content ever reverts to any exact byte-identical
+            # prior state (e.g. via the Revisions panel's own Restore
+            # action, or simply editing a field back to its original
+            # value), that revert produces NO new row and leaves the old
+            # row's `captured_at` untouched -- so `fetch_latest`
+            # (`ORDER BY captured_at DESC`) can return a revision that is
+            # no longer what is actually live, and a run would silently
+            # compile and execute against superseded content. The live
+            # document is always the source of truth for an unpinned run;
+            # `fetch_revision_id_for_content` below only *tags* the run
+            # (thread_id / ROUTINE_REVISIONS_STATE_KEY) with whichever
+            # revision_id, if any, matches this exact content -- for the
+            # Runs panel and the canvas's run-staleness diffing -- it is
+            # never used to decide what gets compiled.
+            graph_doc = await state_manager.get_routine_graph(routine_id)
+            if graph_doc is not None:
+                revision_id = await revision_reader.fetch_revision_id_for_content(
+                    routine_id, graph_doc
+                )
+            else:
+                row = await revision_reader.fetch_latest(routine_id)
+                if row is not None:
+                    revision_id, graph_doc = row
 
         if revision_id is None and graph_doc is None:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' has no stored graph.")]}

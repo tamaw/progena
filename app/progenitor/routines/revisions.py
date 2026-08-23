@@ -16,6 +16,7 @@ from typing import Any, Protocol, cast
 
 import psycopg
 from psycopg.rows import DictRow, dict_row
+from psycopg.types.json import Jsonb
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,10 @@ class RoutineRevisionReader(Protocol):
     async def fetch_latest(self, routine_id: str) -> tuple[str, dict[str, Any]] | None: ...
 
     async def fetch(self, routine_id: str, revision_id: str) -> dict[str, Any] | None: ...
+
+    async def fetch_revision_id_for_content(
+        self, routine_id: str, graph: dict[str, Any]
+    ) -> str | None: ...
 
 
 class PostgresRoutineRevisionReader:
@@ -84,6 +89,42 @@ class PostgresRoutineRevisionReader:
             return None
         return cast(dict[str, Any], row["graph"])
 
+    async def fetch_revision_id_for_content(
+        self, routine_id: str, graph: dict[str, Any]
+    ) -> str | None:
+        """The revision_id whose captured content is byte-for-byte equal to
+        ``graph``, if this exact content has ever been captured before.
+
+        ``revision_id`` is a generated ``sha256(jsonb_send(graph))`` column
+        (see document_store.py's DDL) -- rather than reproduce that exact
+        hash algorithm in Python, this asks Postgres directly via ``jsonb``
+        equality (which already normalizes key order/whitespace the same
+        way the generated column's hash input does), so an unpinned run
+        can tag itself with the correct revision_id for whatever content it
+        actually compiled against, independent of `fetch_latest`'s
+        capture-order-based (not content-based) notion of "latest".
+        """
+        conn = await psycopg.AsyncConnection[DictRow].connect(
+            self._database_url,
+            autocommit=True,
+            prepare_threshold=0,
+            row_factory=dict_row,
+        )
+        try:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT revision_id FROM routine_graph_revisions "
+                    "WHERE routine_id = %s AND graph = %s::jsonb LIMIT 1",
+                    (routine_id, Jsonb(graph)),
+                )
+                row = await cur.fetchone()
+        except psycopg.errors.UndefinedTable:
+            _log_missing_table_once()
+            return None
+        finally:
+            await conn.close()
+        return None if row is None else cast(str, row["revision_id"])
+
 
 class NullRoutineRevisionReader:
     """No-op reader used when no ``database_url`` is configured (dev/SQLite runs)."""
@@ -92,6 +133,11 @@ class NullRoutineRevisionReader:
         return None
 
     async def fetch(self, routine_id: str, revision_id: str) -> dict[str, Any] | None:
+        return None
+
+    async def fetch_revision_id_for_content(
+        self, routine_id: str, graph: dict[str, Any]
+    ) -> str | None:
         return None
 
 
