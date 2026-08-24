@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
+  buildLoopMembership,
   buildStatePathSuggestions,
   deriveActiveNodeIds,
   filterStatePathSuggestions,
@@ -16,6 +17,7 @@ import {
   missingRequirements,
   missingRequiredConfig,
   nodeRequiresRunConfirmation,
+  pickEntryForIteration,
   predecessorsOf,
   reachableFrom,
   removeForkBranch,
@@ -924,5 +926,70 @@ describe('getExpressionAutocompleteContext', () => {
 
   it('clamps a caret position past the end of the text instead of misreading it', () => {
     expect(getExpressionAutocompleteContext('count', 999)).toEqual({ query: 'count', tokenStart: 0, tokenEnd: 5 });
+  });
+});
+
+describe('buildLoopMembership', () => {
+  const loopEdges = [
+    { from: 'start', to: 'tail', level: 'normal' },
+    { from: 'tail', to: 'start', level: 'normal', loop_guard: { expression: 'count < 3' } },
+  ];
+
+  it("claims every node in the body, excluding the loop's own start card", () => {
+    const membership = buildLoopMembership(loopEdges);
+    expect(membership.has('start')).toBe(false);
+    expect(membership.get('tail')).toBe(loopEdges[1]);
+  });
+
+  it('claims a router-branch node inside the loop body too', () => {
+    const edges = [
+      { from: 'start', to: 'gate', level: 'normal' },
+      {
+        from: 'gate',
+        level: 'route',
+        router: 'state_equals',
+        state_key: 'x',
+        branches: { true: 'left', false: 'right' },
+        default: 'tail',
+      },
+      { from: 'left', to: 'tail', level: 'normal' },
+      { from: 'right', to: 'tail', level: 'normal' },
+      { from: 'tail', to: 'start', level: 'normal', loop_guard: { expression: 'count < 3' } },
+    ];
+    const membership = buildLoopMembership(edges);
+    expect(membership.get('gate')).toBe(edges[4]);
+    expect(membership.get('left')).toBe(edges[4]);
+    expect(membership.get('right')).toBe(edges[4]);
+  });
+
+  it('returns an empty map for a graph with no guarded loop', () => {
+    const edges = [{ from: 'a', to: 'b', level: 'normal' }];
+    expect(buildLoopMembership(edges).size).toBe(0);
+  });
+});
+
+describe('pickEntryForIteration', () => {
+  const guardEntries = [{ step: 3 }, { step: 6 }, { step: 9 }];
+
+  it('returns the last entry when no iteration is explicitly selected', () => {
+    const entries = [{ step: 2 }, { step: 5 }, { step: 8 }];
+    expect(pickEntryForIteration(entries, null, guardEntries)).toBe(entries[2]);
+  });
+
+  it("picks the entry whose step falls within the selected iteration's window", () => {
+    const entries = [{ step: 2 }, { step: 5 }, { step: 8 }];
+    expect(pickEntryForIteration(entries, 1, guardEntries)).toBe(entries[0]);
+    expect(pickEntryForIteration(entries, 2, guardEntries)).toBe(entries[1]);
+    expect(pickEntryForIteration(entries, 3, guardEntries)).toBe(entries[2]);
+  });
+
+  it('falls back to the last entry when nothing ran in that window (node skipped that pass)', () => {
+    const entries = [{ step: 2 }, { step: 8 }];
+    expect(pickEntryForIteration(entries, 2, guardEntries)).toBe(entries[1]);
+  });
+
+  it('returns undefined for an empty entries list', () => {
+    expect(pickEntryForIteration([], 1, guardEntries)).toBeUndefined();
+    expect(pickEntryForIteration(undefined, 1, guardEntries)).toBeUndefined();
   });
 });

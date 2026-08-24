@@ -395,7 +395,10 @@ async def test_run_meta_records_route_taken_for_a_router_edge(expression: str, t
 async def test_run_meta_records_route_taken_for_a_loop_guard_edge() -> None:
     """A loop_guard's outcome is recorded the same way -- the looped-back
     target while the guard holds, the exit target on the iteration it
-    finally fails."""
+    finally fails. Each iteration's own `output` is preserved too, not just
+    the final cumulative `data` value -- `tail`'s expression increments
+    itself, so a naive "read `data['tail']` per iteration" would show 2 for
+    every entry instead of each iteration's own real value."""
     routine = graph(
         {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
         {
@@ -421,6 +424,7 @@ async def test_run_meta_records_route_taken_for_a_loop_guard_edge() -> None:
 
     tail_entries = result["run_meta"]["tail"]
     assert [entry["route"] for entry in tail_entries] == ["start", "after"]
+    assert [entry["output"] for entry in tail_entries] == [{"tail": 1}, {"tail": 2}]
 
 
 @pytest.mark.asyncio

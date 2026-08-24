@@ -1075,8 +1075,26 @@ function RunningTimer({ startedAtMs }) {
 // finalized "Xs · N tok" once its own checkpoint has landed, or a ticking
 // "estimated live" timer while it's presumed still executing. Renders
 // nothing at all otherwise (see StepCard), not a placeholder row.
+// Given a node's own run_meta entries and the iteration currently selected
+// for its enclosing loop (see buildLoopMembership/LoopBlock), returns the
+// entry belonging to that iteration -- bucketed by each entry's `step`
+// (factory.py's _instrument_node_callable) against the guard node's own
+// per-iteration step, since a loop-body node can run more than once and
+// "just take the last entry" would otherwise always show the latest
+// iteration regardless of which one is selected. `iterationIndex` null
+// means "latest" (today's default, no override).
+// eslint-disable-next-line react-refresh/only-export-components
+export function pickEntryForIteration(entries, iterationIndex, guardEntries) {
+  if (!entries?.length) return undefined;
+  if (iterationIndex == null) return entries[entries.length - 1];
+  const upper = guardEntries?.[iterationIndex - 1]?.step ?? Infinity;
+  const lower = guardEntries?.[iterationIndex - 2]?.step ?? -Infinity;
+  const inWindow = entries.filter((entry) => typeof entry.step === 'number' && entry.step > lower && entry.step <= upper);
+  return inWindow[inWindow.length - 1] ?? entries[entries.length - 1];
+}
+
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, nodes } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, nodes, loopMembership, loopIterations } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
@@ -1092,7 +1110,14 @@ function StepRunSummary({ nodeId }) {
       </div>
     );
   }
-  const last = entries[entries.length - 1];
+  // A node inside a loop body follows that loop's own selected iteration
+  // (see LoopBlock's prev/next nav) instead of always showing its latest
+  // execution -- null (no loop, or nothing explicitly selected yet) keeps
+  // today's "last entry" default.
+  const guardEdge = loopMembership?.get(nodeId);
+  const guardEntries = guardEdge ? runMeta?.[guardEdge.from] : null;
+  const selectedIteration = guardEdge ? (loopIterations?.[guardEdge.from] ?? null) : null;
+  const last = pickEntryForIteration(entries, selectedIteration, guardEntries);
   const tokens = last.tokens?.total_tokens;
   // Cached run details predate an edit made to this step (or something
   // upstream of it) since -- still shown (still real data, just no longer
@@ -1172,7 +1197,7 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
@@ -1199,10 +1224,24 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 
   if (!node) return null;
   const runEntries = runMeta?.[node.id];
-  const lastRunEntry = runEntries?.[runEntries.length - 1];
+  // Follows the enclosing loop's own selected iteration, same as the
+  // compact canvas badge (see StepRunSummary/pickEntryForIteration) --
+  // clicking through a loop's prev/next nav re-points this panel at that
+  // iteration's own duration/tokens/route/output, not always the latest.
+  const inspectorGuardEdge = loopMembership?.get(node.id);
+  const inspectorGuardEntries = inspectorGuardEdge ? runMeta?.[inspectorGuardEdge.from] : null;
+  const inspectorSelectedIteration = inspectorGuardEdge ? (loopIterations?.[inspectorGuardEdge.from] ?? null) : null;
+  const lastRunEntry = pickEntryForIteration(runEntries, inspectorSelectedIteration, inspectorGuardEntries);
   const isRunStale = !isNodeRunValid(node.id, staleNodeIds || EMPTY_MISSING);
   const outputKey = node.output_key || node.id;
-  const runOutputValue = runData?.[outputKey];
+  // Prefers this execution's own recorded write (see factory.py's
+  // `entry.output`) over the cumulative `data` channel, which only ever
+  // holds the latest write per key -- falls back to `runData` for older
+  // runs recorded before that field existed, or a node with no data write
+  // at all this execution.
+  const runOutputValue = lastRunEntry?.output && outputKey in lastRunEntry.output
+    ? lastRunEntry.output[outputKey]
+    : runData?.[outputKey];
   const runOutputText = runOutputValue === undefined
     ? undefined
     : (typeof runOutputValue === 'string' ? runOutputValue : JSON.stringify(runOutputValue, null, 2));
@@ -1332,7 +1371,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
               </p>
             ) : null}
             <div className="routine-node-inspector__run-head">
-              <span>Last run</span>
+              <span>{inspectorSelectedIteration != null ? `Iteration ${inspectorSelectedIteration} run` : 'Last run'}</span>
               {runEntries.length > 1 ? (
                 <span className="routine-node-inspector__run-count">{runEntries.length} executions this run</span>
               ) : null}
@@ -1605,6 +1644,41 @@ function edgeBySourceMap(edges) {
 
 function routerTargets(edge) {
   return [...Object.values(edge?.branches || {}), ...(edge?.default ? [edge.default] : [])];
+}
+
+// nodeId -> the guard edge of its nearest enclosing guarded loop, for every
+// node inside a loop's body box -- excludes the loop's own start card, the
+// same boundary RoutineChain's own render walk uses (see
+// `positions.get(bodyStartId) + 1` skipping past it below). Nested loops
+// keep whichever guard's walk reaches a node last; nesting is rare and not
+// disambiguated further here.
+// eslint-disable-next-line react-refresh/only-export-components
+export function buildLoopMembership(edges) {
+  const bySource = edgeBySourceMap(edges || []);
+  const membership = new Map();
+  (edges || []).forEach((edge) => {
+    if (!edge?.loop_guard) return;
+    const startId = edgeTargetIds(edge)[0];
+    const tailId = edge.from;
+    if (!startId || !tailId) return;
+    const seen = new Set([startId]);
+    const stack = [startId];
+    while (stack.length) {
+      const id = stack.pop();
+      if (id !== startId) membership.set(id, edge);
+      if (id === tailId) continue;
+      const next = bySource.get(id);
+      if (!next) continue;
+      const targets = next.router ? routerTargets(next) : edgeTargetIds(next);
+      targets.forEach((target) => {
+        if (target && !seen.has(target)) {
+          seen.add(target);
+          stack.push(target);
+        }
+      });
+    }
+  });
+  return membership;
 }
 
 // Every step a join placed after this fork would fan in from: each lane walked
@@ -2157,18 +2231,54 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
 // produce. Either way there's no separate "back to X" line -- the box's
 // own closing edge already says that.
 function LoopBlock({ edge, targetLabel, body }) {
-  const { settings } = useContext(GraphEditContext);
+  const { settings, runMeta, loopIterations, setLoopIteration } = useContext(GraphEditContext);
   const recursionLimit = settings?.recursion_limit;
   const maxRetries = settings?.retry?.max_retries;
   const guard = edge?.loop_guard;
+  // One entry per completed pass through the guard -- the count this
+  // loop's own prev/next nav pages across (see pickEntryForIteration,
+  // which buckets every other body node's entries against these same
+  // steps).
+  const guardEntries = guard ? (runMeta?.[edge.from] || []) : [];
+  const iterationCount = guardEntries.length;
+  const selectedIteration = loopIterations?.[edge?.from] ?? iterationCount;
   return (
     <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
       <div className="routine-loop__head">
-        <span className={`routine-loop__eyebrow${guard ? ' routine-loop__eyebrow--guarded' : ''}${guard && !guard.expression ? ' routine-loop__eyebrow--unset' : ''}`}>
-          {guard ? (guard.expression ? `↺ Loop while ${guard.expression}` : '↺ Loop · set condition') : '↺ Retry loop'}
+        <span className="routine-loop__head-left">
+          <span className={`routine-loop__eyebrow${guard ? ' routine-loop__eyebrow--guarded' : ''}${guard && !guard.expression ? ' routine-loop__eyebrow--unset' : ''}`}>
+            {guard ? (guard.expression ? `↺ Loop while ${guard.expression}` : '↺ Loop · set condition') : '↺ Retry loop'}
+          </span>
         </span>
-        {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
-        {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
+        <span className="routine-loop__head-right">
+          {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
+          {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
+          {iterationCount > 0 ? (
+            <span className="routine-loop__iteration-nav">
+              <button
+                type="button"
+                className="routine-loop__iteration-btn"
+                aria-label="Previous iteration"
+                title="Previous iteration"
+                disabled={selectedIteration <= 1}
+                onClick={() => setLoopIteration(edge.from, Math.max(1, selectedIteration - 1))}
+              >
+                <ChevronLeftSmall />
+              </button>
+              <span className="routine-loop__iteration-label">{selectedIteration} / {iterationCount}</span>
+              <button
+                type="button"
+                className="routine-loop__iteration-btn"
+                aria-label="Next iteration"
+                title="Next iteration"
+                disabled={selectedIteration >= iterationCount}
+                onClick={() => setLoopIteration(edge.from, Math.min(iterationCount, selectedIteration + 1))}
+              >
+                <ChevronRightPointSmall />
+              </button>
+            </span>
+          ) : null}
+        </span>
       </div>
       <div className="routine-loop__body">{body}</div>
     </section>
@@ -2795,6 +2905,18 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     // needs to re-fire this on its own identity change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBrowsingHistory]);
+  // Which iteration a loop's own prev/next nav has explicitly selected,
+  // keyed by the guard node's id (see LoopBlock/pickEntryForIteration) --
+  // absent means "latest" (today's default). Reset the instant a fresh
+  // live run starts so a past browse doesn't strand the canvas on a stale
+  // iteration from before this run existed.
+  const [loopIterations, setLoopIterations] = useState({});
+  const setLoopIteration = useCallback((guardId, iteration) => {
+    setLoopIterations((current) => ({ ...current, [guardId]: iteration }));
+  }, []);
+  useEffect(() => {
+    setLoopIterations({});
+  }, [liveThreadId]);
   // Plain CSS `zoom` on the scrolling chain content only -- not a canvas-
   // style pan/zoom viewport (this isn't React Flow, see the module doc).
   // Deliberately NOT wired into positionInspector's math: CSS `zoom`
@@ -3427,6 +3549,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // useRoutineRunPolling), so counting can start honestly even before the
   // entry node's own completion exists (see ChainCap/StepRunSummary).
   const warmingUp = !runNav.isBrowsingHistory && runStatus === 'discovering';
+  const loopMembership = useMemo(() => buildLoopMembership(displayEdges), [displayEdges]);
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -3454,10 +3577,13 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     staleNodeIds,
     runStatus,
     warmingUp,
+    loopMembership,
+    loopIterations,
+    setLoopIteration,
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
