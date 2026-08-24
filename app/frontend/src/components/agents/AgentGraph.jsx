@@ -3646,18 +3646,19 @@ function ChevronRightPointSmall() {
   );
 }
 
-// A tray/archive with a downward arrow landing in it -- reads as "restore
-// from backup" rather than ReconnectActionIcon's circular refresh loop,
-// which is a different concept (reconnect/retry, not "bring this snapshot
+// A clock face with a counter-clockwise rewind arrow -- "restore to an
+// earlier point in time", not ReconnectActionIcon's plain circular refresh
+// loop (that's reconnect/retry, a different concept) and not a download/
+// tray glyph either (that reads as "bring a file in", not "wind the clock
 // back"). Always rendered in the toolbar (see the Restore button), just
 // disabled outside history browsing, so its width never toggles in and out
 // and shifts the rest of the toolbar/side dock around.
 function RestoreActionIcon() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
-      <path d="M8 2v6.3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M5.3 6 8 8.7 10.7 6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M2.5 9.3v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 4.6A5.2 5.2 0 1 1 2.9 9.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M4.6 2.4 4 4.6 6.3 5.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M8 6v2.6l1.8 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
