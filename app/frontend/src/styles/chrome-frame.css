@@ -7985,6 +7985,20 @@ body,
   border-color: color-mix(in oklab, #f85149 48%, var(--color-border));
 }
 
+/* Pulses while a run has kicked off but nothing anywhere has completed yet
+   (see `warmingUp` in AgentGraph.jsx) -- an expanding/fading ring around
+   Start stands in for the entry node's own missing (would-be-inaccurate)
+   ticking timer during that warm-up window. */
+.routine-cap--warming {
+  animation: routine-cap-warming-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes routine-cap-warming-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.55); }
+  70% { box-shadow: 0 0 0 8px rgba(63, 185, 80, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(63, 185, 80, 0); }
+}
+
 /* A cycle (retry loop) or rejoin (two branches converging) terminates the
    run it's rendered in instead of expanding forever/duplicating a subtree. */
 .routine-chip {

@@ -1076,11 +1076,15 @@ function RunningTimer({ startedAtMs }) {
 // "estimated live" timer while it's presumed still executing. Renders
 // nothing at all otherwise (see StepCard), not a placeholder row.
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
-    if (!isActive) return null;
+    // Nothing anywhere has completed yet -- this can only be the entry
+    // node (see deriveActiveNodeIds), and there's no real anchor to count
+    // from yet. Start's own pulsing glow (see ChainCap) carries that
+    // signal instead of a click-time-anchored guess here.
+    if (!isActive || warmingUp) return null;
     return (
       <div className="routine-step-card__run routine-step-card__run--active">
         <span className="routine-step-card__run-dot" aria-hidden="true" />
@@ -1401,8 +1405,20 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 // begins here" (points at `entry`), End is purely "this path terminates
 // here" (a node with no outgoing edge/branch). Rendered once per terminus,
 // so a branching routine can show multiple Ends -- that's real, not a bug.
+// Pulses while the run has kicked off but nothing anywhere has completed
+// yet (see `warmingUp` in GraphEditContext) -- covers the client discovery
+// poll plus backend routine-compile/model-connect latency before the
+// entry node's own real duration exists, so the entry's card itself stays
+// quiet (see StepRunSummary) instead of showing a click-time-anchored
+// guess. Stops the instant the first run_meta entry lands anywhere.
 function ChainCap({ kind }) {
-  return <div className={`routine-cap routine-cap--${kind}`}>{kind === 'start' ? 'Start' : 'End'}</div>;
+  const { warmingUp } = useContext(GraphEditContext);
+  const pulsing = kind === 'start' && warmingUp;
+  return (
+    <div className={`routine-cap routine-cap--${kind}${pulsing ? ' routine-cap--warming' : ''}`}>
+      {kind === 'start' ? 'Start' : 'End'}
+    </div>
+  );
 }
 
 // A cycle (retry loop) or a rejoin (two branches converging on the same
@@ -3367,6 +3383,13 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   );
   const rawStaleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
   const staleNodeIds = runNav.isBrowsingHistory ? EMPTY_MISSING : rawStaleNodeIds;
+  // True from the moment a run kicks off until the very first run_meta
+  // entry lands anywhere -- the client discovery poll plus backend
+  // routine-compile/model-connect window that has no reliable real
+  // timestamp to count from (see ChainCap/StepRunSummary).
+  const warmingUp = !runNav.isBrowsingHistory
+    && (runStatus === 'running' || runStatus === 'discovering')
+    && totalRunMetaEntries(runMeta) === 0;
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -3393,10 +3416,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     estimatedActiveStartMs,
     staleNodeIds,
     runStatus,
+    warmingUp,
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
