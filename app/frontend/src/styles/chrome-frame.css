@@ -6526,6 +6526,26 @@ body,
   accent-color: var(--color-accent);
 }
 
+.agents-graph-parameters__json {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  padding: 6px 8px;
+  color: var(--color-text-secondary);
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-family: var(--font-family-mono);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.agents-graph-parameters__json:focus {
+  outline: none;
+  border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
 /* Routine Revisions panel -- shares .agents-graph-editor shell chrome with
    JSON/Runs. Same overflow lesson as .agents-graph-runs__list: scroll is
    scoped to this inner list, never the outer <aside>, or it clips the

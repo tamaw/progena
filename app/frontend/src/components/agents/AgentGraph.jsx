@@ -3753,6 +3753,46 @@ function parameterControlValue(value) {
   return value === undefined || value === null ? '' : value;
 }
 
+// array/object-typed properties (e.g. a foreach node's items_from source)
+// need a real parsed value, not a string -- the seed node copies whatever
+// JS value this sends straight into state.data, and the foreach/eval nodes
+// that read it expect an actual list/dict. Buffers its own text so invalid
+// JSON mid-edit doesn't clobber the last-valid parsed value (same lesson as
+// useBufferedFieldText elsewhere in this file, kept local since this is the
+// only text<->JSON round trip in the panel).
+function JsonParamControl({ name, value, onChange }) {
+  const [text, setText] = useState(() => (value === undefined ? '' : JSON.stringify(value, null, 2)));
+  const [error, setError] = useState(null);
+  return (
+    <>
+      <textarea
+        className="agents-graph-parameters__json"
+        aria-label={name}
+        rows={4}
+        placeholder='e.g. ["a", "b"]'
+        value={text}
+        onChange={(event) => {
+          const nextText = event.target.value;
+          setText(nextText);
+          if (nextText.trim() === '') {
+            setError(null);
+            onChange(undefined);
+            return;
+          }
+          try {
+            const parsed = JSON.parse(nextText);
+            setError(null);
+            onChange(parsed);
+          } catch {
+            setError('Invalid JSON -- last valid value is still what Run will send.');
+          }
+        }}
+      />
+      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+    </>
+  );
+}
+
 function ParameterControl({ name, def, value, onChange }) {
   if (Array.isArray(def?.enum) && def.enum.length) {
     return (
@@ -3765,6 +3805,9 @@ function ParameterControl({ name, def, value, onChange }) {
         className="agents-graph-parameters__input"
       />
     );
+  }
+  if (def?.type === 'array' || def?.type === 'object') {
+    return <JsonParamControl name={name} value={value} onChange={onChange} />;
   }
   if (def?.type === 'boolean') {
     return (
