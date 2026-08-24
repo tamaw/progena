@@ -37,8 +37,8 @@ async def routine_run_node(
     through to the runnable as ``_interactive_session_id``/
     ``_interactive_target_node`` -- a stable session_id reused across
     repeated calls resumes the same checkpointed thread instead of starting
-    a fresh run each time (see subagent.py's ``_run``); target_node stops
-    execution right before that node via LangGraph's ``interrupt_before``.
+    a fresh run each time (see subagent.py's ``_run``); target_node runs
+    that node and then stops via LangGraph's ``interrupt_after``.
     Omitting both is a normal, complete, one-shot run -- what the plain
     "Run" button sends today. ``metadata.parameters`` (optional) is a flat
     ``{name: value}`` object matching the routine's declared

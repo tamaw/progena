@@ -39,12 +39,12 @@ describe('nodeRequiresRunConfirmation', () => {
     expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(false);
   });
 
-  it('does not require confirmation for the target node itself, only its predecessors', () => {
-    // target_node stops BEFORE the clicked node runs -- an agent kind AT
-    // the target is never actually executed by this click.
+  it('requires confirmation for the target node itself, not just its predecessors', () => {
+    // target_node runs THROUGH the clicked node (interrupt_after) -- an
+    // agent kind AT the target is actually executed by this click.
     const nodes = [{ id: 'a', kind: 'eval' }, { id: 'b', kind: 'agent' }];
     const edges = [{ from: 'a', to: 'b', level: 'normal' }];
-    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(false);
+    expect(nodeRequiresRunConfirmation('b', nodes, edges, {})).toBe(true);
   });
 
   it('does not require confirmation once the side-effecting predecessor already ran this session', () => {

@@ -145,6 +145,10 @@ def create_routine_subagent(
             # produces a new thread with no history -- carrying prior state
             # forward across a revision change is the checkpoint-copy-forward
             # seeding this primitive does not yet do (tracked separately).
+            # `_interactive_target_node` interrupts AFTER that node runs, not
+            # before -- "Run to here" is meant to execute the clicked node and
+            # show its result, then pause so the next click can pick up where
+            # this one left off.
             session_id = state.get("_interactive_session_id")
             target_node = state.get("_interactive_target_node")
             run_thread_id = (
@@ -174,7 +178,7 @@ def create_routine_subagent(
             result = await compiled.ainvoke(
                 None if resume_existing else seed_input,
                 config=run_config,
-                interrupt_before=[target_node] if target_node else None,
+                interrupt_after=[target_node] if target_node else None,
             )
         except (ValueError, KeyError, NotImplementedError) as exc:
             # See factory.py's _instrument_node_callable: a node that raises
