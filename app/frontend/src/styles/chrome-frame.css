@@ -6980,13 +6980,15 @@ body,
 }
 
 /* Save/validation/run-result status -- split from the actions pill above
-   (.agents-graph-floating) and anchored bottom-left instead of sharing its
-   row. Kept the icon buttons from shifting horizontally every time this
-   text's length changes ("Saving…" vs "Not saved · 2 steps incomplete"
-   vs "Valid graph" vs an N-issue validation message, etc). */
+   (.agents-graph-floating) so its own row never shifts the action icons
+   horizontally every time this text's length changes ("Saving…" vs "Not
+   saved · 2 steps incomplete" vs "Valid graph" vs an N-issue validation
+   message, etc). Stacked directly beneath the actions pill (same left
+   edge, offset by that pill's own height + a gap) rather than pinned to
+   the canvas's bottom -- reads as "status of the thing above it", not an
+   unrelated footer note. */
 .agents-graph-floating--status {
-  top: auto;
-  bottom: 14px;
+  top: 62px;
 }
 
 /* Run-history browser -- back/forward through this routine's past
