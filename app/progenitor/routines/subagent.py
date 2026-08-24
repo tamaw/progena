@@ -108,6 +108,8 @@ def create_routine_subagent(
         if revision_id is None and graph_doc is None:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' has no stored graph.")]}
 
+        compiled: Any = None
+        run_config: RunnableConfig | None = None
         try:
             if revision_id is not None and revision_id in cache:
                 compiled = cache[revision_id]
@@ -150,7 +152,7 @@ def create_routine_subagent(
                 if session_id
                 else f"routine:{routine_id}:{revision_id or 'unpinned'}:{uuid.uuid4().hex}"
             )
-            run_config: RunnableConfig = {"configurable": {"thread_id": run_thread_id}}
+            run_config = {"configurable": {"thread_id": run_thread_id}}
             # A stable thread already carrying checkpoint history must be
             # resumed (input=None) rather than re-invoked with fresh input --
             # LangGraph treats non-None input as a brand-new run regardless
@@ -175,6 +177,27 @@ def create_routine_subagent(
                 interrupt_before=[target_node] if target_node else None,
             )
         except (ValueError, KeyError, NotImplementedError) as exc:
+            # See factory.py's _instrument_node_callable: a node that raises
+            # never gets to *return* its own run_meta entry, so LangGraph
+            # never checkpoints one for it. Stash it onto the checkpoint
+            # manually here -- the only place with both `compiled` and this
+            # run's `run_config` in scope -- before converting the failure
+            # into the same chat message as always; a failure persisting
+            # this entry is logged and swallowed rather than replacing the
+            # real failure message below.
+            node_meta = getattr(exc, "routine_run_meta", None)
+            if node_meta is not None and compiled is not None and run_config is not None:
+                failed_node_id, entry = node_meta
+                try:
+                    await compiled.aupdate_state(
+                        run_config, {"run_meta": {failed_node_id: [entry]}}
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to persist run_meta for failed node %r",
+                        failed_node_id,
+                        exc_info=True,
+                    )
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' failed: {exc}")]}
 
         interrupts = result.get("__interrupt__") if isinstance(result, dict) else None

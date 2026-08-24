@@ -1083,16 +1083,23 @@ function StepRunSummary({ nodeId }) {
   // guaranteed to reflect the current graph), just visually muted with a
   // note instead of read as current. See lib/routineGraphDiff.js.
   const stale = !isNodeRunValid(nodeId, staleNodeIds || EMPTY_MISSING);
+  // A raised node still gets an entry (see factory.py's
+  // _instrument_node_callable): real duration, plus `error` instead of
+  // `tokens` -- surfaced as a red variant of this same badge rather than a
+  // separate element, so a step's run state is always in one place.
+  const failed = Boolean(last.error);
   return (
     <div
-      className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}`}
+      className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}${failed ? ' routine-step-card__run--error' : ''}`}
       title={[
+        failed ? last.error : null,
         entries.length > 1 ? `${entries.length} executions this run` : null,
         stale ? 'Graph changed since this ran' : null,
       ].filter(Boolean).join(' \u2014 ') || undefined}
     >
       <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
-      {typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
+      {failed ? <span className="routine-step-card__run-error-badge" aria-hidden="true">failed</span> : null}
+      {!failed && typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
       {stale ? <span className="routine-step-card__run-stale-badge" aria-hidden="true">stale</span> : null}
     </div>
   );
@@ -1292,7 +1299,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
         />
         <RoutingFooter id={node.id} kind={node.kind} routerEdge={routerEdge} />
         {runEntries?.length ? (
-          <div className={`routine-node-inspector__run${isRunStale ? ' routine-node-inspector__run--stale' : ''}`}>
+          <div className={`routine-node-inspector__run${isRunStale ? ' routine-node-inspector__run--stale' : ''}${lastRunEntry.error ? ' routine-node-inspector__run--error' : ''}`}>
             {isRunStale ? (
               <p className="routine-node-inspector__run-stale-notice" role="status">
                 Graph changed since this ran -- details below may no longer be accurate.
@@ -1304,6 +1311,9 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
                 <span className="routine-node-inspector__run-count">{runEntries.length} executions this run</span>
               ) : null}
             </div>
+            {lastRunEntry.error ? (
+              <p className="routine-node-inspector__run-error" role="alert">{lastRunEntry.error}</p>
+            ) : null}
             <dl className="routine-node-inspector__run-stats">
               <div>
                 <dt>Duration</dt>
