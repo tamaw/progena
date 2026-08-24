@@ -6500,6 +6500,107 @@ body,
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
 
+/* Routine Runs panel -- shares .agents-graph-editor shell chrome (width,
+   collapse rail, header) with the JSON/Parameters panels; only the body
+   differs. Scroll is scoped to .agents-graph-runs__list, NOT this outer
+   <aside> -- the collapse button (.agents-graph-editor__collapse) straddles
+   the seam via a negative transform, rendering *outside* this box's edge,
+   and an overflow: auto here would clip it out of the hit-test area
+   entirely, making it unclickable. Selecting a row drives GraphCanvas's
+   run-nav directly (see RoutineRunsPanel's onSelectIndex), so the
+   highlighted row here and the toolbar's back/forward pill always agree on
+   which run is showing. */
+.agents-graph-runs__empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: 12.5px;
+}
+
+.agents-graph-runs__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.agents-graph-runs__item {
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--color-bg-primary);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.agents-graph-runs__item:hover {
+  background: var(--color-bg-hover);
+}
+
+.agents-graph-runs__item.is-selected {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+}
+
+.agents-graph-runs__item-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.agents-graph-runs__status {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.agents-graph-runs__status--success {
+  color: var(--color-success, #3fb950);
+  background: color-mix(in oklab, var(--color-success, #3fb950) 16%, transparent);
+}
+
+.agents-graph-runs__status--failed {
+  color: var(--color-error, #f85149);
+  background: color-mix(in oklab, var(--color-error, #f85149) 16%, transparent);
+}
+
+.agents-graph-runs__status--pending {
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+}
+
+.agents-graph-runs__age {
+  color: var(--color-text-tertiary);
+  font-weight: 400;
+}
+
+.agents-graph-runs__datetime {
+  margin-top: 2px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+}
+
+.agents-graph-runs__item-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+  color: var(--color-text-tertiary);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 .agents-status-pill,
 .agents-chip {
   display: inline-flex;
