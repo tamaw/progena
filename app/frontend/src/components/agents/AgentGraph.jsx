@@ -2625,8 +2625,16 @@ function useRunHistoryNav(agentId, live) {
   }, [runsList.length]);
   const goForward = useCallback(() => setViewedIndex((current) => Math.max(current - 1, 0)), []);
   const resetToLatest = useCallback(() => setViewedIndex(0), []);
+  // Lets the Runs panel jump straight to any row -- clamped the same way
+  // goBack/goForward are, so an out-of-range index (a stale click after the
+  // list shrank) can't leave viewedIndex pointing past the end.
+  const jumpTo = useCallback((index) => {
+    setViewedIndex(Math.max(0, Math.min(index, Math.max(runsList.length - 1, 0))));
+  }, [runsList.length]);
 
   return {
+    runsList,
+    viewedIndex,
     runMeta: usesLive ? live.runMeta : (historicalState?.run_meta || {}),
     runData: usesLive ? live.runData : (historicalState?.data || {}),
     runRevisionId: usesLive ? live.runRevisionId : (displayEntry?.revision_id || null),
@@ -2644,6 +2652,7 @@ function useRunHistoryNav(agentId, live) {
     canRestore: isBrowsingHistory && Boolean(browsedGraph),
     goBack,
     goForward,
+    jumpTo,
     resetToLatest,
   };
 }
@@ -2676,7 +2685,7 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
   );
 }
 
-function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, parametersOpen, onOpenParameters, onCloseParameters }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, parametersOpen, onOpenParameters, onCloseParameters }) {
   const persistRef = useRef(onPersist);
   const lastSavedRef = useRef(null);
   // Values the user fills in for the routine's declared input_schema.properties
@@ -3609,10 +3618,19 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           onChange={setParameterValues}
           onClose={onCloseParameters}
         />
+      ) : runsOpen ? (
+        <RoutineRunsPanel
+          key={agent.id}
+          agentId={agent.id}
+          onClose={onCloseRuns}
+          runsList={runNav.runsList}
+          viewedIndex={runNav.viewedIndex}
+          onSelectIndex={runNav.jumpTo}
+        />
       ) : (
         <GraphSideDock
-          disabled={runNav.isBrowsingHistory}
-          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); }}
+          disabledIds={runNav.isBrowsingHistory ? EDIT_SIDE_ITEM_IDS : EMPTY_MISSING}
+          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); if (id === 'runs') onOpenRuns(); }}
         />
       )}
       {restoreConfirmOpen ? (
@@ -3678,31 +3696,40 @@ function RestoreActionIcon() {
 
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
+  { id: 'runs', label: 'Runs', title: 'Routine run history' },
   { id: 'parameters', label: 'Params', title: 'Routine parameters' },
 ];
 
-function GraphSideDock({ onSelect, disabled }) {
+// Locked while browsing history (see GraphSideDock's disabledIds): editing
+// surfaces only. 'runs' stays enabled -- it's pure navigation, the same
+// category as the toolbar's own back/forward pill, not an edit surface.
+const EDIT_SIDE_ITEM_IDS = new Set(['json', 'parameters']);
+
+function GraphSideDock({ onSelect, disabledIds }) {
   return (
     <aside className="agents-graph-side" aria-label="Graph tools">
-      {GRAPH_SIDE_ITEMS.map((item) => (
-        <button
-          key={item.id}
-          type="button"
-          className="agents-graph-side__item"
-          title={disabled ? 'Step back to the latest run (or Restore this one) to edit' : item.title}
-          aria-label={item.title}
-          onClick={() => onSelect(item.id)}
-          disabled={disabled}
-        >
-          <ChevronLeftSmall />
-          <span className="agents-graph-side__label">{item.label}</span>
-        </button>
-      ))}
+      {GRAPH_SIDE_ITEMS.map((item) => {
+        const disabled = disabledIds?.has(item.id) ?? false;
+        return (
+          <button
+            key={item.id}
+            type="button"
+            className="agents-graph-side__item"
+            title={disabled ? 'Step back to the latest run (or Restore this one) to edit' : item.title}
+            aria-label={item.title}
+            onClick={() => onSelect(item.id)}
+            disabled={disabled}
+          >
+            <ChevronLeftSmall />
+            <span className="agents-graph-side__label">{item.label}</span>
+          </button>
+        );
+      })}
     </aside>
   );
 }
 
-export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, parametersOpen, onOpenParameters, onCloseParameters }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, parametersOpen, onOpenParameters, onCloseParameters }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -3714,6 +3741,9 @@ export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowP
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}
       onCloseJson={onCloseJson}
+      runsOpen={runsOpen}
+      onOpenRuns={onOpenRuns}
+      onCloseRuns={onCloseRuns}
       parametersOpen={parametersOpen}
       onOpenParameters={onOpenParameters}
       onCloseParameters={onCloseParameters}
@@ -3939,6 +3969,113 @@ function ParameterControl({ name, def, value, onChange }) {
       placeholder={def?.type ? `(${def.type})` : undefined}
       onChange={(event) => onChange(event.target.value)}
     />
+  );
+}
+
+// Every recorded execution of this routine, each row showing what actually
+// happened -- success/failed (from that run's own run_meta, the same
+// per-node duration/tokens/error data the canvas cards and NodeInspector
+// read), wall-clock duration (from the run summary's own started_at/
+// last_checkpoint_at -- no extra fetch needed for that part), total tokens,
+// and when it ran. `viewedIndex`/`onSelectIndex` are owned by GraphCanvas's
+// run-nav (the same state the toolbar's back/forward pill drives), so
+// clicking a row here, clicking back/forward, and this list's highlighted
+// row all stay in lockstep -- one selection, three ways to move it.
+function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectIndex }) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(null);
+    dispatch(fetchRoutineRuns({ agentsUrl, agentId }))
+      .unwrap()
+      .catch((fetchError) => setError(fetchError.message || 'Failed to load runs'))
+      .finally(() => setLoading(false));
+  }, [agentId, agentsUrl, dispatch]);
+
+  useEffect(() => {
+    if (!runsList) load();
+    // Only auto-load the first time this agent's runs are uncached; a
+    // manual refresh re-fetches explicitly via `load`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  // Status/duration/tokens need each run's own run_meta, not just the list
+  // summary -- backfilled into the exact same runStateByThreadId cache the
+  // back/forward pill itself reads, so a run already browsed to needs no
+  // second fetch here, and jumping to a row this panel already resolved
+  // needs none there either.
+  const runStateByThreadId = useSelector((state) => state.uiData.agents.runStateByThreadId);
+  useEffect(() => {
+    (runsList || []).forEach((run) => {
+      if (!runStateByThreadId[run.thread_id]) {
+        dispatch(fetchRunState({ agentsUrl, agentId, threadId: run.thread_id }));
+      }
+    });
+  }, [runsList, runStateByThreadId, agentsUrl, agentId, dispatch]);
+
+  return (
+    <aside className="agents-graph-editor agents-graph-runs">
+      <button
+        type="button"
+        className="agents-graph-editor__collapse"
+        onClick={onClose}
+        title="Collapse"
+        aria-label="Collapse run history"
+      >
+        <ChevronRightSmall />
+      </button>
+      <header className="agents-graph-editor__head">
+        <h2>Runs</h2>
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={load} disabled={loading}>
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </header>
+      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
+      {!error && runsList && runsList.length === 0 && !loading ? (
+        <p className="agents-graph-runs__empty">No runs recorded yet.</p>
+      ) : null}
+      <ul className="agents-graph-runs__list">
+        {(runsList || []).map((run, index) => {
+          const runState = runStateByThreadId[run.thread_id];
+          const entries = runState?.run_meta ? Object.values(runState.run_meta).flat() : null;
+          const failed = entries?.some((entry) => entry.error);
+          const tokens = entries?.reduce((sum, entry) => sum + (entry.tokens?.total_tokens || 0), 0);
+          const status = !entries ? 'pending' : failed ? 'failed' : 'success';
+          const durationSec = run.started_at && run.last_checkpoint_at
+            ? Math.max(0, (new Date(run.last_checkpoint_at) - new Date(run.started_at)) / 1000)
+            : null;
+          const datetime = run.last_checkpoint_at ? new Date(run.last_checkpoint_at).toLocaleString() : null;
+          const isSelected = index === viewedIndex;
+          return (
+            <li key={run.thread_id}>
+              <button
+                type="button"
+                className={`agents-graph-runs__item${isSelected ? ' is-selected' : ''}`}
+                onClick={() => onSelectIndex(index)}
+              >
+                <div className="agents-graph-runs__item-head">
+                  <span className={`agents-graph-runs__status agents-graph-runs__status--${status}`}>
+                    {status === 'pending' ? 'Loading…' : status}
+                  </span>
+                  <span className="agents-graph-runs__age">{formatAge(run.last_checkpoint_at) || '—'}</span>
+                </div>
+                {datetime ? <div className="agents-graph-runs__datetime">{datetime}</div> : null}
+                <div className="agents-graph-runs__item-meta">
+                  {durationSec !== null ? <span>{durationSec.toFixed(1)}s</span> : null}
+                  {typeof tokens === 'number' ? <span>{tokens} tok</span> : null}
+                  <span>{run.checkpoint_count} step{run.checkpoint_count === 1 ? '' : 's'}</span>
+                </div>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
   );
 }
 

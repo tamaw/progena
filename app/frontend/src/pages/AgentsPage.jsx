@@ -331,6 +331,7 @@ export function AgentWorkspace({ page }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
+  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
   const [routineParametersOpen, setRoutineParametersOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -764,7 +765,7 @@ export function AgentWorkspace({ page }) {
               {graphDetailPending ? (
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen || routineParametersOpen ? 'is-editing' : ''}`}>
+                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen || routineParametersOpen ? 'is-editing' : ''}`}>
                   <AgentGraphTab
                     key={selectedAgent.id}
                     agent={selectedAgent}
@@ -774,10 +775,13 @@ export function AgentWorkspace({ page }) {
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
-                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineParametersOpen(false); }}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); setRoutineParametersOpen(false); }}
                     onCloseJson={() => setGraphEditorOpen(false)}
+                    runsOpen={routineRunsOpen}
+                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); setRoutineParametersOpen(false); }}
+                    onCloseRuns={() => setRoutineRunsOpen(false)}
                     parametersOpen={routineParametersOpen}
-                    onOpenParameters={() => { setRoutineParametersOpen(true); setGraphEditorOpen(false); }}
+                    onOpenParameters={() => { setRoutineParametersOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); }}
                     onCloseParameters={() => setRoutineParametersOpen(false)}
                   />
                 </div>
