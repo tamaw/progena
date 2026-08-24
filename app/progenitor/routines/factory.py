@@ -952,9 +952,10 @@ def _instrument_node_callable(
     node_id: str, fn: Any, route_fn: Callable[[RoutineState], Any] | None = None
 ) -> Any:
     """Wrap a node's runnable to record wall-clock duration (and, when the
-    node made a real LLM call, token usage) into run_meta, uniformly for
-    every node kind -- independent of what the node itself returns, so it
-    can never be skipped by omission the way a per-kind opt-in would be.
+    node made a real LLM call, token usage, or wrote to `data`, that too)
+    into run_meta, uniformly for every node kind -- independent of what the
+    node itself returns, so it can never be skipped by omission the way a
+    per-kind opt-in would be.
     Preserves the inner callable's calling convention: some node builders
     accept an optional ``runtime`` second parameter and LangGraph decides
     whether to pass it based on the callable's own signature, so this
@@ -1015,12 +1016,18 @@ def _instrument_node_callable(
             "duration_ms": round(duration_ms, 2),
             "step": step,
         }
+        # This execution's own written fields (not the whole accumulated
+        # `data` dict) -- `data` itself only ever holds the latest write per
+        # key, so a node run multiple times (a loop body) would otherwise
+        # have no way to recover what an earlier iteration actually wrote.
+        new_data = update.get("data")
+        if isinstance(new_data, dict) and new_data:
+            entry["output"] = new_data
         tokens = _extract_token_usage(result)
         if tokens is not None:
             entry["tokens"] = tokens
         if route_fn is not None:
             try:
-                new_data = update.get("data")
                 merged_data = {
                     **(state.get("data") or {}),
                     **(new_data if isinstance(new_data, dict) else {}),
