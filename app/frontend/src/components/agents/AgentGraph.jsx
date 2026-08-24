@@ -326,6 +326,12 @@ const GraphEditContext = createContext(null);
 const EMPTY_MISSING = new Set();
 const MissingFieldsContext = createContext(EMPTY_MISSING);
 
+// Bottom-left zoom control's range/step -- 50%-200% in 10% increments,
+// starting (and Reset zoom-ing back to) 100%.
+const ZOOM_MIN = 0.5;
+const ZOOM_MAX = 2;
+const ZOOM_STEP = 0.1;
+
 // One config field bound to `data.config[field]` (a plain string value).
 function ConfigField({ id, config, field, label, placeholder, multiline, updateNodeConfig }) {
   const missing = useContext(MissingFieldsContext);
@@ -2728,6 +2734,18 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     // needs to re-fire this on its own identity change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBrowsingHistory]);
+  // Plain CSS `zoom` on the scrolling chain content only -- not a canvas-
+  // style pan/zoom viewport (this isn't React Flow, see the module doc).
+  // Deliberately NOT wired into positionInspector's math: CSS `zoom`
+  // reflows layout, so getBoundingClientRect() on a zoomed node already
+  // reports its real post-zoom screen position, and that function reads
+  // real rects off the DOM rather than any canvas-model coordinates --
+  // it keeps working unmodified at any zoom level.
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => setZoom(1), [agent.id]);
+  const zoomOut = useCallback(() => setZoom((z) => Math.max(ZOOM_MIN, Math.round((z - ZOOM_STEP) * 100) / 100)), []);
+  const zoomIn = useCallback(() => setZoom((z) => Math.min(ZOOM_MAX, Math.round((z + ZOOM_STEP) * 100) / 100)), []);
+  const resetZoom = useCallback(() => setZoom(1), []);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3570,9 +3588,37 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 </span>
               </div>
             )}
+            <div className="agents-graph-floating agents-graph-floating--zoom">
+              <DetailHeaderAction
+                icon={<ZoomOutIcon />}
+                label="Zoom out"
+                tooltip="Zoom out"
+                ariaLabel="Zoom out"
+                onClick={zoomOut}
+                disabled={zoom <= ZOOM_MIN}
+              />
+              <button
+                type="button"
+                className="agents-graph-zoom__pct"
+                onClick={resetZoom}
+                title="Reset zoom"
+                aria-label="Reset zoom"
+              >
+                {Math.round(zoom * 100)}%
+              </button>
+              <DetailHeaderAction
+                icon={<ZoomInIcon />}
+                label="Zoom in"
+                tooltip="Zoom in"
+                ariaLabel="Zoom in"
+                onClick={zoomIn}
+                disabled={zoom >= ZOOM_MAX}
+              />
+            </div>
               <GraphEditContext.Provider value={editContext}>
               <div
                 className="routine-canvas__scroll"
+                style={{ zoom }}
                 onClick={(event) => {
                   // A locked inspector still ignores the background: an
                   // accidental outside click discarding an in-progress edit
@@ -3690,6 +3736,29 @@ function RestoreActionIcon() {
       <path d="M4 4.6A5.2 5.2 0 1 1 2.9 9.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
       <path d="M4.6 2.4 4 4.6 6.3 5.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M8 6v2.6l1.8 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Magnifying glass with a +/- inside -- the bottom-left zoom control's
+// icons. Not a canvas-viewport zoom (this isn't React Flow): see the
+// `zoom` state comment in GraphCanvas.
+function ZoomOutIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M13.5 13.5 10.2 10.2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M4.6 6.8h4.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ZoomInIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M13.5 13.5 10.2 10.2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <path d="M6.8 4.6v4.4M4.6 6.8h4.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
     </svg>
   );
 }

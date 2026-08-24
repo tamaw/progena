@@ -6999,6 +6999,32 @@ body,
   right: 16px;
 }
 
+/* Zoom control -- plain CSS `zoom` on the routine chain's own scroll
+   content only (see GraphCanvas's `zoom` state comment), not a canvas
+   viewport transform. Occupies the canvas's bottom-left corner, the spot
+   the save/validation status pill vacated when it moved under the actions
+   pill above. */
+.agents-graph-floating--zoom {
+  top: auto;
+  bottom: 14px;
+}
+
+.agents-graph-floating .agents-graph-zoom__pct {
+  min-width: 38px;
+  padding: 0 6px;
+  text-align: center;
+  color: var(--color-text-secondary);
+  background: transparent;
+  border: none;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+
+.agents-graph-floating .agents-graph-zoom__pct:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
 .agents-graph-floating .agents-graph-run-nav__label {
   padding: 0 4px;
   min-width: 28px;
