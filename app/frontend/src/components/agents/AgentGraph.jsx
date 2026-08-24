@@ -1354,7 +1354,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
             <button
               type="button"
               className="routine-node-inspector__run-to-here"
-              title="Execute the routine from wherever this editor session last stopped, up to (not including) this step"
+              title="Execute the routine from wherever this editor session last stopped, through this step"
               disabled={runStatus === 'discovering' || runStatus === 'running'}
               onClick={() => {
                 if (nodeRequiresRunConfirmation(node.id, graphNodes, graphEdges, runMeta)) {
@@ -1710,18 +1710,18 @@ const SIDE_EFFECTING_KINDS = new Set(['agent', 'routine', 'a2a', 'human']);
 
 // Whether "run to here" for `targetNodeId` would, for the first time this
 // interactive session, execute a node with a real side effect --
-// `interrupt_before=[targetNodeId]` (see subagent.py) means everything
-// BEFORE the target runs, never the target itself, so predecessors are
-// what matters here, not the clicked node. A predecessor that already
-// carries a run_meta entry this session already had its side effect
-// happen once and won't happen again on this click (LangGraph resumes
-// past whatever's already checkpointed, see subagent.py's `_run`) -- only
-// a genuinely new execution needs a confirmation.
+// `interrupt_after=[targetNodeId]` (see subagent.py) means everything
+// UP TO AND INCLUDING the target runs, so both its predecessors and the
+// clicked node itself matter here. A node that already carries a run_meta
+// entry this session already had its side effect happen once and won't
+// happen again on this click (LangGraph resumes past whatever's already
+// checkpointed, see subagent.py's `_run`) -- only a genuinely new
+// execution needs a confirmation.
 // eslint-disable-next-line react-refresh/only-export-components
 export function nodeRequiresRunConfirmation(targetNodeId, nodes, edges, runMeta) {
   const nodesById = new Map((nodes || []).map((node) => [node.id, node]));
   const completed = new Set(Object.keys(runMeta || {}).filter((id) => (runMeta[id] || []).length > 0));
-  for (const id of predecessorsOf(targetNodeId, edges)) {
+  for (const id of [...predecessorsOf(targetNodeId, edges), targetNodeId]) {
     if (completed.has(id)) continue;
     if (SIDE_EFFECTING_KINDS.has(nodesById.get(id)?.kind)) return true;
   }
@@ -2508,7 +2508,7 @@ function useRoutineRunPolling(agentId, parameters) {
     return () => clearTimeout(timer);
   }, [status, threadId, runState.run_meta, agentsUrl, agentId, dispatch]);
 
-  // `targetNode` set means "run to (not including) this node", reusing a
+  // `targetNode` set means "run through this node (inclusive)", reusing a
   // STABLE session_id across repeated clicks within this editor session --
   // the backend's `_interactive_session_id` resume mechanism (see
   // subagent.py's `_run`) needs the same session_id back on every call to

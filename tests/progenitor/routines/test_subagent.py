@@ -430,7 +430,7 @@ def _graph_doc_chain() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_interactive_target_node_stops_before_it_runs():
+async def test_interactive_target_node_runs_through_it():
     from langgraph.checkpoint.memory import MemorySaver
 
     model = _EchoModel()
@@ -452,9 +452,10 @@ async def test_interactive_target_node_stops_before_it_runs():
             "_interactive_target_node": "b",
         }
     )
-    # Only "a" ran -- "b"/"c" never invoked the model.
-    assert len(model.calls) == 1
+    # "a" and "b" ran -- "c" never invoked the model.
+    assert len(model.calls) == 2
     assert model.calls[0][-1].content == "step-a"
+    assert model.calls[1][-1].content == "step-b"
 
 
 @pytest.mark.asyncio
@@ -480,7 +481,7 @@ async def test_interactive_session_id_resumes_instead_of_restarting():
             "_interactive_target_node": "b",
         }
     )
-    assert len(model.calls) == 1  # only "a" ran so far
+    assert len(model.calls) == 2  # "a" and "b" ran so far
 
     result = await spec["runnable"].ainvoke(
         {
@@ -488,10 +489,9 @@ async def test_interactive_session_id_resumes_instead_of_restarting():
             "_interactive_session_id": "sess-1",
         }
     )
-    # "b" and "c" ran -- "a" was NOT re-invoked, proving this resumed the
+    # "c" ran -- "a"/"b" were NOT re-invoked, proving this resumed the
     # same checkpointed thread rather than starting a fresh run from input.
     assert len(model.calls) == 3
-    assert model.calls[1][-1].content == "step-b"
     assert model.calls[2][-1].content == "step-c"
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-a"}
 
