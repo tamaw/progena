@@ -22,7 +22,7 @@ import {
   selectAgentRoutineRuns,
   selectAgentRunState,
 } from '../../store/uiDataSlice';
-import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon, ReconnectActionIcon } from '../layout/DetailHeader';
+import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 import {
@@ -3484,16 +3484,18 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                   onClick={startRunAndTrackLatest}
                   disabled={runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
-                {runNav.isBrowsingHistory ? (
-                  <DetailHeaderAction
-                    icon={<ReconnectActionIcon />}
-                    label="Restore"
-                    tooltip={runNav.canRestore ? 'Restore this run\u2019s graph as the live draft' : 'Loading this run\u2019s graph…'}
-                    ariaLabel="Restore this run's graph"
-                    onClick={() => setRestoreConfirmOpen(true)}
-                    disabled={!runNav.canRestore}
-                  />
-                ) : null}
+                <DetailHeaderAction
+                  icon={<RestoreActionIcon />}
+                  label="Restore"
+                  tooltip={
+                    !runNav.isBrowsingHistory ? 'Step back through a previous run to restore it'
+                      : runNav.canRestore ? 'Restore this run\u2019s graph as the live draft'
+                      : 'Loading this run\u2019s graph…'
+                  }
+                  ariaLabel="Restore this run's graph"
+                  onClick={() => setRestoreConfirmOpen(true)}
+                  disabled={!runNav.isBrowsingHistory || !runNav.canRestore}
+                />
                 {onDelete ? (
                   <DetailHeaderAction
                     icon={<DeleteActionIcon />}
@@ -3640,6 +3642,22 @@ function ChevronRightPointSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
       <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// A tray/archive with a downward arrow landing in it -- reads as "restore
+// from backup" rather than ReconnectActionIcon's circular refresh loop,
+// which is a different concept (reconnect/retry, not "bring this snapshot
+// back"). Always rendered in the toolbar (see the Restore button), just
+// disabled outside history browsing, so its width never toggles in and out
+// and shifts the rest of the toolbar/side dock around.
+function RestoreActionIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d="M8 2v6.3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M5.3 6 8 8.7 10.7 6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.5 9.3v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
