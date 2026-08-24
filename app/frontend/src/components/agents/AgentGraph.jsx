@@ -3655,7 +3655,7 @@ function ChevronRightPointSmall() {
 // and shifts the rest of the toolbar/side dock around.
 function RestoreActionIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
       <path d="M4 4.6A5.2 5.2 0 1 1 2.9 9.6" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
       <path d="M4.6 2.4 4 4.6 6.3 5.3" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M8 6v2.6l1.8 1" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
