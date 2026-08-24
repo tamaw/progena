@@ -6436,65 +6436,8 @@ body,
   gap: 8px;
 }
 
-/* Routine Runs panel -- shares .agents-graph-editor shell chrome (width,
-   collapse rail, header) with the JSON editor; only the body differs.
-   Scroll is scoped to .agents-graph-runs__list, NOT this outer <aside> --
-   the collapse button (.agents-graph-editor__collapse) straddles the seam
-   via a negative transform, rendering *outside* this box's edge, and an
-   overflow: auto here would clip it out of the hit-test area entirely,
-   making it unclickable. */
-.agents-graph-runs__empty {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: 12.5px;
-}
-
-.agents-graph-runs__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.agents-graph-runs__item {
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: var(--color-bg-primary);
-}
-
-.agents-graph-runs__item-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  font-size: 12.5px;
-  font-weight: 600;
-}
-
-.agents-graph-runs__run-id {
-  font-family: var(--font-mono, monospace);
-}
-
-.agents-graph-runs__age {
-  color: var(--color-text-tertiary);
-  font-weight: 400;
-}
-
-.agents-graph-runs__item-meta {
-  display: flex;
-  gap: 10px;
-  margin-top: 4px;
-  color: var(--color-text-tertiary);
-  font-size: 11.5px;
-}
-
 /* Routine Parameters panel -- shares .agents-graph-editor shell chrome with
-   JSON/Runs/Revisions. Same overflow lesson: scroll is scoped to
+   the JSON editor. Same overflow lesson: scroll is scoped to
    .agents-graph-parameters__list, never the outer <aside>. Reuses the
    NodeInspector's .agents-graph-node__field/-label/__required classes for
    labels (they carry no --node-color dependency), with its own input/hint
@@ -6545,62 +6488,6 @@ body,
   border-color: color-mix(in oklab, var(--color-accent) 45%, var(--color-border));
   box-shadow: 0 0 0 3px var(--color-accent-soft);
 }
-
-/* Routine Revisions panel -- shares .agents-graph-editor shell chrome with
-   JSON/Runs. Same overflow lesson as .agents-graph-runs__list: scroll is
-   scoped to this inner list, never the outer <aside>, or it clips the
-   seam-straddling collapse chevron out of the hit-test area. Selecting a
-   revision renders it read-only in the main canvas (see GraphCanvas's
-   viewingRevisionId/readOnly) and expands its own list item in place
-   with Restore/Return controls (.agents-graph-revisions__actions below) --
-   no separate canvas-floating banner or main-content selection UI. */
-.agents-graph-revisions__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.agents-graph-revisions__item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 8px 10px;
-  background: var(--color-bg-primary);
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.agents-graph-revisions__item:hover {
-  background: var(--color-bg-hover);
-}
-
-.agents-graph-revisions__item.is-selected {
-  border-color: var(--color-accent);
-  background: var(--color-accent-soft);
-}
-
-/* Expanded in place under the selected item's button. Restore copies the
-   revision into the live editable draft; Return to current just drops
-   back to it unmodified (both live in the list, not the main canvas). */
-.agents-graph-revisions__actions {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 8px 10px 2px;
-}
-
 
 .agents-status-pill,
 .agents-chip {

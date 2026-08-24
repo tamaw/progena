@@ -15,16 +15,14 @@ import PopupModal from '../common/PopupModal';
 import { useConfig } from '../../context/ConfigContext';
 import {
   fetchRoutineRevision,
-  fetchRoutineRevisions,
   fetchRoutineRuns,
   fetchRunState,
   selectAgentProfiles,
   selectAgentRoutineRevisionContent,
-  selectAgentRoutineRevisions,
   selectAgentRoutineRuns,
   selectAgentRunState,
 } from '../../store/uiDataSlice';
-import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
+import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon, ReconnectActionIcon } from '../layout/DetailHeader';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 import {
@@ -2605,6 +2603,22 @@ function useRunHistoryNav(agentId, live) {
   const displayEntry = usesLive
     ? (live.threadId ? runsList.find((run) => run.thread_id === live.threadId) : runsList[0])
     : runsList[viewedIndex];
+  const isBrowsingHistory = !atFront;
+
+  // Every run is assumed pinned to a revision (see agent_store's
+  // list_routine_runs, which bakes revision_id into the thread_id) -- an
+  // 'unpinned'/missing one is legacy data from before runs were tagged and
+  // is simply treated as having nothing to show, not specially handled.
+  // Fetched into the same revisionContentByKey cache the JSON/restore flow
+  // already shares, so re-visiting an already-fetched run is free.
+  const browsedRevisionId = isBrowsingHistory ? (displayEntry?.revision_id || null) : null;
+  const browsedGraph = useSelector((state) => (
+    browsedRevisionId ? selectAgentRoutineRevisionContent(state, agentId, browsedRevisionId) : undefined
+  ));
+  useEffect(() => {
+    if (!browsedRevisionId || browsedGraph) return;
+    dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId: browsedRevisionId }));
+  }, [browsedRevisionId, browsedGraph, agentsUrl, agentId, dispatch]);
 
   const goBack = useCallback(() => {
     setViewedIndex((current) => Math.min(current + 1, Math.max(runsList.length - 1, 0)));
@@ -2621,6 +2635,13 @@ function useRunHistoryNav(agentId, live) {
     canGoForward: viewedIndex > 0,
     label: displayEntry ? (formatAge(displayEntry.last_checkpoint_at) || 'now') : (isLiveActive ? 'Running…' : null),
     title: displayEntry?.last_checkpoint_at || '',
+    // Everything about a browsed run is locked (see the toolbar's Restore
+    // button): the graph shown is that run's own pinned snapshot, not the
+    // editable draft, so there is nothing sound to edit until either
+    // stepping back to the live front position or explicitly Restoring it.
+    isBrowsingHistory,
+    browsedGraph: isBrowsingHistory ? browsedGraph : null,
+    canRestore: isBrowsingHistory && Boolean(browsedGraph),
     goBack,
     goForward,
     resetToLatest,
@@ -2634,8 +2655,10 @@ function useRunHistoryNav(agentId, live) {
 // against the live/unpinned document (no revision reader configured) --
 // there is no earlier snapshot to diff against in that case, so nothing
 // is ever flagged stale for it; a documented limitation, not a soundness
-// claim. Mirrors RoutineRevisionsPanel's own cache-check-before-fetch
-// pattern against the same revisionContentByKey cache.
+// claim. Only meaningful at the run-nav's front (live draft) position --
+// GraphCanvas discards this result while browsing history, since the
+// canvas there already shows that run's own exact snapshot (see
+// useRunHistoryNav's browsedGraph), which can never diverge from itself.
 function useRunStaleness(agentId, runRevisionId, currentGraph) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
@@ -2653,8 +2676,9 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
   );
 }
 
-function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions, parametersOpen, onOpenParameters, onCloseParameters }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, parametersOpen, onOpenParameters, onCloseParameters }) {
   const persistRef = useRef(onPersist);
+  const lastSavedRef = useRef(null);
   // Values the user fills in for the routine's declared input_schema.properties
   // (see RoutineParametersPanel) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
@@ -3233,60 +3257,49 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     }));
   }, []);
 
-  // Read-only revision preview: set by picking a revision in the Revisions
-  // panel. RoutineRevisionsPanel dispatches the fetch; this only reads the
-  // resulting Redux cache entry, so both stay in sync off the same source.
-  // null means "showing the live/editable draft" (the normal state).
-  const [viewingRevisionId, setViewingRevisionId] = useState(null);
-  // Reset back to the live draft whenever the Revisions panel closes --
-  // adjusted during render (React's documented pattern for state that
-  // must follow a prop change), not inside a useEffect, so there's no
-  // extra render showing stale locked content before the reset lands.
-  const [revisionsWereOpen, setRevisionsWereOpen] = useState(revisionsOpen);
-  if (revisionsOpen !== revisionsWereOpen) {
-    setRevisionsWereOpen(revisionsOpen);
-    if (!revisionsOpen && viewingRevisionId !== null) {
-      setViewingRevisionId(null);
-    }
-  }
-  const viewingRevision = useSelector((state) => (
-    viewingRevisionId ? selectAgentRoutineRevisionContent(state, agent.id, viewingRevisionId) : null
-  ));
-  const isViewingRevision = Boolean(viewingRevisionId);
+  // Restoring pushes the browsed run's revision straight into the live
+  // draft AND persists it immediately (unlike a normal edit, which only
+  // autosaves on its usual debounce) -- Restore is the one explicit way
+  // out of read-only history browsing, so the moment it's confirmed the
+  // canvas has to already be showing, and be editable against, that exact
+  // content, not a dirty draft still catching up to it.
+  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  const handleRestoreRun = useCallback(async () => {
+    const browsed = runNav.browsedGraph;
+    if (!browsed) return;
+    const nextMeta = {
+      status: browsed.status || 'Draft',
+      version: browsed.version || '2.0.0',
+      summary: browsed.summary || '',
+      entry: browsed.entry || (browsed.nodes || [])[0]?.id || null,
+      settings: browsed.settings || {},
+      input_schema: browsed.input_schema || null,
+      output_schema: browsed.output_schema || null,
+      $defs: browsed.$defs || {},
+    };
+    const nextNodes = (browsed.nodes || []).map((node) => ({ ...node }));
+    const nextEdges = (browsed.edges || []).map((edge) => ({ ...edge }));
+    setMeta(nextMeta);
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    const payload = serializeGraph(nextNodes, nextEdges, nextMeta);
+    await persistRef.current(payload);
+    lastSavedRef.current = JSON.stringify(payload);
+    setSaveError(null);
+    setSaveState('saved');
+    runNav.resetToLatest();
+    setRestoreConfirmOpen(false);
+  }, [runNav]);
+
   const displayNodes = useMemo(
-    () => (isViewingRevision ? (viewingRevision?.nodes || []) : nodes),
-    [isViewingRevision, viewingRevision, nodes],
+    () => (runNav.isBrowsingHistory ? (runNav.browsedGraph?.nodes || []) : nodes),
+    [runNav.isBrowsingHistory, runNav.browsedGraph, nodes],
   );
   const displayEdges = useMemo(
-    () => (isViewingRevision ? (viewingRevision?.edges || []) : edges),
-    [isViewingRevision, viewingRevision, edges],
+    () => (runNav.isBrowsingHistory ? (runNav.browsedGraph?.edges || []) : edges),
+    [runNav.isBrowsingHistory, runNav.browsedGraph, edges],
   );
-  const displayEntry = isViewingRevision ? (viewingRevision?.entry ?? null) : meta.entry;
-
-  // Restoring copies the revision into the live editable state as a dirty
-  // draft -- it does NOT persist by itself. The existing autosave effect
-  // below picks up the resulting nodes/edges/meta change exactly like any
-  // other edit and PATCHes it on its normal debounce, so restoring an old
-  // revision becomes current the same way any other edit does.
-  const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
-  const handleRestoreRevision = useCallback(() => {
-    if (!viewingRevision) return;
-    const nextMeta = {
-      status: viewingRevision.status || 'Draft',
-      version: viewingRevision.version || '2.0.0',
-      summary: viewingRevision.summary || '',
-      entry: viewingRevision.entry || (viewingRevision.nodes || [])[0]?.id || null,
-      settings: viewingRevision.settings || {},
-      input_schema: viewingRevision.input_schema || null,
-      output_schema: viewingRevision.output_schema || null,
-      $defs: viewingRevision.$defs || {},
-    };
-    setMeta(nextMeta);
-    setNodes((viewingRevision.nodes || []).map((node) => ({ ...node })));
-    setEdges((viewingRevision.edges || []).map((edge) => ({ ...edge })));
-    setViewingRevisionId(null);
-    setRestoreConfirmOpen(false);
-  }, [viewingRevision]);
+  const displayEntry = runNav.isBrowsingHistory ? (runNav.browsedGraph?.entry ?? null) : meta.entry;
 
   // Which node ids have at least one recorded execution this run, and --
   // derived from that -- which node(s) are probably executing right now
@@ -3299,15 +3312,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
   );
   const activeNodeIds = useMemo(
     () => (runStatus === 'running' || runStatus === 'discovering'
-      ? deriveActiveNodeIds(displayNodes, displayEdges, meta.entry, completedNodeIds)
+      ? deriveActiveNodeIds(displayNodes, displayEdges, displayEntry, completedNodeIds)
       : new Set()),
-    [runStatus, displayNodes, displayEdges, meta.entry, completedNodeIds],
+    [runStatus, displayNodes, displayEdges, displayEntry, completedNodeIds],
   );
   const currentGraphForStaleness = useMemo(
     () => ({ entry: meta.entry, nodes, edges }),
     [meta.entry, nodes, edges],
   );
-  const staleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
+  const rawStaleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
+  const staleNodeIds = runNav.isBrowsingHistory ? EMPTY_MISSING : rawStaleNodeIds;
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
@@ -3327,7 +3341,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     edges: displayEdges,
     nodes: displayNodes,
     inputSchema: meta.input_schema,
-    readOnly: isViewingRevision,
+    readOnly: runNav.isBrowsingHistory,
     runMeta,
     runData,
     activeNodeIds,
@@ -3337,7 +3351,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -3360,7 +3374,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     }),
     [meta.input_schema, parameterValues],
   );
-  const lastSavedRef = useRef(null);
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
     const signature = JSON.stringify(payload);
@@ -3462,14 +3475,25 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                   icon={<PlayActionIcon />}
                   label="Run"
                   tooltip={
-                    !isServerConfirmed ? 'Waiting for save to be confirmed…'
+                    runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
+                      : !isServerConfirmed ? 'Waiting for save to be confirmed…'
                       : missingRequiredParams.length > 0 ? `Fill in ${missingRequiredParams.length} required parameter${missingRequiredParams.length === 1 ? '' : 's'} first`
                       : 'Run routine'
                   }
                   ariaLabel="Run routine"
-                  onClick={() => { startRunAndTrackLatest(); onRun(); }}
-                  disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
+                  onClick={startRunAndTrackLatest}
+                  disabled={runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
+                {runNav.isBrowsingHistory ? (
+                  <DetailHeaderAction
+                    icon={<ReconnectActionIcon />}
+                    label="Restore"
+                    tooltip={runNav.canRestore ? 'Restore this run\u2019s graph as the live draft' : 'Loading this run\u2019s graph…'}
+                    ariaLabel="Restore this run's graph"
+                    onClick={() => setRestoreConfirmOpen(true)}
+                    disabled={!runNav.canRestore}
+                  />
+                ) : null}
                 {onDelete ? (
                   <DetailHeaderAction
                     icon={<DeleteActionIcon />}
@@ -3478,11 +3502,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                     ariaLabel="Delete routine"
                     variant="danger"
                     onClick={onDelete}
+                    disabled={runNav.isBrowsingHistory}
                   />
                 ) : null}
               </DetailHeaderActions>
             </div>
-            {runNav.hasRuns && !isViewingRevision ? (
+            {runNav.hasRuns ? (
               <div className="agents-graph-floating agents-graph-floating--history">
                 <DetailHeaderAction
                   icon={<ChevronLeftSmall />}
@@ -3505,7 +3530,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                 />
               </div>
             ) : null}
-            {isViewingRevision ? null : (
+            {runNav.isBrowsingHistory ? null : (
               <div className="agents-graph-floating agents-graph-floating--status">
                 {saveState !== 'idle' ? (
                   <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
@@ -3564,18 +3589,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
           onSave={handleJsonApply}
           onClose={onCloseJson}
         />
-      ) : runsOpen ? (
-        <RoutineRunsPanel key={agent.id} agentId={agent.id} onClose={onCloseRuns} />
-      ) : revisionsOpen ? (
-        <RoutineRevisionsPanel
-          key={agent.id}
-          agentId={agent.id}
-          onClose={onCloseRevisions}
-          viewingRevisionId={viewingRevisionId}
-          onSelectRevision={setViewingRevisionId}
-          canRestore={Boolean(viewingRevision)}
-          onRequestRestore={() => setRestoreConfirmOpen(true)}
-        />
       ) : parametersOpen ? (
         <RoutineParametersPanel
           key={agent.id}
@@ -3584,17 +3597,17 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
           onChange={setParameterValues}
           onClose={onCloseParameters}
         />
-      ) : (
-        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); if (id === 'revisions') onOpenRevisions(); if (id === 'parameters') onOpenParameters(); }} />
+      ) : runNav.isBrowsingHistory ? null : (
+        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); }} />
       )}
       {restoreConfirmOpen ? (
         <PopupModal
-          eyebrow="Restore revision"
-          title={`Restore revision ${(viewingRevisionId || '').slice(0, 8)}?`}
-          message="This replaces your current draft with the selected revision. Any unsaved changes to the current draft will be lost. The restored graph is not saved until you edit it further -- it autosaves the same way any other change does."
+          eyebrow="Restore run"
+          title={`Restore the run from ${runNav.label || 'this position'}?`}
+          message="This replaces your current draft with the graph this run actually executed against, and saves it immediately as the new live revision. Any unsaved changes to the current draft will be lost."
           confirmLabel="Restore"
           onClose={() => setRestoreConfirmOpen(false)}
-          onConfirm={handleRestoreRevision}
+          onConfirm={handleRestoreRun}
         />
       ) : null}
     </>
@@ -3633,8 +3646,6 @@ function ChevronRightPointSmall() {
 
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
-  { id: 'runs', label: 'Runs', title: 'Routine run history' },
-  { id: 'revisions', label: 'Revisions', title: 'Routine revision history' },
   { id: 'parameters', label: 'Params', title: 'Routine parameters' },
 ];
 
@@ -3658,25 +3669,18 @@ function GraphSideDock({ onSelect }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onRun, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, revisionsOpen, onOpenRevisions, onCloseRevisions, parametersOpen, onOpenParameters, onCloseParameters }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, parametersOpen, onOpenParameters, onCloseParameters }) {
   return (
     <GraphCanvas
       agent={agent}
       graph={graph}
       confirmedGraph={confirmedGraph}
       onPersist={onPersist}
-      onRun={onRun}
       onShowProfile={onShowProfile}
       onDelete={onDelete}
       jsonOpen={jsonOpen}
       onOpenJson={onOpenJson}
       onCloseJson={onCloseJson}
-      runsOpen={runsOpen}
-      onOpenRuns={onOpenRuns}
-      onCloseRuns={onCloseRuns}
-      revisionsOpen={revisionsOpen}
-      onOpenRevisions={onOpenRevisions}
-      onCloseRevisions={onCloseRevisions}
       parametersOpen={parametersOpen}
       onOpenParameters={onOpenParameters}
       onCloseParameters={onCloseParameters}
@@ -3803,76 +3807,6 @@ function AgentGraphEditor({ graph, onSave, onClose }) {
           {saving ? 'Saving…' : 'Apply changes'}
         </button>
       </div>
-    </aside>
-  );
-}
-
-// Recent executions of this routine, reconstructed from LangGraph checkpoint
-// threads named `routine:<routine_id>:<revision_id>:<run_id>` (see
-// app.progenitor.routines.subagent.create_routine_subagent). Lazily fetched
-// the first time the panel opens for a given agent; a manual refresh re-asks
-// since nothing pushes live updates here yet.
-function RoutineRunsPanel({ agentId, onClose }) {
-  const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const agentsUrl = getApiUrl('agentProfiles');
-  const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    dispatch(fetchRoutineRuns({ agentsUrl, agentId }))
-      .unwrap()
-      .catch((fetchError) => setError(fetchError.message || 'Failed to load runs'))
-      .finally(() => setLoading(false));
-  }, [agentId, agentsUrl, dispatch]);
-
-  useEffect(() => {
-    if (!runs) {
-      load();
-    }
-    // Only auto-load the first time this agent's runs are uncached; a
-    // manual refresh (or a later run) re-fetches explicitly via `load`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
-
-  return (
-    <aside className="agents-graph-editor agents-graph-runs">
-      <button
-        type="button"
-        className="agents-graph-editor__collapse"
-        onClick={onClose}
-        title="Collapse"
-        aria-label="Collapse run history"
-      >
-        <ChevronRightSmall />
-      </button>
-      <header className="agents-graph-editor__head">
-        <h2>Runs</h2>
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={load} disabled={loading}>
-          {loading ? 'Loading…' : 'Refresh'}
-        </button>
-      </header>
-      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
-      {!error && runs && runs.length === 0 && !loading ? (
-        <p className="agents-graph-runs__empty">No runs recorded yet.</p>
-      ) : null}
-      <ul className="agents-graph-runs__list">
-        {(runs || []).map((run) => (
-          <li key={run.thread_id} className="agents-graph-runs__item">
-            <div className="agents-graph-runs__item-head">
-              <span className="agents-graph-runs__run-id">{(run.run_id || '').slice(0, 8) || 'unknown'}</span>
-              <span className="agents-graph-runs__age" title={run.last_checkpoint_at || ''}>{formatAge(run.last_checkpoint_at) || '—'}</span>
-            </div>
-            <div className="agents-graph-runs__item-meta">
-              <span>revision {(run.revision_id || 'unpinned').slice(0, 8)}</span>
-              <span>{run.checkpoint_count} step{run.checkpoint_count === 1 ? '' : 's'}</span>
-            </div>
-          </li>
-        ))}
-      </ul>
     </aside>
   );
 }
@@ -4035,122 +3969,3 @@ function RoutineParametersPanel({ inputSchema, values, onChange, onClose }) {
   );
 }
 
-// Every captured revision of this routine's graph document (see
-// app.backend.document_store.PostgresDocumentStore._ensure_routine_revision_history
-// -- a Postgres trigger appends one immutable row on every write to the
-// routine's live document). Clicking a revision renders its actual graph
-// in the canvas above (locked read-only -- see GraphCanvas's readOnly
-// context flag), not a JSON dump: `viewingRevisionId`/`onSelectRevision`
-// are owned by GraphCanvas so the canvas and this list stay in sync.
-function RoutineRevisionsPanel({
-  agentId,
-  onClose,
-  viewingRevisionId,
-  onSelectRevision,
-  canRestore,
-  onRequestRestore,
-}) {
-  const dispatch = useDispatch();
-  const { getApiUrl } = useConfig();
-  const agentsUrl = getApiUrl('agentProfiles');
-  const revisions = useSelector((state) => selectAgentRoutineRevisions(state, agentId));
-  // Whole cache map (not a per-revision selector) so `selectRevision` can
-  // check "already fetched" without violating the rules of hooks inside a
-  // list render -- a revision is only ever fetched once per mount.
-  const revisionContentByKey = useSelector((state) => state.uiData.agents.revisionContentByKey);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [revisionLoading, setRevisionLoading] = useState(false);
-  const [revisionError, setRevisionError] = useState(null);
-
-  const load = useCallback(() => {
-    setLoading(true);
-    setError(null);
-    dispatch(fetchRoutineRevisions({ agentsUrl, agentId }))
-      .unwrap()
-      .catch((fetchError) => setError(fetchError.message || 'Failed to load revisions'))
-      .finally(() => setLoading(false));
-  }, [agentId, agentsUrl, dispatch]);
-
-  useEffect(() => {
-    if (!revisions) {
-      load();
-    }
-    // Only load the first time this agent's revisions are uncached -- a
-    // live push (agent.routine.revisions.loaded) keeps the list current
-    // after that, see _reconcile_routine_agent in ui_routes.py, so there
-    // is no manual refresh affordance.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agentId]);
-
-  const selectRevision = useCallback((revisionId) => {
-    onSelectRevision(revisionId);
-    setRevisionError(null);
-    // Already cached from an earlier click -- render immediately, no
-    // re-fetch and no loading flash on every re-select.
-    if (revisionContentByKey[`${agentId}:${revisionId}`]) {
-      setRevisionLoading(false);
-      return;
-    }
-    setRevisionLoading(true);
-    dispatch(fetchRoutineRevision({ agentsUrl, agentId, revisionId }))
-      .unwrap()
-      .catch((fetchError) => setRevisionError(fetchError.message || 'Failed to load revision'))
-      .finally(() => setRevisionLoading(false));
-  }, [agentId, agentsUrl, dispatch, onSelectRevision, revisionContentByKey]);
-
-  return (
-    <aside className="agents-graph-editor agents-graph-revisions">
-      <button
-        type="button"
-        className="agents-graph-editor__collapse"
-        onClick={onClose}
-        title="Collapse"
-        aria-label="Collapse revision history"
-      >
-        <ChevronRightSmall />
-      </button>
-      <header className="agents-graph-editor__head">
-        <h2>Revisions</h2>
-      </header>
-      {error ? <p className="agents-graph-editor__error">{error}</p> : null}
-      {!error && revisions && revisions.length === 0 && !loading ? (
-        <p className="agents-graph-runs__empty">No revisions recorded yet.</p>
-      ) : null}
-      <ul className="agents-graph-revisions__list">
-        {(revisions || []).map((revision) => {
-          const isSelected = viewingRevisionId === revision.revision_id;
-          return (
-            <li key={revision.revision_id}>
-              <button
-                type="button"
-                className={`agents-graph-revisions__item${isSelected ? ' is-selected' : ''}`}
-                onClick={() => selectRevision(revision.revision_id)}
-              >
-                <span className="agents-graph-runs__run-id">{revision.revision_id.slice(0, 8)}</span>
-                <span className="agents-graph-runs__age" title={revision.captured_at || ''}>{formatAge(revision.captured_at) || '—'}</span>
-              </button>
-              {isSelected ? (
-                <div className="agents-graph-revisions__actions">
-                  {revisionLoading ? <span className="agents-graph-runs__empty">Loading…</span> : null}
-                  {revisionError ? <span className="agents-graph-editor__error">{revisionError}</span> : null}
-                  <button
-                    type="button"
-                    className="repo-btn repo-btn--ghost"
-                    onClick={onRequestRestore}
-                    disabled={!canRestore}
-                  >
-                    Restore this revision
-                  </button>
-                  <button type="button" className="repo-btn" onClick={() => onSelectRevision(null)}>
-                    Return to current
-                  </button>
-                </div>
-              ) : null}
-            </li>
-          );
-        })}
-      </ul>
-    </aside>
-  );
-}
