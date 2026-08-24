@@ -958,13 +958,35 @@ def _instrument_node_callable(node_id: str, fn: Any) -> Any:
     whether to pass it based on the callable's own signature, so this
     wrapper inspects that signature once at wrap time and forwards the
     same way.
+
+    A node that raises never gets to *return* its run_meta entry -- LangGraph
+    only applies (and checkpoints) a node's state update when it returns
+    normally, so a raised exception would otherwise leave this node with no
+    run_meta entry at all despite having run for a real, measurable
+    duration. Stash ``(node_id, entry)`` on the exception itself instead
+    (`routine_run_meta`) so the caller that already catches routine-run
+    failures -- ``subagent.py``'s ``_run``, which alone has the compiled
+    graph and this thread's ``run_config`` in scope -- can persist it via
+    ``compiled.aupdate_state`` before converting the failure into a chat
+    message. The exception's own type/message are left untouched so that
+    existing catch clause keeps matching exactly as before.
     """
     takes_runtime = len(inspect.signature(fn).parameters) >= 2
 
     async def wrapped(state: RoutineState, runtime: Any = None) -> dict[str, Any]:
         started = time.monotonic()
         started_at = utcnow_isoformat()
-        result = await (fn(state, runtime) if takes_runtime else fn(state))
+        try:
+            result = await (fn(state, runtime) if takes_runtime else fn(state))
+        except Exception as exc:
+            duration_ms = (time.monotonic() - started) * 1000
+            entry = {
+                "started_at": started_at,
+                "duration_ms": round(duration_ms, 2),
+                "error": str(exc) or type(exc).__name__,
+            }
+            exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
+            raise
         duration_ms = (time.monotonic() - started) * 1000
         update = dict(result) if isinstance(result, dict) else {}
         entry: dict[str, Any] = {"started_at": started_at, "duration_ms": round(duration_ms, 2)}

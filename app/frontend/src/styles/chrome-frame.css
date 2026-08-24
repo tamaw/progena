@@ -7581,6 +7581,21 @@ body,
   text-transform: uppercase;
 }
 
+.routine-step-card__run--error {
+  color: var(--color-error, #f85149);
+}
+
+.routine-step-card__run-error-badge {
+  padding: 0 5px;
+  color: var(--color-error, #f85149);
+  border: 1px solid color-mix(in oklab, var(--color-error, #f85149) 45%, transparent);
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
 @keyframes routine-step-card-run-pulse {
   0%, 100% { opacity: 0.35; }
   50% { opacity: 1; }
@@ -7810,6 +7825,18 @@ body,
   border: 1px solid color-mix(in oklab, var(--color-warning, #d29922) 35%, var(--color-border));
   border-radius: 6px;
   font-size: 10.5px;
+}
+
+.routine-node-inspector__run-error {
+  margin: 0 0 8px;
+  padding: 6px 9px;
+  color: var(--color-error, #f85149);
+  background: color-mix(in oklab, var(--color-error, #f85149) 10%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-error, #f85149) 35%, var(--color-border));
+  border-radius: 6px;
+  font-size: 10.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 
