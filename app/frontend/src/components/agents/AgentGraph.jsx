@@ -3486,7 +3486,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                   {runNav.label}
                 </span>
                 <DetailHeaderAction
-                  icon={<ChevronRightSmall />}
+                  icon={<ChevronRightPointSmall />}
                   label="Newer run"
                   tooltip="View the next run"
                   ariaLabel="View the next run"
@@ -3606,6 +3606,17 @@ function ChevronRightSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
       <path d="m6.2 4.2 3.6 3.8 3.6-3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// Mirrors ChevronLeftSmall's literal "<" shape -- ChevronRightSmall above
+// is actually a down chevron (used for panel-collapse affordances, not
+// direction), so the run-history nav's forward arrow needs its own icon.
+function ChevronRightPointSmall() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
+      <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
     </svg>
   );
 }
