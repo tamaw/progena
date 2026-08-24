@@ -2539,6 +2539,7 @@ function useRoutineRunPolling(agentId, parameters) {
 
   return {
     status,
+    threadId,
     runMeta: runState.run_meta,
     runData: runState.data,
     // Once nothing has completed yet, the best estimate for "when did the
@@ -2549,6 +2550,70 @@ function useRoutineRunPolling(agentId, parameters) {
     startRun,
     hasInteractiveSession,
     resetInteractiveSession,
+  };
+}
+
+// Drives the canvas's top-right run-history pill: back/forward paging
+// through every past execution of this routine (see agent_store's
+// `list_routine_runs`, newest-first). Position 0 ("the front") always
+// tracks whatever is most current -- the live in-session poll straight
+// from useRoutineRunPolling while one is in flight or has ever run this
+// session (ticking updates, no extra fetch), falling back to the newest
+// list entry on a fresh mount that has not run anything yet. Any other
+// position is purely historical: fetched once (never polled -- it already
+// finished) into the same runStateByThreadId cache the live poll itself
+// uses, so re-visiting a position already fetched this session is free.
+function useRunHistoryNav(agentId, live) {
+  const dispatch = useDispatch();
+  const { getApiUrl } = useConfig();
+  const agentsUrl = getApiUrl('agentProfiles');
+  const runsList = useSelector((state) => selectAgentRoutineRuns(state, agentId)) || [];
+
+  useEffect(() => {
+    dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
+    // Runs once per agent so back/forward works even if the Runs side
+    // panel is never opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentId]);
+
+  const [viewedIndex, setViewedIndex] = useState(0);
+  useEffect(() => setViewedIndex(0), [agentId]);
+
+  const isLiveActive = live.status === 'discovering' || live.status === 'running';
+  const atFront = viewedIndex <= 0;
+  const usesLive = atFront && (isLiveActive || Boolean(live.threadId));
+
+  const historicalThreadId = usesLive ? null : (runsList[viewedIndex]?.thread_id ?? null);
+  const historicalState = useSelector((state) => (
+    historicalThreadId ? selectAgentRunState(state, historicalThreadId) : undefined
+  ));
+  useEffect(() => {
+    if (!historicalThreadId || historicalState) return;
+    dispatch(fetchRunState({ agentsUrl, agentId, threadId: historicalThreadId }));
+  }, [historicalThreadId, historicalState, agentsUrl, agentId, dispatch]);
+
+  const displayEntry = usesLive
+    ? (live.threadId ? runsList.find((run) => run.thread_id === live.threadId) : runsList[0])
+    : runsList[viewedIndex];
+
+  const goBack = useCallback(() => {
+    setViewedIndex((current) => Math.min(current + 1, Math.max(runsList.length - 1, 0)));
+  }, [runsList.length]);
+  const goForward = useCallback(() => setViewedIndex((current) => Math.max(current - 1, 0)), []);
+  const resetToLatest = useCallback(() => setViewedIndex(0), []);
+
+  return {
+    runMeta: usesLive ? live.runMeta : (historicalState?.run_meta || {}),
+    runData: usesLive ? live.runData : (historicalState?.data || {}),
+    runRevisionId: usesLive ? live.runRevisionId : (displayEntry?.revision_id || null),
+    hasRuns: runsList.length > 0 || isLiveActive,
+    canGoBack: runsList.length > 0 && viewedIndex < runsList.length - 1,
+    canGoForward: viewedIndex > 0,
+    label: displayEntry ? (formatAge(displayEntry.last_checkpoint_at) || 'now') : (isLiveActive ? 'Running…' : null),
+    title: displayEntry?.last_checkpoint_at || '',
+    goBack,
+    goForward,
+    resetToLatest,
   };
 }
 
@@ -2584,7 +2649,32 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
   // (see RoutineParametersPanel) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
   const [parameterValues, setParameterValues] = useState({});
-  const { status: runStatus, runMeta, runData, estimatedActiveStartMs, runRevisionId, startRun, hasInteractiveSession, resetInteractiveSession } = useRoutineRunPolling(agent.id, parameterValues);
+  const {
+    status: runStatus,
+    threadId: liveThreadId,
+    runMeta: liveRunMeta,
+    runData: liveRunData,
+    estimatedActiveStartMs,
+    runRevisionId: liveRunRevisionId,
+    startRun,
+    hasInteractiveSession,
+    resetInteractiveSession,
+  } = useRoutineRunPolling(agent.id, parameterValues);
+  const runNav = useRunHistoryNav(agent.id, {
+    status: runStatus,
+    threadId: liveThreadId,
+    runMeta: liveRunMeta,
+    runData: liveRunData,
+    runRevisionId: liveRunRevisionId,
+  });
+  const runMeta = runNav.runMeta;
+  const runData = runNav.runData;
+  const runRevisionId = runNav.runRevisionId;
+  const { resetToLatest: resetRunNavToLatest } = runNav;
+  const startRunAndTrackLatest = useCallback((targetNode) => {
+    resetRunNavToLatest();
+    return startRun(targetNode);
+  }, [resetRunNavToLatest, startRun]);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3234,10 +3324,10 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
     estimatedActiveStartMs,
     staleNodeIds,
     runStatus,
-    startRun,
+    startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRun, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, isViewingRevision, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -3367,7 +3457,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                       : 'Run routine'
                   }
                   ariaLabel="Run routine"
-                  onClick={() => { startRun(); onRun(); }}
+                  onClick={() => { startRunAndTrackLatest(); onRun(); }}
                   disabled={validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
                 {onDelete ? (
@@ -3382,6 +3472,29 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onRun, onShowPro
                 ) : null}
               </DetailHeaderActions>
             </div>
+            {runNav.hasRuns && !isViewingRevision ? (
+              <div className="agents-graph-floating agents-graph-floating--history">
+                <DetailHeaderAction
+                  icon={<ChevronLeftSmall />}
+                  label="Older run"
+                  tooltip="View the previous run"
+                  ariaLabel="View the previous run"
+                  onClick={runNav.goBack}
+                  disabled={!runNav.canGoBack}
+                />
+                <span className="agents-graph-run-nav__label" title={runNav.title}>
+                  {runNav.label}
+                </span>
+                <DetailHeaderAction
+                  icon={<ChevronRightSmall />}
+                  label="Newer run"
+                  tooltip="View the next run"
+                  ariaLabel="View the next run"
+                  onClick={runNav.goForward}
+                  disabled={!runNav.canGoForward}
+                />
+              </div>
+            ) : null}
             {isViewingRevision ? null : (
               <div className="agents-graph-floating agents-graph-floating--status">
                 {saveState !== 'idle' ? (

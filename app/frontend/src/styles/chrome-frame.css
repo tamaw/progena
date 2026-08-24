@@ -6990,6 +6990,24 @@ body,
   bottom: 14px;
 }
 
+/* Run-history browser -- back/forward through this routine's past
+   executions. Same pill shell as the Run/Delete actions above, mirrored
+   to the canvas's top-right corner instead of sharing the top-left row. */
+.agents-graph-floating--history {
+  left: auto;
+  right: 16px;
+}
+
+.agents-graph-floating .agents-graph-run-nav__label {
+  padding: 0 4px;
+  min-width: 28px;
+  text-align: center;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
 .agents-graph-floating span,
 .agents-graph-floating button {
   display: inline-flex;
