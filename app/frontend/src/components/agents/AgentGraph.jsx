@@ -1055,10 +1055,18 @@ function formatSeconds(ms) {
 function RunningTimer({ startedAtMs }) {
   const [elapsedMs, setElapsedMs] = useState(0);
   useEffect(() => {
-    const tick = () => setElapsedMs(Math.max(0, Date.now() - startedAtMs));
+    let timer;
+    const tick = () => {
+      const next = Math.max(0, Date.now() - startedAtMs);
+      setElapsedMs(next);
+      // Sub-second precision (formatSeconds' tenths) only shows below the
+      // 10s cutover -- tick fast enough to actually see it count up to
+      // then, and back off to once a second after, so a long-running node
+      // doesn't re-render 10x/sec for a display that no longer shows it.
+      timer = setTimeout(tick, next < 10000 ? 100 : 1000);
+    };
     tick();
-    const timer = setInterval(tick, 1000);
-    return () => clearInterval(timer);
+    return () => clearTimeout(timer);
   }, [startedAtMs]);
   return <>{formatSeconds(elapsedMs)}…</>;
 }
