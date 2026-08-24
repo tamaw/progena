@@ -3588,32 +3588,36 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 </span>
               </div>
             )}
-            <div className="agents-graph-floating agents-graph-floating--zoom">
-              <DetailHeaderAction
-                icon={<ZoomOutIcon />}
-                label="Zoom out"
-                tooltip="Zoom out"
-                ariaLabel="Zoom out"
-                onClick={zoomOut}
-                disabled={zoom <= ZOOM_MIN}
-              />
+            <div className="agents-graph-zoom-controls">
               <button
                 type="button"
-                className="agents-graph-zoom__pct"
+                className="agents-graph-zoom-controls__btn"
+                onClick={zoomIn}
+                disabled={zoom >= ZOOM_MAX}
+                title="Zoom in"
+                aria-label="Zoom in"
+              >
+                <ZoomPlusIcon />
+              </button>
+              <button
+                type="button"
+                className="agents-graph-zoom-controls__btn"
+                onClick={zoomOut}
+                disabled={zoom <= ZOOM_MIN}
+                title="Zoom out"
+                aria-label="Zoom out"
+              >
+                <ZoomMinusIcon />
+              </button>
+              <button
+                type="button"
+                className="agents-graph-zoom-controls__btn"
                 onClick={resetZoom}
                 title="Reset zoom"
                 aria-label="Reset zoom"
               >
-                {Math.round(zoom * 100)}%
+                <ZoomFitIcon />
               </button>
-              <DetailHeaderAction
-                icon={<ZoomInIcon />}
-                label="Zoom in"
-                tooltip="Zoom in"
-                ariaLabel="Zoom in"
-                onClick={zoomIn}
-                disabled={zoom >= ZOOM_MAX}
-              />
             </div>
               <GraphEditContext.Provider value={editContext}>
               <div
@@ -3740,25 +3744,35 @@ function RestoreActionIcon() {
   );
 }
 
-// Magnifying glass with a +/- inside -- the bottom-left zoom control's
-// icons. Not a canvas-viewport zoom (this isn't React Flow): see the
-// `zoom` state comment in GraphCanvas.
-function ZoomOutIcon() {
+// Plain +/-/corner-brackets, matching Workflows' React Flow Controls
+// look for the same concept -- not a canvas-viewport zoom here though
+// (this isn't React Flow): see the `zoom` state comment in GraphCanvas.
+function ZoomPlusIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M13.5 13.5 10.2 10.2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M4.6 6.8h4.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M8 3v10M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   );
 }
 
-function ZoomInIcon() {
+function ZoomMinusIcon() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
-      <circle cx="6.8" cy="6.8" r="4.3" fill="none" stroke="currentColor" strokeWidth="1.3" />
-      <path d="M13.5 13.5 10.2 10.2" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-      <path d="M6.8 4.6v4.4M4.6 6.8h4.4" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M3 8h10" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+// Four open corner brackets -- "reset/fit" (React Flow's fitView glyph);
+// here it resets the CSS zoom level back to 100% rather than fitting a
+// canvas viewport to content, since there is no viewport to fit.
+function ZoomFitIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M2.5 5.5V3.5a1 1 0 0 1 1-1h2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.5 5.5V3.5a1 1 0 0 0-1-1h-2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M2.5 10.5v2a1 1 0 0 0 1 1h2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M13.5 10.5v2a1 1 0 0 1-1 1h-2" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

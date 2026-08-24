@@ -7003,27 +7003,52 @@ body,
    content only (see GraphCanvas's `zoom` state comment), not a canvas
    viewport transform. Occupies the canvas's bottom-left corner, the spot
    the save/validation status pill vacated when it moved under the actions
-   pill above. */
-.agents-graph-floating--zoom {
-  top: auto;
+   pill above. Vertically stacked (not the horizontal .agents-graph-floating
+   pill shell) to match Workflows' React Flow Controls look. */
+.agents-graph-zoom-controls {
+  position: absolute;
   bottom: 14px;
+  left: 16px;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in oklab, var(--color-bg-secondary) 90%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
 }
 
-.agents-graph-floating .agents-graph-zoom__pct {
-  min-width: 38px;
-  padding: 0 6px;
-  text-align: center;
+.agents-graph-zoom-controls__btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
   color: var(--color-text-secondary);
   background: transparent;
   border: none;
-  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid var(--color-border);
   cursor: pointer;
 }
 
-.agents-graph-floating .agents-graph-zoom__pct:hover {
+.agents-graph-zoom-controls__btn:last-child {
+  border-bottom: none;
+}
+
+.agents-graph-zoom-controls__btn:hover:not(:disabled) {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
+
+.agents-graph-zoom-controls__btn:disabled {
+  color: var(--color-text-tertiary);
+  cursor: default;
+  opacity: 0.5;
+}
+
 
 .agents-graph-floating .agents-graph-run-nav__label {
   padding: 0 4px;
