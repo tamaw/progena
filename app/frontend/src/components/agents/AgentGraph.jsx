@@ -2460,6 +2460,12 @@ function useRoutineRunPolling(agentId, parameters) {
   // from this state instead; the ref stays for the effects' own timeout
   // math above, where reading a ref is fine.
   const [runStartedAtMs, setRunStartedAtMs] = useState(null);
+  // Set the instant discovery resolves (the thread_id turns up in the
+  // checkpoints table) -- a real signal the graph is now actually live,
+  // not just a click-time guess. Anchors the entry node's own ticking
+  // timer once warm-up (see ChainCap's pulse, gated on 'discovering'
+  // alone) ends, well before that node's own completion exists.
+  const [threadFoundAtMs, setThreadFoundAtMs] = useState(null);
   const runs = useSelector((state) => selectAgentRoutineRuns(state, agentId));
   const runState = useSelector((state) => (threadId ? selectAgentRunState(state, threadId) : undefined)) || EMPTY_RUN_STATE;
 
@@ -2473,6 +2479,7 @@ function useRoutineRunPolling(agentId, parameters) {
     setSessionId(null);
     setThreadId(null);
     setStatus('idle');
+    setThreadFoundAtMs(null);
     interactiveSessionIdRef.current = null;
     setHasInteractiveSession(false);
   }, [agentId]);
@@ -2484,6 +2491,7 @@ function useRoutineRunPolling(agentId, parameters) {
     const found = findRunBySessionId(runs, sessionId);
     if (found) {
       setThreadId(found.thread_id);
+      setThreadFoundAtMs(Date.now());
       setStatus('running');
       return undefined;
     }
@@ -2540,6 +2548,7 @@ function useRoutineRunPolling(agentId, parameters) {
     lastTotalRef.current = -1;
     startedAtMsRef.current = Date.now();
     setRunStartedAtMs(startedAtMsRef.current);
+    setThreadFoundAtMs(null);
     setThreadId(null);
     setSessionId(newSessionId);
     setStatus('discovering');
@@ -2581,9 +2590,11 @@ function useRoutineRunPolling(agentId, parameters) {
     runMeta: runState.run_meta,
     runData: runState.data,
     // Once nothing has completed yet, the best estimate for "when did the
-    // active node start" is the run's own click time; after that it's the
-    // latest known finish across every node (see latestCompletionMs).
-    estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? runStartedAtMs,
+    // active node start" is the moment the thread was actually found
+    // (real signal the graph is live), or the run's own click time before
+    // even that -- after the first completion, the latest known finish
+    // across every node (see latestCompletionMs) is exact, not estimated.
+    estimatedActiveStartMs: latestCompletionMs(runState.run_meta) ?? threadFoundAtMs ?? runStartedAtMs,
     runRevisionId,
     startRun,
     hasInteractiveSession,
@@ -3383,13 +3394,13 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   );
   const rawStaleNodeIds = useRunStaleness(agent.id, runRevisionId, currentGraphForStaleness);
   const staleNodeIds = runNav.isBrowsingHistory ? EMPTY_MISSING : rawStaleNodeIds;
-  // True from the moment a run kicks off until the very first run_meta
-  // entry lands anywhere -- the client discovery poll plus backend
-  // routine-compile/model-connect window that has no reliable real
-  // timestamp to count from (see ChainCap/StepRunSummary).
-  const warmingUp = !runNav.isBrowsingHistory
-    && (runStatus === 'running' || runStatus === 'discovering')
-    && totalRunMetaEntries(runMeta) === 0;
+  // True only during the client discovery poll (finding this run's real
+  // thread_id) -- the one window with no reliable timestamp to count from
+  // at all. Once the thread turns up, `estimatedActiveStartMs` anchors on
+  // that real moment instead of the run's click time (see
+  // useRoutineRunPolling), so counting can start honestly even before the
+  // entry node's own completion exists (see ChainCap/StepRunSummary).
+  const warmingUp = !runNav.isBrowsingHistory && runStatus === 'discovering';
   const editContext = useMemo(() => ({
     updateNode,
     deleteNode,
