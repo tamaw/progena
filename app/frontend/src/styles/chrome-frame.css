@@ -6287,6 +6287,17 @@ body,
   background: var(--color-bg-hover);
 }
 
+.agents-graph-side__item:disabled {
+  color: var(--color-text-tertiary, var(--color-text-muted));
+  cursor: default;
+  opacity: 0.5;
+}
+
+.agents-graph-side__item:disabled:hover {
+  color: var(--color-text-tertiary, var(--color-text-muted));
+  background: transparent;
+}
+
 .agents-graph-side__label {
   writing-mode: vertical-rl;
   text-orientation: mixed;

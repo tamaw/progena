@@ -2709,6 +2709,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     resetRunNavToLatest();
     return startRun(targetNode);
   }, [resetRunNavToLatest, startRun]);
+  const { isBrowsingHistory } = runNav;
+  useEffect(() => {
+    if (!isBrowsingHistory) return;
+    onCloseJson();
+    onCloseParameters();
+    // Only reacts to entering browsing itself -- onCloseJson/onCloseParameters
+    // are fresh closures every render (AgentsPage inlines them), and neither
+    // needs to re-fire this on its own identity change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isBrowsingHistory]);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
   const [meta, setMeta] = useState({
@@ -3599,8 +3609,11 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           onChange={setParameterValues}
           onClose={onCloseParameters}
         />
-      ) : runNav.isBrowsingHistory ? null : (
-        <GraphSideDock onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); }} />
+      ) : (
+        <GraphSideDock
+          disabled={runNav.isBrowsingHistory}
+          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); }}
+        />
       )}
       {restoreConfirmOpen ? (
         <PopupModal
@@ -3668,7 +3681,7 @@ const GRAPH_SIDE_ITEMS = [
   { id: 'parameters', label: 'Params', title: 'Routine parameters' },
 ];
 
-function GraphSideDock({ onSelect }) {
+function GraphSideDock({ onSelect, disabled }) {
   return (
     <aside className="agents-graph-side" aria-label="Graph tools">
       {GRAPH_SIDE_ITEMS.map((item) => (
@@ -3676,9 +3689,10 @@ function GraphSideDock({ onSelect }) {
           key={item.id}
           type="button"
           className="agents-graph-side__item"
-          title={item.title}
+          title={disabled ? 'Step back to the latest run (or Restore this one) to edit' : item.title}
           aria-label={item.title}
           onClick={() => onSelect(item.id)}
+          disabled={disabled}
         >
           <ChevronLeftSmall />
           <span className="agents-graph-side__label">{item.label}</span>
