@@ -53,8 +53,8 @@ export function parseRunThreadId(threadId) {
 
 /** Finds the run whose thread_id was minted for `sessionId` among the
  * `/runs` list's entries (each `routine:<id>:<revision>:<run_id>`) --
- * `run_id` is exactly the trailing segment, set to `sessionId` by the `/run`
- * POST body (see AgentsPage.jsx's handleRunRoutine). */
+ * `run_id` is exactly the trailing segment, set to `sessionId` by
+ * AgentGraph.jsx's startRun POST body. */
 export function findRunBySessionId(runs, sessionId) {
   if (!sessionId) return null;
   return (runs || []).find((run) => run.run_id === sessionId) || null;

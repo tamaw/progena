@@ -331,8 +331,6 @@ export function AgentWorkspace({ page }) {
   const [search, setSearch] = useState('');
   const [sortMode, setSortMode] = useState('Type');
   const [graphEditorOpen, setGraphEditorOpen] = useState(false);
-  const [routineRunsOpen, setRoutineRunsOpen] = useState(false);
-  const [routineRevisionsOpen, setRoutineRevisionsOpen] = useState(false);
   const [routineParametersOpen, setRoutineParametersOpen] = useState(false);
   const [deleteConfirmationOpen, setDeleteConfirmationOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -612,18 +610,6 @@ export function AgentWorkspace({ page }) {
     }
   }
 
-  const handleRunRoutine = useCallback(() => {
-    if (!effectiveAgentId) return;
-    // GraphCanvas's useRoutineRunPolling (startRun()) already POSTed and
-    // started polling before this fires -- this is purely the cross-panel
-    // UI chrome: surface the Runs panel as the source of truth for the
-    // run's outcome, and back off any panel that would otherwise cover it.
-    setRoutineRunsOpen(true);
-    setGraphEditorOpen(false);
-    setRoutineRevisionsOpen(false);
-  }, [effectiveAgentId]);
-
-
   return (
     <PageShell>
       <PaneList label={listLabel} className="agents-pane">
@@ -778,27 +764,20 @@ export function AgentWorkspace({ page }) {
               {graphDetailPending ? (
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
-                <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen || routineRevisionsOpen || routineParametersOpen ? 'is-editing' : ''}`}>
+                <div className={`agents-graph-layout ${graphEditorOpen || routineParametersOpen ? 'is-editing' : ''}`}>
                   <AgentGraphTab
                     key={selectedAgent.id}
                     agent={selectedAgent}
                     graph={selectedGraph}
                     confirmedGraph={selectedGraph}
                     onPersist={handleSaveGraph}
-                    onRun={handleRunRoutine}
                     onShowProfile={isRoutines ? null : showProfile}
                     onDelete={isRoutines ? handleDeleteAgent : null}
                     jsonOpen={graphEditorOpen}
-                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); setRoutineParametersOpen(false); }}
+                    onOpenJson={() => { setGraphEditorOpen(true); setRoutineParametersOpen(false); }}
                     onCloseJson={() => setGraphEditorOpen(false)}
-                    runsOpen={routineRunsOpen}
-                    onOpenRuns={() => { setRoutineRunsOpen(true); setGraphEditorOpen(false); setRoutineRevisionsOpen(false); setRoutineParametersOpen(false); }}
-                    onCloseRuns={() => setRoutineRunsOpen(false)}
-                    revisionsOpen={routineRevisionsOpen}
-                    onOpenRevisions={() => { setRoutineRevisionsOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); setRoutineParametersOpen(false); }}
-                    onCloseRevisions={() => setRoutineRevisionsOpen(false)}
                     parametersOpen={routineParametersOpen}
-                    onOpenParameters={() => { setRoutineParametersOpen(true); setGraphEditorOpen(false); setRoutineRunsOpen(false); setRoutineRevisionsOpen(false); }}
+                    onOpenParameters={() => { setRoutineParametersOpen(true); setGraphEditorOpen(false); }}
                     onCloseParameters={() => setRoutineParametersOpen(false)}
                   />
                 </div>
