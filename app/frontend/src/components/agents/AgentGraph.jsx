@@ -1076,7 +1076,7 @@ function RunningTimer({ startedAtMs }) {
 // "estimated live" timer while it's presumed still executing. Renders
 // nothing at all otherwise (see StepCard), not a placeholder row.
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, nodes } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
@@ -1104,11 +1104,21 @@ function StepRunSummary({ nodeId }) {
   // `tokens` -- surfaced as a red variant of this same badge rather than a
   // separate element, so a step's run state is always in one place.
   const failed = Boolean(last.error);
+  // `route`, present only on a router/loop_guard node's own entry, is
+  // which target it actually sent execution to this time (see
+  // factory.py's route_fn) -- resolved to that node's label the same way
+  // the canvas already labels everything else, not shown as a raw id.
+  const routeLabel = last.route == null ? null
+    : (Array.isArray(last.route) ? last.route : [last.route])
+      .map((targetId) => (nodes || []).find((node) => node.id === targetId)?.label || targetId)
+      .join(', ');
   return (
     <div
       className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}${failed ? ' routine-step-card__run--error' : ''}`}
       title={[
         failed ? last.error : null,
+        typeof last.step === 'number' ? `Step ${last.step}` : null,
+        routeLabel ? `Routed to ${routeLabel}` : null,
         entries.length > 1 ? `${entries.length} executions this run` : null,
         stale ? 'Graph changed since this ran' : null,
       ].filter(Boolean).join(' \u2014 ') || undefined}
@@ -1335,10 +1345,26 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
                 <dt>Duration</dt>
                 <dd>{formatSeconds(lastRunEntry.duration_ms)}</dd>
               </div>
+              {typeof lastRunEntry.step === 'number' ? (
+                <div>
+                  <dt>Step</dt>
+                  <dd>{lastRunEntry.step}</dd>
+                </div>
+              ) : null}
               {lastRunEntry.tokens ? (
                 <div>
                   <dt>Tokens</dt>
                   <dd>{lastRunEntry.tokens.total_tokens} ({lastRunEntry.tokens.input_tokens} in / {lastRunEntry.tokens.output_tokens} out)</dd>
+                </div>
+              ) : null}
+              {lastRunEntry.route != null ? (
+                <div>
+                  <dt>Routed to</dt>
+                  <dd>
+                    {(Array.isArray(lastRunEntry.route) ? lastRunEntry.route : [lastRunEntry.route])
+                      .map((targetId) => (graphNodes || []).find((n) => n.id === targetId)?.label || targetId)
+                      .join(', ')}
+                  </dd>
                 </div>
               ) : null}
             </dl>

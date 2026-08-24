@@ -331,6 +331,99 @@ async def test_loop_guard_routes_false_result_without_running_guarded_target() -
 
 
 @pytest.mark.asyncio
+async def test_run_meta_step_orders_execution_across_the_whole_run() -> None:
+    """Each run_meta entry's `step` is a 1-based ordinal across every node
+    execution so far this run -- lets the UI place a given execution among
+    every other node's, not just within its own entry list (see
+    _instrument_node_callable)."""
+    routine = graph(
+        {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}},
+        {"id": "b", "kind": "eval", "output_key": "b", "config": {"expression": "2"}},
+        {"id": "c", "kind": "eval", "output_key": "c", "config": {"expression": "3"}},
+        edges=[
+            {"from": "a", "to": "b", "level": "normal"},
+            {"from": "b", "to": "c", "level": "normal"},
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    run_meta = result["run_meta"]
+    assert run_meta["a"][0]["step"] == 1
+    assert run_meta["b"][0]["step"] == 2
+    assert run_meta["c"][0]["step"] == 3
+
+
+@pytest.mark.parametrize(
+    ("expression", "taken"),
+    [("1 == 1", "yes"), ("1 == 2", "no")],
+)
+@pytest.mark.asyncio
+async def test_run_meta_records_route_taken_for_a_router_edge(expression: str, taken: str) -> None:
+    """A router's outcome (which branch was actually taken) is recorded on
+    the routing node's own run_meta entry -- re-derived from the exact same
+    decision function LangGraph itself uses (see route_fns/route_fn in
+    compile_routine_graph), not a separate guess."""
+    routine = graph(
+        {
+            "id": "gate",
+            "kind": "condition",
+            "output_key": "gate",
+            "config": {"expression": expression},
+        },
+        {"id": "yes", "kind": "eval", "output_key": "yes", "config": {"expression": "'Y'"}},
+        {"id": "no", "kind": "eval", "output_key": "no", "config": {"expression": "'N'"}},
+        edges=[
+            {
+                "from": "gate",
+                "level": "route",
+                "router": "state_equals",
+                "state_key": "gate",
+                "branches": {"true": "yes", "false": "no"},
+            },
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")]}
+    )
+
+    assert result["run_meta"]["gate"][0]["route"] == taken
+
+
+@pytest.mark.asyncio
+async def test_run_meta_records_route_taken_for_a_loop_guard_edge() -> None:
+    """A loop_guard's outcome is recorded the same way -- the looped-back
+    target while the guard holds, the exit target on the iteration it
+    finally fails."""
+    routine = graph(
+        {"id": "start", "kind": "noop", "output_key": "start", "config": {}},
+        {
+            "id": "tail",
+            "kind": "eval",
+            "output_key": "tail",
+            "config": {"expression": "tail + 1", "defaults": {"tail": 0}},
+        },
+        {"id": "after", "kind": "eval", "output_key": "after", "config": {"expression": "'done'"}},
+        edges=[
+            {"from": "start", "to": "tail", "level": "normal"},
+            {
+                "from": "tail",
+                "to": "start",
+                "level": "normal",
+                "loop_guard": {"expression": "tail < 2", "on_false": "after"},
+            },
+        ],
+    )
+    result = await compile_routine_graph(routine, model=FakeModel()).ainvoke(
+        {"messages": [HumanMessage("go")], "data": {}}
+    )
+
+    tail_entries = result["run_meta"]["tail"]
+    assert [entry["route"] for entry in tail_entries] == ["start", "after"]
+
+
+@pytest.mark.asyncio
 async def test_eval_node_with_defaults_increments_from_zero_and_drives_a_loop_guard() -> None:
     """The pattern AgentGraph.jsx's `insertAt` auto-wires for a fresh Loop:
     start -> tail(eval, self-incrementing) -> (guard) -> start, exiting once

@@ -948,7 +948,9 @@ def _extract_token_usage(result: dict[str, Any] | None) -> dict[str, int] | None
     }
 
 
-def _instrument_node_callable(node_id: str, fn: Any) -> Any:
+def _instrument_node_callable(
+    node_id: str, fn: Any, route_fn: Callable[[RoutineState], Any] | None = None
+) -> Any:
     """Wrap a node's runnable to record wall-clock duration (and, when the
     node made a real LLM call, token usage) into run_meta, uniformly for
     every node kind -- independent of what the node itself returns, so it
@@ -970,12 +972,30 @@ def _instrument_node_callable(node_id: str, fn: Any) -> Any:
     ``compiled.aupdate_state`` before converting the failure into a chat
     message. The exception's own type/message are left untouched so that
     existing catch clause keeps matching exactly as before.
+
+    ``route_fn``, present only for a node with a router or loop_guard edge,
+    is the exact same decision function LangGraph itself calls moments
+    later to pick the next node (see compile_routine_graph) -- re-run here,
+    purely for recording, against the state this node's own update
+    produces, so run_meta can say which branch was actually taken without a
+    second, possibly-diverging implementation of the same decision. Errors
+    evaluating it here are swallowed: a genuine routing failure still
+    surfaces from LangGraph's own (real) call to the same function right
+    after, unaffected by this side channel.
     """
     takes_runtime = len(inspect.signature(fn).parameters) >= 2
 
     async def wrapped(state: RoutineState, runtime: Any = None) -> dict[str, Any]:
         started = time.monotonic()
         started_at = utcnow_isoformat()
+        # 1-based ordinal across every node execution so far this run --
+        # the same simple choke point as duration/tokens below, not
+        # LangGraph's own internal checkpoint step (not readable from
+        # inside a node), but equivalent for ordering: it lets the UI place
+        # this execution among every other node's, including across a
+        # loop's repeated iterations, instead of only within this one
+        # node's own entry list.
+        step = sum(len(v) for v in (state.get("run_meta") or {}).values()) + 1
         try:
             result = await (fn(state, runtime) if takes_runtime else fn(state))
         except Exception as exc:
@@ -983,16 +1003,33 @@ def _instrument_node_callable(node_id: str, fn: Any) -> Any:
             entry = {
                 "started_at": started_at,
                 "duration_ms": round(duration_ms, 2),
+                "step": step,
                 "error": str(exc) or type(exc).__name__,
             }
             exc.routine_run_meta = (node_id, entry)  # type: ignore[attr-defined]
             raise
         duration_ms = (time.monotonic() - started) * 1000
         update = dict(result) if isinstance(result, dict) else {}
-        entry: dict[str, Any] = {"started_at": started_at, "duration_ms": round(duration_ms, 2)}
+        entry: dict[str, Any] = {
+            "started_at": started_at,
+            "duration_ms": round(duration_ms, 2),
+            "step": step,
+        }
         tokens = _extract_token_usage(result)
         if tokens is not None:
             entry["tokens"] = tokens
+        if route_fn is not None:
+            try:
+                new_data = update.get("data")
+                merged_data = {
+                    **(state.get("data") or {}),
+                    **(new_data if isinstance(new_data, dict) else {}),
+                }
+                entry["route"] = route_fn({**state, "data": merged_data})
+            except Exception:  # nosec B110 -- see route_fn's docstring: the
+                # real routing failure still surfaces from LangGraph's own
+                # call to the same function moments later.
+                pass
         update["run_meta"] = {node_id: [entry]}
         return update
 
@@ -1150,6 +1187,46 @@ def compile_routine_graph(
     error_routes = {
         edge.source_ids[0]: edge.target_ids[0] for edge in graph.edges if edge.level == "error"
     }
+    # Every path that would otherwise go straight to END routes through the
+    # projector instead when output_schema is declared, so its declared
+    # fields become real top-level channels before the graph actually ends
+    # -- see _build_output_projector. Resolved before the node loop below
+    # so a loop_guard's own route_fn (which needs it) can be built
+    # alongside its node instead of on a second pass over the edges.
+    terminal_target = END
+    if output_fields:
+        builder.add_node(ROUTINE_PROJECT_NODE_ID, _build_output_projector(output_fields))
+        builder.add_edge(ROUTINE_PROJECT_NODE_ID, END)
+        terminal_target = ROUTINE_PROJECT_NODE_ID
+
+    # Error edges are wired as the node's error_handler below, not here: they
+    # are not successors, so they neither occupy a node's outgoing slot nor
+    # stop an otherwise-terminal node from reaching the end of the graph.
+    flow_edges = [edge for edge in graph.edges if edge.is_flow]
+    outgoing: dict[str, RoutineEdge] = {}
+    for edge in flow_edges:
+        for source in edge.source_ids:
+            if source in outgoing:
+                raise ValueError(f"node has more than one outgoing edge declaration: {source}")
+            outgoing[source] = edge
+    split_ids = {node.id for node in graph.nodes if node.kind == "split"}
+    # The exact same routing decision function LangGraph itself calls to
+    # pick the next node (built once, reused below and passed into
+    # _instrument_node_callable) -- so a node's run_meta entry can record
+    # which branch it actually took, without a second, possibly-diverging
+    # implementation of the same decision. Only router (`route` level) and
+    # loop_guard edges have a real decision worth recording; a plain edge
+    # always goes the one place it's wired, a split fans out
+    # unconditionally, and a foreach Send fans out per-item.
+    route_fns: dict[str, Callable[[RoutineState], Any]] = {}
+    for node_id, edge in outgoing.items():
+        if edge.level == "route":
+            route_fns[node_id] = (
+                _build_split_router(edge) if node_id in split_ids else _build_router(edge)
+            )
+        elif edge.loop_guard is not None:
+            route_fns[node_id] = _build_loop_guard(edge, terminal_target)
+
     builder.add_node(_SEED_NODE_ID, _seed_node(input_fields))
     builder.add_edge(START, _SEED_NODE_ID)
     builder.add_edge(_SEED_NODE_ID, graph.entry)
@@ -1180,37 +1257,16 @@ def compile_routine_graph(
                     tool_registry=tool_registry,
                     defs=graph.defs,
                 ),
+                route_fn=route_fns.get(node.id),
             ),
             **node_options,
         )
-
-    # Every path that would otherwise go straight to END routes through the
-    # projector instead when output_schema is declared, so its declared
-    # fields become real top-level channels before the graph actually ends
-    # -- see _build_output_projector.
-    terminal_target = END
-    if output_fields:
-        builder.add_node(ROUTINE_PROJECT_NODE_ID, _build_output_projector(output_fields))
-        builder.add_edge(ROUTINE_PROJECT_NODE_ID, END)
-        terminal_target = ROUTINE_PROJECT_NODE_ID
-
-    # Error edges are wired as the node's error_handler above, not here: they
-    # are not successors, so they neither occupy a node's outgoing slot nor
-    # stop an otherwise-terminal node from reaching the end of the graph.
-    flow_edges = [edge for edge in graph.edges if edge.is_flow]
-    outgoing: dict[str, RoutineEdge] = {}
-    for edge in flow_edges:
-        for source in edge.source_ids:
-            if source in outgoing:
-                raise ValueError(f"node has more than one outgoing edge declaration: {source}")
-            outgoing[source] = edge
 
     foreach_send_ids = {
         node.id
         for node in graph.nodes
         if node.kind == "foreach" and _node_config(node)["mode"] == "send"
     }
-    split_ids = {node.id for node in graph.nodes if node.kind == "split"}
     for node in graph.nodes:
         if node.id not in outgoing:
             builder.add_edge(node.id, terminal_target)
@@ -1223,7 +1279,7 @@ def compile_routine_graph(
             source = edge.source_ids[0]
             builder.add_conditional_edges(
                 source,
-                _build_split_router(edge) if source in split_ids else _build_router(edge),
+                route_fns[source],
                 path_map={target: target for target in targets},
             )
             continue
@@ -1260,7 +1316,7 @@ def compile_routine_graph(
             false_target = edge.loop_guard.on_false or terminal_target
             builder.add_conditional_edges(
                 source,
-                _build_loop_guard(edge, terminal_target),
+                route_fns[source],
                 path_map={target: target for target in [*targets, false_target]},
             )
             continue
