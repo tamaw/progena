@@ -3526,7 +3526,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                       : 'Run routine'
                   }
                   ariaLabel="Run routine"
-                  onClick={startRunAndTrackLatest}
+                  onClick={() => startRunAndTrackLatest()}
                   disabled={runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
                 <DetailHeaderAction
