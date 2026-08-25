@@ -1094,16 +1094,24 @@ export function pickEntryForIteration(entries, iterationIndex, guardEntries) {
 }
 
 // Right-justified status glyph for the step card's run row (see
-// StepRunSummary) -- one shared slot that replaces every prior text badge
-// ("failed", "stale") with an icon in the same position, plus two states
-// that had no visual before: a spinning ring while a node is actually
-// pending/running, and a green check once it finishes clean. Stale is
-// orthogonal to outcome (a passed/failed run can both be stale), so it
-// renders alongside the outcome icon rather than replacing it -- the same
-// "both badges could show together" behavior the old text badges had.
-function RunStatusSpinnerIcon() {
+// StepRunSummary) -- one shared slot, and a node is only ever in exactly
+// one state there: waiting (not yet reached), running (executing now),
+// success, failed, or stale. Stale replaces success/failed rather than
+// joining it -- a stale entry's own pass/fail no longer means much once
+// the graph it ran against is gone, so showing one glyph, not two, is
+// truer to "this cached result may not be trustworthy" than layering a
+// tick or cross underneath it.
+function RunStatusWaitingIcon() {
   return (
-    <svg className="routine-step-card__status-icon routine-step-card__status-icon--pending" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--waiting" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeOpacity="0.4" />
+    </svg>
+  );
+}
+
+function RunStatusRunningIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--running" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
       <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeOpacity="0.25" />
       <path d="M14 8a6 6 0 0 0-6-6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
@@ -1135,20 +1143,34 @@ function RunStatusStaleIcon() {
 }
 
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, nodes, loopMembership, loopIterations } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, isRunInProgress, nodes, loopMembership, loopIterations } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
-    // Nothing anywhere has completed yet -- this can only be the entry
-    // node (see deriveActiveNodeIds), and there's no real anchor to count
-    // from yet. Start's own pulsing glow (see ChainCap) carries that
-    // signal instead of a click-time-anchored guess here.
-    if (!isActive || warmingUp) return null;
+    if (isActive) {
+      // Nothing anywhere has completed yet -- this can only be the entry
+      // node (see deriveActiveNodeIds), and there's no real anchor to count
+      // from yet. Start's own pulsing glow (see ChainCap) carries that
+      // signal instead of a click-time-anchored guess here.
+      if (warmingUp) return null;
+      return (
+        <div className="routine-step-card__run routine-step-card__run--active" data-tooltip="Running…">
+          <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
+          <span className="routine-step-card__run-status" aria-hidden="true">
+            <RunStatusRunningIcon />
+          </span>
+        </div>
+      );
+    }
+    // Not this run's current frontier, but a run is actually in flight --
+    // every node still ahead of it in the chain reads as queued rather
+    // than blank, so "which step is next" is visible at a glance instead
+    // of only ever showing the one node currently executing.
+    if (!isRunInProgress) return null;
     return (
-      <div className="routine-step-card__run routine-step-card__run--active" data-tooltip="Running…">
-        <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
+      <div className="routine-step-card__run routine-step-card__run--waiting" data-tooltip="Waiting to run">
         <span className="routine-step-card__run-status" aria-hidden="true">
-          <RunStatusSpinnerIcon />
+          <RunStatusWaitingIcon />
         </span>
       </div>
     );
@@ -1194,8 +1216,7 @@ function StepRunSummary({ nodeId }) {
       <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
       {!failed && typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
       <span className="routine-step-card__run-status" aria-hidden="true">
-        {stale ? <RunStatusStaleIcon /> : null}
-        {failed ? <RunStatusErrorIcon /> : <RunStatusSuccessIcon />}
+        {stale ? <RunStatusStaleIcon /> : failed ? <RunStatusErrorIcon /> : <RunStatusSuccessIcon />}
       </span>
     </div>
   );
@@ -3632,13 +3653,14 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     staleNodeIds,
     runStatus,
     warmingUp,
+    isRunInProgress,
     loopMembership,
     loopIterations,
     setLoopIteration,
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
