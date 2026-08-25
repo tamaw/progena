@@ -8304,24 +8304,40 @@ body,
    chain segment from the node it loops back to through the back-edge).
    Amber, not teal, so the two scope kinds read as distinct at a glance.
 
-   Unlike Fork/Foreach (whose header sits in a row above their body), the
-   loop condition renders as a vertical label rail down the box's left edge
-   -- .routine-loop is a flex ROW of [rail, main], so the rail is a real
-   flex item whose writing-mode: vertical-rl content sets the row's cross
-   size; no min-height floor is needed even for a single-card loop. Badges
-   and the iteration nav move to a small right-aligned toolbar inside
-   .routine-loop__main, above the body, rather than a full header line --
-   there's nothing left of them once the condition text moves to the rail. */
+   The loop condition renders as a vertical label rail down the box's left
+   edge -- .routine-loop is a flex ROW of [rail, main], so the rail is a
+   real flex item whose writing-mode: vertical-rl content sets the row's
+   cross size; no min-height floor is needed even for a single-card loop.
+   Badges and the iteration nav sit in their own row ABOVE the box (like
+   Fork/Foreach's header, and like this block had before the rail existed)
+   -- .routine-loop-frame is a flex column with align-items: stretch so
+   that row spans the same width as the box below it and its content can
+   right-align flush with the box's own right edge, no JS measurement
+   needed. */
 .routine-loop-frame {
   --loop-rail-w: 28px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   width: max-content;
   max-width: 100%;
   margin: 8px auto 0;
-  /* The rail below adds width only on the left, which would otherwise pull
-     the frame's auto-centered midpoint away from the body cards' own
-     center. Shift left by half the rail's (fixed) width so the cards stay
-     aligned under the connector line above/below, like every other step. */
+  /* The rail on the box below adds width only on the left, which would
+     otherwise pull the frame's auto-centered midpoint (and everything
+     stretched to its width, including the toolbar row) away from the body
+     cards' own center. Shift left by half the rail's (fixed) width so the
+     cards stay aligned under the connector line above/below, like every
+     other step. */
   transform: translateX(calc(var(--loop-rail-w) / -2));
+}
+
+.routine-loop__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 2px 6px;
 }
 
 .routine-loop {
@@ -8373,15 +8389,6 @@ body,
   flex: 1;
   min-width: 0;
   padding: 10px;
-}
-
-.routine-loop__toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-bottom: 6px;
 }
 
 .routine-loop__badge {
