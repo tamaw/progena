@@ -1093,6 +1093,47 @@ export function pickEntryForIteration(entries, iterationIndex, guardEntries) {
   return inWindow[inWindow.length - 1] ?? entries[entries.length - 1];
 }
 
+// Right-justified status glyph for the step card's run row (see
+// StepRunSummary) -- one shared slot that replaces every prior text badge
+// ("failed", "stale") with an icon in the same position, plus two states
+// that had no visual before: a spinning ring while a node is actually
+// pending/running, and a green check once it finishes clean. Stale is
+// orthogonal to outcome (a passed/failed run can both be stale), so it
+// renders alongside the outcome icon rather than replacing it -- the same
+// "both badges could show together" behavior the old text badges had.
+function RunStatusSpinnerIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--pending" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeOpacity="0.25" />
+      <path d="M14 8a6 6 0 0 0-6-6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RunStatusSuccessIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--success" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M3.5 8.4 6.5 11.4 12.5 5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function RunStatusErrorIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--error" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function RunStatusStaleIcon() {
+  return (
+    <svg className="routine-step-card__status-icon routine-step-card__status-icon--stale" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <circle cx="8" cy="8" r="5.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeDasharray="2 2" />
+    </svg>
+  );
+}
+
 function StepRunSummary({ nodeId }) {
   const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, nodes, loopMembership, loopIterations } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
@@ -1104,9 +1145,11 @@ function StepRunSummary({ nodeId }) {
     // signal instead of a click-time-anchored guess here.
     if (!isActive || warmingUp) return null;
     return (
-      <div className="routine-step-card__run routine-step-card__run--active">
-        <span className="routine-step-card__run-dot" aria-hidden="true" />
+      <div className="routine-step-card__run routine-step-card__run--active" title="Running…">
         <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
+        <span className="routine-step-card__run-status" aria-hidden="true">
+          <RunStatusSpinnerIcon />
+        </span>
       </div>
     );
   }
@@ -1126,8 +1169,8 @@ function StepRunSummary({ nodeId }) {
   const stale = !isNodeRunValid(nodeId, staleNodeIds || EMPTY_MISSING);
   // A raised node still gets an entry (see factory.py's
   // _instrument_node_callable): real duration, plus `error` instead of
-  // `tokens` -- surfaced as a red variant of this same badge rather than a
-  // separate element, so a step's run state is always in one place.
+  // `tokens` -- surfaced as the red cross variant of the status icon rather
+  // than a separate element, so a step's run state is always in one place.
   const failed = Boolean(last.error);
   // `route`, present only on a router/loop_guard node's own entry, is
   // which target it actually sent execution to this time (see
@@ -1149,9 +1192,11 @@ function StepRunSummary({ nodeId }) {
       ].filter(Boolean).join(' \u2014 ') || undefined}
     >
       <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
-      {failed ? <span className="routine-step-card__run-error-badge" aria-hidden="true">failed</span> : null}
       {!failed && typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
-      {stale ? <span className="routine-step-card__run-stale-badge" aria-hidden="true">stale</span> : null}
+      <span className="routine-step-card__run-status" aria-hidden="true">
+        {stale ? <RunStatusStaleIcon /> : null}
+        {failed ? <RunStatusErrorIcon /> : <RunStatusSuccessIcon />}
+      </span>
     </div>
   );
 }
