@@ -8313,9 +8313,15 @@ body,
    .routine-loop__main, above the body, rather than a full header line --
    there's nothing left of them once the condition text moves to the rail. */
 .routine-loop-frame {
+  --loop-rail-w: 28px;
   width: max-content;
   max-width: 100%;
   margin: 8px auto 0;
+  /* The rail below adds width only on the left, which would otherwise pull
+     the frame's auto-centered midpoint away from the body cards' own
+     center. Shift left by half the rail's (fixed) width so the cards stay
+     aligned under the connector line above/below, like every other step. */
+  transform: translateX(calc(var(--loop-rail-w) / -2));
 }
 
 .routine-loop {
@@ -8334,7 +8340,8 @@ body,
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  padding: 10px 6px;
+  width: var(--loop-rail-w);
+  padding: 10px 0;
   background: rgb(210 153 34 / 10%);
   border-right: 1px solid color-mix(in oklab, #d29922 30%, var(--color-border));
 }
