@@ -8306,39 +8306,29 @@ body,
 
    The condition text sits OUTSIDE the box entirely -- a plain vertical
    label (writing-mode: vertical-rl, no background/border of its own) in
-   the gutter to the box's left. The prev/next iteration nav flanks that
-   same label (arrow, label, arrow) rather than floating as its own pill
-   elsewhere -- one identity cluster, still outside the box. Recursion/
-   retry badges (unrelated to iteration paging) keep their own row above,
-   right-aligned over the box -- .routine-loop-frame is a flex column with
-   align-items: stretch so that row spans the same width as the cluster+
-   box row below it, no JS measurement needed.
-
-   .routine-loop__outer centers its items on the cross axis (not stretch):
-   the label sizes to its own vertical-text content and the two arrow
-   buttons are small fixed squares, so centering each within the row's
-   height (set by whichever of {label, box} is tallest) keeps the arrows
-   pinned to the label's own middle instead of stretching them. The nav
-   is always rendered, disabled when there's no run history yet, so the
-   cluster's width -- and the frame's centering offset below -- stays
-   constant regardless of whether a run has happened. */
+   the gutter to the box's left, rather than a boxed rail sharing the
+   amber border. .routine-loop__outer is a flex ROW of [label, box], so
+   the label's own content sets the row's cross size; no min-height floor
+   is needed even for a single-card loop. Badges and the iteration nav
+   live in their own row above, right-aligned over the box -- also
+   outside it -- .routine-loop-frame is a flex column with
+   align-items: stretch so that row spans the same width as the
+   label+box row below it, no JS measurement needed. */
 .routine-loop-frame {
   --loop-label-w: 20px;
-  --loop-nav-btn-w: 16px;
-  --loop-cluster-w: calc(var(--loop-nav-btn-w) * 2 + var(--loop-label-w) + 8px);
   display: flex;
   flex-direction: column;
   align-items: stretch;
   width: max-content;
   max-width: 100%;
   margin: 8px auto 0;
-  /* The cluster adds width only on the left, which would otherwise pull
-     the frame's auto-centered midpoint (and everything stretched to its
+  /* The label adds width only on the left, which would otherwise pull the
+     frame's auto-centered midpoint (and everything stretched to its
      width, including the toolbar row) away from the box's own center.
-     Shift left by half the cluster's (fixed) width so the box stays
+     Shift left by half the label's (fixed) width so the box stays
      aligned under the connector line above/below, like every other
      step. */
-  transform: translateX(calc(var(--loop-cluster-w) / -2));
+  transform: translateX(calc(var(--loop-label-w) / -2));
 }
 
 .routine-loop__toolbar {
@@ -8353,8 +8343,7 @@ body,
 .routine-loop__outer {
   display: flex;
   flex-direction: row;
-  align-items: center;
-  gap: 4px;
+  align-items: stretch;
 }
 
 .routine-loop__label {
@@ -8363,6 +8352,7 @@ body,
   justify-content: center;
   flex-shrink: 0;
   width: var(--loop-label-w);
+  padding-right: 4px;
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   color: #d29922;
@@ -8383,36 +8373,6 @@ body,
   font-style: italic;
 }
 
-/* Pages through a guarded loop's own recorded iterations -- selecting one
-   re-points every body node's badge/inspector at that iteration's own
-   duration/tokens/route/output instead of always the latest (see
-   LoopBlock/pickEntryForIteration). Icon-only -- the current position is a
-   tooltip, not visible text, since there's no room for it between the
-   arrows and the label. */
-.routine-loop__rail-nav-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  width: var(--loop-nav-btn-w);
-  height: var(--loop-nav-btn-w);
-  padding: 0;
-  color: #f0c04b;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.routine-loop__rail-nav-btn:hover:not(:disabled) {
-  background: rgb(210 153 34 / 18%);
-}
-
-.routine-loop__rail-nav-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
 .routine-loop {
   flex: 1;
   min-width: 0;
@@ -8431,6 +8391,52 @@ body,
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
+}
+
+/* Pages through a guarded loop's own recorded iterations -- selecting one
+   re-points every body node's badge/inspector at that iteration's own
+   duration/tokens/route/output instead of always the latest (see
+   LoopBlock/pickEntryForIteration). */
+.routine-loop__iteration-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  color: #f0c04b;
+  background: rgb(210 153 34 / 10%);
+  border: 1px solid rgb(210 153 34 / 28%);
+  border-radius: 999px;
+}
+
+.routine-loop__iteration-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.routine-loop__iteration-btn:hover:not(:disabled) {
+  background: rgb(210 153 34 / 18%);
+}
+
+.routine-loop__iteration-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.routine-loop__iteration-label {
+  min-width: 34px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .routine-loop__body {
