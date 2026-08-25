@@ -7620,7 +7620,7 @@ body,
 }
 
 .routine-step-card__run--stale {
-  color: var(--color-text-tertiary, var(--color-text-secondary));
+  color: var(--color-warning, #d29922);
   opacity: 0.75;
 }
 
@@ -7628,11 +7628,16 @@ body,
   color: var(--color-error, #f85149);
 }
 
+.routine-step-card__run--waiting {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+
 /* Right-justified status glyph slot (see StepRunSummary) -- one shared
-   position for whichever icon(s) apply: a spinning ring while pending, a
-   green check on a clean finish, a red cross on failure, and a dashed
-   amber ring for stale (shown alongside the outcome icon, not instead of
-   it, since a stale run can be either a pass or a fail). */
+   position, and a node is only ever in exactly one state there: a dim
+   ring while waiting to be reached, a spinning ring while actually
+   running, a green check on a clean finish, a red cross on failure, or a
+   dashed amber ring once the graph it ran against has since changed
+   (stale replaces the pass/fail glyph rather than joining it). */
 .routine-step-card__run-status {
   display: flex;
   align-items: center;
@@ -7641,7 +7646,11 @@ body,
   flex: none;
 }
 
-.routine-step-card__status-icon--pending {
+.routine-step-card__status-icon--waiting {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}
+
+.routine-step-card__status-icon--running {
   animation: routine-step-card-spin 0.9s linear infinite;
 }
 
