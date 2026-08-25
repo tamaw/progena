@@ -3644,6 +3644,52 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   }, [nodes, edges, meta, incomplete]);
 
   const workingGraph = useMemo(() => serializeGraph(nodes, edges, meta), [nodes, edges, meta]);
+  // `nodes`/`edges`/`meta` above are seeded from `graph` only once, at
+  // mount (React state initializers don't re-run on prop changes) -- so an
+  // `agent.graph.updated` SSE event (progenitor writing /routines/<id>.json
+  // directly, another tab saving, a revision restore) lands in Redux and
+  // changes `confirmedGraph` under this already-mounted canvas, but nothing
+  // adopts it: the JSON sidebar and RoutineParametersPanel below both read
+  // off this local copy, so they'd stay stale until a full reload. Pull a
+  // genuinely external change in here, but only when this tab has no
+  // unsaved edit of its own in flight (`workingGraph` still matches
+  // `lastSavedRef`) -- otherwise the user's in-progress edit would be
+  // silently discarded. `adoptedSignatureRef` tracks the last confirmed
+  // signature already reflected locally (by mount or a prior adoption) so
+  // this doesn't refire for e.g. this tab's own save simply echoing back.
+  const confirmedSignature = useMemo(
+    () => JSON.stringify(serializeGraph(confirmedGraph?.nodes || [], confirmedGraph?.edges || [], confirmedGraph || {})),
+    [confirmedGraph],
+  );
+  const adoptedSignatureRef = useRef(confirmedSignature);
+  useEffect(() => {
+    if (confirmedSignature === adoptedSignatureRef.current) return;
+    adoptedSignatureRef.current = confirmedSignature;
+    const localSignature = JSON.stringify(workingGraph);
+    if (confirmedSignature === localSignature) return;
+    if (localSignature !== lastSavedRef.current) return;
+    const nextNodes = (confirmedGraph.nodes || []).map((node) => ({ ...node }));
+    const nextEdges = (confirmedGraph.edges || []).map((edge) => ({ ...edge }));
+    setNodes(nextNodes);
+    setEdges(nextEdges);
+    setMeta({
+      status: confirmedGraph.status || 'Draft',
+      version: confirmedGraph.version || '2.0.0',
+      summary: confirmedGraph.summary || '',
+      entry: confirmedGraph.entry || nextNodes[0]?.id || null,
+      settings: confirmedGraph.settings || {},
+      input_schema: confirmedGraph.input_schema || null,
+      output_schema: confirmedGraph.output_schema || null,
+      $defs: confirmedGraph.$defs || {},
+    });
+    confirmedNodeIdsRef.current = new Set(nextNodes.map((node) => node.id));
+    lastSavedRef.current = confirmedSignature;
+    if (!selectedNodeIdRef.current || !nextNodes.some((node) => node.id === selectedNodeIdRef.current)) {
+      setSelectedNodeId(null);
+      setInspectorPosition(null);
+    }
+  }, [confirmedSignature, confirmedGraph, workingGraph]);
+
   // Run must match what the server actually has, not just what this tab
   // optimistically believes it sent -- `confirmedGraph` is the live
   // Redux-tracked agent graph, updated only by the `agent.graph.updated`
@@ -4094,12 +4140,33 @@ function JsonCodeEditor({ value, onChange }) {
 
 // Edit the agent graph by describing it as JSON conforming to the published
 // schema. The PATCH endpoint validates and persists; the broadcast updates the
-// canvas. Keyed by agent id so switching agents resets the draft.
+// canvas, whose `workingGraph` this panel's `graph` prop already tracks --
+// keyed by agent id so switching agents remounts and resets the draft; the
+// effect below additionally resyncs a still-mounted draft when `graph`
+// changes out from under it (e.g. an external write) with nothing unsaved.
 function AgentGraphEditor({ graph, onSave, onClose }) {
-  const [draft, setDraft] = useState(() => graphToJson(graph));
+  const initialJson = useMemo(() => graphToJson(graph), [graph]);
+  const [draft, setDraft] = useState(initialJson);
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const lastAdoptedJsonRef = useRef(initialJson);
+  // Same "only pull in an external change if there's nothing unsaved
+  // locally" rule as GraphCanvas's own graph-prop resync (see the comment
+  // above its `confirmedSignature` effect) -- `graph` here is that
+  // canvas's `workingGraph`, so this panel needs its own copy of the rule:
+  // a user mid-edit in this textarea should never have their draft
+  // silently overwritten by an unrelated external update arriving while
+  // the panel happens to be open.
+  useEffect(() => {
+    if (initialJson === lastAdoptedJsonRef.current) return;
+    const previousAdopted = lastAdoptedJsonRef.current;
+    lastAdoptedJsonRef.current = initialJson;
+    if (draft !== previousAdopted) return;
+    setDraft(initialJson);
+    setError(null);
+    setSaved(false);
+  }, [initialJson, draft]);
 
   async function handleApply() {
     let parsed;
@@ -4147,7 +4214,7 @@ function AgentGraphEditor({ graph, onSave, onClose }) {
       {error ? <p className="agents-graph-editor__error">{error}</p> : null}
       {saved ? <p className="agents-graph-editor__saved">Graph saved.</p> : null}
       <div className="agents-graph-editor__actions">
-        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => { setDraft(graphToJson(graph)); setError(null); setSaved(false); }}>Reset</button>
+        <button type="button" className="repo-btn repo-btn--ghost" onClick={() => { setDraft(initialJson); setError(null); setSaved(false); }}>Reset</button>
         <button type="button" className="repo-btn" onClick={handleApply} disabled={saving}>
           {saving ? 'Saving…' : 'Apply changes'}
         </button>
