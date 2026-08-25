@@ -1145,7 +1145,7 @@ function StepRunSummary({ nodeId }) {
     // signal instead of a click-time-anchored guess here.
     if (!isActive || warmingUp) return null;
     return (
-      <div className="routine-step-card__run routine-step-card__run--active" title="Running…">
+      <div className="routine-step-card__run routine-step-card__run--active" data-tooltip="Running…">
         <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
         <span className="routine-step-card__run-status" aria-hidden="true">
           <RunStatusSpinnerIcon />
@@ -1183,7 +1183,7 @@ function StepRunSummary({ nodeId }) {
   return (
     <div
       className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}${failed ? ' routine-step-card__run--error' : ''}`}
-      title={[
+      data-tooltip={[
         failed ? last.error : null,
         typeof last.step === 'number' ? `Step ${last.step}` : null,
         routeLabel ? `Routed to ${routeLabel}` : null,
@@ -1427,7 +1427,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
                     type="button"
                     className="routine-node-inspector__iteration-btn"
                     aria-label="Previous iteration"
-                    title="Previous iteration"
+                    data-tooltip="Previous iteration"
                     disabled={inspectorEffectiveIteration <= 1}
                     onClick={() => setLoopIteration(inspectorGuardEdge.from, Math.max(1, inspectorEffectiveIteration - 1))}
                   >
@@ -1438,7 +1438,7 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
                     type="button"
                     className="routine-node-inspector__iteration-btn"
                     aria-label="Next iteration"
-                    title="Next iteration"
+                    data-tooltip="Next iteration"
                     disabled={inspectorEffectiveIteration >= inspectorIterationCount}
                     onClick={() => setLoopIteration(inspectorGuardEdge.from, Math.min(inspectorIterationCount, inspectorEffectiveIteration + 1))}
                   >
