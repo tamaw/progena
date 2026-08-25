@@ -1147,12 +1147,11 @@ function StepRunSummary({ nodeId }) {
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
-    if (isActive) {
-      // Nothing anywhere has completed yet -- this can only be the entry
-      // node (see deriveActiveNodeIds), and there's no real anchor to count
-      // from yet. Start's own pulsing glow (see ChainCap) carries that
-      // signal instead of a click-time-anchored guess here.
-      if (warmingUp) return null;
+    // `isActive` (see deriveActiveNodeIds) is only ever true while a run is
+    // actually in flight, so it already implies `isRunInProgress` -- no
+    // separate check needed here.
+    if (!isRunInProgress) return null;
+    if (isActive && !warmingUp) {
       return (
         <div className="routine-step-card__run routine-step-card__run--active" data-tooltip="Running…">
           <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
@@ -1162,11 +1161,12 @@ function StepRunSummary({ nodeId }) {
         </div>
       );
     }
-    // Not this run's current frontier, but a run is actually in flight --
-    // every node still ahead of it in the chain reads as queued rather
-    // than blank, so "which step is next" is visible at a glance instead
-    // of only ever showing the one node currently executing.
-    if (!isRunInProgress) return null;
+    // Covers both: every node still ahead of the current frontier, AND
+    // the entry node itself during warm-up (no thread found yet, so no
+    // reliable start time to anchor a running spinner's timer against --
+    // see RunningTimer/estimatedActiveStartMs) -- it reads the same as
+    // "queued" rather than the blank the entry used to show while Start's
+    // own pulsing glow (see ChainCap) was the only warm-up signal.
     return (
       <div className="routine-step-card__run routine-step-card__run--waiting" data-tooltip="Waiting to run">
         <span className="routine-step-card__run-status" aria-hidden="true">
