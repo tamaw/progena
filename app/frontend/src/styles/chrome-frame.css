@@ -7824,6 +7824,39 @@ body,
   font-weight: 400;
 }
 
+/* Pages through a guarded loop's own recorded iterations from inside the
+   panel that already shows their duration/tokens/route/output (see
+   NodeInspector's inspectorGuardEdge/pickEntryForIteration) -- the canvas
+   itself carries no loop-iteration chrome at all. */
+.routine-node-inspector__iteration-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.routine-node-inspector__iteration-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.routine-node-inspector__iteration-btn:hover:not(:disabled) {
+  background: var(--color-bg-tertiary);
+}
+
+.routine-node-inspector__iteration-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 .routine-node-inspector__run-stats {
   display: flex;
   flex-wrap: wrap;
@@ -8309,11 +8342,19 @@ body,
    the gutter to the box's left, rather than a boxed rail sharing the
    amber border. .routine-loop__outer is a flex ROW of [label, box], so
    the label's own content sets the row's cross size; no min-height floor
-   is needed even for a single-card loop. Badges and the iteration nav
+   is needed even for a single-card loop. Recursion-limit/retry badges
    live in their own row above, right-aligned over the box -- also
    outside it -- .routine-loop-frame is a flex column with
    align-items: stretch so that row spans the same width as the
-   label+box row below it, no JS measurement needed. */
+   label+box row below it, no JS measurement needed.
+
+   No iteration nav lives on the canvas at all -- every placement tried
+   (boxed rail, floating pill, flanking the label) read as bolted-on.
+   Paging through a loop's recorded iterations happens in NodeInspector
+   instead (see its own run-head), the same place their duration/tokens/
+   route/output already render (see StepRunSummary/pickEntryForIteration
+   for how every body node still displays whichever iteration is
+   selected there). */
 .routine-loop-frame {
   --loop-label-w: 20px;
   display: flex;
@@ -8391,52 +8432,6 @@ body,
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
-}
-
-/* Pages through a guarded loop's own recorded iterations -- selecting one
-   re-points every body node's badge/inspector at that iteration's own
-   duration/tokens/route/output instead of always the latest (see
-   LoopBlock/pickEntryForIteration). */
-.routine-loop__iteration-nav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  color: #f0c04b;
-  background: rgb(210 153 34 / 10%);
-  border: 1px solid rgb(210 153 34 / 28%);
-  border-radius: 999px;
-}
-
-.routine-loop__iteration-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  color: inherit;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.routine-loop__iteration-btn:hover:not(:disabled) {
-  background: rgb(210 153 34 / 18%);
-}
-
-.routine-loop__iteration-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.routine-loop__iteration-label {
-  min-width: 34px;
-  font-size: 10px;
-  font-weight: 700;
-  text-align: center;
-  font-variant-numeric: tabular-nums;
 }
 
 .routine-loop__body {

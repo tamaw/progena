@@ -1197,7 +1197,7 @@ function StepCard({ node }) {
 // Full configuration for the selected node. It floats inside the canvas and
 // is deliberately separate from the chain so large prompts never resize it.
 function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew, style, panelRef }) {
-  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations } = useContext(GraphEditContext);
+  const { updateNode, deleteNode, updateLoopGuard, runMeta, runData, staleNodeIds, edges: graphEdges, nodes: graphNodes, readOnly, runStatus, startRun, hasInteractiveSession, resetInteractiveSession, loopMembership, loopIterations, setLoopIteration } = useContext(GraphEditContext);
   const [isEditingLabel, setIsEditingLabel] = useState(false);
   const [confirmRunOpen, setConfirmRunOpen] = useState(false);
   const [labelDraft, setLabelDraft] = useState('');
@@ -1224,13 +1224,18 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 
   if (!node) return null;
   const runEntries = runMeta?.[node.id];
-  // Follows the enclosing loop's own selected iteration, same as the
-  // compact canvas badge (see StepRunSummary/pickEntryForIteration) --
-  // clicking through a loop's prev/next nav re-points this panel at that
-  // iteration's own duration/tokens/route/output, not always the latest.
+  // Follows the enclosing loop's own selected iteration, same as every
+  // other body node's badge (see StepRunSummary/pickEntryForIteration) --
+  // this panel is also where that iteration gets *changed*: the canvas
+  // carries no loop chrome beyond the plain condition label, since every
+  // attempt to place a prev/next control there read as bolted-on. Paging
+  // through iterations happens here instead, the same place their
+  // duration/tokens/route/output already render.
   const inspectorGuardEdge = loopMembership?.get(node.id);
   const inspectorGuardEntries = inspectorGuardEdge ? runMeta?.[inspectorGuardEdge.from] : null;
+  const inspectorIterationCount = inspectorGuardEntries?.length ?? 0;
   const inspectorSelectedIteration = inspectorGuardEdge ? (loopIterations?.[inspectorGuardEdge.from] ?? null) : null;
+  const inspectorEffectiveIteration = inspectorSelectedIteration ?? inspectorIterationCount;
   const lastRunEntry = pickEntryForIteration(runEntries, inspectorSelectedIteration, inspectorGuardEntries);
   const isRunStale = !isNodeRunValid(node.id, staleNodeIds || EMPTY_MISSING);
   const outputKey = node.output_key || node.id;
@@ -1371,7 +1376,33 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
               </p>
             ) : null}
             <div className="routine-node-inspector__run-head">
-              <span>{inspectorSelectedIteration != null ? `Iteration ${inspectorSelectedIteration} run` : 'Last run'}</span>
+              {inspectorGuardEdge && inspectorIterationCount > 0 ? (
+                <span className="routine-node-inspector__iteration-nav">
+                  <button
+                    type="button"
+                    className="routine-node-inspector__iteration-btn"
+                    aria-label="Previous iteration"
+                    title="Previous iteration"
+                    disabled={inspectorEffectiveIteration <= 1}
+                    onClick={() => setLoopIteration(inspectorGuardEdge.from, Math.max(1, inspectorEffectiveIteration - 1))}
+                  >
+                    <ChevronLeftSmall />
+                  </button>
+                  <span>{inspectorSelectedIteration != null ? `Iteration ${inspectorSelectedIteration} run` : 'Last run'}</span>
+                  <button
+                    type="button"
+                    className="routine-node-inspector__iteration-btn"
+                    aria-label="Next iteration"
+                    title="Next iteration"
+                    disabled={inspectorEffectiveIteration >= inspectorIterationCount}
+                    onClick={() => setLoopIteration(inspectorGuardEdge.from, Math.min(inspectorIterationCount, inspectorEffectiveIteration + 1))}
+                  >
+                    <ChevronRightPointSmall />
+                  </button>
+                </span>
+              ) : (
+                <span>{inspectorSelectedIteration != null ? `Iteration ${inspectorSelectedIteration} run` : 'Last run'}</span>
+              )}
               {runEntries.length > 1 ? (
                 <span className="routine-node-inspector__run-count">{runEntries.length} executions this run</span>
               ) : null}
@@ -2231,48 +2262,16 @@ function renderRun(tree, initialSlot, suppressJoinChip = false) {
 // produce. Either way there's no separate "back to X" line -- the box's
 // own closing edge already says that.
 function LoopBlock({ edge, targetLabel, body }) {
-  const { settings, runMeta, loopIterations, setLoopIteration } = useContext(GraphEditContext);
+  const { settings } = useContext(GraphEditContext);
   const recursionLimit = settings?.recursion_limit;
   const maxRetries = settings?.retry?.max_retries;
   const guard = edge?.loop_guard;
-  // One entry per completed pass through the guard -- the count this
-  // loop's own prev/next nav pages across (see pickEntryForIteration,
-  // which buckets every other body node's entries against these same
-  // steps).
-  const guardEntries = guard ? (runMeta?.[edge.from] || []) : [];
-  const iterationCount = guardEntries.length;
-  const selectedIteration = loopIterations?.[edge?.from] ?? iterationCount;
   return (
     <div className="routine-loop-frame">
-      {(recursionLimit || maxRetries || iterationCount > 0) ? (
+      {(recursionLimit || maxRetries) ? (
         <div className="routine-loop__toolbar">
           {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
           {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
-          {iterationCount > 0 ? (
-            <span className="routine-loop__iteration-nav">
-              <button
-                type="button"
-                className="routine-loop__iteration-btn"
-                aria-label="Previous iteration"
-                title="Previous iteration"
-                disabled={selectedIteration <= 1}
-                onClick={() => setLoopIteration(edge.from, Math.max(1, selectedIteration - 1))}
-              >
-                <ChevronLeftSmall />
-              </button>
-              <span className="routine-loop__iteration-label">{selectedIteration} / {iterationCount}</span>
-              <button
-                type="button"
-                className="routine-loop__iteration-btn"
-                aria-label="Next iteration"
-                title="Next iteration"
-                disabled={selectedIteration >= iterationCount}
-                onClick={() => setLoopIteration(edge.from, Math.min(iterationCount, selectedIteration + 1))}
-              >
-                <ChevronRightPointSmall />
-              </button>
-            </span>
-          ) : null}
         </div>
       ) : null}
       <div className="routine-loop__outer">
