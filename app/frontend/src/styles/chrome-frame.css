@@ -8304,32 +8304,31 @@ body,
    chain segment from the node it loops back to through the back-edge).
    Amber, not teal, so the two scope kinds read as distinct at a glance.
 
-   The rail down the box's left edge is the loop's one identity column --
-   the condition text (writing-mode: vertical-rl) and the iteration
-   prev/next nav both live there, stacked, instead of the nav floating
-   separately above the box. .routine-loop is a flex ROW of [rail, main],
-   so the rail's own content sets the row's cross size; no min-height
-   floor is needed even for a single-card loop. Recursion-limit/retry
-   badges (unrelated to iteration paging) keep their own row above the
-   box, like Fork/Foreach's header -- .routine-loop-frame is a flex
-   column with align-items: stretch so that row spans the box's own
-   width and its content can right-align flush with the box's right
-   edge, no JS measurement needed. */
+   The condition text sits OUTSIDE the box entirely -- a plain vertical
+   label (writing-mode: vertical-rl, no background/border of its own) in
+   the gutter to the box's left, rather than a boxed rail sharing the
+   amber border. .routine-loop__outer is a flex ROW of [label, box], so
+   the label's own content sets the row's cross size; no min-height floor
+   is needed even for a single-card loop. Badges and the iteration nav
+   live in their own row above, right-aligned over the box -- also
+   outside it -- .routine-loop-frame is a flex column with
+   align-items: stretch so that row spans the same width as the
+   label+box row below it, no JS measurement needed. */
 .routine-loop-frame {
-  --loop-rail-w: 28px;
+  --loop-label-w: 20px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   width: max-content;
   max-width: 100%;
   margin: 8px auto 0;
-  /* The rail on the box below adds width only on the left, which would
-     otherwise pull the frame's auto-centered midpoint (and everything
-     stretched to its width, including the toolbar row) away from the body
-     cards' own center. Shift left by half the rail's (fixed) width so the
-     cards stay aligned under the connector line above/below, like every
-     other step. */
-  transform: translateX(calc(var(--loop-rail-w) / -2));
+  /* The label adds width only on the left, which would otherwise pull the
+     frame's auto-centered midpoint (and everything stretched to its
+     width, including the toolbar row) away from the box's own center.
+     Shift left by half the label's (fixed) width so the box stays
+     aligned under the connector line above/below, like every other
+     step. */
+  transform: translateX(calc(var(--loop-label-w) / -2));
 }
 
 .routine-loop__toolbar {
@@ -8341,30 +8340,19 @@ body,
   padding: 0 2px 6px;
 }
 
-.routine-loop {
+.routine-loop__outer {
   display: flex;
   flex-direction: row;
   align-items: stretch;
-  background: color-mix(in oklab, #d29922 6%, var(--color-bg-secondary));
-  border: 1px solid color-mix(in oklab, #d29922 42%, var(--color-border));
-  border-radius: 14px;
-  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
-  overflow: hidden;
 }
 
-.routine-loop__rail {
+.routine-loop__label {
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  width: var(--loop-rail-w);
-  padding: 10px 0;
-  background: rgb(210 153 34 / 10%);
-  border-right: 1px solid color-mix(in oklab, #d29922 30%, var(--color-border));
-}
-
-.routine-loop__rail-text {
+  width: var(--loop-label-w);
+  padding-right: 4px;
   writing-mode: vertical-rl;
   transform: rotate(180deg);
   color: #d29922;
@@ -8375,78 +8363,24 @@ body,
   white-space: nowrap;
 }
 
-.routine-loop__rail-text--guarded {
+.routine-loop__label--guarded {
   text-transform: none;
   letter-spacing: 0;
 }
 
-.routine-loop__rail-text--unset {
+.routine-loop__label--unset {
   color: #b8860b;
   font-style: italic;
 }
 
-/* Pages through a guarded loop's own recorded iterations -- selecting one
-   re-points every body node's badge/inspector at that iteration's own
-   duration/tokens/route/output instead of always the latest (see
-   LoopBlock/pickEntryForIteration). Stacked vertically under the rail's
-   own condition text, so both live in the same identity column instead of
-   a second floating control. */
-.routine-loop__rail-nav {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
-  margin-top: 10px;
-}
-
-.routine-loop__rail-nav-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  padding: 0;
-  color: #f0c04b;
-  background: transparent;
-  border: none;
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-/* Reuses the chevron-left glyph rotated to point up/down instead of a
-   second pair of icon components -- the rail is vertical, the buttons
-   page up/down through it. */
-.routine-loop__rail-nav-btn svg {
-  transform: rotate(90deg);
-}
-
-.routine-loop__rail-nav-btn--next svg {
-  transform: rotate(-90deg);
-}
-
-.routine-loop__rail-nav-btn:hover:not(:disabled) {
-  background: rgb(210 153 34 / 18%);
-}
-
-.routine-loop__rail-nav-btn:disabled {
-  opacity: 0.35;
-  cursor: default;
-}
-
-.routine-loop__rail-nav-label {
-  writing-mode: horizontal-tb;
-  font-size: 8px;
-  font-weight: 700;
-  color: #f0c04b;
-  font-variant-numeric: tabular-nums;
-}
-
-.routine-loop__main {
-  display: flex;
-  flex-direction: column;
+.routine-loop {
   flex: 1;
   min-width: 0;
   padding: 10px;
+  background: color-mix(in oklab, #d29922 6%, var(--color-bg-secondary));
+  border: 1px solid color-mix(in oklab, #d29922 42%, var(--color-border));
+  border-radius: 14px;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
 }
 
 .routine-loop__badge {
@@ -8457,6 +8391,52 @@ body,
   border-radius: 999px;
   font-size: 10px;
   font-weight: 700;
+}
+
+/* Pages through a guarded loop's own recorded iterations -- selecting one
+   re-points every body node's badge/inspector at that iteration's own
+   duration/tokens/route/output instead of always the latest (see
+   LoopBlock/pickEntryForIteration). */
+.routine-loop__iteration-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  color: #f0c04b;
+  background: rgb(210 153 34 / 10%);
+  border: 1px solid rgb(210 153 34 / 28%);
+  border-radius: 999px;
+}
+
+.routine-loop__iteration-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.routine-loop__iteration-btn:hover:not(:disabled) {
+  background: rgb(210 153 34 / 18%);
+}
+
+.routine-loop__iteration-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.routine-loop__iteration-label {
+  min-width: 34px;
+  font-size: 10px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .routine-loop__body {
