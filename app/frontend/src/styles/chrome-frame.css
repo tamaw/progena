@@ -8305,11 +8305,23 @@ body,
    header ("RETRY LOOP") and the box's own closing edge already say "this
    repeats"; there is no separate "back to X" line. Amber, not teal, so the
    two scope kinds read as distinct at a glance. */
-.routine-loop {
+/* Header (eyebrow + iteration nav) renders ABOVE the amber box now, not
+   inside it -- a flex column with `width: max-content` sized to the wider
+   of the two rows (header vs. the body's own step cards) and
+   `align-items: stretch` so the narrower row's rails/head span the exact
+   same width as the other, no JS measurement needed. This lets .routine-loop
+   itself hug the body's real content width instead of being forced wide
+   enough to fit the header row inside it. */
+.routine-loop-frame {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   width: max-content;
-  min-width: min(480px, 100%);
   max-width: 100%;
   margin: 8px auto 0;
+}
+
+.routine-loop {
   padding: 10px;
   background: color-mix(in oklab, #d29922 6%, var(--color-bg-secondary));
   border: 1px solid color-mix(in oklab, #d29922 42%, var(--color-border));
@@ -8324,7 +8336,7 @@ body,
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
-  padding: 2px 2px 10px;
+  padding: 0 2px 6px;
 }
 
 .routine-loop__head-left,

@@ -2243,7 +2243,7 @@ function LoopBlock({ edge, targetLabel, body }) {
   const iterationCount = guardEntries.length;
   const selectedIteration = loopIterations?.[edge?.from] ?? iterationCount;
   return (
-    <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
+    <div className="routine-loop-frame">
       <div className="routine-loop__head">
         <span className="routine-loop__head-left">
           <span className={`routine-loop__eyebrow${guard ? ' routine-loop__eyebrow--guarded' : ''}${guard && !guard.expression ? ' routine-loop__eyebrow--unset' : ''}`}>
@@ -2280,8 +2280,10 @@ function LoopBlock({ edge, targetLabel, body }) {
           ) : null}
         </span>
       </div>
-      <div className="routine-loop__body">{body}</div>
-    </section>
+      <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
+        <div className="routine-loop__body">{body}</div>
+      </section>
+    </div>
   );
 }
 
