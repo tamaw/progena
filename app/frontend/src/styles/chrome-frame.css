@@ -8301,68 +8301,80 @@ body,
 
 /* Retry loop: same idea as .routine-foreach/.routine-fork's own box -- one
    border, not a box nested inside a box -- around the cycle's body (the
-   chain segment from the node it loops back to through the back-edge). The
-   header ("RETRY LOOP") and the box's own closing edge already say "this
-   repeats"; there is no separate "back to X" line. Amber, not teal, so the
-   two scope kinds read as distinct at a glance. */
-/* Header (eyebrow + iteration nav) renders ABOVE the amber box now, not
-   inside it -- a flex column with `width: max-content` sized to the wider
-   of the two rows (header vs. the body's own step cards) and
-   `align-items: stretch` so the narrower row's rails/head span the exact
-   same width as the other, no JS measurement needed. This lets .routine-loop
-   itself hug the body's real content width instead of being forced wide
-   enough to fit the header row inside it. */
+   chain segment from the node it loops back to through the back-edge).
+   Amber, not teal, so the two scope kinds read as distinct at a glance.
+
+   Unlike Fork/Foreach (whose header sits in a row above their body), the
+   loop condition renders as a vertical label rail down the box's left edge
+   -- .routine-loop is a flex ROW of [rail, main], so the rail is a real
+   flex item whose writing-mode: vertical-rl content sets the row's cross
+   size; no min-height floor is needed even for a single-card loop. Badges
+   and the iteration nav move to a small right-aligned toolbar inside
+   .routine-loop__main, above the body, rather than a full header line --
+   there's nothing left of them once the condition text moves to the rail. */
 .routine-loop-frame {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
   width: max-content;
   max-width: 100%;
   margin: 8px auto 0;
 }
 
 .routine-loop {
-  padding: 10px;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
   background: color-mix(in oklab, #d29922 6%, var(--color-bg-secondary));
   border: 1px solid color-mix(in oklab, #d29922 42%, var(--color-border));
   border-radius: 14px;
   box-shadow: inset 0 1px 0 rgb(255 255 255 / 3%);
+  overflow: hidden;
 }
 
-.routine-loop__head {
-  position: relative;
+.routine-loop__rail {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 2px 6px;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 10px 6px;
+  background: rgb(210 153 34 / 10%);
+  border-right: 1px solid color-mix(in oklab, #d29922 30%, var(--color-border));
 }
 
-.routine-loop__head-left,
-.routine-loop__head-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.routine-loop__eyebrow {
+.routine-loop__rail-text {
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
   color: #d29922;
   font-size: 10px;
   font-weight: 800;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.routine-loop__eyebrow--guarded {
+.routine-loop__rail-text--guarded {
   text-transform: none;
   letter-spacing: 0;
 }
 
-.routine-loop__eyebrow--unset {
+.routine-loop__rail-text--unset {
   color: #b8860b;
   font-style: italic;
+}
+
+.routine-loop__main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  padding: 10px;
+}
+
+.routine-loop__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 6px;
 }
 
 .routine-loop__badge {
@@ -8435,6 +8447,7 @@ body,
 .routine-loop__body > .routine-cap--end {
   display: none;
 }
+
 
 /* Router fork: a CSS-only switch box. Its rails rely on flex centring rather
    than measurements, so they reflow with branch labels and lane widths.

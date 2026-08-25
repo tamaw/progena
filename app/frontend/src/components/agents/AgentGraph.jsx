@@ -2244,44 +2244,46 @@ function LoopBlock({ edge, targetLabel, body }) {
   const selectedIteration = loopIterations?.[edge?.from] ?? iterationCount;
   return (
     <div className="routine-loop-frame">
-      <div className="routine-loop__head">
-        <span className="routine-loop__head-left">
-          <span className={`routine-loop__eyebrow${guard ? ' routine-loop__eyebrow--guarded' : ''}${guard && !guard.expression ? ' routine-loop__eyebrow--unset' : ''}`}>
+      <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
+        <div className="routine-loop__rail" title={guard?.expression || undefined}>
+          <span className={`routine-loop__rail-text${guard ? ' routine-loop__rail-text--guarded' : ''}${guard && !guard.expression ? ' routine-loop__rail-text--unset' : ''}`}>
             {guard ? (guard.expression ? `↺ Loop while ${guard.expression}` : '↺ Loop · set condition') : '↺ Retry loop'}
           </span>
-        </span>
-        <span className="routine-loop__head-right">
-          {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
-          {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
-          {iterationCount > 0 ? (
-            <span className="routine-loop__iteration-nav">
-              <button
-                type="button"
-                className="routine-loop__iteration-btn"
-                aria-label="Previous iteration"
-                title="Previous iteration"
-                disabled={selectedIteration <= 1}
-                onClick={() => setLoopIteration(edge.from, Math.max(1, selectedIteration - 1))}
-              >
-                <ChevronLeftSmall />
-              </button>
-              <span className="routine-loop__iteration-label">{selectedIteration} / {iterationCount}</span>
-              <button
-                type="button"
-                className="routine-loop__iteration-btn"
-                aria-label="Next iteration"
-                title="Next iteration"
-                disabled={selectedIteration >= iterationCount}
-                onClick={() => setLoopIteration(edge.from, Math.min(iterationCount, selectedIteration + 1))}
-              >
-                <ChevronRightPointSmall />
-              </button>
-            </span>
+        </div>
+        <div className="routine-loop__main">
+          {(recursionLimit || maxRetries || iterationCount > 0) ? (
+            <div className="routine-loop__toolbar">
+              {recursionLimit ? <span className="routine-loop__badge">Recursion limit {recursionLimit}</span> : null}
+              {maxRetries ? <span className="routine-loop__badge">retries {maxRetries}x per step</span> : null}
+              {iterationCount > 0 ? (
+                <span className="routine-loop__iteration-nav">
+                  <button
+                    type="button"
+                    className="routine-loop__iteration-btn"
+                    aria-label="Previous iteration"
+                    title="Previous iteration"
+                    disabled={selectedIteration <= 1}
+                    onClick={() => setLoopIteration(edge.from, Math.max(1, selectedIteration - 1))}
+                  >
+                    <ChevronLeftSmall />
+                  </button>
+                  <span className="routine-loop__iteration-label">{selectedIteration} / {iterationCount}</span>
+                  <button
+                    type="button"
+                    className="routine-loop__iteration-btn"
+                    aria-label="Next iteration"
+                    title="Next iteration"
+                    disabled={selectedIteration >= iterationCount}
+                    onClick={() => setLoopIteration(edge.from, Math.min(iterationCount, selectedIteration + 1))}
+                  >
+                    <ChevronRightPointSmall />
+                  </button>
+                </span>
+              ) : null}
+            </div>
           ) : null}
-        </span>
-      </div>
-      <section className="routine-loop" aria-label={guard ? 'Loop' : `Retry loop back to ${targetLabel}`}>
-        <div className="routine-loop__body">{body}</div>
+          <div className="routine-loop__body">{body}</div>
+        </div>
       </section>
     </div>
   );
