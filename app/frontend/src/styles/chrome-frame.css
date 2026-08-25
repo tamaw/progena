@@ -7125,6 +7125,17 @@ body,
   color: var(--color-error);
 }
 
+/* Run button while a run is in flight: same "gray out, stay mounted, pulse
+   don't spin" idiom as the rest of this toolbar (see routine-step-card-run
+   and routine-cap--warming below) -- the icon itself (Play -> Stop, swapped
+   in AgentGraph.jsx's isRunInProgress) pulses in place rather than the
+   button disappearing or a spinner replacing it, and disabled dims the
+   whole control since a second click would mint a second concurrent run,
+   not stop this one -- there's no cancel endpoint for an in-flight run. */
+.agents-graph-floating .agents-graph-run-action--pending .detail-header-action__icon {
+  animation: routine-step-card-run-pulse 1.1s ease-in-out infinite;
+}
+
 /* ── Subagent workflow canvas ──────────────────────────────────────────────
    The canvas chrome (node card, title bar, body, dock, minimap, controls,
    background) is shared with the Workspace canvas via the .workspace-* and

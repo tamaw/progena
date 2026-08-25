@@ -22,7 +22,7 @@ import {
   selectAgentRoutineRuns,
   selectAgentRunState,
 } from '../../store/uiDataSlice';
-import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon } from '../layout/DetailHeader';
+import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon, StopActionIcon } from '../layout/DetailHeader';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 import {
@@ -3553,6 +3553,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // useRoutineRunPolling), so counting can start honestly even before the
   // entry node's own completion exists (see ChainCap/StepRunSummary).
   const warmingUp = !runNav.isBrowsingHistory && runStatus === 'discovering';
+  // Drives the top-left Run button's icon (Play -> Stop) and disables it
+  // for the run's full duration, not just discovery -- a second click
+  // mid-run would mint a second concurrent session against the same
+  // routine, and there's no cancel endpoint for an in-flight run to make
+  // "Stop" anything but a status indicator.
+  const isRunInProgress = !runNav.isBrowsingHistory && (runStatus === 'discovering' || runStatus === 'running');
   const loopMembership = useMemo(() => buildLoopMembership(displayEdges), [displayEdges]);
   const editContext = useMemo(() => ({
     updateNode,
@@ -3754,17 +3760,19 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                   />
                 ) : null}
                 <DetailHeaderAction
-                  icon={<PlayActionIcon />}
-                  label="Run"
+                  icon={isRunInProgress ? <StopActionIcon /> : <PlayActionIcon />}
+                  label={isRunInProgress ? 'Running' : 'Run'}
+                  className={isRunInProgress ? 'agents-graph-run-action--pending' : ''}
                   tooltip={
-                    runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
+                    isRunInProgress ? 'Running…'
+                      : runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
                       : !isServerConfirmed ? 'Waiting for save to be confirmed…'
                       : missingRequiredParams.length > 0 ? `Fill in ${missingRequiredParams.length} required parameter${missingRequiredParams.length === 1 ? '' : 's'} first`
                       : 'Run routine'
                   }
-                  ariaLabel="Run routine"
+                  ariaLabel={isRunInProgress ? 'Running' : 'Run routine'}
                   onClick={() => startRunAndTrackLatest()}
-                  disabled={runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
+                  disabled={isRunInProgress || runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
                 />
                 <DetailHeaderAction
                   icon={<RestoreActionIcon />}
