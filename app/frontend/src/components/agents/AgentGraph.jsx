@@ -2915,11 +2915,11 @@ function useRunStaleness(agentId, runRevisionId, currentGraph) {
   );
 }
 
-function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, parametersOpen, onOpenParameters, onCloseParameters }) {
+function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   const persistRef = useRef(onPersist);
   const lastSavedRef = useRef(null);
   // Values the user fills in for the routine's declared input_schema.properties
-  // (see RoutineParametersPanel) -- session-local only, never persisted to the
+  // (see RunParametersModal) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
   const [parameterValues, setParameterValues] = useState({});
   const {
@@ -2952,10 +2952,10 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   useEffect(() => {
     if (!isBrowsingHistory) return;
     onCloseJson();
-    onCloseParameters();
-    // Only reacts to entering browsing itself -- onCloseJson/onCloseParameters
-    // are fresh closures every render (AgentsPage inlines them), and neither
-    // needs to re-fire this on its own identity change.
+    setRunModalOpen(false);
+    // Only reacts to entering browsing itself -- onCloseJson is a fresh
+    // closure every render (AgentsPage inlines it), and doesn't need to
+    // re-fire this on its own identity change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isBrowsingHistory]);
   // Which iteration a loop's own prev/next nav has explicitly selected,
@@ -3537,6 +3537,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // canvas has to already be showing, and be editable against, that exact
   // content, not a dirty draft still catching up to it.
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
+  // The Run button opens this instead of the old always-docked Params tab --
+  // review/edit the routine's declared input_schema values right where the
+  // intent to run was expressed, instead of a separately-discoverable side
+  // panel. Local (not lifted to AgentsPage) since nothing outside this
+  // canvas needs to know it's open, same as restoreConfirmOpen above.
+  const [runModalOpen, setRunModalOpen] = useState(false);
   const handleRestoreRun = useCallback(async () => {
     const browsed = runNav.browsedGraph;
     if (!browsed) return;
@@ -3657,8 +3663,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     [nodes, edges],
   );
   // Declared input_schema.required names with no (or blank) value filled in
-  // yet -- gates the Run button the same way `incomplete` gates it for node
-  // config, so a routine that needs parameters can't be run silently empty.
+  // yet -- gates the run-parameters modal's own Run button the same way
+  // `incomplete` gates the canvas one for node config, so a routine that
+  // needs parameters can't be run silently empty.
   const missingRequiredParams = useMemo(
     () => (meta.input_schema?.required || []).filter((name) => {
       const value = parameterValues[name];
@@ -3666,6 +3673,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     }),
     [meta.input_schema, parameterValues],
   );
+  // Whether the toolbar Run button opens the parameters modal at all --
+  // a routine with nothing declared just runs immediately, same as before.
+  const hasDeclaredParams = Object.keys(meta.input_schema?.properties || {}).length > 0;
   useEffect(() => {
     const payload = serializeGraph(nodes, edges, meta);
     const signature = JSON.stringify(payload);
@@ -3705,8 +3715,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // `agent.graph.updated` SSE event (progenitor writing /routines/<id>.json
   // directly, another tab saving, a revision restore) lands in Redux and
   // changes `confirmedGraph` under this already-mounted canvas, but nothing
-  // adopts it: the JSON sidebar and RoutineParametersPanel below both read
-  // off this local copy, so they'd stay stale until a full reload. Pull a
+  // adopts it: the JSON sidebar and RunParametersModal both read off this
+  // local copy, so they'd stay stale until a full reload. Pull a
   // genuinely external change in here, but only when this tab has no
   // unsaved edit of its own in flight (`workingGraph` still matches
   // `lastSavedRef`) -- otherwise the user's in-progress edit would be
@@ -3817,12 +3827,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                     isRunInProgress ? 'Running…'
                       : runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
                       : !isServerConfirmed ? 'Waiting for save to be confirmed…'
-                      : missingRequiredParams.length > 0 ? `Fill in ${missingRequiredParams.length} required parameter${missingRequiredParams.length === 1 ? '' : 's'} first`
+                      : hasDeclaredParams ? 'Set parameters and run'
                       : 'Run routine'
                   }
                   ariaLabel={isRunInProgress ? 'Running' : 'Run routine'}
-                  onClick={() => startRunAndTrackLatest()}
-                  disabled={isRunInProgress || runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed || missingRequiredParams.length > 0}
+                  onClick={() => { if (hasDeclaredParams) setRunModalOpen(true); else startRunAndTrackLatest(); }}
+                  disabled={isRunInProgress || runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
                 />
                 <DetailHeaderAction
                   icon={<RestoreActionIcon />}
@@ -3949,6 +3959,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 />
               ) : null}
             </GraphEditContext.Provider>
+            {runModalOpen ? (
+              <RunParametersModal
+                inputSchema={meta.input_schema}
+                values={parameterValues}
+                onChange={setParameterValues}
+                missingRequiredParams={missingRequiredParams}
+                onClose={() => setRunModalOpen(false)}
+                onConfirm={() => { setRunModalOpen(false); startRunAndTrackLatest(); }}
+              />
+            ) : null}
           </div>
           {saveError ? <div className="agents-graph-save-error">{saveError}</div> : null}
         </div>
@@ -3959,14 +3979,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
           graph={workingGraph}
           onSave={handleJsonApply}
           onClose={onCloseJson}
-        />
-      ) : parametersOpen ? (
-        <RoutineParametersPanel
-          key={agent.id}
-          inputSchema={meta.input_schema}
-          values={parameterValues}
-          onChange={setParameterValues}
-          onClose={onCloseParameters}
         />
       ) : runsOpen ? (
         <RoutineRunsPanel
@@ -3980,7 +3992,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
       ) : (
         <GraphSideDock
           disabledIds={runNav.isBrowsingHistory ? EDIT_SIDE_ITEM_IDS : EMPTY_MISSING}
-          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'parameters') onOpenParameters(); if (id === 'runs') onOpenRuns(); }}
+          onSelect={(id) => { if (id === 'json') onOpenJson(); if (id === 'runs') onOpenRuns(); }}
         />
       )}
       {restoreConfirmOpen ? (
@@ -4080,13 +4092,12 @@ function ZoomFitIcon() {
 const GRAPH_SIDE_ITEMS = [
   { id: 'json', label: 'JSON', title: 'Edit as JSON' },
   { id: 'runs', label: 'Runs', title: 'Routine run history' },
-  { id: 'parameters', label: 'Params', title: 'Routine parameters' },
 ];
 
 // Locked while browsing history (see GraphSideDock's disabledIds): editing
 // surfaces only. 'runs' stays enabled -- it's pure navigation, the same
 // category as the toolbar's own back/forward pill, not an edit surface.
-const EDIT_SIDE_ITEM_IDS = new Set(['json', 'parameters']);
+const EDIT_SIDE_ITEM_IDS = new Set(['json']);
 
 function GraphSideDock({ onSelect, disabledIds }) {
   return (
@@ -4112,7 +4123,7 @@ function GraphSideDock({ onSelect, disabledIds }) {
   );
 }
 
-export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns, parametersOpen, onOpenParameters, onCloseParameters }) {
+export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowProfile, onDelete, jsonOpen, onOpenJson, onCloseJson, runsOpen, onOpenRuns, onCloseRuns }) {
   return (
     <GraphCanvas
       agent={agent}
@@ -4127,9 +4138,6 @@ export function AgentGraphTab({ agent, graph, confirmedGraph, onPersist, onShowP
       runsOpen={runsOpen}
       onOpenRuns={onOpenRuns}
       onCloseRuns={onCloseRuns}
-      parametersOpen={parametersOpen}
-      onOpenParameters={onOpenParameters}
-      onCloseParameters={onCloseParameters}
     />
   );
 }
@@ -4483,10 +4491,37 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
   );
 }
 
-function RoutineParametersPanel({ inputSchema, values, onChange, onClose }) {
+// Values the user fills in for the routine's declared input_schema.properties
+// right at the moment they hit Run -- session-local (GraphCanvas's
+// parameterValues state), never persisted to the graph document. The
+// schema itself (properties/required) is authored the same way node-level
+// response_schema is: via the JSON editor, not a bespoke properties-builder
+// UI here -- this modal only renders what's already declared and collects
+// values for it. Deliberately NOT a portal to document.body (see
+// PopupModal) -- rendered as a plain child of .canvas-surface (already
+// position:relative, already the exact bounds of the routine's own content
+// area) so the backdrop only ever covers the graph, never the app chrome
+// either side of it.
+function RunParametersModal({ inputSchema, values, onChange, missingRequiredParams, onClose, onConfirm }) {
   const properties = inputSchema?.properties || {};
   const required = new Set(inputSchema?.required || []);
   const names = Object.keys(properties);
+  const confirmRef = useRef(null);
+  const openerRef = useRef(document.activeElement);
+  const missing = new Set(missingRequiredParams);
+
+  useEffect(() => {
+    const opener = openerRef.current;
+    confirmRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [onClose]);
 
   const setValue = (name, raw) => {
     onChange((current) => {
@@ -4501,28 +4536,22 @@ function RoutineParametersPanel({ inputSchema, values, onChange, onClose }) {
   };
 
   return (
-    <aside className="agents-graph-editor agents-graph-parameters">
-      <button
-        type="button"
-        className="agents-graph-editor__collapse"
-        onClick={onClose}
-        title="Collapse"
-        aria-label="Collapse parameters"
+    <div className="routine-run-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="routine-run-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="routine-run-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
       >
-        <ChevronRightSmall />
-      </button>
-      <header className="agents-graph-editor__head">
-        <h2>Parameters</h2>
-        {names.length ? (
-          <button type="button" className="repo-btn repo-btn--ghost" onClick={() => onChange({})}>Clear</button>
-        ) : null}
-      </header>
-      {names.length === 0 ? (
-        <p className="agents-graph-parameters__empty">
-          This routine has no declared input_schema. Add one via the JSON editor -- a JSON Schema object with `properties` (and optionally `required`) -- to collect values here before Run.
-        </p>
-      ) : (
-        <div className="agents-graph-parameters__list">
+        <header className="sidebar-modal__head">
+          <div>
+            <span className="sidebar-modal__eyebrow">Run routine</span>
+            <h3 id="routine-run-modal-title">Set parameters</h3>
+          </div>
+          <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
+        </header>
+        <div className="routine-run-modal__body agents-graph-parameters__list">
           {names.map((name) => {
             const def = properties[name] || {};
             const isRequired = required.has(name);
@@ -4538,8 +4567,15 @@ function RoutineParametersPanel({ inputSchema, values, onChange, onClose }) {
             );
           })}
         </div>
-      )}
-    </aside>
+        <footer className="sidebar-modal__foot">
+          <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Cancel</button>
+          <button ref={confirmRef} type="button" className="popup-modal__confirm" onClick={onConfirm} disabled={missing.size > 0}>
+            Run
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
+
 
