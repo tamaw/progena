@@ -4569,7 +4569,7 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
         </div>
         <footer className="sidebar-modal__foot">
           <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Cancel</button>
-          <button ref={confirmRef} type="button" className="popup-modal__confirm" onClick={onConfirm} disabled={missing.size > 0}>
+          <button ref={confirmRef} type="button" className="task-btn task-btn--primary" onClick={onConfirm} disabled={missing.size > 0}>
             Run
           </button>
         </footer>
