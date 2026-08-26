@@ -3914,7 +3914,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 className="agents-graph-zoom-controls__btn"
                 onClick={zoomIn}
                 disabled={zoom >= ZOOM_MAX}
-                title="Zoom in"
+                data-tooltip="Zoom in"
                 aria-label="Zoom in"
               >
                 <ZoomPlusIcon />
@@ -3924,7 +3924,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 className="agents-graph-zoom-controls__btn"
                 onClick={zoomOut}
                 disabled={zoom <= ZOOM_MIN}
-                title="Zoom out"
+                data-tooltip="Zoom out"
                 aria-label="Zoom out"
               >
                 <ZoomMinusIcon />
@@ -3933,7 +3933,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 type="button"
                 className="agents-graph-zoom-controls__btn"
                 onClick={resetZoom}
-                title="Reset zoom"
+                data-tooltip="Reset zoom"
                 aria-label="Reset zoom"
               >
                 <ZoomFitIcon />
