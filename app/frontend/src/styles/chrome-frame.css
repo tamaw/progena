@@ -8868,13 +8868,23 @@ body,
 }
 
 
+/* No `max-width` cap here: `100%` would resolve against this flex item's own
+   containing block (`.routine-fork`), which is itself `width: max-content`
+   sized bottom-up from this very join -- a percentage cap on it is circular.
+   When the join's content (e.g. a nested fork wider than the outer fork's
+   own head/branches) exceeds that phantom cap, `align-items: center`'s safe-
+   alignment fallback drops to flush-left instead of centering, pulling the
+   join's rail off the incoming connector's centre line. Sizing purely via
+   `width: fit-content` and leaving overflow to the canvas's own horizontal
+   scroll (`.routine-canvas__scroll { overflow: auto }`) keeps every join
+   centred on its fork, the same pattern `.routine-fork`/`.routine-chain`
+   already use for oversized content. */
 .routine-fork__join {
   position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   width: fit-content;
-  max-width: calc(100% - 48px);
   margin: 0 auto;
 }
 
