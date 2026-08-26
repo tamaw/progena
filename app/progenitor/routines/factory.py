@@ -150,17 +150,17 @@ def _node_timeout(config: dict[str, Any], settings: dict[str, Any]) -> float | N
 _RESERVED_STATE_CHANNELS = frozenset({"messages", "data"})
 
 
-def _extra_state_fields(*schemas: dict[str, str] | list[str] | None) -> list[str]:
+def _extra_state_fields(*name_lists: list[str] | None) -> list[str]:
     """Union of declared input/output field names (order-stable, de-duplicated,
     reserved base channel names dropped -- a graph author declaring "data" or
     "messages" in input_schema/output_schema just means that base channel,
-    not a second one). Accepts either a flat name->type map (output_schema's
-    shape) or an already-extracted name list (input_schema's real-JSON-Schema
-    shape -- see _input_schema_field_names): iterating either yields names."""
+    not a second one). Callers always pass already-extracted name lists (see
+    _schema_field_names) -- input_schema and output_schema are both real
+    JSON Schema objects, never a raw field name source themselves."""
     seen = set(_RESERVED_STATE_CHANNELS)
     names: list[str] = []
-    for schema in schemas:
-        for name in schema or {}:
+    for name_list in name_lists:
+        for name in name_list or []:
             if name in seen:
                 continue
             seen.add(name)
@@ -168,13 +168,14 @@ def _extra_state_fields(*schemas: dict[str, str] | list[str] | None) -> list[str
     return names
 
 
-def _input_schema_field_names(input_schema: dict[str, Any] | None) -> list[str]:
-    """Declared parameter names from a real-JSON-Schema-shaped input_schema
-    (``{"type": "object", "properties": {...}, "required": [...]}``, the same
-    convention node-level ``response_schema`` uses) -- everything downstream
-    (state channels, the compiled input TypedDict, the seed node) only ever
-    needs the names, not the property definitions themselves."""
-    return list((input_schema or {}).get("properties") or {})
+def _schema_field_names(schema: dict[str, Any] | None) -> list[str]:
+    """Declared field names from a real-JSON-Schema-shaped input_schema or
+    output_schema (``{"type": "object", "properties": {...}, "required":
+    [...]}``, the same convention node-level ``response_schema`` uses) --
+    everything downstream (state channels, the compiled input/output
+    TypedDicts, the seed node, the output projector) only ever needs the
+    names, not the property definitions themselves."""
+    return list((schema or {}).get("properties") or {})
 
 
 def _extended_state_type(extra_fields: list[str]) -> Any:
@@ -1172,11 +1173,11 @@ def compile_routine_graph(
     if graph.entry not in node_ids:
         raise ValueError(f"entry references unknown node: {graph.entry}")
 
-    input_fields = _input_schema_field_names(graph.input_schema)
-    output_fields = list(graph.output_schema or {})
+    input_fields = _schema_field_names(graph.input_schema)
+    output_fields = _schema_field_names(graph.output_schema)
 
     builder = StateGraph(
-        _extended_state_type(_extra_state_fields(input_fields, graph.output_schema)),
+        _extended_state_type(_extra_state_fields(input_fields, output_fields)),
         context_schema=RoutineContext,
         input_schema=_input_schema_type(input_fields),
         output_schema=_output_schema_type(output_fields),

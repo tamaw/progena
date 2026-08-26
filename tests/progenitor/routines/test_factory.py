@@ -697,7 +697,7 @@ class TestOutputSchema:
                 {"id": "b", "kind": "eval", "output_key": "dropped", "config": {"expression": "2"}},
             ],
             "edges": [{"from": "a", "to": "b", "level": "normal"}],
-            "output_schema": {"kept": "integer"},
+            "output_schema": {"properties": {"kept": {"type": "integer"}}},
         }
         graph = validate_routine_graph_payload(payload)
         runnable = compile_routine_graph(graph, model=FakeModel([]))
@@ -716,7 +716,9 @@ class TestOutputSchema:
                 {"id": "a", "kind": "eval", "output_key": "a", "config": {"expression": "1"}}
             ],
             "edges": [],
-            "output_schema": {"a": "integer", "never_produced": "string"},
+            "output_schema": {
+                "properties": {"a": {"type": "integer"}, "never_produced": {"type": "string"}}
+            },
         }
         graph = validate_routine_graph_payload(payload)
         runnable = compile_routine_graph(graph, model=FakeModel([]))
@@ -761,7 +763,7 @@ class TestRoutineDelegationContract:
                 {"id": "a", "kind": "eval", "output_key": "result", "config": {"expression": "1"}}
             ],
             "edges": [],
-            "output_schema": {"result": "integer"},
+            "output_schema": {"properties": {"result": {"type": "integer"}}},
         }
         graph = validate_routine_graph_payload(payload)
         runnable = compile_routine_graph(graph, model=FakeModel([]))

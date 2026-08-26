@@ -46,7 +46,7 @@ class AgentGraphModel(BaseModel):
     edges: list[dict[str, Any]] = []
     settings: dict[str, Any] = {}
     input_schema: dict[str, Any] | None = None
-    output_schema: dict[str, str] | None = None
+    output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
@@ -125,7 +125,7 @@ class AgentGraphUpdateRequest(BaseModel):
     summary: str | None = None
     settings: dict[str, Any] = {}
     input_schema: dict[str, Any] | None = None
-    output_schema: dict[str, str] | None = None
+    output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
@@ -181,7 +181,7 @@ def validate_agent_graph_document(
     description: str,
     settings: dict[str, Any] | None = None,
     input_schema: dict[str, Any] | None = None,
-    output_schema: dict[str, str] | None = None,
+    output_schema: dict[str, Any] | None = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Validate the complete routine document that the route will persist."""
