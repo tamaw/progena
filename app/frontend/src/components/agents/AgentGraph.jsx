@@ -1557,17 +1557,18 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 // quiet (see StepRunSummary) instead of showing a click-time-anchored
 // guess. Stops the instant the first run_meta entry lands anywhere.
 function ChainCap({ kind }) {
-  const { warmingUp, inputSchema, outputSchema, setRunModalOpen, setOutputModalOpen } = useContext(GraphEditContext);
+  const { warmingUp, inputSchema, setRunModalOpen, setOutputModalOpen } = useContext(GraphEditContext);
   const pulsing = kind === 'start' && warmingUp;
-  // Only interactive once there's something declared to show -- a routine
-  // with no input_schema/output_schema keeps today's plain, inert cap.
-  // input_schema is a nested JSON-Schema-shaped object (.properties/
-  // .required); output_schema is still the older flat `{name: typeName}`
-  // dict (see AgentGraphModel.output_schema, dict[str, str] server-side) --
-  // genuinely different shapes, so each side reads its own.
+  // Start is only interactive once input_schema declares something to
+  // fill in -- the Run button already handles the no-params case by
+  // running directly, so there'd be nothing for this modal to show.
+  // End is always interactive: RoutineOutputModal shows output_schema's
+  // declared fields when present, or falls back to every value this run
+  // actually wrote -- showing the result is the point of this cap even
+  // for the (common) case of a routine with no output_schema declared.
   const clickable = kind === 'start'
     ? Object.keys(inputSchema?.properties || {}).length > 0
-    : Object.keys(outputSchema || {}).length > 0;
+    : true;
   const openModal = kind === 'start' ? setRunModalOpen : setOutputModalOpen;
   return (
     <div
@@ -4653,7 +4654,14 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
 // input_schema there's no nested .properties/.description to read, just
 // the type name shown as a plain hint.
 function RoutineOutputModal({ outputSchema, runData, onClose }) {
-  const names = Object.keys(outputSchema || {});
+  const declaredNames = Object.keys(outputSchema || {});
+  // No output_schema declared -- most routines today don't have one --
+  // falls back to every key this run actually wrote to the cumulative
+  // `data` channel, so End still shows the result instead of nothing.
+  // Declaring output_schema narrows this to the specific fields intended
+  // as the routine's real result.
+  const hasSchema = declaredNames.length > 0;
+  const names = hasSchema ? declaredNames : Object.keys(runData || {});
   const closeRef = useRef(null);
   const openerRef = useRef(document.activeElement);
 
@@ -4687,25 +4695,38 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
           <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
         </header>
         <div className="routine-run-modal__body agents-graph-parameters__list">
-          {names.map((name) => {
-            const typeName = outputSchema[name];
-            const value = runData?.[name];
-            const hasValue = value !== undefined;
-            const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
-            return (
-              <div key={name} className="agents-graph-node__field">
-                <span className="agents-graph-node__field-label">{name}</span>
-                {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
-                {hasValue ? (
-                  <div className="routine-node-inspector__run-output">
-                    <pre>{text}</pre>
+          {names.length === 0 ? (
+            <p className="agents-graph-parameters__empty">
+              This routine hasn't produced any output yet -- run it to see results here.
+            </p>
+          ) : (
+            <>
+              {!hasSchema ? (
+                <p className="agents-graph-parameters__empty">
+                  No output_schema declared -- showing everything this run wrote. Declare one (via the JSON editor) to select specific fields instead.
+                </p>
+              ) : null}
+              {names.map((name) => {
+                const typeName = hasSchema ? outputSchema[name] : null;
+                const value = runData?.[name];
+                const hasValue = value !== undefined;
+                const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
+                return (
+                  <div key={name} className="agents-graph-node__field">
+                    <span className="agents-graph-node__field-label">{name}</span>
+                    {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
+                    {hasValue ? (
+                      <div className="routine-node-inspector__run-output">
+                        <pre>{text}</pre>
+                      </div>
+                    ) : (
+                      <p className="agents-graph-parameters__hint">Not produced yet -- run this routine to see this value.</p>
+                    )}
                   </div>
-                ) : (
-                  <p className="agents-graph-parameters__hint">Not produced yet -- run this routine to see this value.</p>
-                )}
-              </div>
-            );
-          })}
+                );
+              })}
+            </>
+          )}
         </div>
         <footer className="sidebar-modal__foot">
           <button ref={closeRef} type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
