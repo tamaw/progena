@@ -4647,16 +4647,20 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
 // .routine-run-modal-backdrop/.routine-run-modal shell (and the
 // .routine-node-inspector__run-output pre styling NodeInspector's own
 // per-node output already uses) rather than inventing a second modal look.
-// output_schema itself is the older flat `{name: typeName}` dict (see
-// AgentGraphModel.output_schema, dict[str, str] server-side) -- unlike
-// input_schema there's no nested .properties/.description to read, just
-// the type name shown as a plain hint. Deliberately NOT a runData
-// fallback when output_schema is absent -- the routine's own data channel
-// carries every node's intermediate write, most of which is not "the
-// result"; showing all of it isn't clearer, it's noise. Absent schema
-// means an explicit "not declared" message instead.
+// output_schema is now the same real-JSON-Schema shape input_schema is
+// (``{type: "object", properties: {...}, required: [...]}`` -- see
+// AgentGraphModel.output_schema, dict[str, Any] server-side, and
+// factory.py's _schema_field_names, shared by both sides) -- reads
+// .properties/.required/.description the same way RunParametersModal
+// does, just read-only. Deliberately NOT a runData fallback when
+// output_schema is absent -- the routine's own data channel carries every
+// node's intermediate write, most of which is not "the result"; showing
+// all of it isn't clearer, it's noise. Absent schema means an explicit
+// "not declared" message instead.
 function RoutineOutputModal({ outputSchema, runData, onClose }) {
-  const names = Object.keys(outputSchema || {});
+  const properties = outputSchema?.properties || {};
+  const required = new Set(outputSchema?.required || []);
+  const names = Object.keys(properties);
   const closeRef = useRef(null);
   const openerRef = useRef(document.activeElement);
 
@@ -4692,17 +4696,21 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
         <div className="routine-run-modal__body agents-graph-parameters__list">
           {names.length === 0 ? (
             <p className="agents-graph-parameters__empty">
-              This routine has no declared output_schema. Add one via the JSON editor -- a flat {'{'}"name": "type"{'}'} map -- to see its result here.
+              This routine has no declared output_schema. Add one via the JSON editor -- a JSON Schema object with `properties` (and optionally `required`) -- to see its result here.
             </p>
           ) : names.map((name) => {
-            const typeName = outputSchema[name];
+            const def = properties[name] || {};
+            const isRequired = required.has(name);
             const value = runData?.[name];
             const hasValue = value !== undefined;
             const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
             return (
-              <div key={name} className="agents-graph-node__field">
-                <span className="agents-graph-node__field-label">{name}</span>
-                {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
+              <div key={name} className={`agents-graph-node__field${isRequired ? ' agents-graph-node__field--required' : ''}`}>
+                <span className="agents-graph-node__field-label">
+                  {name}
+                  {isRequired ? <span className="agents-graph-node__required" title="Always set by this routine">Required</span> : null}
+                </span>
+                {def.description ? <span className="agents-graph-parameters__hint">{def.description}</span> : null}
                 {hasValue ? (
                   <div className="routine-node-inspector__run-output">
                     <pre>{text}</pre>

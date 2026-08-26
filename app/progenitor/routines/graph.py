@@ -522,7 +522,7 @@ class RoutineGraph(BaseModel):
     edges: list[RoutineEdge] = Field(default_factory=list)
     settings: RoutineSettings = Field(default_factory=RoutineSettings)
     input_schema: dict[str, Any] | None = None
-    output_schema: dict[str, str] | None = None
+    output_schema: dict[str, Any] | None = None
     defs: dict[str, dict[str, Any]] | None = Field(default=None, alias="$defs")
 
 
