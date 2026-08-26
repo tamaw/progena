@@ -7020,6 +7020,46 @@ body,
   backdrop-filter: blur(10px);
 }
 
+/* Run button's parameters modal (RunParametersModal in AgentGraph.jsx) --
+   deliberately NOT .sidebar-modal-backdrop's fixed/inset:0/document.body
+   portal: this backdrop is a plain child of .canvas-surface (already
+   position:relative, already exactly the routine's own content bounds),
+   so it only ever covers the graph -- never the app's left nav, routine
+   list, or top chrome either side of it, per the "modal must stay inside
+   the page content" requirement. z-index only needs to clear this
+   canvas's own local stacking (NodeInspector is 10, the floating pills
+   and zoom controls are 5). */
+.routine-run-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(10, 14, 23, 0.44);
+  backdrop-filter: blur(8px);
+}
+
+.routine-run-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(420px, 100%);
+  max-height: 100%;
+  padding: 16px;
+  color: var(--color-text-primary);
+  background:
+    radial-gradient(circle at 20% 0%, rgba(88, 166, 255, 0.14), transparent 34%),
+    var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-lg);
+}
+
+.routine-run-modal__body {
+  overflow-y: auto;
+  margin-top: 14px;
+}
+
 .agents-graph-zoom-controls__btn {
   display: flex;
   align-items: center;
