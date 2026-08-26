@@ -1557,10 +1557,32 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 // quiet (see StepRunSummary) instead of showing a click-time-anchored
 // guess. Stops the instant the first run_meta entry lands anywhere.
 function ChainCap({ kind }) {
-  const { warmingUp } = useContext(GraphEditContext);
+  const { warmingUp, inputSchema, outputSchema, setRunModalOpen, setOutputModalOpen } = useContext(GraphEditContext);
   const pulsing = kind === 'start' && warmingUp;
+  // Only interactive once there's something declared to show -- a routine
+  // with no input_schema/output_schema keeps today's plain, inert cap.
+  // input_schema is a nested JSON-Schema-shaped object (.properties/
+  // .required); output_schema is still the older flat `{name: typeName}`
+  // dict (see AgentGraphModel.output_schema, dict[str, str] server-side) --
+  // genuinely different shapes, so each side reads its own.
+  const clickable = kind === 'start'
+    ? Object.keys(inputSchema?.properties || {}).length > 0
+    : Object.keys(outputSchema || {}).length > 0;
+  const openModal = kind === 'start' ? setRunModalOpen : setOutputModalOpen;
   return (
-    <div className={`routine-cap routine-cap--${kind}${pulsing ? ' routine-cap--warming' : ''}`}>
+    <div
+      className={`routine-cap routine-cap--${kind}${pulsing ? ' routine-cap--warming' : ''}${clickable ? ' routine-cap--clickable' : ''}`}
+      role={clickable ? 'button' : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      aria-label={clickable ? (kind === 'start' ? 'View or edit routine parameters' : 'View routine output') : undefined}
+      onClick={clickable ? () => openModal(true) : undefined}
+      onKeyDown={clickable ? (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          openModal(true);
+        }
+      } : undefined}
+    >
       {kind === 'start' ? 'Start' : 'End'}
     </div>
   );
@@ -3537,12 +3559,19 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // canvas has to already be showing, and be editable against, that exact
   // content, not a dirty draft still catching up to it.
   const [restoreConfirmOpen, setRestoreConfirmOpen] = useState(false);
-  // The Run button opens this instead of the old always-docked Params tab --
-  // review/edit the routine's declared input_schema values right where the
-  // intent to run was expressed, instead of a separately-discoverable side
-  // panel. Local (not lifted to AgentsPage) since nothing outside this
-  // canvas needs to know it's open, same as restoreConfirmOpen above.
+  // The Run button, and the Start cap when input_schema is declared, both
+  // open this instead of the old always-docked Params tab -- review/edit
+  // the routine's declared input_schema values right where the intent to
+  // run was expressed, instead of a separately-discoverable side panel.
+  // Local (not lifted to AgentsPage) since nothing outside this canvas
+  // needs to know it's open, same as restoreConfirmOpen above.
   const [runModalOpen, setRunModalOpen] = useState(false);
+  // The End cap's read-only mirror -- opens RoutineOutputModal to show the
+  // declared output_schema resolved against the run currently in view
+  // (live or browsed, same runData every other run-aware element here
+  // already reads). No edit surface, so no browsing-history close effect
+  // needed the way runModalOpen has one below.
+  const [outputModalOpen, setOutputModalOpen] = useState(false);
   const handleRestoreRun = useCallback(async () => {
     const browsed = runNav.browsedGraph;
     if (!browsed) return;
@@ -3634,6 +3663,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     edges: displayEdges,
     nodes: displayNodes,
     inputSchema: meta.input_schema,
+    outputSchema: meta.output_schema,
+    setRunModalOpen,
+    setOutputModalOpen,
     readOnly: runNav.isBrowsingHistory,
     runMeta,
     runData,
@@ -3649,7 +3681,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     startRun: startRunAndTrackLatest,
     hasInteractiveSession,
     resetInteractiveSession,
-  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
+  }), [updateNode, deleteNode, insertAt, onChangeStateKey, updateLoopGuard, removeBranching, onAddBranch, onJoinBranches, selectNode, selectedNodeId, onAddDefault, onRemoveBranch, onRemoveDefault, onRenameBranch, meta.settings, displayEdges, displayNodes, meta.input_schema, meta.output_schema, runNav.isBrowsingHistory, runMeta, runData, activeNodeIds, estimatedActiveStartMs, staleNodeIds, runStatus, warmingUp, isRunInProgress, loopMembership, loopIterations, setLoopIteration, startRunAndTrackLatest, hasInteractiveSession, resetInteractiveSession]);
 
   // Debounced autosave: serialize the working graph and PATCH it. The first
   // run records the baseline so simply opening the tab does not trigger a save.
@@ -3959,14 +3991,33 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 />
               ) : null}
             </GraphEditContext.Provider>
+            {/* Mirrors the toolbar Run button's own disabled conditions (see
+                its `disabled` prop above) -- the modal is now reachable from
+                a second, otherwise-ungated entry point (the Start cap), so
+                its own Run button needs the same guard independently. */}
             {runModalOpen ? (
               <RunParametersModal
                 inputSchema={meta.input_schema}
                 values={parameterValues}
                 onChange={setParameterValues}
                 missingRequiredParams={missingRequiredParams}
+                blockedReason={
+                  isRunInProgress ? 'A run is already in progress'
+                    : runNav.isBrowsingHistory ? 'Step back to the latest run (or Restore this one) before running'
+                    : validationErrors.length > 0 ? 'Fix validation issues before running'
+                    : incomplete > 0 ? 'Finish incomplete steps before running'
+                    : !isServerConfirmed ? 'Waiting for save to be confirmed…'
+                    : null
+                }
                 onClose={() => setRunModalOpen(false)}
                 onConfirm={() => { setRunModalOpen(false); startRunAndTrackLatest(); }}
+              />
+            ) : null}
+            {outputModalOpen ? (
+              <RoutineOutputModal
+                outputSchema={meta.output_schema}
+                runData={runData}
+                onClose={() => setOutputModalOpen(false)}
               />
             ) : null}
           </div>
@@ -4497,12 +4548,16 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
 // schema itself (properties/required) is authored the same way node-level
 // response_schema is: via the JSON editor, not a bespoke properties-builder
 // UI here -- this modal only renders what's already declared and collects
-// values for it. Deliberately NOT a portal to document.body (see
+// values for it. Also reachable via the Start cap (ChainCap), independent
+// of the toolbar Run button's own disabled state -- `blockedReason` mirrors
+// that button's gating (isRunInProgress/isBrowsingHistory/validation/
+// isServerConfirmed) so Run-inside-the-modal can't bypass it from that
+// second entry point. Deliberately NOT a portal to document.body (see
 // PopupModal) -- rendered as a plain child of .canvas-surface (already
 // position:relative, already the exact bounds of the routine's own content
 // area) so the backdrop only ever covers the graph, never the app chrome
 // either side of it.
-function RunParametersModal({ inputSchema, values, onChange, missingRequiredParams, onClose, onConfirm }) {
+function RunParametersModal({ inputSchema, values, onChange, missingRequiredParams, blockedReason, onClose, onConfirm }) {
   const properties = inputSchema?.properties || {};
   const required = new Set(inputSchema?.required || []);
   const names = Object.keys(properties);
@@ -4569,9 +4624,91 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
         </div>
         <footer className="sidebar-modal__foot">
           <button type="button" className="task-btn task-btn--secondary" onClick={onClose}>Cancel</button>
-          <button ref={confirmRef} type="button" className="task-btn task-btn--primary" onClick={onConfirm} disabled={missing.size > 0}>
+          <button
+            ref={confirmRef}
+            type="button"
+            className="task-btn task-btn--primary"
+            title={missing.size === 0 ? blockedReason || undefined : undefined}
+            onClick={onConfirm}
+            disabled={missing.size > 0 || Boolean(blockedReason)}
+          >
             Run
           </button>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+// End cap's read-only mirror of RunParametersModal -- the declared
+// output_schema resolved against the run currently in view (live or
+// browsed via runNav, same runData every other run-aware element on this
+// canvas already reads), not editable, no Run action: this is "what came
+// out", not "what to submit". Reuses the same
+// .routine-run-modal-backdrop/.routine-run-modal shell (and the
+// .routine-node-inspector__run-output pre styling NodeInspector's own
+// per-node output already uses) rather than inventing a second modal look.
+// output_schema itself is the older flat `{name: typeName}` dict (see
+// AgentGraphModel.output_schema, dict[str, str] server-side) -- unlike
+// input_schema there's no nested .properties/.description to read, just
+// the type name shown as a plain hint.
+function RoutineOutputModal({ outputSchema, runData, onClose }) {
+  const names = Object.keys(outputSchema || {});
+  const closeRef = useRef(null);
+  const openerRef = useRef(document.activeElement);
+
+  useEffect(() => {
+    const opener = openerRef.current;
+    closeRef.current?.focus();
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      if (opener?.isConnected) opener.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div className="routine-run-modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="routine-run-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="routine-output-modal-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="sidebar-modal__head">
+          <div>
+            <span className="sidebar-modal__eyebrow">Routine result</span>
+            <h3 id="routine-output-modal-title">Output</h3>
+          </div>
+          <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
+        </header>
+        <div className="routine-run-modal__body agents-graph-parameters__list">
+          {names.map((name) => {
+            const typeName = outputSchema[name];
+            const value = runData?.[name];
+            const hasValue = value !== undefined;
+            const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
+            return (
+              <div key={name} className="agents-graph-node__field">
+                <span className="agents-graph-node__field-label">{name}</span>
+                {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
+                {hasValue ? (
+                  <div className="routine-node-inspector__run-output">
+                    <pre>{text}</pre>
+                  </div>
+                ) : (
+                  <p className="agents-graph-parameters__hint">Not produced yet -- run this routine to see this value.</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <footer className="sidebar-modal__foot">
+          <button ref={closeRef} type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
         </footer>
       </section>
     </div>

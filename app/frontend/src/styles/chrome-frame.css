@@ -8051,7 +8051,9 @@ body,
 }
 
 /* Start/End chrome -- never a schema node, purely "the chain begins/ends
-   here". A branching routine can render multiple Ends; that's real. */
+   here" -- but each becomes clickable (see .routine-cap--clickable) when
+   its own schema is declared, opening the matching input/output modal. A
+   branching routine can render multiple Ends; that's real. */
 .routine-cap {
   display: inline-flex;
   align-items: center;
@@ -8078,6 +8080,21 @@ body,
   color: #f85149;
   background: color-mix(in oklab, #f85149 13%, var(--color-bg-secondary));
   border-color: color-mix(in oklab, #f85149 48%, var(--color-border));
+}
+
+/* Only applied when the cap's own schema is declared (see ChainCap's
+   `clickable`) -- plain, inert text otherwise, same as before this
+   existed. */
+.routine-cap--clickable {
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.routine-cap--clickable:hover,
+.routine-cap--clickable:focus-visible {
+  border-color: color-mix(in oklab, currentcolor 55%, var(--color-border));
+  box-shadow: 0 0 0 2px color-mix(in oklab, currentcolor 20%, transparent);
+  outline: none;
 }
 
 /* Pulses while a run has kicked off but nothing anywhere has completed yet
