@@ -1557,32 +1557,26 @@ function NodeInspector({ node, routerEdge, guardEdge, onClose, onDismiss, isNew,
 // quiet (see StepRunSummary) instead of showing a click-time-anchored
 // guess. Stops the instant the first run_meta entry lands anywhere.
 function ChainCap({ kind }) {
-  const { warmingUp, inputSchema, setRunModalOpen, setOutputModalOpen } = useContext(GraphEditContext);
+  const { warmingUp, setRunModalOpen, setOutputModalOpen } = useContext(GraphEditContext);
   const pulsing = kind === 'start' && warmingUp;
-  // Start is only interactive once input_schema declares something to
-  // fill in -- the Run button already handles the no-params case by
-  // running directly, so there'd be nothing for this modal to show.
-  // End is always interactive: RoutineOutputModal shows output_schema's
-  // declared fields when present, or falls back to every value this run
-  // actually wrote -- showing the result is the point of this cap even
-  // for the (common) case of a routine with no output_schema declared.
-  const clickable = kind === 'start'
-    ? Object.keys(inputSchema?.properties || {}).length > 0
-    : true;
+  // Both always interactive, schema declared or not -- RunParametersModal/
+  // RoutineOutputModal show the declared fields when present, or an
+  // explicit "nothing declared" message otherwise. Never a silent no-op:
+  // clicking either cap always tells you something.
   const openModal = kind === 'start' ? setRunModalOpen : setOutputModalOpen;
   return (
     <div
-      className={`routine-cap routine-cap--${kind}${pulsing ? ' routine-cap--warming' : ''}${clickable ? ' routine-cap--clickable' : ''}`}
-      role={clickable ? 'button' : undefined}
-      tabIndex={clickable ? 0 : undefined}
-      aria-label={clickable ? (kind === 'start' ? 'View or edit routine parameters' : 'View routine output') : undefined}
-      onClick={clickable ? () => openModal(true) : undefined}
-      onKeyDown={clickable ? (event) => {
+      className={`routine-cap routine-cap--${kind} routine-cap--clickable${pulsing ? ' routine-cap--warming' : ''}`}
+      role="button"
+      tabIndex={0}
+      aria-label={kind === 'start' ? 'View or edit routine parameters' : 'View routine output'}
+      onClick={() => openModal(true)}
+      onKeyDown={(event) => {
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           openModal(true);
         }
-      } : undefined}
+      }}
     >
       {kind === 'start' ? 'Start' : 'End'}
     </div>
@@ -4608,7 +4602,11 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
           <button type="button" className="sidebar-modal__close" aria-label="Close" onClick={onClose}>×</button>
         </header>
         <div className="routine-run-modal__body agents-graph-parameters__list">
-          {names.map((name) => {
+          {names.length === 0 ? (
+            <p className="agents-graph-parameters__empty">
+              This routine has no declared input_schema. Add one via the JSON editor -- a JSON Schema object with `properties` (and optionally `required`) -- to collect values here before Run.
+            </p>
+          ) : names.map((name) => {
             const def = properties[name] || {};
             const isRequired = required.has(name);
             return (
