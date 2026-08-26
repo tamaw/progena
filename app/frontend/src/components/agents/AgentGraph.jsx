@@ -1143,7 +1143,7 @@ function RunStatusStaleIcon() {
 }
 
 function StepRunSummary({ nodeId }) {
-  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, isRunInProgress, nodes, loopMembership, loopIterations } = useContext(GraphEditContext);
+  const { runMeta, activeNodeIds, estimatedActiveStartMs, staleNodeIds, warmingUp, isRunInProgress, loopMembership, loopIterations } = useContext(GraphEditContext);
   const entries = runMeta?.[nodeId];
   const isActive = activeNodeIds?.has(nodeId);
   if (!entries?.length) {
@@ -1153,7 +1153,7 @@ function StepRunSummary({ nodeId }) {
     if (!isRunInProgress) return null;
     if (isActive && !warmingUp) {
       return (
-        <div className="routine-step-card__run routine-step-card__run--active" data-tooltip="Running…">
+        <div className="routine-step-card__run routine-step-card__run--active">
           <span className="routine-step-card__run-time"><RunningTimer startedAtMs={estimatedActiveStartMs} /></span>
           <span className="routine-step-card__run-status" aria-hidden="true">
             <RunStatusRunningIcon />
@@ -1168,7 +1168,7 @@ function StepRunSummary({ nodeId }) {
     // "queued" rather than the blank the entry used to show while Start's
     // own pulsing glow (see ChainCap) was the only warm-up signal.
     return (
-      <div className="routine-step-card__run routine-step-card__run--waiting" data-tooltip="Waiting to run">
+      <div className="routine-step-card__run routine-step-card__run--waiting">
         <span className="routine-step-card__run-status" aria-hidden="true">
           <RunStatusWaitingIcon />
         </span>
@@ -1194,25 +1194,8 @@ function StepRunSummary({ nodeId }) {
   // `tokens` -- surfaced as the red cross variant of the status icon rather
   // than a separate element, so a step's run state is always in one place.
   const failed = Boolean(last.error);
-  // `route`, present only on a router/loop_guard node's own entry, is
-  // which target it actually sent execution to this time (see
-  // factory.py's route_fn) -- resolved to that node's label the same way
-  // the canvas already labels everything else, not shown as a raw id.
-  const routeLabel = last.route == null ? null
-    : (Array.isArray(last.route) ? last.route : [last.route])
-      .map((targetId) => (nodes || []).find((node) => node.id === targetId)?.label || targetId)
-      .join(', ');
   return (
-    <div
-      className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}${failed ? ' routine-step-card__run--error' : ''}`}
-      data-tooltip={[
-        failed ? last.error : null,
-        typeof last.step === 'number' ? `Step ${last.step}` : null,
-        routeLabel ? `Routed to ${routeLabel}` : null,
-        entries.length > 1 ? `${entries.length} executions this run` : null,
-        stale ? 'Graph changed since this ran' : null,
-      ].filter(Boolean).join(' \u2014 ') || undefined}
-    >
+    <div className={`routine-step-card__run${stale ? ' routine-step-card__run--stale' : ''}${failed ? ' routine-step-card__run--error' : ''}`}>
       <span className="routine-step-card__run-time">{formatSeconds(last.duration_ms)}</span>
       {!failed && typeof tokens === 'number' ? <span className="routine-step-card__run-tokens">{tokens} tok</span> : null}
       <span className="routine-step-card__run-status" aria-hidden="true">
@@ -3914,7 +3897,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 className="agents-graph-zoom-controls__btn"
                 onClick={zoomIn}
                 disabled={zoom >= ZOOM_MAX}
-                data-tooltip="Zoom in"
                 aria-label="Zoom in"
               >
                 <ZoomPlusIcon />
@@ -3924,7 +3906,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 className="agents-graph-zoom-controls__btn"
                 onClick={zoomOut}
                 disabled={zoom <= ZOOM_MIN}
-                data-tooltip="Zoom out"
                 aria-label="Zoom out"
               >
                 <ZoomMinusIcon />
@@ -3933,7 +3914,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 type="button"
                 className="agents-graph-zoom-controls__btn"
                 onClick={resetZoom}
-                data-tooltip="Reset zoom"
                 aria-label="Reset zoom"
               >
                 <ZoomFitIcon />
