@@ -4652,16 +4652,13 @@ function RunParametersModal({ inputSchema, values, onChange, missingRequiredPara
 // output_schema itself is the older flat `{name: typeName}` dict (see
 // AgentGraphModel.output_schema, dict[str, str] server-side) -- unlike
 // input_schema there's no nested .properties/.description to read, just
-// the type name shown as a plain hint.
+// the type name shown as a plain hint. Deliberately NOT a runData
+// fallback when output_schema is absent -- the routine's own data channel
+// carries every node's intermediate write, most of which is not "the
+// result"; showing all of it isn't clearer, it's noise. Absent schema
+// means an explicit "not declared" message instead.
 function RoutineOutputModal({ outputSchema, runData, onClose }) {
-  const declaredNames = Object.keys(outputSchema || {});
-  // No output_schema declared -- most routines today don't have one --
-  // falls back to every key this run actually wrote to the cumulative
-  // `data` channel, so End still shows the result instead of nothing.
-  // Declaring output_schema narrows this to the specific fields intended
-  // as the routine's real result.
-  const hasSchema = declaredNames.length > 0;
-  const names = hasSchema ? declaredNames : Object.keys(runData || {});
+  const names = Object.keys(outputSchema || {});
   const closeRef = useRef(null);
   const openerRef = useRef(document.activeElement);
 
@@ -4697,36 +4694,27 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
         <div className="routine-run-modal__body agents-graph-parameters__list">
           {names.length === 0 ? (
             <p className="agents-graph-parameters__empty">
-              This routine hasn't produced any output yet -- run it to see results here.
+              This routine has no declared output_schema. Add one via the JSON editor -- a flat {'{'}"name": "type"{'}'} map -- to see its result here.
             </p>
-          ) : (
-            <>
-              {!hasSchema ? (
-                <p className="agents-graph-parameters__empty">
-                  No output_schema declared -- showing everything this run wrote. Declare one (via the JSON editor) to select specific fields instead.
-                </p>
-              ) : null}
-              {names.map((name) => {
-                const typeName = hasSchema ? outputSchema[name] : null;
-                const value = runData?.[name];
-                const hasValue = value !== undefined;
-                const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
-                return (
-                  <div key={name} className="agents-graph-node__field">
-                    <span className="agents-graph-node__field-label">{name}</span>
-                    {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
-                    {hasValue ? (
-                      <div className="routine-node-inspector__run-output">
-                        <pre>{text}</pre>
-                      </div>
-                    ) : (
-                      <p className="agents-graph-parameters__hint">Not produced yet -- run this routine to see this value.</p>
-                    )}
+          ) : names.map((name) => {
+            const typeName = outputSchema[name];
+            const value = runData?.[name];
+            const hasValue = value !== undefined;
+            const text = hasValue ? (typeof value === 'string' ? value : JSON.stringify(value, null, 2)) : null;
+            return (
+              <div key={name} className="agents-graph-node__field">
+                <span className="agents-graph-node__field-label">{name}</span>
+                {typeName ? <span className="agents-graph-parameters__hint">({typeName})</span> : null}
+                {hasValue ? (
+                  <div className="routine-node-inspector__run-output">
+                    <pre>{text}</pre>
                   </div>
-                );
-              })}
-            </>
-          )}
+                ) : (
+                  <p className="agents-graph-parameters__hint">Not produced yet -- run this routine to see this value.</p>
+                )}
+              </div>
+            );
+          })}
         </div>
         <footer className="sidebar-modal__foot">
           <button ref={closeRef} type="button" className="task-btn task-btn--secondary" onClick={onClose}>Close</button>
