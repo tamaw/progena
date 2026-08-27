@@ -2651,7 +2651,7 @@ const EMPTY_RUN_STATE = { run_meta: {}, data: {}, found: false };
 // `agentId` scopes everything: switching routines drops any in-flight poll
 // for the previous one immediately, so a stale sub-header never keeps
 // ticking for a routine the author has navigated away from.
-function useRoutineRunPolling(agentId, parameters) {
+function useRoutineRunPolling(agentId, parameters, inputSchema) {
   const dispatch = useDispatch();
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
@@ -2758,18 +2758,31 @@ function useRoutineRunPolling(agentId, parameters) {
     setThreadId(null);
     setSessionId(newSessionId);
     setStatus('discovering');
+    // A required boolean the user never touched has no key in `parameters`
+    // at all (see ParameterControl's toggle -- there's no third "unset"
+    // state to write), but the routine's own compiled graph (condition/
+    // state_equals expressions) expects the field to exist. Fill it in as
+    // `false` here, at the wire boundary, rather than writing a synthetic
+    // value into `parameterValues` -- that would make the toggle UI lie
+    // about ever having been touched.
+    const effectiveParameters = { ...parameters };
+    for (const name of inputSchema?.required || []) {
+      if (inputSchema.properties?.[name]?.type === 'boolean' && effectiveParameters[name] === undefined) {
+        effectiveParameters[name] = false;
+      }
+    }
     fetch(`${agentsUrl}/${encodeURIComponent(agentId)}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: newSessionId,
         ...(targetNode ? { target_node: targetNode } : {}),
-        ...(parameters && Object.keys(parameters).length ? { parameters } : {}),
+        ...(Object.keys(effectiveParameters).length ? { parameters: effectiveParameters } : {}),
       }),
     }).catch(() => {});
     dispatch(fetchRoutineRuns({ agentsUrl, agentId }));
     return newSessionId;
-  }, [agentsUrl, agentId, dispatch, parameters]);
+  }, [agentsUrl, agentId, dispatch, parameters, inputSchema]);
 
   // Abandons the current interactive ("Run to here") session -- the next
   // "Run to here" click mints a brand new session_id/thread_id instead of
@@ -2938,6 +2951,16 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // Values the user fills in for the routine's declared input_schema.properties
   // (see RunParametersModal) -- session-local only, never persisted to the
   // graph document; startRun sends the current snapshot with every POST.
+  const [meta, setMeta] = useState({
+    status: graph.status || 'Draft',
+    version: graph.version || '2.0.0',
+    summary: graph.summary || '',
+    entry: graph.entry || (graph.nodes || [])[0]?.id || null,
+    settings: graph.settings || {},
+    input_schema: graph.input_schema || null,
+    output_schema: graph.output_schema || null,
+    $defs: graph.$defs || {},
+  });
   const [parameterValues, setParameterValues] = useState({});
   const {
     status: runStatus,
@@ -2949,7 +2972,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     startRun,
     hasInteractiveSession,
     resetInteractiveSession,
-  } = useRoutineRunPolling(agent.id, parameterValues);
+  } = useRoutineRunPolling(agent.id, parameterValues, meta.input_schema);
   const runNav = useRunHistoryNav(agent.id, {
     status: runStatus,
     threadId: liveThreadId,
@@ -3001,16 +3024,6 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   const resetZoom = useCallback(() => setZoom(1), []);
   const [nodes, setNodes] = useState(() => (graph.nodes || []).map((node) => ({ ...node })));
   const [edges, setEdges] = useState(() => (graph.edges || []).map((edge) => ({ ...edge })));
-  const [meta, setMeta] = useState({
-    status: graph.status || 'Draft',
-    version: graph.version || '2.0.0',
-    summary: graph.summary || '',
-    entry: graph.entry || (graph.nodes || [])[0]?.id || null,
-    settings: graph.settings || {},
-    input_schema: graph.input_schema || null,
-    output_schema: graph.output_schema || null,
-    $defs: graph.$defs || {},
-  });
   const [saveState, setSaveState] = useState('idle');
   const [saveError, setSaveError] = useState(null);
   // Snapshotted alongside `saveState` (never read live from the `incomplete`
@@ -3692,9 +3705,15 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // Declared input_schema.required names with no (or blank) value filled in
   // yet -- gates the run-parameters modal's own Run button the same way
   // `incomplete` gates the canvas one for node config, so a routine that
-  // needs parameters can't be run silently empty.
+  // needs parameters can't be run silently empty. A `boolean` field is
+  // exempt: its checkbox has no third "unset" state to leave blank -- it
+  // reads as false the instant it renders, same as `ParameterControl`'s own
+  // `checked={value === true}` already treats it -- so demanding an explicit
+  // click before Run unblocks would make an unticked required checkbox an
+  // unsolvable state.
   const missingRequiredParams = useMemo(
     () => (meta.input_schema?.required || []).filter((name) => {
+      if (meta.input_schema?.properties?.[name]?.type === 'boolean') return false;
       const value = parameterValues[name];
       return value === undefined || value === null || value === '';
     }),
@@ -4400,12 +4419,16 @@ function ParameterControl({ name, def, value, onChange }) {
   }
   if (def?.type === 'boolean') {
     return (
-      <input
-        type="checkbox"
-        className="agents-graph-parameters__checkbox"
-        checked={value === true}
-        onChange={(event) => onChange(event.target.checked)}
-      />
+      <button
+        type="button"
+        role="switch"
+        aria-checked={value === true}
+        aria-label={name}
+        className={`tools-toggle ${value === true ? 'is-on' : 'is-off'}`}
+        onClick={() => onChange(value !== true)}
+      >
+        <span />
+      </button>
     );
   }
   if (def?.type === 'number' || def?.type === 'integer') {
