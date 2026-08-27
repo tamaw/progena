@@ -41,6 +41,7 @@ from app.progenitor.content_documents import (
     AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
     SKILL_DOCUMENT_KEY_PREFIX,
 )
+from app.progenitor.document_kinds import DOCUMENT_KINDS, KANBAN_CARD_KEY_PREFIX, key_prefix_for
 from app.progenitor.routines.store import ROUTINE_GRAPH_KEY_PREFIX
 from app.progenitor.schedule import Scheduler, default_timezone_name
 from app.progenitor.schedule.service import generate_schedule_id
@@ -988,7 +989,7 @@ def _kanban_board_store_key() -> str:
     return "kanban_board"
 
 
-_KANBAN_CARD_KEY_PREFIX = "kanban_card:"
+_KANBAN_CARD_KEY_PREFIX = KANBAN_CARD_KEY_PREFIX
 
 
 def _kanban_card_store_key(card_id: str) -> str:
@@ -2149,6 +2150,27 @@ async def get_workflows(
         request_id=request_id,
     )
     return acknowledgement_response(request_id, ["workflows.snapshot"])
+
+
+@router.get("/document-kinds", status_code=202, response_model=UiRequestAcknowledgement)
+async def get_document_kinds(
+    request: Request,
+    x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
+):
+    """Return the canonical document-kind registry (label + key_prefix pairs).
+
+    Backs the workflow event trigger's document-kind picker (see
+    ``app.progenitor.document_kinds``) -- the same list every ``document.changed``
+    trigger's ``key_prefix`` filter is validated against.
+    """
+    request_id = _request_correlation_id(request, x_request_id)
+    kinds = [{"label": kind.label, "key_prefix": kind.key_prefix} for kind in DOCUMENT_KINDS]
+    broadcast_ui_event(
+        "document_kinds.snapshot",
+        {"items": kinds},
+        request_id=request_id,
+    )
+    return acknowledgement_response(request_id, ["document_kinds.snapshot"])
 
 
 @router.get("/workflows/content", status_code=202, response_model=UiRequestAcknowledgement)
@@ -4244,6 +4266,44 @@ def _queue_workflow_invoke_reconciliation(_snapshot, changed_key: str | None = N
     task.add_done_callback(_active_workflow_invoke_tasks.discard)
 
 
+_document_change_watch_callback = None
+_active_document_change_tasks: set[asyncio.Task] = set()
+
+
+def _queue_document_change_dispatch(key: str | None, action: str | None) -> None:
+    """Raw store-change watcher: dispatch a document.changed workflow trigger
+    for every tracked-document write, independent of whether any UI client
+    is connected or whether the coarse StateSnapshot diff moved.
+
+    Registered via ``add_raw_watcher`` (not ``add_watcher``/
+    ``_queue_state_watch_status``) so it also fires for document kinds that
+    carry no signal in ``StateSnapshot``'s tracked fields, mirroring
+    ``_queue_kanban_trigger_reconciliation``'s "must keep firing whether or
+    not anyone has the frontend open" requirement.
+    """
+    if key is None:
+        return
+    key_prefix = key_prefix_for(key)
+    if key_prefix is None:
+        return
+    task = asyncio.create_task(_dispatch_document_change_trigger(key, key_prefix, action))
+    _active_document_change_tasks.add(task)
+    task.add_done_callback(_active_document_change_tasks.discard)
+
+
+async def _dispatch_document_change_trigger(key: str, key_prefix: str, action: str | None) -> None:
+    trigger_payload = {
+        "event_type": "document.changed",
+        "payload": {"key_prefix": key_prefix, "key": key, "action": action},
+    }
+    try:
+        await get_workflow_executor().dispatch_event("document.changed", trigger_payload)
+    except Exception:
+        logger.debug(
+            "Failed to dispatch document.changed workflow trigger for %r", key, exc_info=True
+        )
+
+
 _kanban_trigger_watch_callback = None
 _active_kanban_reconcile_tasks: set[asyncio.Task] = set()
 
@@ -4372,6 +4432,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
 async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     global _state_watch_callback, _kanban_trigger_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _document_change_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is None:
         _state_watch_callback = _queue_state_watch_status
@@ -4385,12 +4446,16 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _routine_agent_watch_callback is None:
         _routine_agent_watch_callback = _queue_routine_agent_reconciliation
         state_reader.add_watcher(_routine_agent_watch_callback)
+    if _document_change_watch_callback is None:
+        _document_change_watch_callback = _queue_document_change_dispatch
+        state_reader.add_raw_watcher(_document_change_watch_callback)
     await state_reader.start_watching(reconnect_delay)
 
 
 async def stop_state_status_watcher() -> None:
     global _state_watch_callback, _kanban_trigger_watch_callback
     global _workflow_invoke_watch_callback, _routine_agent_watch_callback
+    global _document_change_watch_callback
     state_reader = get_state_reader()
     if _state_watch_callback is not None:
         state_reader.remove_watcher(_state_watch_callback)
@@ -4404,6 +4469,9 @@ async def stop_state_status_watcher() -> None:
     if _routine_agent_watch_callback is not None:
         state_reader.remove_watcher(_routine_agent_watch_callback)
         _routine_agent_watch_callback = None
+    if _document_change_watch_callback is not None:
+        state_reader.remove_raw_watcher(_document_change_watch_callback)
+        _document_change_watch_callback = None
     await state_reader.stop_watching()
 
 

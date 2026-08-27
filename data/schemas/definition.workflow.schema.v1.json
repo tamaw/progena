@@ -54,7 +54,8 @@
             "kanban.card.updated",
             "kanban.card.moved",
             "kanban.card.deleted",
-            "kanban.card.status_changed"
+            "kanban.card.status_changed",
+            "document.changed"
           ]
         },
         "from_column": {
@@ -66,6 +67,19 @@
           "description": "Optional kanban.card.moved filter: only trigger when the card entered this column. Null/omitted means any column.",
           "type": ["string", "null"],
           "enum": ["backlog", "plan", "build", "validate", "done", null]
+        },
+        "key_prefix": {
+          "description": "Optional document.changed filter: only trigger for documents of this key prefix (see document_kinds.DOCUMENT_KINDS). Null/omitted means any document kind.",
+          "type": ["string", "null"]
+        },
+        "key": {
+          "description": "Optional document.changed filter: only trigger for this exact document key. Null/omitted means any key.",
+          "type": ["string", "null"]
+        },
+        "action": {
+          "description": "Optional document.changed filter: only trigger for this write action. Null/omitted means any action.",
+          "type": ["string", "null"],
+          "enum": ["upserted", "deleted", null]
         }
       }
     },

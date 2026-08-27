@@ -16,12 +16,12 @@ from typing import Any, Literal
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel
 
+from app.progenitor.document_kinds import INBOX_MESSAGE_KEY_PREFIX
+
 from .chat_sessions import UiRequestAcknowledgement, acknowledgement_response
 from .document_store import PROGENITOR_STATE_PREFIX, BackendDocumentStore
 from .request_utils import BroadcastUiEvent
 from .request_utils import request_correlation_id as _request_correlation_id
-
-INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 
 
 class InboxMessage(BaseModel):

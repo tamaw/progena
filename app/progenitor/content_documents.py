@@ -29,20 +29,25 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from .document_kinds import (
+    AGENT_DOCUMENT_KEY_PREFIX,
+    MEMORY_DOCUMENT_KEY_PREFIX,
+    PROMPT_DOCUMENT_KEY_PREFIX,
+    SKILL_DOCUMENT_KEY_PREFIX,
+)
+from .document_kinds import (
+    AGENT_SELF_EDIT_TOUCH_KEY_PREFIX as AGENT_SELF_EDIT_TOUCH_KEY_PREFIX,
+)
+
 logger = logging.getLogger(__name__)
 
-PROMPT_DOCUMENT_KEY_PREFIX = "prompt:"
-SKILL_DOCUMENT_KEY_PREFIX = "skill:"
-MEMORY_DOCUMENT_KEY_PREFIX = "memory:"
-AGENT_DOCUMENT_KEY_PREFIX = "agent:"
-
-# Not a content-document kind itself -- a lightweight marker key an object
-# agent's self-edit touches purely to trigger the shared `store` table's
-# Postgres NOTIFY trigger. Needed because a *native* agent's SYSTEM.md lives
-# on disk (see `SelfManifestBackend`), so unlike a marketplace/user agent's
-# `agent:`-prefixed document write, the disk write alone never touches
-# Postgres and the backend process would otherwise never learn about it.
-AGENT_SELF_EDIT_TOUCH_KEY_PREFIX = "agent-touch:"
+# AGENT_SELF_EDIT_TOUCH_KEY_PREFIX: not a content-document kind itself -- a
+# lightweight marker key an object agent's self-edit touches purely to
+# trigger the shared `store` table's Postgres NOTIFY trigger. Needed because
+# a *native* agent's SYSTEM.md lives on disk (see `SelfManifestBackend`), so
+# unlike a marketplace/user agent's `agent:`-prefixed document write, the
+# disk write alone never touches Postgres and the backend process would
+# otherwise never learn about it.
 
 _KIND_PREFIXES: dict[str, str] = {
     "prompt": PROMPT_DOCUMENT_KEY_PREFIX,
