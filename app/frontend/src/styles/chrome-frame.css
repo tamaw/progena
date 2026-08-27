@@ -6474,12 +6474,6 @@ body,
   line-height: 1.4;
 }
 
-.agents-graph-parameters__checkbox {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--color-accent);
-}
-
 .agents-graph-parameters__json {
   width: 100%;
   min-height: 72px;
@@ -8134,6 +8128,19 @@ body,
   color: #f0c04b;
   background: rgb(210 153 34 / 10%);
   border: 1px dashed rgb(210 153 34 / 45%);
+  font-style: normal;
+  font-weight: 700;
+}
+
+/* A rejoin (a branch reaching a node another branch already rendered, e.g.
+   a fan-in fed by two non-sibling forks) is real content living elsewhere
+   on the chain, not a warning -- accent blue, not loop's amber, keeps the
+   two "terminates here" chip kinds visually distinct while still standing
+   out from the plain muted default. */
+.routine-chip--rejoin {
+  color: var(--color-accent);
+  background: color-mix(in oklab, var(--color-accent) 12%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--color-accent) 45%, transparent);
   font-style: normal;
   font-weight: 700;
 }
