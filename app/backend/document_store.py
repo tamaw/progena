@@ -450,11 +450,12 @@ class PostgresDocumentStore:
                 DECLARE
                     row_prefix TEXT := COALESCE(NEW.prefix, OLD.prefix);
                     row_key TEXT := COALESCE(NEW.key, OLD.key);
+                    row_action TEXT := CASE WHEN TG_OP = 'DELETE' THEN 'deleted' ELSE 'upserted' END;
                 BEGIN
                     IF row_prefix IN ({prefixes}) THEN
                         PERFORM pg_notify(
                             '{STORE_CHANGE_CHANNEL}',
-                            json_build_object('prefix', row_prefix, 'key', row_key)::text
+                            json_build_object('prefix', row_prefix, 'key', row_key, 'action', row_action)::text
                         );
                     END IF;
                     RETURN COALESCE(NEW, OLD);

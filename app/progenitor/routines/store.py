@@ -22,9 +22,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from ..document_kinds import ROUTINE_GRAPH_KEY_PREFIX
 from .graph import ROUTINE_GRAPH_VERSION, RoutineGraph, validate_routine_graph_payload
-
-ROUTINE_GRAPH_KEY_PREFIX = "routine:"
 
 DEFAULT_ROUTINE_PROMPT_TEMPLATE = (
     "Complete the delegated task and return the result.\n\nRequest: {request}"

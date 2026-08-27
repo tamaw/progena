@@ -11,6 +11,7 @@ from ..content_documents import (
     content_document_key,
     content_document_prefix,
 )
+from ..document_kinds import INBOX_MESSAGE_KEY_PREFIX
 from ..routines.store import ROUTINE_GRAPH_KEY_PREFIX, routine_graph_key
 from ..utils import utcnow_isoformat
 from ..workflows import (
@@ -38,8 +39,6 @@ from .models import (
 from .preferences import default_preferences_payload
 
 logger = logging.getLogger(__name__)
-
-INBOX_MESSAGE_KEY_PREFIX = "inbox_message:"
 
 
 def _structured_log_message(log_name: str, payload: dict[str, Any]) -> str:
