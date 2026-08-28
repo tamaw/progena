@@ -9432,12 +9432,6 @@ body,
     transform: translateX(0);
   }
 
-  /* Restore full nav labels inside the drawer. */
-  .app-shell__sidebar.is-collapsed .app-shell__nav-label,
-  .app-shell__sidebar.is-collapsed .app-shell__brand-name {
-    display: block;
-  }
-
   .app-shell__nav-scrim {
     position: fixed;
     inset: 0;

@@ -2291,6 +2291,13 @@ function AppRuntimeShell() {
       if (e.matches) {
         setIsNavCollapsed(false); // no icon rail — drawer handles narrow viewports
         setIsNavOpen(false);      // start with drawer closed
+      } else {
+        // Leaving mobile width: the drawer's open/closed state is meaningless
+        // at desktop width (no drawer, just the grid-column rail) — a stale
+        // isNavOpen=true would otherwise desync PrimaryNav's isCollapsed prop
+        // (forced false while "open") from the outer grid's collapsed-width
+        // column, rendering full labels squeezed into a 52px rail.
+        setIsNavOpen(false);
       }
     };
     mq.addEventListener('change', handler);
@@ -2478,7 +2485,13 @@ function AppRuntimeShell() {
   return (
     <div className={shellClass}>
       <PrimaryNav
-        isCollapsed={isNavCollapsed}
+        // The collapsed icon-only rail is a desktop space-saving preference;
+        // it's meaningless for the mobile/tablet slide-over drawer (which is
+        // already a full-width overlay), and the drawer's own toggle button
+        // is repurposed to "close" while open, so a collapsed desktop
+        // preference would otherwise make the labels permanently unreachable
+        // at narrow viewports. Force expanded whenever the drawer is open.
+        isCollapsed={isNavCollapsed && !isNavOpen}
         isOpen={isNavOpen}
         onClose={() => setIsNavOpen(false)}
         onToggleCollapse={() => setIsNavCollapsed((current) => {
