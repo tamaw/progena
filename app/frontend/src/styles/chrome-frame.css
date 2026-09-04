@@ -6510,16 +6510,15 @@ body,
   font-size: 12.5px;
 }
 
+/* PaneListVirtualized owns row layout (absolute-positioned, offsets bake in
+   their own gap -- see PANE_ROW_GAP), so this is just the scroll region;
+   no list-style/gap/flex-column needed for its rows. */
 .agents-graph-runs__list {
-  list-style: none;
   margin: 0;
   padding: 0;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
 .agents-graph-runs__item {
@@ -6570,9 +6569,26 @@ body,
   background: color-mix(in oklab, var(--color-error, #f85149) 16%, transparent);
 }
 
-.agents-graph-runs__status--pending {
-  color: var(--color-text-tertiary);
-  background: var(--color-bg-secondary);
+.agents-graph-runs__load-more {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px dashed var(--color-border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.agents-graph-runs__load-more:hover:not(:disabled) {
+  background: var(--color-bg-hover);
+}
+
+.agents-graph-runs__load-more:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
 .agents-graph-runs__age {
@@ -6973,16 +6989,63 @@ body,
   transform: translate(0, 0);
 }
 
-/* Save/validation/run-result status -- split from the actions pill above
-   (.agents-graph-floating) so its own row never shifts the action icons
-   horizontally every time this text's length changes ("Saving…" vs "Not
-   saved · 2 steps incomplete" vs "Valid graph" vs an N-issue validation
-   message, etc). Stacked directly beneath the actions pill (same left
-   edge, offset by that pill's own height + a gap) rather than pinned to
-   the canvas's bottom -- reads as "status of the thing above it", not an
-   unrelated footer note. */
+/* Save status -- split from the actions pill above (.agents-graph-floating)
+   so its own row never shifts the action icons horizontally every time this
+   text's length changes ("Saving…" vs "Not saved · 2 steps incomplete" vs
+   "Saved", etc). Stacked directly beneath the actions pill (same left edge,
+   offset by that pill's own height + a gap) rather than pinned to the
+   canvas's bottom -- reads as "status of the thing above it", not an
+   unrelated footer note. Validation moved into the actions pill itself (see
+   ValidationOkIcon/ValidationErrorIcon) and gets its own panel below. */
 .agents-graph-floating--status {
   top: 62px;
+}
+
+/* Validation issues panel -- toggled by the ValidationErrorIcon action
+   button (between Run and Restore in the actions pill above). Left-anchored
+   to match that pill's own edge, stacked below it and the save-status pill.
+   A fixed top offset (rather than flowing under the status pill) is fine
+   here: it only ever renders while validationPanelOpen is true, so it can
+   never visually collide with the save-status pill's own varying text. Its
+   own max-height is clamped to the canvas so a long error list scrolls
+   internally instead of spilling past the routine page's own height. */
+.agents-graph-validation-panel {
+  position: absolute;
+  top: 106px;
+  left: 16px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  width: min(360px, calc(100% - 32px));
+  max-height: calc(100% - 130px);
+  padding: 10px 12px;
+  color: var(--color-text-primary);
+  background: color-mix(in oklab, var(--color-bg-secondary) 94%, transparent);
+  border: 1px solid color-mix(in oklab, var(--color-error, #ef4444) 38%, var(--color-border));
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(10px);
+}
+
+.agents-graph-validation-panel__header {
+  flex: none;
+  margin-bottom: 6px;
+  color: var(--color-error, #ef4444);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.agents-graph-validation-panel__list {
+  margin: 0;
+  padding-left: 18px;
+  overflow-y: auto;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.agents-graph-validation-panel__list li + li {
+  margin-top: 4px;
 }
 
 /* Run-history browser -- back/forward through this routine's past
@@ -7365,6 +7428,24 @@ body,
 .agents-graph-floating .agents-graph-save--error { color: var(--color-error, #ef4444); }
 /* Withheld rather than rejected: a warning, not the error red of a failed save. */
 .agents-graph-floating .agents-graph-save--incomplete { color: var(--color-warning, #d29922); }
+
+/* Validation status icon in the actions pill (tick vs. warning triangle).
+   Colour-only distinction, same shell as every other DetailHeaderAction --
+   the ok state is deliberately non-interactive (see ValidationOkIcon's own
+   comment), styled with the disabled button's reduced opacity removed so a
+   passing graph still reads as a clear, legible green tick rather than a
+   washed-out disabled control. */
+.agents-graph-validation-action--ok {
+  color: var(--color-success, #22c55e);
+}
+
+.agents-graph-validation-action--ok:disabled {
+  opacity: 1;
+}
+
+.agents-graph-validation-action--error {
+  color: var(--color-error, #ef4444);
+}
 
 /* Required-but-empty config in the node inspector. The field itself is
    outlined so the eye lands on the input, not just the label. */

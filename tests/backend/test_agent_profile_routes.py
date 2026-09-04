@@ -396,11 +396,62 @@ def test_runs_route_publishes_run_summaries():
     assert_acknowledged(response, ["agent.routine.runs.loaded"])
     payload = events[-1][1]
     assert payload["agent_id"] == "alpha"
+    assert payload["before"] is None
+    assert payload["has_more"] is False
     run_ids = [run["run_id"] for run in payload["runs"]]
     assert run_ids == ["run-b", "run-a"]  # newest last_checkpoint_at first
     newest = payload["runs"][0]
     assert newest["revision_id"] == "rev-newer"
     assert newest["thread_id"] == "routine:alpha:rev-newer:run-b"
+
+
+def test_runs_route_pages_backward_with_before_cursor():
+    """limit + before page backward through many runs without OFFSET drift."""
+    from app.backend.document_store import CheckpointThreadSnapshot
+
+    doc_store = InMemoryDocumentStore()
+    for index in range(3):
+        doc_store.upsert_checkpoint_thread_snapshot(
+            CheckpointThreadSnapshot(
+                thread_id=f"routine:alpha:rev-a:run-{index}",
+                checkpoint_id=f"c{index}",
+                checkpoint_ts=f"2026-01-0{index + 1}T00:00:00+00:00",
+                messages=[],
+            )
+        )
+    events: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
+
+    def broadcast(event_type, payload, **kwargs):
+        events.append((event_type, payload, kwargs))
+        return None
+
+    app = FastAPI()
+    _install_request_id_middleware(app)
+    app.include_router(
+        create_agent_profile_router(
+            get_agent_store=lambda: FakeAgentStore(),
+            get_document_store=lambda: doc_store,
+            broadcast_ui_event=broadcast,
+        ),
+        prefix="/api/ui",
+    )
+    client = TestClient(app)
+
+    first_page = client.get("/api/ui/agent-profiles/alpha/runs?limit=2")
+    assert_acknowledged(first_page, ["agent.routine.runs.loaded"])
+    first_payload = events[-1][1]
+    assert [run["run_id"] for run in first_payload["runs"]] == ["run-2", "run-1"]
+    assert first_payload["has_more"] is True
+
+    oldest_of_first_page = first_payload["runs"][-1]["last_checkpoint_at"]
+    second_page = client.get(
+        "/api/ui/agent-profiles/alpha/runs", params={"limit": 2, "before": oldest_of_first_page}
+    )
+    assert_acknowledged(second_page, ["agent.routine.runs.loaded"])
+    second_payload = events[-1][1]
+    assert [run["run_id"] for run in second_payload["runs"]] == ["run-0"]
+    assert second_payload["before"] == oldest_of_first_page
+    assert second_payload["has_more"] is False
 
 
 def test_revisions_route_publishes_revision_summaries():

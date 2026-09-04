@@ -190,6 +190,7 @@ export {
   selectActiveAgentProfileState,
   selectAgentSkillContent,
   selectAgentRoutineRuns,
+  selectAgentRoutineRunsHasMore,
   selectAgentRoutineRevisions,
   selectAgentRoutineRevisionContent,
   selectAgentRunState,
