@@ -98,7 +98,7 @@ async def test_invoke_request_starts_progenitor_sourced_run(workflow_env, backen
     run = await _wait_for_completed_run(store, workflow_id)
     assert run["source"] == "progenitor"
     assert run["ancestry"] == []
-    assert run["trigger_event"]["payload"]["input"] == {"value": 1}
+    assert run["trigger_event"]["input"] == {"value": 1}
     assert store.get_document(PROGENITOR_STATE_PREFIX, key, None) is None
 
 

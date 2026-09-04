@@ -1,87 +1,53 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Workflow Definition",
-  "description": "A v1 workflow starts at its top-level trigger and contains prompt steps plus approval and deterministic condition primitives.",
+  "description": "A graph-native workflow contains event and literal-value sources plus typed value connections. Every connection supplies data and establishes execution dependency.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "title", "description", "enabled", "paused", "version", "trigger", "graph", "ui", "updated_at", "created_at"],
+  "required": ["id", "title", "description", "enabled", "paused", "version", "graph", "ui", "updated_at", "created_at"],
   "properties": {
     "id": {"type": "string", "minLength": 1},
     "title": {"type": "string", "minLength": 1},
     "description": {"type": "string"},
     "enabled": {"type": "boolean"},
     "paused": {"type": "boolean"},
-    "version": {"const": 1},
-    "trigger": {
-      "type": "object", "additionalProperties": false, "required": ["type", "event_type"],
-      "properties": {
-        "type": {"const": "event"},
-        "event_type": {"type": "string", "enum": ["kanban.card.created", "kanban.card.updated", "kanban.card.moved", "kanban.card.deleted", "kanban.card.status_changed"]},
-        "from_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
-        "to_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
-        "output_schema": {"type": ["object", "null"]}
-      }
-    },
+    "version": {"const": 3},
     "graph": {
       "type": "object", "additionalProperties": false, "required": ["nodes", "edges"],
       "properties": {
         "nodes": {"type": "object", "minProperties": 1, "additionalProperties": {"oneOf": [
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name"], "properties": {
-            "kind": {"const": "prompt"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "event_type"], "properties": {
+            "kind": {"const": "event"}, "title": {"type": "string", "minLength": 1},
+            "event_type": {"type": "string", "enum": ["kanban.card.created", "kanban.card.updated", "kanban.card.moved", "kanban.card.deleted", "kanban.card.status_changed"]},
+            "from_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
+            "to_column": {"type": ["string", "null"], "enum": ["backlog", "plan", "build", "validate", "done", null]},
+            "output_schema": {"type": ["object", "null"]}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "prompt_path"], "properties": {
-            "kind": {"const": "saved_prompt"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "prompt_path": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "value", "output_schema"], "properties": {
+            "kind": {"const": "data"}, "title": {"type": "string", "minLength": 1}, "value": {}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "agent_id"], "properties": {
-            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "agent_id": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message", "input_schema", "output_schema"], "properties": {
+            "kind": {"const": "agent"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "knowledge_base_id"], "properties": {
-            "kind": {"const": "knowledge"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "knowledge_base_id": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "input_schema", "output_schema"], "properties": {
+            "kind": {"const": "mcp"}, "title": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "repository_id"], "properties": {
-            "kind": {"const": "repository"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "repository_id": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression"], "properties": {
+            "kind": {"const": "condition"}, "title": {"type": "string", "minLength": 1}, "expression": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "kanban_card_id"], "properties": {
-            "kind": {"const": "kanban"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "kanban_card_id": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {
+            "kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
           }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name"], "properties": {
-            "kind": {"const": "ask_user"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
-          }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "inbox_message_id"], "properties": {
-            "kind": {"const": "inbox"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "inbox_message_id": {"type": "string", "minLength": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
-          }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "prompt", "agent_name", "routine_id", "routine_revision"], "properties": {
-            "kind": {"const": "routine"}, "title": {"type": "string", "minLength": 1}, "prompt": {"type": "string", "minLength": 1}, "agent_name": {"type": "string", "minLength": 1}, "routine_id": {"type": "string", "minLength": 1}, "routine_revision": {"type": "integer", "minimum": 1},
-            "references": {"$ref": "#/$defs/references"}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}
-          }},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "expression"], "properties": {"kind": {"const": "condition"}, "title": {"type": "string", "minLength": 1}, "expression": {"type": "string", "minLength": 1}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}}},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message"], "properties": {"kind": {"const": "approval"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}}},
-          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "server_id", "tool_name"], "properties": {"kind": {"const": "mcp"}, "title": {"type": "string", "minLength": 1}, "server_id": {"type": "string", "minLength": 1}, "tool_name": {"type": "string", "minLength": 1}, "inputs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/binding"}}, "input_schema": {"type": ["object", "null"]}, "output_schema": {"type": ["object", "null"]}}}
+          {"type": "object", "additionalProperties": false, "required": ["kind", "title", "message", "input_schema", "output_schema"], "properties": {
+            "kind": {"const": "human_input"}, "title": {"type": "string", "minLength": 1}, "message": {"type": "string", "minLength": 1}, "input_schema": {"type": "object"}, "output_schema": {"type": "object"}
+          }}
         ]}},
-        "edges": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {"from": {"$ref": "#/$defs/edgeEndpoint"}, "to": {"$ref": "#/$defs/edgeEndpoint"}}}}
+        "edges": {"type": "array", "items": {"type": "object", "additionalProperties": false, "required": ["from", "to"], "properties": {
+          "from": {"$ref": "#/$defs/edgeEndpoint"}, "to": {"$ref": "#/$defs/edgeEndpoint"}
+        }}}
       }
     },
-    "ui": {"type": "object"},
-    "updated_at": {"type": "string", "minLength": 1},
-    "created_at": {"type": "string", "minLength": 1}
+    "ui": {"type": "object"}, "updated_at": {"type": "string", "minLength": 1}, "created_at": {"type": "string", "minLength": 1}
   },
-  "$defs": {
-    "edgeEndpoint": {"type": "object", "additionalProperties": false, "required": ["node", "port"], "properties": {"node": {"type": "string", "minLength": 1}, "port": {"type": "string", "minLength": 1}}},
-    "binding": {"type": "object", "additionalProperties": false, "required": ["source"], "properties": {"source": {"enum": ["literal", "trigger", "previous_output", "reference"]}, "value": {}, "path": {"type": ["string", "null"]}, "reference": {"type": ["string", "null"]}}},
-    "skill": {"type": "object", "additionalProperties": false, "required": ["source", "name"], "properties": {"source": {"enum": ["native", "plugin"]}, "name": {"type": "string", "minLength": 1}, "segment": {"type": ["string", "null"]}}},
-    "references": {"type": "object", "additionalProperties": false, "properties": {
-      "prompt_path": {"type": ["string", "null"], "x-ui": {"control": "reference-picker", "source": "prompt"}}, "agent_id": {"type": ["string", "null"], "x-ui": {"control": "reference-picker", "source": "agent"}}, "repository_id": {"type": ["string", "null"], "x-ui": {"control": "reference-picker", "source": "repository"}}, "knowledge_base_id": {"type": ["string", "null"], "x-ui": {"control": "reference-picker", "source": "knowledge_base"}}, "kanban_card_id": {"type": ["string", "null"]}, "inbox_message_id": {"type": ["string", "null"], "x-ui": {"control": "reference-picker", "source": "inbox_message"}},
-      "mcp_tool": {"type": ["object", "null"], "additionalProperties": false, "required": ["server_id", "tool_name"], "properties": {"server_id": {"type": "string", "minLength": 1}, "tool_name": {"type": "string", "minLength": 1}}},
-      "routine": {"type": ["object", "null"], "x-ui": {"control": "reference-picker", "source": "routine"}, "additionalProperties": false, "required": ["id", "revision"], "properties": {"id": {"type": "string", "minLength": 1}, "revision": {"type": "integer", "minimum": 1}}},
-      "skills": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/skill"}}
-    }}
-  }
+  "$defs": {"edgeEndpoint": {"type": "object", "additionalProperties": false, "required": ["node", "port"], "properties": {"node": {"type": "string", "minLength": 1}, "port": {"type": "string", "minLength": 1}}}}
 }

@@ -28,8 +28,7 @@ WORKFLOW_ALLOWED_EVENT_TYPES = (
 )
 WORKFLOW_DEFAULT_EVENT_TYPE = WORKFLOW_ALLOWED_EVENT_TYPES[0]
 
-WORKFLOW_DEFAULT_AGENT_NAME = "progenitor"
-WORKFLOW_VERSION = 1
+WORKFLOW_VERSION = 3
 # Max chained Progenitor-initiated workflow invocations.
 MAX_WORKFLOW_INVOKE_DEPTH = 3
 
@@ -42,6 +41,7 @@ WorkflowRunSource = Literal["kanban", "manual", "progenitor"]
 
 _JSON_OBJECT_SCHEMA = {"type": "object"}
 _KANBAN_CARD_SCHEMA = {
+    "title": "Card",
     "type": "object",
     "required": [
         "id",
@@ -82,6 +82,7 @@ _KANBAN_CARD_SCHEMA = {
     },
 }
 _KANBAN_TASK_SCHEMA = {
+    "title": "Task",
     "type": "object",
     "required": ["path", "format", "content"],
     "properties": {
@@ -91,322 +92,193 @@ _KANBAN_TASK_SCHEMA = {
         "content": {"type": "string"},
     },
 }
+_MCP_TOOL_SCHEMA = {
+    "title": "McpTool",
+    "type": "object",
+    "required": ["server_id", "tool_name"],
+    "properties": {
+        "server_id": {"type": "string"},
+        "tool_name": {"type": "string"},
+    },
+}
+_KANBAN_POSITION_SCHEMA = {
+    "title": "ColumnPosition",
+    "type": "object",
+    "required": ["column_id", "position"],
+    "properties": {
+        "column_id": {"type": ["string", "null"]},
+        "position": {"type": ["integer", "null"]},
+    },
+}
 
 
 def workflow_trigger_output_schema(event_type: str) -> dict[str, Any]:
-    """Return the canonical dataflow contract for one workflow trigger type."""
-    payload_properties: dict[str, Any] = {
-        "event_type": {"const": event_type},
+    """Return the canonical, flat dataflow contract for one event type.
+
+    Every property is a directly connectable top-level output port; there is
+    no ``payload``/envelope wrapper and no ``oneOf`` branching by source.
+    """
+
+    properties: dict[str, Any] = {
+        "event_type": {"type": "string", "const": event_type},
         "timestamp": {"type": "string"},
-        "source": {"const": "kanban"},
         "card": _KANBAN_CARD_SCHEMA,
         "task": _KANBAN_TASK_SCHEMA,
     }
-    payload_required = ["event_type", "timestamp", "source", "card", "task"]
+    # Only the envelope fields are required: a manual/operator-triggered test
+    # run may omit card/task, while real kanban dispatch always supplies the
+    # full typed payload below.
+    required = ["event_type", "timestamp"]
     if event_type in {"kanban.card.updated", "kanban.card.moved", "kanban.card.status_changed"}:
-        payload_properties["previous_card"] = _KANBAN_CARD_SCHEMA
-        payload_required.append("previous_card")
+        properties["previous_card"] = _KANBAN_CARD_SCHEMA
     if event_type == "kanban.card.updated":
-        payload_properties["changed_fields"] = {"type": "array", "items": {"type": "string"}}
-        payload_required.append("changed_fields")
+        properties["changed_fields"] = {"type": "array", "items": {"type": "string"}}
     elif event_type == "kanban.card.moved":
-        position = {
-            "type": "object",
-            "required": ["column_id", "position"],
-            "properties": {
-                "column_id": {"type": ["string", "null"]},
-                "position": {"type": ["integer", "null"]},
-            },
-        }
-        payload_properties.update({"from": position, "to": position})
-        payload_required.extend(["from", "to"])
+        properties["from"] = _KANBAN_POSITION_SCHEMA
+        properties["to"] = _KANBAN_POSITION_SCHEMA
     elif event_type == "kanban.card.status_changed":
-        payload_properties.update(
-            {
-                "from_status": {"type": ["string", "null"]},
-                "to_status": {"type": ["string", "null"]},
-            }
-        )
-        payload_required.extend(["from_status", "to_status"])
+        properties["from_status"] = {"type": ["string", "null"]}
+        properties["to_status"] = {"type": ["string", "null"]}
 
-    kanban_event = {
+    return {
+        "title": "Event",
         "type": "object",
-        "required": ["event_type", "timestamp", "payload"],
-        "properties": {
-            "event_type": {"const": event_type},
-            "timestamp": {"type": "string"},
-            "payload": {
-                "type": "object",
-                "required": payload_required,
-                "properties": payload_properties,
-            },
-        },
+        "required": required,
+        "properties": properties,
     }
-    manual_event = {
-        "type": "object",
-        "required": ["event_type", "timestamp", "payload"],
-        "properties": {
-            "event_type": {"const": event_type},
-            "timestamp": {"type": "string"},
-            "payload": {
-                "type": "object",
-                "required": ["event_type", "timestamp", "source"],
-                "properties": {
-                    "event_type": {"const": event_type},
-                    "timestamp": {"type": "string"},
-                    "source": {"const": "manual"},
-                },
-            },
-        },
-    }
-    return {"oneOf": [kanban_event, manual_event]}
 
 
-class WorkflowTrigger(BaseModel):
-    """Workflow entrypoint definition with a canonical event-output contract."""
+class WorkflowNodeEvent(BaseModel):
+    """Graph-native event entrypoint with its own event filters."""
 
     model_config = ConfigDict(extra="forbid")
 
-    type: Literal["event"] = "event"
+    kind: Literal["event"] = "event"
+    title: str = "Kanban event"
     event_type: str
     from_column: str | None = None
     to_column: str | None = None
     output_schema: dict[str, Any] | None = None
 
     @model_validator(mode="after")
-    def apply_canonical_output_schema(self) -> WorkflowTrigger:
+    def apply_canonical_output_schema(self) -> WorkflowNodeEvent:
         self.output_schema = workflow_trigger_output_schema(self.event_type)
         return self
 
 
-class WorkflowBinding(BaseModel):
-    """A constrained value source accepted by a prompt configuration."""
+class WorkflowNodeData(BaseModel):
+    """A literal typed value node with no execution behavior."""
 
     model_config = ConfigDict(extra="forbid")
 
-    source: Literal["literal", "trigger", "previous_output", "reference"]
-    value: Any | None = None
-    path: str | None = None
-    reference: str | None = None
+    kind: Literal["data"] = "data"
+    title: str = "Data"
+    value: Any = None
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
-class WorkflowRoutineReference(BaseModel):
-    """Pinned immutable routine revision."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    revision: int = Field(ge=1)
-
-
-class WorkflowMcpToolReference(BaseModel):
-    """Stable MCP tool selection."""
+class WorkflowNodeAgent(BaseModel):
+    """A generic Progenitor-backed step: typed input, message, typed output."""
 
     model_config = ConfigDict(extra="forbid")
 
-    server_id: str
-    tool_name: str
+    kind: Literal["agent"] = "agent"
+    title: str = "Agent"
+    message: str
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
-class WorkflowSkillReference(BaseModel):
-    """A mounted native or plugin skill."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    source: Literal["native", "plugin"]
-    name: str
-    segment: str | None = None
-
-
-class WorkflowPromptReferences(BaseModel):
-    """Stable source identifiers resolved by the backend at execution time."""
+class WorkflowNodeMcp(BaseModel):
+    """Deterministic MCP tool invocation with a typed tool selection input."""
 
     model_config = ConfigDict(extra="forbid")
 
-    prompt_path: str | None = None
-    agent_id: str | None = None
-    repository_id: str | None = None
-    knowledge_base_id: str | None = None
-    kanban_card_id: str | None = None
-    inbox_message_id: str | None = None
-    mcp_tool: WorkflowMcpToolReference | None = None
-    routine: WorkflowRoutineReference | None = None
-    skills: list[WorkflowSkillReference] = Field(default_factory=list, max_length=8)
-
-
-class WorkflowNodePrompt(BaseModel):
-    """A prompt step with an optional typed input and output contract."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["prompt"] = "prompt"
-    title: str = "Prompt"
-    prompt: str
-    agent_name: str = WORKFLOW_DEFAULT_AGENT_NAME
-    references: WorkflowPromptReferences = Field(default_factory=WorkflowPromptReferences)
-    inputs: dict[str, WorkflowBinding] = Field(default_factory=dict)
-    input_schema: dict[str, Any] | None = None
-    output_schema: dict[str, Any] | None = None
-
-
-class WorkflowNodeSavedPrompt(WorkflowNodePrompt):
-    """A selected saved prompt with an editable execution instruction."""
-
-    kind: Literal["saved_prompt"] = "saved_prompt"  # type: ignore[assignment]
-    title: str = "Saved Prompt"
-    prompt_path: str
-
-
-class WorkflowNodeAgent(WorkflowNodePrompt):
-    """An agent-backed prompt step."""
-
-    kind: Literal["agent"] = "agent"  # type: ignore[assignment]
-    title: str = "Call Agent"
-    agent_id: str
-
-
-class WorkflowNodeKnowledge(WorkflowNodePrompt):
-    """A knowledge-base-backed prompt step."""
-
-    kind: Literal["knowledge"] = "knowledge"  # type: ignore[assignment]
-    title: str = "Search Knowledge"
-    knowledge_base_id: str
-
-
-class WorkflowNodeRepository(WorkflowNodePrompt):
-    """A repository-backed prompt step."""
-
-    kind: Literal["repository"] = "repository"  # type: ignore[assignment]
-    title: str = "Repository Task"
-    repository_id: str
-
-
-class WorkflowNodeKanban(WorkflowNodePrompt):
-    """A Kanban-card-backed prompt step."""
-
-    kind: Literal["kanban"] = "kanban"  # type: ignore[assignment]
-    title: str = "Kanban Task"
-    kanban_card_id: str
-
-
-class WorkflowNodeAskUser(WorkflowNodePrompt):
-    """A prompt step that asks the user for a workflow decision or input."""
-
-    kind: Literal["ask_user"] = "ask_user"  # type: ignore[assignment]
-    title: str = "Ask User"
-
-
-class WorkflowNodeInbox(WorkflowNodePrompt):
-    """An inbox-message-backed prompt step."""
-
-    kind: Literal["inbox"] = "inbox"  # type: ignore[assignment]
-    title: str = "Use Inbox Message"
-    inbox_message_id: str
-
-
-class WorkflowNodeRoutine(WorkflowNodePrompt):
-    """A pinned routine-backed prompt step."""
-
-    kind: Literal["routine"] = "routine"  # type: ignore[assignment]
-    title: str = "Run Routine"
-    routine_id: str
-    routine_revision: int = Field(ge=1)
+    kind: Literal["mcp"] = "mcp"
+    title: str = "MCP Tool"
+    input_schema: dict[str, Any] = Field(
+        default_factory=lambda: {
+            "type": "object",
+            "required": ["tool", "arguments"],
+            "properties": {
+                "tool": dict(_MCP_TOOL_SCHEMA),
+                "arguments": dict(_JSON_OBJECT_SCHEMA),
+            },
+        }
+    )
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
 class WorkflowNodeCondition(BaseModel):
-    """Branch node with a typed boolean-routing result."""
+    """Branch node that emits the selected branch as a typed value."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["condition"] = "condition"
     title: str = "Condition"
     expression: str
-    input_schema: dict[str, Any] | None = None
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
     output_schema: dict[str, Any] = Field(
-        default_factory=lambda: {"type": "string", "enum": ["true", "false"]}
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {"true": {"type": "boolean"}, "false": {"type": "boolean"}},
+        }
     )
 
 
 class WorkflowNodeApproval(BaseModel):
-    """Approval gate with a typed approval-routing result."""
+    """Approval gate that emits the selected approval result as a value."""
 
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["approval"] = "approval"
     title: str = "Approval"
     message: str
-    input_schema: dict[str, Any] | None = None
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
     output_schema: dict[str, Any] = Field(
-        default_factory=lambda: {"type": "string", "enum": ["approved", "rejected"]}
+        default_factory=lambda: {
+            "type": "object",
+            "properties": {
+                "approved": {"type": "boolean"},
+                "rejected": {"type": "boolean"},
+            },
+        }
     )
 
 
-class WorkflowNodeMcp(BaseModel):
-    """MCP tool invocation node with typed bindings and output contract."""
+class WorkflowNodeHumanInput(BaseModel):
+    """Pause gate that resumes with an arbitrary typed human-supplied value."""
 
     model_config = ConfigDict(extra="forbid")
-    input_schema: dict[str, Any] | None = None
 
-    kind: Literal["mcp"] = "mcp"
-    title: str = "MCP Tool"
-    server_id: str
-    tool_name: str
-    inputs: dict[str, WorkflowBinding] = Field(default_factory=dict)
-    output_schema: dict[str, Any] | None = None
+    kind: Literal["human_input"] = "human_input"
+    title: str = "Human Input"
+    message: str
+    input_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
+    output_schema: dict[str, Any] = Field(default_factory=lambda: dict(_JSON_OBJECT_SCHEMA))
 
 
-WorkflowNode = Annotated[
-    WorkflowNodePrompt
-    | WorkflowNodeSavedPrompt
+# Data nodes are literal source values; every other node either starts a run
+# (event) or runs only when an inbound data edge supplies an input.
+WorkflowControlNode = (
+    WorkflowNodeEvent
     | WorkflowNodeAgent
-    | WorkflowNodeKnowledge
-    | WorkflowNodeRepository
-    | WorkflowNodeKanban
-    | WorkflowNodeAskUser
-    | WorkflowNodeInbox
-    | WorkflowNodeRoutine
+    | WorkflowNodeMcp
     | WorkflowNodeCondition
     | WorkflowNodeApproval
-    | WorkflowNodeMcp,
+    | WorkflowNodeHumanInput
+)
+
+WorkflowNode = Annotated[
+    WorkflowNodeEvent
+    | WorkflowNodeData
+    | WorkflowNodeAgent
+    | WorkflowNodeMcp
+    | WorkflowNodeCondition
+    | WorkflowNodeApproval
+    | WorkflowNodeHumanInput,
     Field(discriminator="kind"),
 ]
-
-
-def workflow_node_as_prompt(node: WorkflowNode) -> WorkflowNodePrompt:
-    """Resolve a typed capability node into the shared prompt execution contract."""
-
-    if not isinstance(node, WorkflowNodePrompt):
-        raise TypeError(f"node '{node.kind}' does not execute as a prompt")
-
-    reference_updates: dict[str, Any] = {}
-    if isinstance(node, WorkflowNodeSavedPrompt):
-        reference_updates["prompt_path"] = node.prompt_path
-    elif isinstance(node, WorkflowNodeAgent):
-        reference_updates["agent_id"] = node.agent_id
-    elif isinstance(node, WorkflowNodeKnowledge):
-        reference_updates["knowledge_base_id"] = node.knowledge_base_id
-    elif isinstance(node, WorkflowNodeRepository):
-        reference_updates["repository_id"] = node.repository_id
-    elif isinstance(node, WorkflowNodeKanban):
-        reference_updates["kanban_card_id"] = node.kanban_card_id
-    elif isinstance(node, WorkflowNodeInbox):
-        reference_updates["inbox_message_id"] = node.inbox_message_id
-    elif isinstance(node, WorkflowNodeRoutine):
-        reference_updates["routine"] = {
-            "id": node.routine_id,
-            "revision": node.routine_revision,
-        }
-
-    references = node.references.model_copy(update=reference_updates)
-    return WorkflowNodePrompt(
-        title=node.title,
-        prompt=node.prompt,
-        agent_name=node.agent_name,
-        references=references,
-        inputs=node.inputs,
-        input_schema=node.input_schema,
-        output_schema=node.output_schema,
-    )
 
 
 class WorkflowEdgeEndpoint(BaseModel):
@@ -419,7 +291,7 @@ class WorkflowEdgeEndpoint(BaseModel):
 
 
 class WorkflowEdge(BaseModel):
-    """Directed connection between two nodes."""
+    """A directed typed value connection that also establishes dependency."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -447,7 +319,6 @@ class WorkflowDefinition(BaseModel):
     enabled: bool = True
     paused: bool = False
     version: int = WORKFLOW_VERSION
-    trigger: WorkflowTrigger
     graph: WorkflowGraph
     ui: dict[str, Any] = Field(default_factory=dict)
     updated_at: str
@@ -485,8 +356,12 @@ class WorkflowRun(BaseModel):
     pending_approval: dict[str, Any] | None = None
     thread_id: str | None = None
     trigger_event: dict[str, Any] = Field(default_factory=dict)
+    trigger_node_id: str | None = None
     source: WorkflowRunSource = "manual"
     ancestry: list[str] = Field(default_factory=list)
+    # Outputs produced so far, keyed by node id. Data edges resolve strictly
+    # from this registry; there is no implicit "previous output" dataflow.
+    node_outputs: dict[str, Any] = Field(default_factory=dict)
     last_output: str | None = None
     last_error: str | None = None
     step_audit: list[dict[str, Any]] = Field(default_factory=list)
@@ -543,6 +418,10 @@ def workflow_id_from_path(path_or_id: str) -> str:
 def build_workflow_list_item(definition: WorkflowDefinition) -> WorkflowListItem:
     """Project a stored workflow definition into a list-card payload."""
 
+    event_node = next(
+        (node for node in definition.graph.nodes.values() if isinstance(node, WorkflowNodeEvent)),
+        None,
+    )
     return WorkflowListItem(
         id=definition.id,
         title=definition.title,
@@ -550,7 +429,7 @@ def build_workflow_list_item(definition: WorkflowDefinition) -> WorkflowListItem
         enabled=definition.enabled,
         paused=definition.paused,
         version=definition.version,
-        event_type=definition.trigger.event_type,
+        event_type=event_node.event_type if event_node else "",
         node_count=len(definition.graph.nodes),
         updated_at=definition.updated_at,
         created_at=definition.created_at,
@@ -564,11 +443,12 @@ def default_workflow_definition(
     description: str = "",
     event_type: str = WORKFLOW_DEFAULT_EVENT_TYPE,
 ) -> dict[str, Any]:
-    """Return the minimal valid workflow document for v1."""
+    """Return the minimal valid graph-native workflow document."""
 
     created_at = utcnow_isoformat()
     resolved_id = workflow_id or f"workflow_{uuid.uuid4().hex[:10]}"
-    prompt_node_id = f"prompt_{uuid.uuid4().hex[:8]}"
+    event_node_id = f"event_{uuid.uuid4().hex[:8]}"
+    agent_node_id = f"agent_{uuid.uuid4().hex[:8]}"
     return {
         "id": resolved_id,
         "title": title,
@@ -576,30 +456,50 @@ def default_workflow_definition(
         "enabled": True,
         "paused": False,
         "version": WORKFLOW_VERSION,
-        "trigger": {"type": "event", "event_type": event_type},
         "graph": {
             "nodes": {
-                prompt_node_id: {
-                    "kind": "prompt",
-                    "title": "Prompt",
-                    "prompt": "Handle this workflow event.",
-                    "agent_name": WORKFLOW_DEFAULT_AGENT_NAME,
-                    "references": {},
-                    "inputs": {},
-                    "output_schema": None,
-                }
+                event_node_id: {
+                    "kind": "event",
+                    "title": "Kanban event",
+                    "event_type": event_type,
+                    "from_column": None,
+                    "to_column": None,
+                },
+                agent_node_id: {
+                    "kind": "agent",
+                    "title": "Agent",
+                    "message": "Handle this workflow event.",
+                    "input_schema": {
+                        "type": "object",
+                        "required": ["event_type"],
+                        "properties": {"event_type": {"type": "string"}},
+                    },
+                    "output_schema": {"type": "object", "properties": {}},
+                },
             },
-            "edges": [],
+            "edges": [
+                {
+                    "from": {"node": event_node_id, "port": "event_type"},
+                    "to": {"node": agent_node_id, "port": "event_type"},
+                }
+            ],
         },
         "ui": {
             "nodes": {
-                prompt_node_id: {
+                event_node_id: {
+                    "position": {"x": 96, "y": 160},
+                    "size": {
+                        "data": {"width": 320, "height": 220},
+                        "settings": {"width": 340, "height": 260},
+                    },
+                },
+                agent_node_id: {
                     "position": {"x": 456, "y": 160},
                     "size": {
                         "data": {"width": 340, "height": 160},
                         "settings": {"width": 340, "height": 280},
                     },
-                }
+                },
             },
             "viewport": {"x": 0, "y": 0, "zoom": 1},
         },
@@ -627,25 +527,27 @@ def validate_workflow_definition_payload(payload: Any) -> dict[str, Any]:
         raise ValueError(f"schema validation failed: {schema_error}")
 
     definition = WorkflowDefinition.model_validate(payload)
-    if definition.version != WORKFLOW_VERSION:
-        raise ValueError(f"workflow version must be {WORKFLOW_VERSION}")
-    if definition.trigger.event_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
-        raise ValueError(
-            f"unsupported workflow trigger event type: {definition.trigger.event_type}"
-        )
-    if (
-        definition.trigger.from_column is not None or definition.trigger.to_column is not None
-    ) and definition.trigger.event_type != "kanban.card.moved":
-        raise ValueError(
-            "from_column and to_column filters are only valid for kanban.card.moved triggers"
-        )
+    event_nodes = [
+        node for node in definition.graph.nodes.values() if isinstance(node, WorkflowNodeEvent)
+    ]
+    if not event_nodes:
+        raise ValueError("workflow graph must contain at least one event node")
+    for event_node in event_nodes:
+        if event_node.event_type not in WORKFLOW_ALLOWED_EVENT_TYPES:
+            raise ValueError(f"unsupported workflow event type: {event_node.event_type}")
+        if (
+            event_node.from_column is not None or event_node.to_column is not None
+        ) and event_node.event_type != "kanban.card.moved":
+            raise ValueError(
+                "from_column and to_column filters are only valid for kanban.card.moved events"
+            )
 
     _validate_workflow_graph(definition)
     return definition.model_dump(mode="json", by_alias=True)
 
 
 def ordered_workflow_node_ids(definition: WorkflowDefinition) -> list[str]:
-    """Return the linear node order for an unbranched v1 workflow."""
+    """Return a linear execution order when value dependencies form one chain."""
 
     outgoing: dict[str, list[str]] = defaultdict(list)
     inbound: dict[str, int] = dict.fromkeys(definition.graph.nodes, 0)
@@ -653,10 +555,18 @@ def ordered_workflow_node_ids(definition: WorkflowDefinition) -> list[str]:
         outgoing[edge.from_.node].append(edge.to.node)
         inbound[edge.to.node] = inbound.get(edge.to.node, 0) + 1
 
-    roots = [node_id for node_id, count in inbound.items() if count == 0]
-    if len(roots) != 1:
-        raise ValueError("workflow graph must contain exactly one root node in v1")
-    ordered, seen, cursor = [], set(), roots[0]
+    event_roots = [
+        node_id
+        for node_id, node in definition.graph.nodes.items()
+        if isinstance(node, WorkflowNodeEvent) and inbound[node_id] == 0
+    ]
+    if len(event_roots) != 1:
+        raise ValueError("ordered nodes are unavailable without exactly one event root")
+    ordered, seen = [], set()
+    next_nodes = outgoing.get(event_roots[0], [])
+    if len(next_nodes) > 1:
+        raise ValueError("ordered nodes are unavailable for a branched workflow")
+    cursor = next_nodes[0] if next_nodes else None
     while cursor is not None:
         if cursor in seen:
             raise ValueError("workflow graph must be acyclic")
@@ -701,132 +611,114 @@ def parse_workflow_invoke_request_document(
     return WorkflowInvokeRequest.model_validate(dict(payload))
 
 
+def workflow_node_output_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
+    """Return the named, typed output ports for one node."""
+
+    if isinstance(node, WorkflowNodeData):
+        return {"value": dict(node.output_schema)}
+    schema = node.output_schema or {}
+    if schema.get("type") != "object":
+        return {}
+    return dict(schema.get("properties") or {})
+
+
+def workflow_node_input_ports(node: WorkflowNode) -> dict[str, dict[str, Any]]:
+    """Return the named, typed input ports for one node."""
+
+    if isinstance(node, WorkflowNodeData | WorkflowNodeEvent):
+        return {}
+    schema = node.input_schema or {}
+    if schema.get("type") != "object":
+        return {}
+    return dict(schema.get("properties") or {})
+
+
+def workflow_node_output_object(node: WorkflowNode) -> dict[str, Any] | None:
+    """Return the immediately available output object for literal data nodes."""
+
+    if isinstance(node, WorkflowNodeData):
+        return {"value": node.value}
+    return None
+
+
+def _schema_types_compatible(source: Mapping[str, Any], target: Mapping[str, Any]) -> bool:
+    """Structural compatibility: same JSON type, and matching title if both declare one."""
+
+    source_type = source.get("type")
+    target_type = target.get("type")
+    if source_type and target_type and source_type != target_type:
+        return False
+    source_title = source.get("title")
+    target_title = target.get("title")
+    return not (source_title and target_title and source_title != target_title)
+
+
 def _validate_workflow_graph(definition: WorkflowDefinition) -> None:
     node_ids = set(definition.graph.nodes)
     if not node_ids:
         raise ValueError("workflow graph must contain at least one node")
 
-    inbound: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
-    outbound: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
-    adjacency: dict[str, list[str]] = defaultdict(list)
     for edge in definition.graph.edges:
-        source_id, target_id = edge.from_.node, edge.to.node
-        if source_id not in node_ids:
-            raise ValueError(f"edge references unknown source node '{source_id}'")
-        if target_id not in node_ids:
-            raise ValueError(f"edge references unknown target node '{target_id}'")
-        outbound[source_id].add(target_id)
-        inbound[target_id].add(source_id)
-        adjacency[source_id].append(target_id)
+        if edge.from_.node not in node_ids:
+            raise ValueError(f"edge references unknown source node '{edge.from_.node}'")
+        if edge.to.node not in node_ids:
+            raise ValueError(f"edge references unknown target node '{edge.to.node}'")
 
-    roots = [node_id for node_id, sources in inbound.items() if not sources]
-    if len(roots) != 1:
-        raise ValueError("workflow graph must contain exactly one root node in v1")
-    _assert_acyclic(node_ids, adjacency)
-
-    for node_id in roots:
-        root = definition.graph.nodes[node_id]
-        if hasattr(root, "input_schema"):
-            root.input_schema = definition.trigger.output_schema
-    for edge in definition.graph.edges:
-        source = definition.graph.nodes[edge.from_.node]
-        target = definition.graph.nodes[edge.to.node]
-        if hasattr(target, "input_schema"):
-            target.input_schema = getattr(source, "output_schema", None)
+    _validate_data_edges(definition)
 
     for node_id, node in definition.graph.nodes.items():
-        branching = isinstance(node, WorkflowNodeCondition | WorkflowNodeApproval)
-        if len(inbound[node_id]) > 1:
-            raise ValueError(f"node '{node_id}' may have at most one inbound source in v1")
-        if not branching and len(outbound[node_id]) > 1:
-            raise ValueError(f"node '{node_id}' may have at most one outbound target in v1")
-        if branching:
-            if len(outbound[node_id]) > 2:
-                raise ValueError(f"node '{node_id}' may have at most two outbound edges in v1")
-            expected_ports = (
-                {"true", "false"}
-                if isinstance(node, WorkflowNodeCondition)
-                else {"approved", "rejected"}
-            )
-            ports = [
-                edge.from_.port for edge in definition.graph.edges if edge.from_.node == node_id
-            ]
-            if any(port not in expected_ports for port in ports) or len(ports) != len(set(ports)):
-                expected = ", ".join(sorted(expected_ports))
-                raise ValueError(
-                    f"{node.kind} node '{node_id}' edges must use distinct ports from: {expected}"
-                )
-        if isinstance(node, WorkflowNodePrompt):
-            if not node.prompt.strip():
-                raise ValueError(f"prompt node '{node_id}' is missing a prompt")
-            if not node.agent_name.strip():
-                raise ValueError(f"prompt node '{node_id}' is missing an agent_name")
-            _validate_prompt_node(node_id, node)
-        elif isinstance(node, WorkflowNodeCondition) and not node.expression.strip():
+        if isinstance(node, WorkflowNodeCondition) and not node.expression.strip():
             raise ValueError(f"condition node '{node_id}' is missing an expression")
         elif isinstance(node, WorkflowNodeApproval) and not node.message.strip():
             raise ValueError(f"approval node '{node_id}' is missing a message")
-        elif isinstance(node, WorkflowNodeMcp):
-            if not node.server_id.strip():
-                raise ValueError(f"mcp node '{node_id}' is missing a server_id")
-            if not node.tool_name.strip():
-                raise ValueError(f"mcp node '{node_id}' is missing a tool_name")
-            _validate_mcp_node(node_id, node)
+        elif isinstance(node, WorkflowNodeHumanInput) and not node.message.strip():
+            raise ValueError(f"human_input node '{node_id}' is missing a message")
+        elif isinstance(node, WorkflowNodeAgent) and not node.message.strip():
+            raise ValueError(f"agent node '{node_id}' is missing a message")
 
 
-def _validate_prompt_node(node_id: str, node: WorkflowNodePrompt) -> None:
-    """Reject configurations that could become backend queries or ambiguous paths."""
+def _validate_data_edges(definition: WorkflowDefinition) -> None:
+    nodes = definition.graph.nodes
+    inbound: dict[str, int] = dict.fromkeys(nodes, 0)
+    adjacency: dict[str, list[str]] = defaultdict(list)
+    seen_targets: set[tuple[str, str]] = set()
 
-    for input_name, binding in node.inputs.items():
-        if not input_name.strip():
-            raise ValueError(f"prompt node '{node_id}' has an empty input name")
-        if binding.source == "literal":
-            if binding.path is not None or binding.reference is not None:
-                raise ValueError(f"prompt node '{node_id}' literal binding is malformed")
-        elif binding.source in {"trigger", "previous_output"}:
-            if not binding.path or not binding.path.startswith("/"):
-                raise ValueError(f"prompt node '{node_id}' binding path must start with '/'")
-            if binding.value is not None or binding.reference is not None:
-                raise ValueError(f"prompt node '{node_id}' binding is malformed")
-        elif binding.source == "reference":
-            if binding.reference not in {
-                "prompt",
-                "agent",
-                "repository",
-                "knowledge_base",
-                "kanban_card",
-                "inbox_message",
-                "mcp_tool",
-                "routine",
-            }:
-                raise ValueError(f"prompt node '{node_id}' has an unknown reference binding")
-            if binding.value is not None or binding.path is not None:
-                raise ValueError(f"prompt node '{node_id}' binding is malformed")
-    for skill in node.references.skills:
-        if skill.source == "plugin" and not skill.segment:
-            raise ValueError(f"prompt node '{node_id}' plugin skill is missing a segment")
-        if skill.source == "native" and skill.segment is not None:
-            raise ValueError(f"prompt node '{node_id}' native skill cannot set a segment")
+    for edge in definition.graph.edges:
+        source = nodes[edge.from_.node]
+        target = nodes[edge.to.node]
+        output_ports = workflow_node_output_ports(source)
+        if edge.from_.port not in output_ports:
+            raise ValueError(
+                f"edge source '{edge.from_.node}' has no output port '{edge.from_.port}'"
+            )
+        input_ports = workflow_node_input_ports(target)
+        if edge.to.port not in input_ports:
+            raise ValueError(f"edge target '{edge.to.node}' has no input port '{edge.to.port}'")
+        target_key = (edge.to.node, edge.to.port)
+        if target_key in seen_targets:
+            raise ValueError(
+                f"input port '{edge.to.port}' on node '{edge.to.node}' has more than one edge"
+            )
+        seen_targets.add(target_key)
+        if not _schema_types_compatible(output_ports[edge.from_.port], input_ports[edge.to.port]):
+            raise ValueError(
+                f"edge from '{edge.from_.node}.{edge.from_.port}' to "
+                f"'{edge.to.node}.{edge.to.port}' has incompatible types"
+            )
+        inbound[edge.to.node] += 1
+        adjacency[edge.from_.node].append(edge.to.node)
 
+    for node_id, node in nodes.items():
+        if isinstance(node, WorkflowNodeEvent) and inbound[node_id]:
+            raise ValueError("event nodes cannot have inbound edges")
+        if not isinstance(node, WorkflowNodeData | WorkflowNodeEvent) and not inbound[node_id]:
+            raise ValueError(f"executable node '{node_id}' has no inbound connection")
+        input_schema = getattr(node, "input_schema", None) or {}
+        for port in input_schema.get("required") or []:
+            if (node_id, port) not in seen_targets:
+                raise ValueError(f"required input '{port}' on node '{node_id}' has no edge")
 
-def _validate_mcp_node(node_id: str, node: WorkflowNodeMcp) -> None:
-    """Reject malformed MCP tool bindings."""
-
-    for input_name, binding in node.inputs.items():
-        if not input_name.strip():
-            raise ValueError(f"mcp node '{node_id}' has an empty input name")
-        if binding.source == "literal":
-            if binding.path is not None or binding.reference is not None:
-                raise ValueError(f"mcp node '{node_id}' literal binding is malformed")
-        elif binding.source in {"trigger", "previous_output"}:
-            if not binding.path or not binding.path.startswith("/"):
-                raise ValueError(f"mcp node '{node_id}' binding path must start with '/'")
-            if binding.value is not None or binding.reference is not None:
-                raise ValueError(f"mcp node '{node_id}' binding is malformed")
-        elif binding.source == "reference" and (
-            binding.value is not None or binding.path is not None
-        ):
-            raise ValueError(f"mcp node '{node_id}' reference binding is malformed")
+    _assert_acyclic(set(nodes), adjacency)
 
 
 def _assert_acyclic(node_ids: set[str], adjacency: dict[str, list[str]]) -> None:
