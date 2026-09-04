@@ -24,14 +24,14 @@ const ROUTINE = '/routines/routine-private-context';
 const CHAIN_AFTER = ['Build private trace', 'Run shared subgraph', 'Return public answer'];
 
 const canvas = (page) => page.locator('.routine-chain');
-const status = (page) => page.locator('.agents-graph-validation');
+const status = (page) => page.locator('.agents-graph-validation-action');
 const foreachBody = (page) => page.locator('.routine-foreach__body');
 
 async function openRoutine(page) {
   await page.goto(ROUTINE);
   await expect(canvas(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('.canvas-node').first()).toBeVisible({ timeout: 20_000 });
-  await expect(status(page)).toHaveText('Valid graph');
+  await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');
 }
 
 /** Open a connector's `+` menu and pick a node kind by its menu label. */
@@ -86,7 +86,7 @@ test.describe('routine graph editing', () => {
     const after = await labels(canvas(page));
     expect(after.slice(-CHAIN_AFTER.length)).toEqual(CHAIN_AFTER);
     expect(after).toContain('Join fan-out');
-    await expect(status(page)).toHaveText('Valid graph');
+    await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');
 
     // The Send needs a real target even while the body is empty; the
     // terminator stands in until a step is added.
@@ -106,7 +106,7 @@ test.describe('routine graph editing', () => {
     expect(await labels(canvas(page))).toEqual([
       'Inject context', 'Foreach', 'Eval', 'Join fan-out', ...CHAIN_AFTER,
     ]);
-    await expect(status(page)).toHaveText('Valid graph');
+    await expect(status(page)).toHaveAttribute('aria-label', 'Graph is valid');
 
     const withBody = await serialized(page);
     const bodyId = withBody.nodes.find((node) => node.label === 'Eval').id;

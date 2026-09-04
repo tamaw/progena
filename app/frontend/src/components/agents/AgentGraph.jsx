@@ -20,9 +20,11 @@ import {
   selectAgentProfiles,
   selectAgentRoutineRevisionContent,
   selectAgentRoutineRuns,
+  selectAgentRoutineRunsHasMore,
   selectAgentRunState,
 } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon, StopActionIcon } from '../layout/DetailHeader';
+import { PaneListVirtualized } from '../layout/PaneList';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 import {
@@ -3580,6 +3582,12 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
   // already reads). No edit surface, so no browsing-history close effect
   // needed the way runModalOpen has one below.
   const [outputModalOpen, setOutputModalOpen] = useState(false);
+  // Toggled by the validation status icon in the actions row -- shows the
+  // full list of errors in a scrollable panel below the actions/history
+  // pills. Only ever meaningful while invalid (see validationErrors below);
+  // reset shut whenever the graph becomes valid again so it doesn't linger
+  // open over an empty list once the last error is fixed.
+  const [validationPanelOpen, setValidationPanelOpen] = useState(false);
   const handleRestoreRun = useCallback(async () => {
     const browsed = runNav.browsedGraph;
     if (!browsed) return;
@@ -3827,6 +3835,9 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     () => validateWorkingGraph(nodes, edges, meta.entry),
     [nodes, edges, meta.entry],
   );
+  useEffect(() => {
+    if (!validationErrors.length || runNav.isBrowsingHistory) setValidationPanelOpen(false);
+  }, [validationErrors.length, runNav.isBrowsingHistory]);
 
   const handleJsonApply = useCallback(async (parsed) => {
     const nextMeta = {
@@ -3881,6 +3892,20 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                   disabled={isRunInProgress || runNav.isBrowsingHistory || validationErrors.length > 0 || incomplete > 0 || !isServerConfirmed}
                 />
                 <DetailHeaderAction
+                  icon={validationErrors.length ? <ValidationErrorIcon /> : <ValidationOkIcon />}
+                  label={validationErrors.length ? 'Validation issues' : 'Valid graph'}
+                  className={`agents-graph-validation-action ${validationErrors.length ? 'agents-graph-validation-action--error' : 'agents-graph-validation-action--ok'}`}
+                  tooltip={
+                    validationErrors.length
+                      ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'} \u2014 click to view`
+                      : 'Graph is valid'
+                  }
+                  ariaLabel={validationErrors.length ? `${validationErrors.length} validation issues, click to view` : 'Graph is valid'}
+                  aria-pressed={validationErrors.length ? validationPanelOpen : undefined}
+                  onClick={validationErrors.length ? () => setValidationPanelOpen((open) => !open) : undefined}
+                  disabled={!validationErrors.length || runNav.isBrowsingHistory}
+                />
+                <DetailHeaderAction
                   icon={<RestoreActionIcon />}
                   label="Restore"
                   tooltip={
@@ -3928,25 +3953,28 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
                 />
               </div>
             ) : null}
-            {runNav.isBrowsingHistory ? null : (
+            {runNav.isBrowsingHistory || saveState === 'idle' ? null : (
               <div className="agents-graph-floating agents-graph-floating--status">
-                {saveState !== 'idle' ? (
-                  <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
-                    {saveState === 'saving' ? 'Saving…'
-                      : saveState === 'saved' ? 'Saved'
-                      : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
-                          : 'Save failed'}
-                  </span>
-                ) : null}
-                <span
-                  className={`agents-graph-validation ${validationErrors.length ? 'agents-graph-validation--error' : 'agents-graph-validation--ok'}`}
-                  role="status"
-                  aria-label={validationErrors.length ? `Graph invalid: ${validationErrors.join(' ')}` : 'Graph valid'}
-                >
-                  {validationErrors.length ? `${validationErrors.length} validation issue${validationErrors.length === 1 ? '' : 's'}` : 'Valid graph'}
+                <span className={`agents-graph-save agents-graph-save--${saveState}`} role="status">
+                  {saveState === 'saving' ? 'Saving…'
+                    : saveState === 'saved' ? 'Saved'
+                    : saveState === 'incomplete' ? `Not saved · ${incompleteCount} step${incompleteCount === 1 ? '' : 's'} incomplete`
+                        : 'Save failed'}
                 </span>
               </div>
             )}
+            {!runNav.isBrowsingHistory && validationPanelOpen && validationErrors.length > 0 ? (
+              <div className="agents-graph-validation-panel" role="alert">
+                <div className="agents-graph-validation-panel__header">
+                  {validationErrors.length} validation issue{validationErrors.length === 1 ? '' : 's'}
+                </div>
+                <ul className="agents-graph-validation-panel__list">
+                  {validationErrors.map((message, index) => (
+                    <li key={index}>{message}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="agents-graph-zoom-controls">
               <button
                 type="button"
@@ -4100,6 +4128,32 @@ function ChevronRightPointSmall() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true">
       <path d="m6.2 4.2 3.6 3.8-3.6 3.8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// Plain checkmark -- the actions-row status icon between Run and Restore
+// when the working graph passes validateWorkingGraph with zero issues.
+// Always rendered (never conditionally omitted) so the actions row never
+// reflows width when validity flips; disabled/non-interactive in this
+// state since there's nothing to expand.
+function ValidationOkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M3.5 8.4 6.3 11.2 12.5 4.6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// Warning triangle -- shown in the same actions-row slot as ValidationOkIcon
+// above when validateWorkingGraph reports issues. Clicking it toggles the
+// scrollable agents-graph-validation-panel listing every message.
+function ValidationErrorIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path d="M8 2.4 14.2 13a1 1 0 0 1-.86 1.5H2.66A1 1 0 0 1 1.8 13L8 2.4z" fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
+      <path d="M8 6.6v3.1" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="8" cy="11.6" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -4467,7 +4521,9 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
   const { getApiUrl } = useConfig();
   const agentsUrl = getApiUrl('agentProfiles');
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState(null);
+  const hasMore = useSelector((state) => selectAgentRoutineRunsHasMore(state, agentId));
 
   const load = useCallback(() => {
     setLoading(true);
@@ -4485,19 +4541,39 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [agentId]);
 
+  // Pages backward past the oldest run currently loaded, via the cursor
+  // the backend's own `last_checkpoint_at` ordering already gives us --
+  // see document_store.list_routine_runs. Appends into the same
+  // runsByAgentId cache the initial `load()` populates (see the
+  // `agent.routine.runs.loaded` reducer), so this list only ever grows,
+  // never re-fetches a page it already has.
+  const loadMore = useCallback(() => {
+    const oldest = runsList?.[runsList.length - 1];
+    if (!oldest?.last_checkpoint_at || loadingMore) return;
+    setLoadingMore(true);
+    setError(null);
+    dispatch(fetchRoutineRuns({ agentsUrl, agentId, before: oldest.last_checkpoint_at }))
+      .unwrap()
+      .catch((fetchError) => setError(fetchError.message || 'Failed to load more runs'))
+      .finally(() => setLoadingMore(false));
+  }, [agentId, agentsUrl, dispatch, loadingMore, runsList]);
+
   // Status/duration/tokens need each run's own run_meta, not just the list
-  // summary -- backfilled into the exact same runStateByThreadId cache the
-  // back/forward pill itself reads, so a run already browsed to needs no
-  // second fetch here, and jumping to a row this panel already resolved
-  // needs none there either.
+  // summary. Deliberately NOT fetched eagerly for the whole list -- opening
+  // this panel used to fire one concurrent /run-state request (each opening
+  // its own short-lived Postgres checkpoint connection) per run, all at
+  // once. Instead this rides useRunHistoryNav's existing `historicalThreadId`
+  // effect: selecting a row (via `onSelectIndex` below, or the toolbar's
+  // back/forward pill, both of which move the same `viewedIndex`) is what
+  // triggers that one fetch, into the same runStateByThreadId cache read
+  // here -- a run already browsed to needs no second fetch, and clicking a
+  // row this panel hasn't resolved yet needs none added here either.
   const runStateByThreadId = useSelector((state) => state.uiData.agents.runStateByThreadId);
-  useEffect(() => {
-    (runsList || []).forEach((run) => {
-      if (!runStateByThreadId[run.thread_id]) {
-        dispatch(fetchRunState({ agentsUrl, agentId, threadId: run.thread_id }));
-      }
-    });
-  }, [runsList, runStateByThreadId, agentsUrl, agentId, dispatch]);
+
+  const virtualItems = useMemo(() => {
+    if (!runsList) return [];
+    return hasMore ? [...runsList, { loadMoreRow: true }] : runsList;
+  }, [runsList, hasMore]);
 
   return (
     <aside className="agents-graph-editor agents-graph-runs">
@@ -4520,20 +4596,43 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
       {!error && runsList && runsList.length === 0 && !loading ? (
         <p className="agents-graph-runs__empty">No runs recorded yet.</p>
       ) : null}
-      <ul className="agents-graph-runs__list">
-        {(runsList || []).map((run, index) => {
-          const runState = runStateByThreadId[run.thread_id];
-          const entries = runState?.run_meta ? Object.values(runState.run_meta).flat() : null;
-          const failed = entries?.some((entry) => entry.error);
-          const tokens = entries?.reduce((sum, entry) => sum + (entry.tokens?.total_tokens || 0), 0);
-          const status = !entries ? 'pending' : failed ? 'failed' : 'success';
-          const durationSec = run.started_at && run.last_checkpoint_at
-            ? Math.max(0, (new Date(run.last_checkpoint_at) - new Date(run.started_at)) / 1000)
-            : null;
-          const datetime = run.last_checkpoint_at ? new Date(run.last_checkpoint_at).toLocaleString() : null;
-          const isSelected = index === viewedIndex;
-          return (
-            <li key={run.thread_id}>
+      {runsList ? (
+        <PaneListVirtualized
+          className="agents-graph-runs__list"
+          items={virtualItems}
+          getItemKey={(item) => item.thread_id || 'load-more'}
+          estimatedItemHeight={78}
+          renderItem={(item, index) => {
+            if (item.loadMoreRow) {
+              return (
+                <button
+                  type="button"
+                  className="agents-graph-runs__load-more"
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                >
+                  {loadingMore ? 'Loading…' : 'Load more'}
+                </button>
+              );
+            }
+            const run = item;
+            // Status is free -- `run.failed` comes straight off the list
+            // query (a cheap EXISTS against LangGraph's own '__error__'
+            // pending-write channel, see document_store.list_routine_runs).
+            // Tokens still need the fuller run_meta fetch, which only
+            // happens once this row is actually selected (see the comment
+            // above runStateByThreadId) -- so tokens stay optional here,
+            // status never does.
+            const runState = runStateByThreadId[run.thread_id];
+            const entries = runState?.run_meta ? Object.values(runState.run_meta).flat() : null;
+            const tokens = entries?.reduce((sum, entry) => sum + (entry.tokens?.total_tokens || 0), 0);
+            const status = run.failed ? 'failed' : 'success';
+            const durationSec = run.started_at && run.last_checkpoint_at
+              ? Math.max(0, (new Date(run.last_checkpoint_at) - new Date(run.started_at)) / 1000)
+              : null;
+            const datetime = run.last_checkpoint_at ? new Date(run.last_checkpoint_at).toLocaleString() : null;
+            const isSelected = index === viewedIndex;
+            return (
               <button
                 type="button"
                 className={`agents-graph-runs__item${isSelected ? ' is-selected' : ''}`}
@@ -4541,7 +4640,7 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
               >
                 <div className="agents-graph-runs__item-head">
                   <span className={`agents-graph-runs__status agents-graph-runs__status--${status}`}>
-                    {status === 'pending' ? 'Loading…' : status}
+                    {status}
                   </span>
                   <span className="agents-graph-runs__age">{formatAge(run.last_checkpoint_at) || '—'}</span>
                 </div>
@@ -4552,10 +4651,10 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
                   <span>{run.checkpoint_count} step{run.checkpoint_count === 1 ? '' : 's'}</span>
                 </div>
               </button>
-            </li>
-          );
-        })}
-      </ul>
+            );
+          }}
+        />
+      ) : null}
     </aside>
   );
 }

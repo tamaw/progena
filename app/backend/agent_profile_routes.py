@@ -18,7 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from app.progenitor.routines.graph import (
@@ -631,20 +631,31 @@ def create_agent_profile_router(
     async def list_routine_runs(
         agent_id: str,
         request: Request,
+        before: str | None = Query(default=None),
+        limit: int = Query(default=50, ge=1, le=200),
         x_request_id: str | None = Header(default=None, alias="X-Request-ID"),
     ):
-        """Publish recent execution runs for one routine.
+        """Publish one page of recent execution runs for one routine.
 
         A run is a distinct checkpoint thread named
         ``routine:<agent_id>:<revision_id>:<run_id>`` (see
         ``app.progenitor.routines.subagent.create_routine_subagent``); this
         reads the ``checkpoints`` table grouped by that thread_id rather than
         any bespoke run-history storage.
+
+        ``before`` pages backward from a cursor (a ``last_checkpoint_at``
+        value from a previously returned run) for "Load more" in the Runs
+        panel; omitted, this returns the newest page. ``has_more`` in the
+        response tells the caller whether another page exists.
         """
         request_id = _request_correlation_id(request, x_request_id)
-        runs = await asyncio.to_thread(get_document_store().list_routine_runs, agent_id)
+        runs, has_more = await asyncio.to_thread(
+            get_document_store().list_routine_runs, agent_id, limit=limit, before=before
+        )
         payload = {
             "agent_id": agent_id,
+            "before": before,
+            "has_more": has_more,
             "runs": [
                 {
                     "thread_id": run.thread_id,
@@ -653,6 +664,7 @@ def create_agent_profile_router(
                     "started_at": run.started_at,
                     "last_checkpoint_at": run.last_checkpoint_at,
                     "checkpoint_count": run.checkpoint_count,
+                    "failed": run.failed,
                 }
                 for run in runs
             ],

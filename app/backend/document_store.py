@@ -52,6 +52,10 @@ class CheckpointThreadSnapshot:
     checkpoint_id: str | None
     checkpoint_ts: str | None
     messages: list[Any]
+    # Whether any checkpoint_writes row for this thread carries LangGraph's
+    # own '__error__' channel -- see list_routine_runs for why this, not a
+    # deserialized run_meta field, is the reliable failed/success signal.
+    failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +74,7 @@ class RoutineRunSummary:
     started_at: str | None
     last_checkpoint_at: str | None
     checkpoint_count: int
+    failed: bool
 
 
 @dataclass(frozen=True)
@@ -163,7 +168,9 @@ class BackendDocumentStore(Protocol):
         checkpoint_id: str | None = None,
     ) -> CheckpointThreadSnapshot | None: ...
 
-    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]: ...
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]: ...
 
     def list_routine_revisions(
         self, routine_id: str, *, limit: int = 50
@@ -283,7 +290,9 @@ class InMemoryDocumentStore:
             return None
         return snapshot
 
-    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]:
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]:
         prefix = f"routine:{routine_id}:"
         summaries = [
             RoutineRunSummary(
@@ -294,12 +303,18 @@ class InMemoryDocumentStore:
                 started_at=snapshot.checkpoint_ts,
                 last_checkpoint_at=snapshot.checkpoint_ts,
                 checkpoint_count=1,
+                failed=snapshot.failed,
             )
             for snapshot in self._checkpoint_threads.values()
             if snapshot.thread_id.startswith(prefix)
         ]
         summaries.sort(key=lambda summary: summary.last_checkpoint_at or "", reverse=True)
-        return summaries[:limit] if limit > 0 else summaries
+        if before:
+            summaries = [s for s in summaries if (s.last_checkpoint_at or "") < before]
+        if limit <= 0:
+            return summaries, False
+        page = summaries[:limit]
+        return page, len(summaries) > limit
 
     def list_routine_revisions(
         self, routine_id: str, *, limit: int = 50
@@ -858,7 +873,9 @@ class PostgresDocumentStore:
             messages=messages,
         )
 
-    def list_routine_runs(self, routine_id: str, *, limit: int = 50) -> list[RoutineRunSummary]:
+    def list_routine_runs(
+        self, routine_id: str, *, limit: int = 50, before: str | None = None
+    ) -> tuple[list[RoutineRunSummary], bool]:
         """Every distinct routine-run checkpoint thread for one routine.
 
         A run's thread_id is ``routine:<routine_id>:<revision_id>:<run_id>``
@@ -866,26 +883,60 @@ class PostgresDocumentStore:
         Groups raw checkpoint rows by thread_id -- one row per run, newest
         last-checkpoint first -- rather than reconstructing full message
         history, which the Runs panel doesn't need.
+
+        ``before`` is a keyset cursor: the ``last_checkpoint_at`` of the
+        oldest run already loaded by the caller (verbatim string this same
+        method previously returned), so paging never relies on OFFSET
+        against a live-growing table. Fetches one extra row over ``limit``
+        purely to answer ``has_more`` without a second COUNT query, then
+        trims it back off before returning.
+
+        ``failed`` is a per-run ``EXISTS`` against ``checkpoint_writes`` for
+        LangGraph's own ``__error__`` pending-write channel -- written
+        unconditionally by LangGraph's task runner the instant any node
+        raises, *before* any of our own error-handling code runs. This is
+        deliberately NOT derived from the ``run_meta`` channel's own
+        per-node ``error`` field: that field only exists when
+        subagent.py's narrow exception catch fires AND its own backfill
+        write succeeds (both best-effort), so it under-reports real
+        failures. The EXISTS runs once per already-LIMIT-bounded row,
+        against ``checkpoint_writes_thread_id_idx`` -- no checkpoint blob
+        deserialization, no extra connection, one round trip alongside the
+        existing GROUP BY.
         """
         escaped = routine_id.translate({ord("\\"): "\\\\", ord("%"): "\\%", ord("_"): "\\_"})
         pattern = f"routine:{escaped}:%"
+        params: list[Any] = [pattern, before is None, before, limit + 1]
         with self._cursor() as cur:
             cur.execute(
                 """
+                WITH runs AS (
+                    SELECT
+                        thread_id,
+                        min((checkpoint->>'ts')::timestamptz) AS started_at,
+                        max((checkpoint->>'ts')::timestamptz) AS last_checkpoint_at,
+                        count(*) AS checkpoint_count
+                    FROM checkpoints
+                    WHERE thread_id LIKE %s ESCAPE '\\'
+                    GROUP BY thread_id
+                    HAVING %s OR max((checkpoint->>'ts')::timestamptz) < %s::timestamptz
+                    ORDER BY last_checkpoint_at DESC
+                    LIMIT %s
+                )
                 SELECT
-                    thread_id,
-                    min((checkpoint->>'ts')::timestamptz) AS started_at,
-                    max((checkpoint->>'ts')::timestamptz) AS last_checkpoint_at,
-                    count(*) AS checkpoint_count
-                FROM checkpoints
-                WHERE thread_id LIKE %s ESCAPE '\\'
-                GROUP BY thread_id
+                    runs.*,
+                    EXISTS (
+                        SELECT 1 FROM checkpoint_writes cw
+                        WHERE cw.thread_id = runs.thread_id AND cw.channel = '__error__'
+                    ) AS failed
+                FROM runs
                 ORDER BY last_checkpoint_at DESC
-                LIMIT %s
                 """,
-                (pattern, limit),
+                params,
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
+        has_more = len(rows) > limit
+        rows = rows[:limit]
         summaries: list[RoutineRunSummary] = []
         for row in rows:
             thread_id = row.get("thread_id")
@@ -905,9 +956,10 @@ class PostgresDocumentStore:
                         str(row["last_checkpoint_at"]) if row.get("last_checkpoint_at") else None
                     ),
                     checkpoint_count=int(row["checkpoint_count"] or 0),
+                    failed=bool(row.get("failed")),
                 )
             )
-        return summaries
+        return summaries, has_more
 
     def list_routine_revisions(
         self, routine_id: str, *, limit: int = 50

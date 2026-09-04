@@ -144,6 +144,56 @@ def test_routine_graph_v2_migration_distinguishes_router_and_normal_edges():
     assert params == ("progenitor.state", "routine:%")
 
 
+class _RowsCursor(_FakeCursor):
+    """Like _FakeCursor but fetchall() returns canned rows -- list_routine_runs
+    reads its EXISTS(...) result via fetchall(), not fetchone()."""
+
+    def __init__(self, rows):
+        super().__init__(None)
+        self._rows = rows
+
+    def fetchall(self):
+        return self._rows
+
+
+def test_list_routine_runs_reads_error_channel_not_run_meta():
+    """The failed flag comes from checkpoint_writes.__error__, a single-query
+    EXISTS alongside the existing GROUP BY -- not a second round trip, and
+    not derived from deserializing run_meta (see document_store.py's
+    list_routine_runs docstring for why run_meta under-reports failures)."""
+    store = PostgresDocumentStore("postgresql://example")
+    rows = [
+        {
+            "thread_id": "routine:alpha:rev-a:run-failed",
+            "started_at": "2026-01-01T00:00:00+00:00",
+            "last_checkpoint_at": "2026-01-01T00:00:05+00:00",
+            "checkpoint_count": 3,
+            "failed": True,
+        },
+        {
+            "thread_id": "routine:alpha:rev-a:run-ok",
+            "started_at": "2026-01-02T00:00:00+00:00",
+            "last_checkpoint_at": "2026-01-02T00:00:05+00:00",
+            "checkpoint_count": 5,
+            "failed": False,
+        },
+    ]
+    pool = _HealthyPool(None)
+    pool._cursor = _RowsCursor(rows)
+    store._pool = pool
+
+    summaries, has_more = store.list_routine_runs("alpha", limit=50)
+
+    executed_query = str(pool._cursor.executed[0][0])
+    assert "checkpoint_writes" in executed_query
+    assert "__error__" in executed_query
+    assert has_more is False
+    assert [(s.run_id, s.failed) for s in summaries] == [
+        ("run-failed", True),
+        ("run-ok", False),
+    ]
+
+
 class _FakeNotify:
     def __init__(self, payload: str) -> None:
         self.payload = payload

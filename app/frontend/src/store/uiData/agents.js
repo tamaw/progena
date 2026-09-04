@@ -28,7 +28,10 @@ export const initialState = {
     skillsByPath: {},
     // Recent execution runs for a routine, fetched lazily when the Runs
     // side-panel opens and cached by agent id (see `fetchRoutineRuns` /
-    // `agent.routine.runs.loaded`).
+    // `agent.routine.runs.loaded`). `{ items, hasMore }` -- `items` newest
+    // first, `hasMore` true when the backend's cursor-paginated `/runs`
+    // route (LIMIT + `before`) has more pages; a `before`-bearing fetch
+    // appends onto `items` instead of replacing it (see the reducer below).
     runsByAgentId: {},
     // Revision history for a routine, fetched lazily when the Revisions
     // side-panel opens and cached by agent id (see `fetchRoutineRevisions` /
@@ -115,8 +118,8 @@ export const fetchAgentSkillContent = createAcknowledgedThunk('uiData/fetchAgent
   { requestId },
 ));
 
-export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns', ({ agentsUrl, agentId }, { requestId }) => requestAcknowledged(
-  `${agentsUrl}/${encodeURIComponent(agentId)}/runs`,
+export const fetchRoutineRuns = createAcknowledgedThunk('uiData/fetchRoutineRuns', ({ agentsUrl, agentId, before }, { requestId }) => requestAcknowledged(
+  `${agentsUrl}/${encodeURIComponent(agentId)}/runs${before ? `?before=${encodeURIComponent(before)}` : ''}`,
   { requestId },
 ));
 
@@ -191,8 +194,21 @@ export const eventHandlers = {
     }
   },
   'agent.routine.runs.loaded': (state, payload) => {
-    if (typeof payload?.agent_id === 'string' && payload.agent_id) {
-      state.agents.runsByAgentId[payload.agent_id] = Array.isArray(payload.runs) ? payload.runs : [];
+    if (typeof payload?.agent_id !== 'string' || !payload.agent_id) return;
+    const runs = Array.isArray(payload.runs) ? payload.runs : [];
+    const hasMore = Boolean(payload.has_more);
+    // A `before`-bearing response is a "Load more" page -- append past the
+    // existing tail (deduped by thread_id, in case a slow page race lands
+    // twice) rather than replacing, which would otherwise drop everything
+    // already scrolled past. No `before` means a fresh/initial load: the
+    // list may have moved on since we last looked, so replace outright.
+    if (payload.before) {
+      const existing = state.agents.runsByAgentId[payload.agent_id]?.items || [];
+      const existingIds = new Set(existing.map((run) => run.thread_id));
+      const appended = runs.filter((run) => !existingIds.has(run.thread_id));
+      state.agents.runsByAgentId[payload.agent_id] = { items: [...existing, ...appended], hasMore };
+    } else {
+      state.agents.runsByAgentId[payload.agent_id] = { items: runs, hasMore };
     }
   },
   'agent.routine.revisions.loaded': (state, payload) => {
@@ -234,7 +250,8 @@ export const selectAgentProfilesState = (state) => state.uiData.agents;
 export const selectActiveAgentProfile = (state) => state.uiData.agents.active.detail;
 export const selectActiveAgentProfileState = (state) => state.uiData.agents.active;
 export const selectAgentSkillContent = (state, skillPath) => state.uiData.agents.skillsByPath[skillPath];
-export const selectAgentRoutineRuns = (state, agentId) => state.uiData.agents.runsByAgentId[agentId];
+export const selectAgentRoutineRuns = (state, agentId) => state.uiData.agents.runsByAgentId[agentId]?.items;
+export const selectAgentRoutineRunsHasMore = (state, agentId) => Boolean(state.uiData.agents.runsByAgentId[agentId]?.hasMore);
 export const selectAgentRoutineRevisions = (state, agentId) => state.uiData.agents.revisionsByAgentId[agentId];
 export const selectAgentRoutineRevisionContent = (state, agentId, revisionId) => state.uiData.agents.revisionContentByKey[`${agentId}:${revisionId}`];
 export const selectAgentRunState = (state, threadId) => (threadId ? state.uiData.agents.runStateByThreadId[threadId] : undefined);
