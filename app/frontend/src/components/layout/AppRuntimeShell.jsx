@@ -1034,16 +1034,21 @@ function QuickChatPanel({
     }
     spectatorCleanupRef.current?.();
 
-    const assistantId = `qchat_spectate_${requestId}`;
-    let assistantContent = '';
+    const existingAssistant = [...history].reverse().find(
+      (turn) => turn.role === 'assistant' && turn.isStreaming,
+    );
+    const assistantId = existingAssistant?.id || `qchat_spectate_${requestId}`;
+    let assistantContent = existingAssistant?.content || '';
     spectatedRequestIdRef.current = requestId;
-    setHistory((currentHistory) => currentHistory.concat({
-      id: assistantId,
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      isStreaming: true,
-    }));
+    if (!existingAssistant) {
+      setHistory((currentHistory) => currentHistory.concat({
+        id: assistantId,
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        isStreaming: true,
+      }));
+    }
 
     spectatorCleanupRef.current = observeResponseStream(requestId, {
       onChunk: (chunk) => {
@@ -1054,7 +1059,7 @@ function QuickChatPanel({
         )));
       },
     });
-  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, observeResponseStream, rehydrateFromPersistedThread]);
+  }, [scratchThreadId, isSending, generatingChatIds, requestIdByThreadId, history, observeResponseStream, rehydrateFromPersistedThread]);
 
   useEffect(() => () => {
     spectatorCleanupRef.current?.();
@@ -1073,12 +1078,10 @@ function QuickChatPanel({
     return threadId;
   }, [scratchThreadId, startFreshQuickThread]);
 
-
-  // Mirror conversation state into module-level memory so it survives the
-  // panel unmounting on close. Streaming turns are stored as settled so a
-  // mid-stream close doesn't resume as a stuck "Thinking…" bubble.
+  // Mirror the transcript and its active streaming turn into module-level
+  // memory so closing the panel does not discard an in-flight response.
   useEffect(() => {
-    quickChatMemory.history = history.map((turn) => (turn.isStreaming ? { ...turn, isStreaming: false } : turn));
+    quickChatMemory.history = history;
   }, [history]);
   useEffect(() => {
     quickChatMemory.threadId = scratchThreadId;
@@ -1128,9 +1131,8 @@ function QuickChatPanel({
       pendingRehydrateRef.current?.resolve([]);
       pendingRehydrateRef.current = null;
       isQuickChatMountedRef.current = false;
-      void cancelStream();
     };
-  }, [cancelStream]);
+  }, []);
 
   // Decide the thread once per mount. A pinned quick chat's QuickChatPanel
   // mounts as soon as the shell adopts the pinned panel from its fast

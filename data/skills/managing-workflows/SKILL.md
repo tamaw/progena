@@ -8,14 +8,13 @@ Workflow definitions live as one JSON file per workflow:
 - `/workflows/<workflow-id>.json`
 
 Schemas are mounted read-only under `/schemas/`:
-- `/schemas/definition.workflow.schema.v1.json` — the whole document; self-contained (embeds the trigger shape and all four node-kind shapes via `oneOf`), so it is the only schema `structured_output` needs to build or rewrite a complete workflow in one call.
-- `/schemas/trigger.workflow.schema.v1.json` — the `trigger` object alone.
-- `/schemas/node_event.workflow.schema.v1.json` — the `event` node alone.
-- `/schemas/node_prompt.workflow.schema.v1.json` — the `prompt` node alone.
-- `/schemas/node_user.workflow.schema.v1.json` — the `user` (notify) node alone.
-- `/schemas/node_code.workflow.schema.v1.json` — the `code` node alone.
+- `/schemas/definition.workflow.schema.v1.json` — the complete graph-native definition schema; use it to create or rewrite a workflow.
+- `/schemas/node_event.workflow.schema.v1.json` — an event entrypoint node.
+- `/schemas/node_prompt.workflow.schema.v1.json` — the `prompt` node.
+- `/schemas/node_user.workflow.schema.v1.json` — the `user` (notify) node.
+- `/schemas/node_code.workflow.schema.v1.json` — the `code` node.
 
-The four `node_*` files and `trigger.workflow.schema.v1.json` exist for editing a single piece of an existing workflow in isolation; they are not required reading to build a new one, since `definition.workflow.schema.v1.json` already contains every shape they document.
+Event nodes are stored in `graph.nodes`; there is no top-level trigger field.
 
 Core rules:
 1. Work on exactly one workflow file at a time.
@@ -23,46 +22,45 @@ Core rules:
 3. Preserve `id`, `created_at`, and unrelated `ui` fields unless the user asked to change them.
 4. Do not add runtime execution fields to the definition file.
 5. Prefer `edit_file` for focused changes. Use `write_file` only when creating a new workflow or rewriting the whole document intentionally.
-6. Use `structured_output` against a schema (the full definition, or one `node_*`/`trigger` schema for a focused edit) whenever creating or reshaping nodes/edges — don't hand-assemble JSON from memory.
+6. Use `structured_output` against the complete definition schema whenever creating or reshaping event nodes, other nodes, or edges — do not hand-assemble JSON from memory.
 
 Recommended flow for a new workflow:
 1. `ls /workflows/`
 2. `read_file /schemas/definition.workflow.schema.v1.json`
 3. Generate ids for the workflow and its nodes.
-4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, instruction describing the whole workflow (trigger, every node, and the edges connecting them) — this produces the complete, schema-valid definition in a single shot.
+4. One `structured_output` call, `schema_file: definition.workflow.schema.v1.json`, describing every event node, executable node, and edge — this produces the complete, schema-valid definition in one shot.
 5. `write_file /workflows/<workflow-id>.json`
 
 Recommended flow for editing an existing workflow:
 1. `ls /workflows/`
 2. `read_file /workflows/<workflow-id>.json`
 3. If only one field changes, update it with `edit_file` directly.
-4. If one node's shape changes (e.g. rewriting a prompt node into a user node), `read_file` that node kind's `node_*.workflow.schema.v1.json`, run `structured_output` scoped to just that node object, then `edit_file` to replace `graph.nodes.<id>` in place — smaller and safer than regenerating the whole document.
-5. If the trigger, several nodes, or the edge wiring all change together, `read_file /schemas/definition.workflow.schema.v1.json` and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
+4. If an event node, several nodes, or edge wiring changes together, read the complete definition schema and use `structured_output` to produce the whole updated definition, then persist only that workflow file.
 
-Minimal valid v1 workflow shape:
-- one `event` node
-- one `prompt` node
-- one edge from the event node to the prompt node
-- top-level `trigger.type = "event"`
-- top-level `trigger.event_type` set to one of:
+Minimal valid v2 workflow shape:
+- one or more `event` nodes
+- one or more executable nodes
+- every event node has no inbound edges and an edge to its first executable step
+- each event node carries its own `event_type`, optional `from_column`, and optional `to_column`
+- event types are one of:
   - `kanban.card.created`
   - `kanban.card.updated`
   - `kanban.card.moved`
   - `kanban.card.deleted`
   - `kanban.card.status_changed`
-- optional `trigger.from_column` / `trigger.to_column` — only meaningful when `event_type` is `kanban.card.moved`; filters to a specific column transition instead of any move. Each is one of `backlog`, `plan`, `build`, `validate`, `done`, or `null` for "any column". Omit both for "any move".
+- `from_column` / `to_column` are only meaningful for `kanban.card.moved`; filters are one of `backlog`, `plan`, `build`, `validate`, `done`, or `null`.
 
-Node kinds (each also has its own `node_<kind>.workflow.schema.v1.json` for focused edits; shapes are identical to the inline `oneOf` branch in `definition.workflow.schema.v1.json`):
-- `event` (`node_event.workflow.schema.v1.json`) — the fixed trigger/start node. Fields: `kind`, `title`.
-- `prompt` (`node_prompt.workflow.schema.v1.json`) — runs a prompt through the backend SSE path. Fields: `kind`, `title`, `prompt`, `agent_name`, `role` (nullable).
-- `user` (`node_user.workflow.schema.v1.json`) — delivers a message to the user via an agent tool. Fields: `kind`, `title`, `message_type` (`say_to_user` | `notify_user` | `ask_user`), `message`, `notification_title` (required, non-null, only when `message_type` is `notify_user`), `level` (`info` | `warning` | `error` | `success`).
-- `code` (`node_code.workflow.schema.v1.json`) — asks the agent to run a code snippet through the same SSE path (no sandboxed executor). Fields: `kind`, `title`, `language`, `content`.
+Node kinds:
+- `event` — graph entrypoint with fields `kind`, `title`, `event_type`, optional `from_column`, optional `to_column`.
+- `prompt` — runs a prompt through the backend SSE path.
+- `condition` — deterministic branch with `true`/`false` outputs.
+- `approval` — pauses for an approval decision.
+- `mcp` — invokes a configured MCP tool.
 
 Validation reminders:
-- exactly one `event` node
-- `event` nodes cannot have inbound edges
-- `prompt`, `user`, and `code` nodes may each have at most one inbound and one outbound edge
-- `user` nodes with `message_type: "notify_user"` must have a non-empty `notification_title`
-- `code` nodes must have non-empty `content` and `language`
+- at least one `event` node is required
+- event nodes cannot have inbound edges
+- event nodes have at most one outbound edge
+- non-event roots are invalid
 - edges must point to existing node ids
 - the graph must be acyclic

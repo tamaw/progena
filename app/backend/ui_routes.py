@@ -559,12 +559,16 @@ async def _workflow_prompt_runner(
     input_text: str,
     thread_id: str | None,
 ) -> PromptExecutionResult:
-    """Execute every ordinary workflow step through one normal prompt path."""
+    """Execute every agent workflow step through one normal prompt path.
+
+    ``input_text`` already carries the node's message alongside its resolved
+    typed input (see ``compose_workflow_agent_input``); it is the sole
+    instruction sent to the model.
+    """
 
     widget_id = f"workflow:{workflow.id}:{node_id}"
     request = ActionRunRequest(
         widget_id=widget_id,
-        prompt=node.prompt,
         input=input_text,
         broadcast_response=False,
         thread_id=thread_id,
@@ -1004,12 +1008,9 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
             {
                 "event_type": "kanban.card.updated",
                 "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.updated",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "changed_fields": changed_fields,
-                },
+                "card": refreshed_card,
+                "previous_card": previous_card,
+                "changed_fields": changed_fields,
             }
         )
     if previous_card.get("column_id") != refreshed_card.get("column_id") or previous_card.get(
@@ -1019,18 +1020,15 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
             {
                 "event_type": "kanban.card.moved",
                 "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.moved",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "from": {
-                        "column_id": previous_card.get("column_id"),
-                        "position": previous_card.get("position"),
-                    },
-                    "to": {
-                        "column_id": refreshed_card.get("column_id"),
-                        "position": refreshed_card.get("position"),
-                    },
+                "card": refreshed_card,
+                "previous_card": previous_card,
+                "from": {
+                    "column_id": previous_card.get("column_id"),
+                    "position": previous_card.get("position"),
+                },
+                "to": {
+                    "column_id": refreshed_card.get("column_id"),
+                    "position": refreshed_card.get("position"),
                 },
             }
         )
@@ -1039,13 +1037,10 @@ def _kanban_card_change_triggers(previous_card: dict, refreshed_card: dict, now:
             {
                 "event_type": "kanban.card.status_changed",
                 "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.status_changed",
-                    "card": refreshed_card,
-                    "previous_card": previous_card,
-                    "from_status": previous_card.get("status"),
-                    "to_status": refreshed_card.get("status"),
-                },
+                "card": refreshed_card,
+                "previous_card": previous_card,
+                "from_status": previous_card.get("status"),
+                "to_status": refreshed_card.get("status"),
             }
         )
     return triggers
@@ -1057,24 +1052,21 @@ def _enrich_kanban_workflow_triggers(
     """Attach the immutable task snapshot required by workflow dataflow."""
     enriched: list[dict] = []
     for trigger in triggers:
-        payload = dict(trigger.get("payload") or {})
-        card = payload.get("card")
+        card = trigger.get("card")
+        task = None
         if isinstance(card, dict):
-            task = _read_task_content(state_reader, card)
-            payload["task"] = {
-                "path": task.path,
-                "format": task.format,
-                "updated_at": task.updated_at,
-                "content": task.content,
+            task_content = _read_task_content(state_reader, card)
+            task = {
+                "path": task_content.path,
+                "format": task_content.format,
+                "updated_at": task_content.updated_at,
+                "content": task_content.content,
             }
         enriched.append(
             {
                 **trigger,
-                "payload": {
-                    **payload,
-                    "timestamp": trigger.get("timestamp") or now,
-                    "source": "kanban",
-                },
+                **({"task": task} if task is not None else {}),
+                "timestamp": trigger.get("timestamp") or now,
             }
         )
     return enriched
@@ -1205,7 +1197,7 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
             trigger = {
                 "event_type": "kanban.card.created",
                 "timestamp": now,
-                "payload": {"event_type": "kanban.card.created", "card": card},
+                "card": card,
             }
             _apply_event_widget_triggers(state_reader, [trigger])
             await _dispatch_workflow_triggers(
@@ -1220,7 +1212,7 @@ async def _reconcile_kanban_card_triggers(changed_key: str | None) -> None:
             trigger = {
                 "event_type": "kanban.card.deleted",
                 "timestamp": now,
-                "payload": {"event_type": "kanban.card.deleted", "card": previous},
+                "card": previous,
             }
             _apply_event_widget_triggers(state_reader, [trigger])
             await _dispatch_workflow_triggers(
@@ -1859,9 +1851,9 @@ async def _inspect_agent_widget(
     }
 
 
-def _summarize_event_trigger(event_type: str, payload: dict) -> str:
+def _summarize_event_trigger(event_type: str, trigger: dict) -> str:
     label = KANBAN_EVENT_TYPE_LABELS.get(event_type, event_type)
-    card = payload.get("card") if isinstance(payload, dict) else None
+    card = trigger.get("card") if isinstance(trigger, dict) else None
     if isinstance(card, dict):
         title = str(card.get("title") or "").strip()
         if title:
@@ -1893,8 +1885,11 @@ def _apply_event_widget_triggers(
                 continue
 
             timestamp = str(trigger.get("timestamp") or utcnow().isoformat())
-            payload = trigger.get("payload")
-            normalized_payload = payload if isinstance(payload, dict) else {}
+            normalized_payload = {
+                key: value
+                for key, value in trigger.items()
+                if key not in ("event_type", "timestamp")
+            }
             summary = str(
                 trigger.get("summary") or _summarize_event_trigger(event_type, normalized_payload)
             )
@@ -1960,11 +1955,8 @@ async def _reconcile_workflow_invoke_requests(changed_key: str | None = None) ->
             trigger = {
                 "event_type": "progenitor.invoke",
                 "timestamp": request.requested_at,
-                "payload": {
-                    "event_type": "progenitor.invoke",
-                    "input": request.input,
-                    "source": "progenitor",
-                },
+                "input": request.input,
+                "source": "progenitor",
             }
             try:
                 await executor.trigger_workflow(
@@ -3114,10 +3106,7 @@ async def create_kanban_card(
             {
                 "event_type": "kanban.card.created",
                 "timestamp": now,
-                "payload": {
-                    "event_type": "kanban.card.created",
-                    "card": created,
-                },
+                "card": created,
             }
         ],
         request_id=request_id,
@@ -3129,10 +3118,7 @@ async def create_kanban_card(
                 {
                     "event_type": "kanban.card.created",
                     "timestamp": now,
-                    "payload": {
-                        "event_type": "kanban.card.created",
-                        "card": created,
-                    },
+                    "card": created,
                 }
             ],
             now,
@@ -3273,10 +3259,7 @@ async def delete_kanban_card(
                 {
                     "event_type": "kanban.card.deleted",
                     "timestamp": timestamp,
-                    "payload": {
-                        "event_type": "kanban.card.deleted",
-                        "card": deleted_card,
-                    },
+                    "card": deleted_card,
                 }
             ],
             request_id=request_id,
@@ -3288,10 +3271,7 @@ async def delete_kanban_card(
                     {
                         "event_type": "kanban.card.deleted",
                         "timestamp": timestamp,
-                        "payload": {
-                            "event_type": "kanban.card.deleted",
-                            "card": deleted_card,
-                        },
+                        "card": deleted_card,
                     }
                 ],
                 timestamp,

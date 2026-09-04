@@ -1,324 +1,207 @@
 import pytest
 
-from app.progenitor.schemas import load_schema
-from app.progenitor.structured import validate_against_schema
 from app.progenitor.workflows import (
+    WorkflowDefinition,
     default_workflow_definition,
     ordered_workflow_node_ids,
     validate_workflow_definition_payload,
 )
 
 
-def test_workflow_definition_validator_starts_at_top_level_trigger():
-    normalized = validate_workflow_definition_payload(
-        default_workflow_definition(title="Validator check")
+def _node_id(payload, kind):
+    return next(
+        node_id for node_id, node in payload["graph"]["nodes"].items() if node["kind"] == kind
     )
 
-    assert normalized["title"] == "Validator check"
-    assert normalized["trigger"]["event_type"] == "kanban.card.created"
-    assert len(normalized["graph"]["nodes"]) == 1
 
-
-def test_workflow_definition_validator_accepts_references_and_bindings():
-    payload = default_workflow_definition()
-    prompt = next(iter(payload["graph"]["nodes"].values()))
-    prompt["references"] = {
-        "agent_id": "reviewer",
-        "repository_id": "progenitor",
-        "mcp_tool": {"server_id": "github", "tool_name": "create_issue"},
-        "skills": [{"source": "native", "name": "managing-mcp"}],
-    }
-    prompt["inputs"] = {
-        "card": {"source": "trigger", "path": "/payload/card"},
-        "prior": {"source": "previous_output", "path": "/"},
-        "priority": {"source": "literal", "value": "high"},
-        "agent": {"source": "reference", "reference": "agent"},
+def _agent_node(title, *, message="Handle it.", input_schema=None, output_schema=None):
+    return {
+        "kind": "agent",
+        "title": title,
+        "message": message,
+        "input_schema": input_schema or {"type": "object", "properties": {}},
+        "output_schema": output_schema or {"type": "object", "properties": {}},
     }
 
-    normalized = validate_workflow_definition_payload(payload)
 
-    node = next(iter(normalized["graph"]["nodes"].values()))
-    assert node["references"]["agent_id"] == "reviewer"
-    assert node["inputs"]["card"]["path"] == "/payload/card"
+def test_default_workflow_wires_an_event_property():
+    normalized = validate_workflow_definition_payload(default_workflow_definition())
+    event_id = _node_id(normalized, "event")
+    agent_id = _node_id(normalized, "agent")
 
-
-def test_workflow_definition_validator_rejects_arbitrary_binding_path():
-    payload = default_workflow_definition()
-    prompt = next(iter(payload["graph"]["nodes"].values()))
-    prompt["inputs"] = {"bad": {"source": "trigger", "path": "payload.card"}}
-
-    with pytest.raises(ValueError, match="binding path"):
-        validate_workflow_definition_payload(payload)
-
-
-def test_workflow_definition_validator_rejects_legacy_specialized_nodes():
-    payload = default_workflow_definition()
-    payload["graph"]["nodes"]["legacy"] = {
-        "kind": "code",
-        "title": "Legacy code",
-        "language": "python",
-        "content": "print('no')",
-    }
-
-    with pytest.raises(ValueError, match="schema validation failed"):
-        validate_workflow_definition_payload(payload)
-
-
-def test_workflow_definition_validator_accepts_column_filtered_moved_trigger():
-    payload = default_workflow_definition(event_type="kanban.card.moved")
-    payload["trigger"]["from_column"] = "backlog"
-    payload["trigger"]["to_column"] = "plan"
-
-    normalized = validate_workflow_definition_payload(payload)
-
-    assert normalized["trigger"]["to_column"] == "plan"
-
-
-def test_workflow_definition_validator_rejects_unknown_column():
-    payload = default_workflow_definition(event_type="kanban.card.moved")
-    payload["trigger"]["to_column"] = "not-a-real-column"
-
-    with pytest.raises(ValueError, match="schema validation failed"):
-        validate_workflow_definition_payload(payload)
-
-
-def test_workflow_definition_validator_rejects_cycles():
-    payload = default_workflow_definition()
-    prompt_a_id = next(iter(payload["graph"]["nodes"]))
-    prompt_b_id = "prompt_cycle"
-    payload["graph"]["nodes"][prompt_b_id] = {
-        "kind": "prompt",
-        "title": "Cycle prompt",
-        "prompt": "Create a cycle",
-        "agent_name": "progenitor",
-    }
-    payload["graph"]["edges"] = [
+    event = normalized["graph"]["nodes"][event_id]
+    agent = normalized["graph"]["nodes"][agent_id]
+    assert "thread_id" not in event["output_schema"]["properties"]
+    assert agent["input_schema"]["properties"]["event_type"] == {"type": "string"}
+    assert normalized["graph"]["edges"] == [
         {
-            "from": {"node": prompt_a_id, "port": "default"},
-            "to": {"node": prompt_b_id, "port": "default"},
-        },
-        {
-            "from": {"node": prompt_b_id, "port": "default"},
-            "to": {"node": prompt_a_id, "port": "default"},
-        },
-    ]
-
-    with pytest.raises(ValueError, match="root node|acyclic"):
-        validate_workflow_definition_payload(payload)
-
-
-def test_ordered_workflow_nodes_uses_graph_root_not_event_node():
-    payload = default_workflow_definition()
-    prompt_a_id = next(iter(payload["graph"]["nodes"]))
-    prompt_b_id = "prompt_followup"
-    payload["graph"]["nodes"][prompt_b_id] = {
-        "kind": "prompt",
-        "title": "Follow-up",
-        "prompt": "Continue",
-        "agent_name": "progenitor",
-    }
-    payload["graph"]["edges"] = [
-        {
-            "from": {"node": prompt_a_id, "port": "default"},
-            "to": {"node": prompt_b_id, "port": "default"},
+            "from": {"node": event_id, "port": "event_type"},
+            "to": {"node": agent_id, "port": "event_type"},
         }
     ]
-    definition = validate_workflow_definition_payload(payload)
 
-    from app.progenitor.workflows import WorkflowDefinition
 
-    assert ordered_workflow_node_ids(WorkflowDefinition.model_validate(definition)) == [
-        prompt_a_id,
-        prompt_b_id,
+def test_workflow_edges_have_no_control_kind():
+    payload = default_workflow_definition()
+    payload["graph"]["edges"][0]["kind"] = "control"
+
+    with pytest.raises(ValueError, match="schema validation failed"):
+        validate_workflow_definition_payload(payload)
+
+
+def test_connected_property_is_the_execution_dependency():
+    payload = default_workflow_definition()
+    event_id = _node_id(payload, "event")
+    source_id = _node_id(payload, "agent")
+    target_id = "agent_consumer"
+    payload["graph"]["nodes"][source_id] = _agent_node(
+        "Source",
+        input_schema={
+            "type": "object",
+            "required": ["event_type"],
+            "properties": {"event_type": {"type": "string"}},
+        },
+        output_schema={
+            "type": "object",
+            "required": ["title"],
+            "properties": {"title": {"type": "string"}},
+        },
+    )
+    payload["graph"]["nodes"][target_id] = _agent_node(
+        "Consumer",
+        input_schema={
+            "type": "object",
+            "required": ["title"],
+            "properties": {"title": {"type": "string"}},
+        },
+    )
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "event_type"},
+            "to": {"node": source_id, "port": "event_type"},
+        },
+        {"from": {"node": source_id, "port": "title"}, "to": {"node": target_id, "port": "title"}},
+    ]
+
+    normalized = validate_workflow_definition_payload(payload)
+    assert ordered_workflow_node_ids(WorkflowDefinition.model_validate(normalized)) == [
+        source_id,
+        target_id,
     ]
 
 
-def test_workflow_definition_accepts_multiple_property_edges_between_one_node_pair():
+def test_executable_node_without_connection_is_rejected():
     payload = default_workflow_definition()
-    source_id = next(iter(payload["graph"]["nodes"]))
-    target_id = "prompt_consumer"
-    source = payload["graph"]["nodes"][source_id]
-    source["output_schema"] = {
+    payload["graph"]["edges"] = []
+
+    with pytest.raises(ValueError, match="no inbound connection"):
+        validate_workflow_definition_payload(payload)
+
+
+def test_required_input_must_have_a_connected_property():
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    payload["graph"]["nodes"][agent_id]["input_schema"] = {
         "type": "object",
-        "properties": {"title": {"type": "string"}, "priority": {"type": "string"}},
+        "required": ["card"],
+        "properties": {"card": {"type": "object"}, "event_type": {"type": "string"}},
     }
-    payload["graph"]["nodes"][target_id] = {
-        "kind": "prompt",
-        "title": "Consumer",
-        "prompt": "Use the connected fields.",
-        "agent_name": "progenitor",
-        "inputs": {
-            "title": {"source": "previous_output", "path": "/title"},
-            "priority": {"source": "previous_output", "path": "/priority"},
+    event_id = _node_id(payload, "event")
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "event_type"},
+            "to": {"node": agent_id, "port": "event_type"},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="required input 'card'"):
+        validate_workflow_definition_payload(payload)
+
+
+def test_duplicate_input_connection_is_rejected():
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    data_id = "data_event_type"
+    payload["graph"]["nodes"][data_id] = {
+        "kind": "data",
+        "title": "Event type",
+        "value": "manual",
+        "output_schema": {"type": "string"},
+    }
+    payload["graph"]["edges"].append(
+        {"from": {"node": data_id, "port": "value"}, "to": {"node": agent_id, "port": "event_type"}}
+    )
+
+    with pytest.raises(ValueError, match="more than one edge"):
+        validate_workflow_definition_payload(payload)
+
+
+def test_cycle_of_connected_properties_is_rejected():
+    payload = default_workflow_definition()
+    event_id = _node_id(payload, "event")
+    first_id = _node_id(payload, "agent")
+    second_id = "agent_second"
+    schema = {"type": "object", "required": ["value"], "properties": {"value": {"type": "string"}}}
+    output = {"type": "object", "properties": {"value": {"type": "string"}}}
+    payload["graph"]["nodes"][first_id] = _agent_node(
+        "First", input_schema=schema, output_schema=output
+    )
+    payload["graph"]["nodes"][second_id] = _agent_node(
+        "Second", input_schema=schema, output_schema=output
+    )
+    payload["graph"]["edges"] = [
+        {
+            "from": {"node": event_id, "port": "event_type"},
+            "to": {"node": first_id, "port": "value"},
         },
+        {"from": {"node": first_id, "port": "value"}, "to": {"node": second_id, "port": "value"}},
+        {"from": {"node": second_id, "port": "value"}, "to": {"node": first_id, "port": "value"}},
+    ]
+
+    with pytest.raises(ValueError, match="more than one edge|acyclic"):
+        validate_workflow_definition_payload(payload)
+
+
+def test_condition_and_approval_expose_selected_value_ports():
+    payload = default_workflow_definition()
+    agent_id = _node_id(payload, "agent")
+    condition_id = "condition_gate"
+    payload["graph"]["nodes"][condition_id] = {
+        "kind": "condition",
+        "title": "Gate",
+        "expression": "ready",
+        "input_schema": {
+            "type": "object",
+            "required": ["ready"],
+            "properties": {"ready": {"type": "boolean"}},
+        },
+    }
+    payload["graph"]["nodes"][agent_id] = _agent_node(
+        "Consumer",
+        input_schema={
+            "type": "object",
+            "required": ["result"],
+            "properties": {"result": {"type": "boolean"}},
+        },
+    )
+    payload["graph"]["nodes"]["data_ready"] = {
+        "kind": "data",
+        "title": "Ready",
+        "value": True,
+        "output_schema": {"type": "boolean"},
     }
     payload["graph"]["edges"] = [
         {
-            "from": {"node": source_id, "port": "out:/title"},
-            "to": {"node": target_id, "port": "in:title"},
+            "from": {"node": "data_ready", "port": "value"},
+            "to": {"node": condition_id, "port": "ready"},
         },
         {
-            "from": {"node": source_id, "port": "out:/priority"},
-            "to": {"node": target_id, "port": "in:priority"},
+            "from": {"node": condition_id, "port": "true"},
+            "to": {"node": agent_id, "port": "result"},
         },
     ]
 
     normalized = validate_workflow_definition_payload(payload)
-
-    assert len(normalized["graph"]["edges"]) == 2
-    assert normalized["graph"]["nodes"][target_id]["inputs"]["priority"]["path"] == "/priority"
-
-
-@pytest.mark.parametrize(
-    ("kind", "field", "value"),
-    [
-        ("saved_prompt", "prompt_path", "/prompts/review.md"),
-        ("agent", "agent_id", "reviewer"),
-        ("knowledge", "knowledge_base_id", "architecture"),
-        ("repository", "repository_id", "progenitor"),
-        ("kanban", "kanban_card_id", "card-42"),
-        ("inbox", "inbox_message_id", "message-42"),
-        ("routine", "routine_id", "daily-review"),
-    ],
-)
-def test_workflow_definition_validator_accepts_typed_capability_nodes(kind, field, value):
-    payload = default_workflow_definition()
-    node_id = next(iter(payload["graph"]["nodes"]))
-    node = payload["graph"]["nodes"][node_id]
-    node.update({"kind": kind, "title": f"Typed {kind}", field: value})
-    if kind == "routine":
-        node["routine_revision"] = 1
-
-    normalized = validate_workflow_definition_payload(payload)
-
-    assert normalized["graph"]["nodes"][node_id]["kind"] == kind
-    assert normalized["graph"]["nodes"][node_id][field] == value
-
-
-@pytest.mark.parametrize(
-    ("schema_name", "node"),
-    [
-        (
-            "node_prompt.workflow",
-            {
-                "kind": "prompt",
-                "title": "Prompt",
-                "prompt": "Handle the event.",
-                "agent_name": "progenitor",
-            },
-        ),
-        (
-            "node_saved_prompt.workflow",
-            {
-                "kind": "saved_prompt",
-                "title": "Saved prompt",
-                "prompt": "Handle the event.",
-                "agent_name": "progenitor",
-                "prompt_path": "/prompts/review",
-            },
-        ),
-        (
-            "node_agent.workflow",
-            {
-                "kind": "agent",
-                "title": "Agent",
-                "prompt": "Delegate the event.",
-                "agent_name": "progenitor",
-                "agent_id": "reviewer",
-            },
-        ),
-        (
-            "node_knowledge.workflow",
-            {
-                "kind": "knowledge",
-                "title": "Knowledge",
-                "prompt": "Search for context.",
-                "agent_name": "progenitor",
-                "knowledge_base_id": "product",
-            },
-        ),
-        (
-            "node_repository.workflow",
-            {
-                "kind": "repository",
-                "title": "Repository",
-                "prompt": "Review the code.",
-                "agent_name": "progenitor",
-                "repository_id": "progenitor",
-            },
-        ),
-        (
-            "node_kanban.workflow",
-            {
-                "kind": "kanban",
-                "title": "Kanban",
-                "prompt": "Handle the card.",
-                "agent_name": "progenitor",
-                "kanban_card_id": "card-42",
-            },
-        ),
-        (
-            "node_ask_user.workflow",
-            {
-                "kind": "ask_user",
-                "title": "Ask user",
-                "prompt": "Ask for a decision.",
-                "agent_name": "progenitor",
-            },
-        ),
-        (
-            "node_inbox.workflow",
-            {
-                "kind": "inbox",
-                "title": "Inbox",
-                "prompt": "Use the message.",
-                "agent_name": "progenitor",
-                "inbox_message_id": "message-42",
-            },
-        ),
-        (
-            "node_routine.workflow",
-            {
-                "kind": "routine",
-                "title": "Routine",
-                "prompt": "Run the routine.",
-                "agent_name": "progenitor",
-                "routine_id": "daily-review",
-                "routine_revision": 1,
-            },
-        ),
-        (
-            "node_condition.workflow",
-            {
-                "kind": "condition",
-                "title": "Condition",
-                "expression": "payload.card.priority == 'high'",
-            },
-        ),
-        (
-            "node_approval.workflow",
-            {"kind": "approval", "title": "Approval", "message": "Approve this action."},
-        ),
-        (
-            "node_mcp.workflow",
-            {"kind": "mcp", "title": "MCP", "server_id": "github", "tool_name": "create_issue"},
-        ),
-    ],
-)
-def test_current_workflow_node_schemas_are_independently_loadable(schema_name, node):
-    schema = load_schema(schema_name)
-    definition_schema = load_schema("definition.workflow")
-    definition_variant = next(
-        variant
-        for variant in definition_schema["properties"]["graph"]["properties"]["nodes"][
-            "additionalProperties"
-        ]["oneOf"]
-        if variant["properties"]["kind"]["const"] == node["kind"]
-    )
-
-    assert {
-        key: schema[key] for key in ("type", "additionalProperties", "required", "properties")
-    } == definition_variant
-
-    assert schema["properties"]["kind"]["const"] == node["kind"]
-    assert validate_against_schema(node, schema) is None
+    assert normalized["graph"]["nodes"][condition_id]["output_schema"]["properties"]["true"] == {
+        "type": "boolean"
+    }

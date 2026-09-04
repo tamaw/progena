@@ -367,37 +367,16 @@
 }
 
 
-.workflow-graph-node--prompt {
-  --workflow-node-color: #58a6ff;
+.workflow-graph-node--trigger {
+  --workflow-node-color: #ffa657;
 }
 
 .workflow-graph-node--agent {
-  --workflow-node-color: #f85149;
+  --workflow-node-color: #58a6ff;
 }
 
-.workflow-graph-node--knowledge {
+.workflow-graph-node--data {
   --workflow-node-color: #3fb950;
-}
-
-.workflow-graph-node--repository {
-  --workflow-node-color: #d29922;
-}
-
-.workflow-graph-node--kanban,
-.workflow-graph-node--trigger {
-  --workflow-node-color: #f2cc60;
-}
-
-.workflow-graph-node--ask_user {
-  --workflow-node-color: #39c5cf;
-}
-
-.workflow-graph-node--inbox {
-  --workflow-node-color: #bc8cff;
-}
-
-.workflow-graph-node--routine {
-  --workflow-node-color: #2dd4bf;
 }
 
 .workflow-graph-node--mcp {
@@ -405,11 +384,15 @@
 }
 
 .workflow-graph-node--condition {
-  --workflow-node-color: #ffa657;
+  --workflow-node-color: #d29922;
 }
 
 .workflow-graph-node--approval {
-  --workflow-node-color: #3fb950;
+  --workflow-node-color: #f85149;
+}
+
+.workflow-graph-node--human_input {
+  --workflow-node-color: #39c5cf;
 }
 
 .workflow-graph-node .node-type-icon {
@@ -424,6 +407,35 @@
 
 .workflow-graph-node .canvas-handle {
   background: var(--workflow-node-color);
+}
+
+
+.react-flow__edge.workflow-edge--data .react-flow__edge-path {
+  stroke: var(--color-text-muted, #8b949e);
+  stroke-width: 1.5px;
+  stroke-dasharray: 5 4;
+  animation: dashdraw 1.8s linear infinite;
+}
+
+.workflow-canvas--pointer .react-flow__pane {
+  cursor: default;
+}
+
+.workflow-canvas--grab .react-flow__pane {
+  cursor: grab;
+}
+
+.workflow-canvas--grab .react-flow__pane:active {
+  cursor: grabbing;
+}
+
+.workflow-canvas--cut .react-flow__pane {
+  cursor: crosshair;
+}
+
+.workflow-canvas--cut .react-flow__edge,
+.workflow-canvas--cut .react-flow__edge-path {
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Ccircle cx='4' cy='12' r='1.7' fill='none' stroke='%23e6edf3' stroke-width='1.3'/%3E%3Ccircle cx='12' cy='12' r='1.7' fill='none' stroke='%23e6edf3' stroke-width='1.3'/%3E%3Cpath d='m5.3 10.7 5.4-7.4M10.7 10.7 5.3 3.3' fill='none' stroke='%23e6edf3' stroke-linecap='round' stroke-width='1.3'/%3E%3C/svg%3E") 8 8, crosshair;
 }
 
 .workflow-graph-node.selected {
@@ -707,6 +719,13 @@
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
 }
 
+.workflow-node-menu--cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  transform: translateY(8px);
+}
+
 .workflow-node-menu__filter {
   display: block;
   padding: 9px;
@@ -937,7 +956,9 @@
   transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
-.canvas-dock-item:hover .canvas-dock-tooltip {
+.canvas-dock-item:hover .canvas-dock-tooltip,
+.canvas-toolbar-button:hover .canvas-dock-tooltip,
+.canvas-toolbar-button:focus-visible .canvas-dock-tooltip {
   opacity: 1;
   transform: translateX(-50%) translateY(0);
 }
