@@ -60,17 +60,25 @@ docker compose -f docker/docker-compose.progenitor.yml logs -f frontend
 ## Network and ports
 
 Current compose behavior:
-- Only the frontend is published to the host: `80:80`
+- Only the frontend is published to the host, bound to localhost: `127.0.0.1:8081:443`
 - The backend listens on port `8000` **inside** the compose networks only
 - The Progenitor HTTP server listens on port `9501` inside the compose networks
 - The backend connects to the runtime with `PROGENITOR_RUNTIME_URL=http://progenitor:9501`
 - The compose file attaches services to an internal bridge network and the external `progenitor_network`
 
-Because the backend is not host-published, host access normally goes through nginx on `http://localhost`:
-- UI: `http://localhost/`
-- Proxied API: `http://localhost/v1/...` and `http://localhost/api/ui/...`
+The intended public deployment places a host-level nginx and an external OAuth2
+proxy in front of the stack. Nginx terminates TLS, calls the OAuth2 proxy's
+`/oauth2/auth` endpoint for authentication, and proxies authenticated traffic to
+`https://127.0.0.1:8081`. The OAuth2 proxy is deliberately not part of this
+Compose project; keep its credentials and provider configuration in the host
+deployment. See `docs/nginx/progena.tama.id.au.conf.example` for a template.
 
-If you need direct host access to backend port `8000`, add your own port mapping to the compose file or use a one-off override file.
+Because the frontend is localhost-bound, direct public access cannot bypass the
+nginx/OAuth2 authentication layer. The backend and runtime remain internal to
+the Docker networks.
+
+If you need direct host access to backend port `8000`, add your own port mapping
+to a one-off override file; do not expose it in the public deployment.
 
 ## Volumes and ephemeral storage
 
