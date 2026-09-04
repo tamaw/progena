@@ -146,7 +146,9 @@ services:
       backend:
         condition: service_started
     ports:
-      - "443:443"
+      # The host nginx terminates public TLS and performs authentication.
+      # Keep the frontend reachable only from localhost so it cannot bypass auth.
+      - "127.0.0.1:8081:443"
     networks:
       - progenitor-net
       - progenitor_network
