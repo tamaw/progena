@@ -56,6 +56,7 @@ from .state_backend import (
     create_knowledge_state_file,
     create_marketplaces_state_file,
     create_mcp_state_file,
+    create_model_profiles_state_file,
     create_plugins_state_file,
     create_preferences_state_file,
     create_registry_state_file,
@@ -186,6 +187,7 @@ def create_progenitor_backend(
             create_repo_scan_state_file,
             create_health_state_file,
             create_preferences_state_file,
+            create_model_profiles_state_file,
         ]
         routes["/config/"] = StateDocumentBackend(
             [factory(state_manager) for factory in state_file_factories]

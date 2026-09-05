@@ -793,6 +793,9 @@ def _object_agent_profile(
             for permission in manifest.permissions
         ],
         "interrupt_on": manifest.interrupt_on,
+        "mounts": [
+            {"path": mount.path, "access": mount.access} for mount in manifest.mounts
+        ],
     }
     front_matter: Mapping[str, Any] = {}
     if raw_content is not None:
