@@ -264,7 +264,7 @@ export function ACPDetailBody({ agent }) {
 // interrupt_on) are skipped here to avoid showing the same data twice, as
 // is `name`, which is already the page's detail-header title above this
 // card.
-const FRONT_MATTER_DEDICATED_KEYS = new Set(['name', 'tools', 'skills', 'permissions', 'interrupt_on']);
+const FRONT_MATTER_DEDICATED_KEYS = new Set(['name', 'tools', 'skills', 'mounts', 'permissions', 'interrupt_on']);
 
 function humanizeKey(key) {
   return key.replace(/_/g, ' ').replace(/^./, (char) => char.toUpperCase());

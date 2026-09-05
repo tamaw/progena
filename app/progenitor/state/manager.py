@@ -27,6 +27,7 @@ from . import (
     background_store,
 )
 from .langgraph_store import LangGraphRuntimeStore
+from .model_profiles import default_model_profiles_payload
 from .models import (
     A2ATaskRecord,
     ACPTaskRecord,
@@ -150,6 +151,7 @@ class StateManager:
             "marketplaces": default_marketplaces_config_payload(),
             "knowledge": {"bases": []},
             "preferences": default_preferences_payload(),
+            "profile": default_model_profiles_payload(),
             "mcp_tools": {"tools": []},
             "schedule": default_schedule_config_payload(),
             "health": {},
@@ -439,6 +441,19 @@ class StateManager:
     async def save_preferences_config(self, payload: dict[str, Any]) -> None:
         """Persist the preferences document to the shared runtime store."""
         await self._save_runtime_document("preferences", payload)
+
+    # ==========================================================================
+    # Model profiles
+    # ==========================================================================
+    async def get_model_profiles_config(self) -> dict[str, Any]:
+        """Return the shared model profile map behind ``/config/profile.json``."""
+        default = default_model_profiles_payload()
+        payload = await self._runtime_store.get_document("profile", default)
+        return payload if isinstance(payload, dict) else default
+
+    async def save_model_profiles_config(self, payload: dict[str, Any]) -> None:
+        """Persist the validated shared model profile map."""
+        await self._save_runtime_document("profile", payload)
 
     # ==========================================================================
     # Kanban board

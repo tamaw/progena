@@ -5,6 +5,11 @@ version: 1.1.0
 kind: object
 tools: []
 skills: [/skills/managing-repos]
+mounts:
+  - path: /skills/managing-repos/
+    access: read
+  - path: /repos/
+    access: read
 shell: true
 env_passthrough: [GH_TOKEN, GITHUB_TOKEN]
 ---

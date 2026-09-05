@@ -37,6 +37,19 @@
       "items": { "type": "string" },
       "description": "Skill source paths wired into SkillsMiddleware (e.g. /skills/<name>/)."
     },
+    "mounts": {
+      "type": "array",
+      "description": "Explicit virtual filesystem paths available to the agent. Paths must be beneath an existing Progenitor route.",
+      "items": {
+        "type": "object",
+        "required": ["path", "access"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "pattern": "^/" },
+          "access": { "enum": ["read", "read-write"] }
+        }
+      }
+    },
     "permissions": {
       "type": "array",
       "items": {

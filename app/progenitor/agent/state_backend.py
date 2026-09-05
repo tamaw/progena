@@ -48,6 +48,10 @@ from ..routines.store import (
 from ..runtime.thread_context import get_current_thread_id
 from ..schedule.engine import parse_schedule_datetime
 from ..schemas import check_entry_schema
+from ..state.model_profiles import (
+    default_model_profiles_payload,
+    validate_model_profiles_document,
+)
 from ..state.models import ScheduleEntry
 from ..state.preferences import default_preferences_payload, validate_preferences_document
 from ..utils import utcnow, utcnow_isoformat
@@ -652,6 +656,17 @@ def create_preferences_state_file(
         validate=validate_preferences_document,
         default=default_preferences_payload(),
         on_change=on_change,
+    )
+
+
+def create_model_profiles_state_file(state_manager: Any) -> StateFile:
+    """Build the provider/deployment map exposed as ``/config/profile.json``."""
+    return _simple_state_file(
+        "profile.json",
+        get=state_manager.get_model_profiles_config,
+        save=state_manager.save_model_profiles_config,
+        validate=validate_model_profiles_document,
+        default=default_model_profiles_payload(),
     )
 
 
