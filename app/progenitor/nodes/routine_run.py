@@ -51,8 +51,8 @@ async def routine_run_node(
     if not routine_id:
         return {"cycle_error": "routine_run: missing routine_id in task metadata"}
 
-    routine_runner = getattr(runtime.context, "routine_runner", None)
-    if not callable(routine_runner):
+    routine_runner = runtime.context.routine_runner
+    if routine_runner is None:
         return {"cycle_error": "routine_run: routine runner unavailable"}
 
     session_id = str(metadata.get("session_id") or "").strip() or None

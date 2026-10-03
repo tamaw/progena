@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 from deepagents.backends import CompositeBackend
-from deepagents.middleware.filesystem import supports_execution
+from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 
 from app.progenitor.agent.object_agents import (
     ObjectAgentSource,
@@ -54,7 +54,11 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path):
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        lambda **_kwargs: object(),
+    )
     proxy = create_object_agent_proxy(
         source,
         state_manager=_StateManager(),
@@ -67,7 +71,12 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path):
         shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
     )
     await proxy["runnable"].ainvoke({"messages": []})
-    return calls[0]["backend"]
+    filesystem = next(
+        middleware
+        for middleware in calls[0]["middleware"]
+        if isinstance(middleware, FilesystemMiddleware)
+    )
+    return filesystem.backend
 
 
 def test_shell_manifest_defaults():
@@ -103,7 +112,9 @@ async def test_shell_proxy_exposes_execute_capability(monkeypatch, tmp_path: Pat
     backend = await _compiled_backend(monkeypatch, _source(tmp_path, SHELL_SYSTEM), tmp_path)
 
     assert supports_execution(backend)
-    assert backend.default.cwd == tmp_path / "repos"
+    assert backend.default.cwd == (
+        tmp_path / "repos" / ".object-agent-workspaces" / "shell-reviewer"
+    )
     assert backend.default._default_timeout == 120
 
 
@@ -117,7 +128,11 @@ async def test_non_shell_proxy_does_not_expose_execute_capability(monkeypatch, t
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        lambda **_kwargs: object(),
+    )
     proxy = create_object_agent_proxy(
         source,
         state_manager=_StateManager(),
@@ -129,30 +144,24 @@ async def test_non_shell_proxy_does_not_expose_execute_capability(monkeypatch, t
     )
     await proxy["runnable"].ainvoke({"messages": []})
 
-    assert not supports_execution(calls[0]["backend"])
+    assert not any(
+        isinstance(middleware, FilesystemMiddleware)
+        for middleware in calls[0]["middleware"]
+    )
 
 
 @pytest.mark.asyncio
 async def test_shell_proxy_rejects_unrouted_permissions(monkeypatch, tmp_path: Path):
     content = SHELL_SYSTEM.replace(
+        "tools: []\n",
+        "tools: []\nmounts:\n  - path: /repos/\n    access: read\n",
+    ).replace(
         "shell: true\nenv_passthrough: []\n",
         "permissions:\n  - operations: [read]\n    paths: [/nope/]\nshell: true\nenv_passthrough: []\n",
     )
-    source = _source(tmp_path, content)
-    proxy = create_object_agent_proxy(
-        source,
-        state_manager=_StateManager(),
-        model="model",
-        tools=[],
-        backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
-        checkpointer=object(),
-        agent_specs=lambda _caller: [],
-        worktree_dir=tmp_path / "repos",
-        shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
-    )
 
-    with pytest.raises(ValueError, match="mounted route prefix"):
-        await proxy["runnable"].ainvoke({"messages": []})
+    with pytest.raises(ValueError, match="outside declared mounts"):
+        _source(tmp_path, content)
 
 
 def test_shell_environment_is_scrubbed_and_explicit():

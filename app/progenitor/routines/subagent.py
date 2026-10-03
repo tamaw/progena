@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, cast
 
 from deepagents.middleware.subagents import CompiledSubAgent
 from langchain_core.language_models import BaseChatModel
@@ -54,7 +54,11 @@ async def resolve_routine_document(
     list_graphs = getattr(state_manager, "list_routine_graphs", None)
     if not callable(list_graphs):
         return None
-    for graph_doc in await list_graphs():
+    typed_list_graphs = cast(
+        Callable[[], Awaitable[list[dict[str, Any]]]],
+        list_graphs,
+    )
+    for graph_doc in await typed_list_graphs():
         if not isinstance(graph_doc, dict):
             continue
         graph_id = str(graph_doc.get("id") or "").strip()
