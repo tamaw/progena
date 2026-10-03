@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent
@@ -34,6 +35,35 @@ logger = logging.getLogger(__name__)
 ROUTINE_REVISIONS_STATE_KEY = "routine_revisions"
 
 
+async def resolve_routine_document(
+    state_manager: Any, routine_id_or_name: str
+) -> tuple[str, dict[str, Any]] | None:
+    """Resolve a routine document by its stored id, or by its display name.
+
+    Routine documents remain the source of truth.  The name fallback is used
+    by nested routine nodes, whose schema stores ``routine_name`` rather than
+    a separate foreign-key record.
+    """
+    requested = str(routine_id_or_name or "").strip()
+    if not requested:
+        return None
+    direct = await state_manager.get_routine_graph(requested)
+    if isinstance(direct, dict):
+        canonical_id = str(direct.get("id") or requested).strip()
+        return canonical_id, direct
+    list_graphs = getattr(state_manager, "list_routine_graphs", None)
+    if not callable(list_graphs):
+        return None
+    for graph_doc in await list_graphs():
+        if not isinstance(graph_doc, dict):
+            continue
+        graph_id = str(graph_doc.get("id") or "").strip()
+        graph_name = str(graph_doc.get("name") or "").strip()
+        if requested in {graph_id, graph_name} and graph_id:
+            return graph_id, graph_doc
+    return None
+
+
 def create_routine_subagent(
     *,
     routine_id: str,
@@ -43,6 +73,7 @@ def create_routine_subagent(
     revision_reader: RoutineRevisionReader,
     agent_registry: dict[str, Any],
     routine_registry: dict[str, Any],
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
 ) -> CompiledSubAgent:
@@ -121,6 +152,7 @@ def create_routine_subagent(
                     model=model,
                     agent_registry=agent_registry,
                     routine_registry=routine_registry,
+                    routine_runner=routine_runner,
                     tool_registry=tool_registry,
                     base_system_prompt=None,
                     checkpointer=checkpointer,
@@ -254,7 +286,8 @@ async def resume_routine_thread(
     state_manager: Any,
     revision_reader: RoutineRevisionReader,
     agent_registry: dict[str, Any],
-    routine_registry: dict[str, Any],
+    routine_registry: dict[str, Any] | None = None,
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
 ) -> dict[str, Any]:
@@ -281,6 +314,7 @@ async def resume_routine_thread(
         model=model,
         agent_registry=agent_registry,
         routine_registry=routine_registry,
+        routine_runner=routine_runner,
         tool_registry=tool_registry,
         base_system_prompt=None,
         checkpointer=checkpointer,

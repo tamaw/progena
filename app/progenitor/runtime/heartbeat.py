@@ -141,6 +141,7 @@ class ProgenitorLoop:
             llm_reasoning_effort=str(
                 getattr(getattr(self.config, "llm", None), "reasoning_effort", "") or ""
             ),
+            routine_runner=getattr(self.graph, "routine_runner", None),
         )
         validate_heartbeat_context(self._heartbeat_context)
         self._heartbeat_graph = create_runtime_heartbeat_graph()

@@ -13,6 +13,7 @@ from app.progenitor.agent.state import ProgenitorAgentState
 from app.progenitor.routines.subagent import (
     ROUTINE_REVISIONS_STATE_KEY,
     create_routine_subagent,
+    resolve_routine_document,
     resume_routine_thread,
 )
 
@@ -90,6 +91,19 @@ class _FakeStateManager:
         return self._graph_doc
 
 
+class _MultiRoutineStateManager:
+    def __init__(self, graphs: dict[str, dict[str, Any]]):
+        self.graphs = graphs
+        self.get_calls: list[str] = []
+
+    async def get_routine_graph(self, routine_id: str) -> dict[str, Any] | None:
+        self.get_calls.append(routine_id)
+        return self.graphs.get(routine_id)
+
+    async def list_routine_graphs(self) -> list[dict[str, Any]]:
+        return list(self.graphs.values())
+
+
 def _spec(reader, state_manager=None, model=None, agent_registry=None):
     return create_routine_subagent(
         routine_id=ROUTINE_ID,
@@ -100,6 +114,26 @@ def _spec(reader, state_manager=None, model=None, agent_registry=None):
         agent_registry=agent_registry or {},
         routine_registry={},
     )
+
+
+def _ephemeral_runner(state_manager, reader, model):
+    async def run(routine_id_or_name, state, runtime=None):
+        resolved = await resolve_routine_document(state_manager, routine_id_or_name)
+        assert resolved is not None
+        routine_id, graph_doc = resolved
+        spec = create_routine_subagent(
+            routine_id=routine_id,
+            description=str(graph_doc.get("description") or "test"),
+            model=model,
+            state_manager=state_manager,
+            revision_reader=reader,
+            agent_registry={},
+            routine_registry={},
+            routine_runner=run,
+        )
+        return await spec["runnable"].ainvoke(state)
+
+    return run
 
 
 @pytest.mark.asyncio
@@ -113,6 +147,53 @@ async def test_runs_latest_and_pins_revision():
 
     assert result[ROUTINE_REVISIONS_STATE_KEY] == {ROUTINE_ID: "rev-a"}
     assert result["messages"][-1].content == "rev-a output"
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_runner_create_then_edit_runs_without_runtime_restart():
+    manager = _MultiRoutineStateManager({ROUTINE_ID: _graph_doc("created output")})
+    reader = _FakeRevisionReader({})
+    runner = _ephemeral_runner(manager, reader, _EchoModel())
+
+    first = await runner(ROUTINE_ID, {"messages": [HumanMessage("run")]})
+    assert first["messages"][-1].content == "created output"
+
+    manager.graphs[ROUTINE_ID] = _graph_doc("edited output")
+    second = await runner(ROUTINE_ID, {"messages": [HumanMessage("run")]})
+    assert second["messages"][-1].content == "edited output"
+    assert manager.get_calls.count(ROUTINE_ID) >= 4
+
+
+@pytest.mark.asyncio
+async def test_ephemeral_runner_nested_routine_resolves_by_name():
+    child_id = "routine-child"
+    parent_id = "routine-parent"
+    child = _graph_doc("child output")
+    child["id"] = child_id
+    child["name"] = "Child Routine"
+    parent = {
+        "id": parent_id,
+        "name": "Parent Routine",
+        "description": "parent",
+        "version": "2.0.0",
+        "entry": "delegate",
+        "nodes": [
+            {
+                "id": "delegate",
+                "kind": "routine",
+                "output_key": "delegate",
+                "config": {"routine_name": "Child Routine"},
+            }
+        ],
+        "edges": [],
+    }
+    manager = _MultiRoutineStateManager({parent_id: parent, child_id: child})
+    runner = _ephemeral_runner(manager, _FakeRevisionReader({}), _EchoModel())
+
+    result = await runner(parent_id, {"messages": [HumanMessage("run")]})
+
+    assert result["messages"][-1].content == "child output"
+    assert "Child Routine" in manager.get_calls
 
 
 @pytest.mark.asyncio

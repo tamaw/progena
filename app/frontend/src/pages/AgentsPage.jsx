@@ -349,8 +349,14 @@ export function AgentWorkspace({ page }) {
   const agentsUrl = getApiUrl('agentProfiles');
 
   const handleNewAgent = useCallback(() => {
+    if (isRoutines) {
+      window.dispatchEvent(new CustomEvent('progenitor:open-quick-chat', {
+        detail: { mode: 'routine-create' },
+      }));
+      return;
+    }
     setNewAgentOpen(true);
-  }, []);
+  }, [isRoutines]);
 
   const handlePickType = useCallback((kind) => {
     setDraftAgent(makeDraftAgent(kind));

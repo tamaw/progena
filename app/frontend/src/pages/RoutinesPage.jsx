@@ -4,6 +4,7 @@ const ROUTINES_PAGE = {
   kind: 'routines',
   basePath: '/routines',
   listLabel: 'Routines',
+  createLabel: '+ New',
   searchPlaceholder: 'Search routines...',
   sortTitle: 'Sort routines',
 };
