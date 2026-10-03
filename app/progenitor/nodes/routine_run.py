@@ -8,10 +8,10 @@ model could narrate instead of executing).
 
 This node sidesteps that: it is only entered when a queued background task's
 metadata explicitly marks ``kind: "routine_run"`` (see the
-``POST /agent-profiles/{agent_id}/run`` backend route), and it calls the
-routine's already-compiled subagent runnable directly -- the same runnable
-``task()`` would have invoked, with the same model/registries/checkpointer,
-just without an LLM deciding to call it. No chat message, no narration risk.
+``POST /agent-profiles/{agent_id}/run`` backend route), and it invokes the
+runtime's ephemeral Postgres-backed routine runner directly -- without an
+in-memory registry of compiled routines and without an LLM deciding to call
+it. No chat message, no narration risk.
 """
 
 from __future__ import annotations
@@ -51,10 +51,9 @@ async def routine_run_node(
     if not routine_id:
         return {"cycle_error": "routine_run: missing routine_id in task metadata"}
 
-    routine_registry = getattr(runtime.context.agent_graph, "routine_registry", None) or {}
-    runnable = routine_registry.get(routine_id)
-    if runnable is None:
-        return {"cycle_error": f"routine_run: unknown or unregistered routine '{routine_id}'"}
+    routine_runner = getattr(runtime.context, "routine_runner", None)
+    if not callable(routine_runner):
+        return {"cycle_error": "routine_run: routine runner unavailable"}
 
     session_id = str(metadata.get("session_id") or "").strip() or None
     target_node = str(metadata.get("target_node") or "").strip() or None
@@ -68,7 +67,7 @@ async def routine_run_node(
         }
         if isinstance(parameters, dict) and parameters:
             invoke_input["parameters"] = parameters
-        result = await runnable.ainvoke(invoke_input)
+        result = await routine_runner(routine_id, invoke_input)
     except Exception as exc:  # noqa: BLE001 - convert to cycle_error like cycle_node does
         logger.warning("routine_run node failed for %r: %s", routine_id, exc)
         return {"cycle_error": f"routine '{routine_id}' failed: {exc}"}

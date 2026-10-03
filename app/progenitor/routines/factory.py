@@ -6,9 +6,10 @@ backstop are all wired here; a router edge's own branches are how a graph author
 expresses a *conditional* loop (see :func:`_build_router`) -- there is no separate
 "loop" node kind or setting, since LangGraph's conditional-edge mechanism already
 covers it and a parallel mechanism would just be a second way to say the same thing.
-Nothing in the live progenitor runtime invokes a compiled routine yet -- ``compile_routine_graph``
-produces a correct, independently testable runnable via ``.ainvoke(...)``, wiring it into
-DeepAgent subagent delegation is a separate task.
+The live runtime resolves routine documents from Postgres and uses an ephemeral
+runner to compile and invoke them. ``compile_routine_graph`` remains the
+independently testable compiler, while conversational DeepAgent subagent
+discovery is wired separately by the agent factory.
 """
 
 from __future__ import annotations
@@ -829,7 +830,12 @@ def _build_foreach_node(node: RoutineNode, *, agent_registry: dict[str, Any]) ->
     return run_agent
 
 
-def _build_routine_node(node: RoutineNode, *, routine_registry: dict[str, Any]) -> Any:
+def _build_routine_node(
+    node: RoutineNode,
+    *,
+    routine_registry: dict[str, Any],
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+) -> Any:
     config = _node_config(node)
     output_key = node.output_key or node.id
     name = config["routine_name"]
@@ -837,18 +843,21 @@ def _build_routine_node(node: RoutineNode, *, routine_registry: dict[str, Any]) 
     output_map = config.get("output_map") or {}
 
     async def run(state: RoutineState, runtime: Runtime | None = None) -> dict[str, Any]:
-        target = routine_registry.get(name)
-        if target is None:
-            raise KeyError(f"node {node.id}: unknown routine '{name}'")
         parent_data = state.get("data", {})
         child_data = (
             _resolve_inputs(node.id, input_map, parent_data) if input_map else dict(parent_data)
         )
         child_state = {"messages": state.get("messages") or [], "data": child_data}
-        if runtime is None:
-            result = await target.ainvoke(child_state)
+        if routine_runner is not None:
+            result = await routine_runner(name, child_state, runtime)
         else:
-            result = await target.ainvoke(child_state, context=runtime.context)
+            target = routine_registry.get(name)
+            if target is None:
+                raise KeyError(f"node {node.id}: unknown routine '{name}'")
+            if runtime is None:
+                result = await target.ainvoke(child_state)
+            else:
+                result = await target.ainvoke(child_state, context=runtime.context)
         messages = result.get("messages") or []
         text = normalize_message_content(messages[-1].content) if messages else ""
         result_data = result.get("data") or {}
@@ -882,6 +891,7 @@ def _build_node_callable(
     base_system_prompt: str | None,
     agent_registry: dict[str, Any],
     routine_registry: dict[str, Any],
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     defs: dict[str, dict[str, Any]] | None = None,
 ) -> Any:
@@ -908,7 +918,11 @@ def _build_node_callable(
     if node.kind == "human":
         return _build_human_node(node)
     if node.kind == "routine":
-        return _build_routine_node(node, routine_registry=routine_registry)
+        return _build_routine_node(
+            node,
+            routine_registry=routine_registry,
+            routine_runner=routine_runner,
+        )
     if node.kind == "noop":
         return _build_noop_node(node)
     raise ValueError(f"unknown node kind: {node.kind}")
@@ -1155,6 +1169,7 @@ def compile_routine_graph(
     model: BaseChatModel,
     agent_registry: dict[str, Any] | None = None,
     routine_registry: dict[str, Any] | None = None,
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     base_system_prompt: str | None = None,
     checkpointer: Any | None = None,
@@ -1164,7 +1179,9 @@ def compile_routine_graph(
 
     The graph document controls optional node retries/caches and recursion limits;
     callers provide the checkpointer and invocation context when resumability or
-    human approval is required.
+    human approval is required. ``routine_runner`` is the Postgres-backed,
+    per-invocation resolver for nested routine nodes; ``routine_registry`` is
+    retained for direct compiler callers and backwards compatibility.
     """
     agent_registry = agent_registry or {}
     routine_registry = routine_registry or {}
@@ -1262,6 +1279,7 @@ def compile_routine_graph(
                     base_system_prompt=base_system_prompt,
                     agent_registry=agent_registry,
                     routine_registry=routine_registry,
+                    routine_runner=routine_runner,
                     tool_registry=tool_registry,
                     defs=graph.defs,
                 ),

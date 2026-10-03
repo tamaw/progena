@@ -1,110 +1,136 @@
 ---
 name: managing-routines
-description: Create, inspect, update, or delete an agent's editable routine graph by editing one file under /routines/ at a time. Use when a user asks to build or change a subagent's routine (the "Routines" page, formerly "Sequences") -- a declarative prompt/code/eval/subagent/agent/noop graph compiled into a runnable LangGraph agent.
+description: Create, inspect, edit, validate, and delete executable routine graphs stored under /routines/. Use when a user asks to build or change a routine, formerly called a sequence, including branching, loops, parallel fan-out, human approval, or delegated agent steps.
 allowed-tools: read_file write_file edit_file ls structured_output generate_id current_time
 ---
 
-Routine graphs live as one JSON file per agent:
-- `/routines/<agent-id>.json`
+# Managing routines
 
-The filename is the owning agent's id (see `/config/agents.json` or the Agents
-page for ids) -- there is no separate id-generation step like workflows have;
-you never invent a routine id, you always target an existing agent's file.
+Routine graphs are executable LangGraph definitions stored as one JSON document
+per routine: `/routines/<routine-id>.json`.
 
-Schema is mounted read-only under `/schemas/`:
-- `/schemas/graph.routine.schema.v1.json` -- the whole document, self-contained
-  (embeds all six node-kind shapes and both edge shapes via `oneOf`/`$defs`), so
-  it is the only schema `structured_output` needs to build or rewrite a complete
-  routine in one call. Unlike workflows there are no separate per-node-kind
-  schema files -- read the `$defs` section of this one file for a focused shape.
+The authoritative contract is `/schemas/graph.routine.schema.v1.json`. Read it
+before creating or reshaping a graph. The compiler and topology validator are
+implemented in `app/progenitor/routines/graph.py` and
+`app/progenitor/routines/factory.py`.
 
-Core rules:
+## Operating rules
+
 1. Work on exactly one routine file at a time.
-2. Read the routine file before editing it -- preserve `id`, `name`,
-   `description`, and `version` unless the user asked to change them. `id` must
-   always equal the filename (`<agent-id>`).
-3. Node kinds are executable step kinds, not decoration: each one is compiled
-   into a real LangGraph node by `app.progenitor.routines.factory`. Getting a
-   node's `config` shape wrong breaks the agent at compile/run time, not just
-   in the editor.
-4. Prefer `edit_file` for focused changes. Use `write_file` only when creating
-   the first version of a routine (an agent seeded with the single-step
-   default) or rewriting the whole document intentionally.
-5. Use `structured_output` against `/schemas/graph.routine.schema.v1.json`
-   whenever creating or reshaping nodes/edges -- don't hand-assemble JSON from
-   memory; the node `config` unions are strict (`additionalProperties: false`
-   plus `oneOf` requiring the inline source field for each node kind).
-6. Before creating or reshaping nodes, call `generate_id` with `prefix=node`
-   and `count` equal to the number of new node ids needed. Use the returned ids
-   in the `structured_output` instruction; never invent node ids or use the
-   reserved compiler id `__seed__`. The tool supports up to 50 ids in one call.
+2. For an existing routine, read it first and preserve `id`, `name`,
+   `description`, and `version` unless the user asks to change them.
+3. The document `id` must match the filename's routine id. Never silently
+   rename a routine or overwrite another routine while creating one.
+4. Use `edit_file` for focused field changes. Use `structured_output` followed
+   by `write_file` when adding, removing, or reshaping nodes or edges.
+5. For a new routine, call `generate_id` with `prefix=routine` and `count=1`.
+   Use that returned id in the filename and document. Before adding nodes, call
+   `generate_id` with `prefix=node` and a count equal to the number of new ids.
+   Never invent ids or use `__seed__`,
+   `__project_output__`, `__start__`, or `__end__`.
+6. Validate the complete document against the routine schema before writing it.
+   Also check topology: valid entry, existing endpoints, no duplicate outgoing
+   flow declarations, valid condition branches, foreach wiring, and loop guards.
+7. Do not claim success until the file write succeeds.
 
-Recommended flow for building out a routine:
-1. `ls /routines/` to see which agents already have a graph.
-2. `read_file /routines/<agent-id>.json` -- every agent has one from the moment
-   it's created (seeded as a single `prompt` node), so there is no "create"
-   step distinct from "edit".
-3. `read_file /schemas/graph.routine.schema.v1.json`.
-4. Call `generate_id prefix=node count=<number of new nodes>` for the node ids,
-   then make one `structured_output` call, `schema_file:
-   graph.routine.schema.v1.json`, describing the whole routine (every node and
-   the edges connecting them), with `id`/`name`/`description`/`version` copied
-   forward from the file you just read and the generated node ids assigned.
-5. `write_file /routines/<agent-id>.json`.
+## Create, inspect, edit, and delete
 
-Recommended flow for a small edit:
-1. `read_file /routines/<agent-id>.json`.
-2. If only one field changes (a prompt template, a node's `label`/position),
-   update it with `edit_file` directly.
-3. If you're adding, removing, or reshaping a node or edge, re-run
-   `structured_output` for the whole document (step 4 above) rather than
-   hand-editing JSON, then `write_file` the result -- the schema's `oneOf`
-   config unions are easy to get subtly wrong by hand.
+For creation, call `generate_id` with `prefix=routine` and `count=1`; the
+returned id is the owning filename and document id. Create a complete v2
+document with `version: "2.0.0"`, at least one node, a valid `entry`, and valid
+edges. A single `prompt` node is a valid seed.
 
-Minimal valid routine shape:
-- `id` (must equal `<agent-id>`), `name`, `description`, `version`
-- at least one node
-- `entry` set to one of the node ids
-- every edge's `from`/`to` (or router `branches`) referencing existing node ids
-- the graph must be acyclic-safe for `entry` (no dangling entry, no orphaned
-  router branch)
+For inspection, list `/routines/`, read the requested document, and summarize
+its nodes, flow, inputs, outputs, and validation-relevant gaps without changing
+it.
 
-Node kinds (`kind` discriminates; every kind shares `id`, `description`,
-`output_key`, `label` -- there is no `x`/`y`: layout is rigid/computed by the
-canvas, not authored, so position is never part of the document):
-- `prompt` -- render a template and invoke the chat model. `config`: exactly
-  `prompt_template` (inline) and optional `system_prompt`.
-- `code` -- evaluate a restricted deterministic Python expression (never
-  `eval()`/`exec()` -- see `app.progenitor.routines.expression`). `config`:
-  required `expression` (inline), optional `inputs` (local name -> dotted path
-  into `data`) and optional `language` set to `"python"`.
-- `eval` -- same restricted expression evaluator as `code`, or a model rubric.
-  `config`: optional `expression` (inline) or `rubric_prompt`; when omitted,
-  the rubric asks the model a yes/no question whose response starting with
-  `"true"` evaluates true. Optional `inputs` are supported.
-- `subagent` -- invoke another compiled routine graph by name. `config`:
-  required `subagent_name` and inline `prompt_template`.
-- `agent` -- invoke a declarative object agent by name. `config`: required
-  `agent_name` and inline `prompt_template`.
-- `noop` -- pass through without changing state. `config` is empty
-  (`additionalProperties: false`, no required keys beyond the shared ones).
+For edits, read the current document and preserve unrelated fields. Directly
+edit prompts, labels, descriptions, or optional coordinates when appropriate.
+For topology or config changes, regenerate the complete document through the
+schema, validate it, then write exactly one routine file.
 
-Edges:
-- Plain edge: `{"from": <node id>, "to": <node id>}`.
-- Router edge (`state_equals`): `{"from": <node id>, "router": "state_equals",
-  "state_key": <dotted path into "data">, "branches": {<value>: <node id>,
-  ...}, "default": <node id>}` (`default` optional). A node may have at most
-  one outbound router edge, and a router edge cannot coexist with a plain edge
-  from the same source.
+## Node kinds
 
-Validation reminders:
-- every node kind requires `id`, `kind`, `output_key` (`prompt`/`code`/`eval`/
-  `subagent`/`agent` also require `config`)
-- node ids must be unique within the graph
-- node ids must not be `__seed__`; that identifier is reserved for the compiler
-- `entry` must reference an existing node id
-- edges must reference existing node ids on both ends (plain `to`, router
-  `branches` values, and router `default`)
-- a node cannot mix a router edge and a plain edge as its outbound edge
-- the whole document is `additionalProperties: false` at every level --
-  extra/misspelled keys fail validation, they don't get silently dropped
+The current schema supports: `prompt`, `eval`, `condition`, `switch`, `split`,
+`classify`, `agent`, `a2a`, `noop`, `human`, `foreach`, and `routine`.
+
+- `prompt` invokes the model using exactly one of `prompt_template` or
+  `prompt_file`.
+- `eval` uses a restricted Python expression or expression file; `defaults`
+  provides fallbacks for missing top-level state values.
+- `condition` is a boolean gate whose router must have exactly `true` and
+  `false` branches and no default.
+- `switch` routes an expression through author-defined branches.
+- `split` is a structural parallel gateway that runs every branch.
+- `classify` uses a model rubric and required response schema.
+- `agent` invokes a local object agent; `a2a` invokes a registered A2A peer.
+- `noop` passes state through unchanged.
+- `human` pauses for a user response and is suitable for approval/review.
+- `foreach` supports parallel item fan-out (`mode: "send"`) or per-item agent
+  execution (`mode: "agent"`).
+- `routine` invokes another routine by name with optional input/output maps.
+
+### Prompt template placeholders
+
+Use Python format-string placeholders resolved from the routine's top-level
+state. Use `{note}` for a top-level input:
+
+```text
+Summarize this note concisely:
+
+{note}
+```
+
+Use `{context[user_id]}` for an indexed value:
+
+```text
+The current user is {context[user_id]}.
+```
+
+Every node shares `id`, `description`, and `output_key`, with optional `label`,
+`x`, and `y` editor metadata. Layout coordinates are not required for
+execution.
+
+Use only the fields allowed by the selected node kind. For example:
+
+```text
+prompt  -> config.prompt_template
+eval    -> config.expression
+human   -> config.message
+routine -> config.routine_name
+```
+
+Do not copy fields between kinds. The schema's `oneOf` branches are strict.
+
+## Edge kinds and loops
+
+- Normal flow: `from`, `to`, `level: "normal"`; it may carry `loop_guard`.
+- Fan-in barrier: a list of sources, one target, `level: "fan_in"`.
+- Router: `level: "route"`, `router: "state_equals"`, `state_key`, and a
+  non-empty `branches` map; `default` is optional.
+- Error flow: `from`, `to`, `level: "error"`; it handles exhausted retries and
+  does not count as the normal outgoing flow.
+
+There is no separate loop node. A normal edge's `loop_guard` contains an
+expression and optional `on_false` destination. Use it for retry and
+conditional loops, and ensure every loop has a safe exit.
+
+## Human approval
+
+Use a `human` node before a consequential `agent`, `routine`, file-writing, or
+external-call step. Give it a clear `message` and, when useful, an
+`allowed_responses` list such as `approve` and `reject`. The runtime checkpoints
+the routine and resumes the same thread after the user's response.
+
+## Standard workflow
+
+1. List `/routines/` and identify the target.
+2. Read the target document if it exists.
+3. Read the full routine schema for creation or structural changes.
+4. Generate ids for new nodes.
+5. Produce or reshape the graph with `structured_output` using the full schema;
+   use its JSON result rather than hand-assembling the document.
+6. Validate schema and topology, correcting all errors.
+7. Write exactly the intended routine file.
+8. Report the routine id and changes; do not imply UI navigation or execution
+   unless it actually occurred.

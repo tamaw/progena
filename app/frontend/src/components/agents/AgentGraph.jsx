@@ -2561,7 +2561,7 @@ function RoutineChain({ nodes, edges, entry }) {
 // it up as a plain string, so every graph with a router-fork "Join branches"
 // join permanently failed validation and could never enable Run).
 // eslint-disable-next-line react-refresh/only-export-components
-export function validateWorkingGraph(nodes, edges, entry) {
+export function validateWorkingGraph(nodes, edges, entry, runtimeProfiles = null) {
   const errors = [];
   const ids = new Set(nodes.map((node) => node.id).filter(Boolean));
   if (!entry || !ids.has(entry)) errors.push('Entry must reference an existing node.');
@@ -2606,6 +2606,28 @@ export function validateWorkingGraph(nodes, edges, entry) {
   });
   const reachable = reachableFrom(entry, edges);
   nodes.filter((node) => !reachable.has(node.id)).forEach((node) => errors.push(`"${node.id}" is unreachable.`));
+
+  // The JSON schema can only validate that an agent_name is a string. When a
+  // live profile roster is available, also validate local agent references so
+  // a graph cannot appear runnable while pointing at an unregistered object
+  // agent. An empty roster means the roster request has not arrived yet, so
+  // defer this environment-specific check rather than showing a false error.
+  if (runtimeProfiles?.length) {
+    const objectAgentNames = new Set(
+      runtimeProfiles.filter((profile) => profile.kind === 'object').map((profile) => profile.name),
+    );
+    nodes.forEach((node) => {
+      const config = node.config || {};
+      const agentName = node.kind === 'agent'
+        ? config.agent_name
+        : node.kind === 'foreach' && config.mode === 'agent'
+          ? config.agent_name
+          : null;
+      if (agentName && !objectAgentNames.has(agentName)) {
+        errors.push(`Node "${node.id}" references unavailable agent "${agentName}".`);
+      }
+    });
+  }
   return errors;
 }
 
@@ -2964,6 +2986,7 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     $defs: graph.$defs || {},
   });
   const [parameterValues, setParameterValues] = useState({});
+  const runtimeProfiles = useSelector(selectAgentProfiles);
   const {
     status: runStatus,
     threadId: liveThreadId,
@@ -3832,8 +3855,8 @@ function GraphCanvas({ agent, graph, confirmedGraph, onPersist, onShowProfile, o
     ? edges.find((edge) => edge.loop_guard && edge.to === selectedNode.id)
     : null;
   const validationErrors = useMemo(
-    () => validateWorkingGraph(nodes, edges, meta.entry),
-    [nodes, edges, meta.entry],
+    () => validateWorkingGraph(nodes, edges, meta.entry, runtimeProfiles),
+    [nodes, edges, meta.entry, runtimeProfiles],
   );
   useEffect(() => {
     if (!validationErrors.length || runNav.isBrowsingHistory) setValidationPanelOpen(false);
@@ -4851,5 +4874,4 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
     </div>
   );
 }
-
 

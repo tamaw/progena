@@ -27,7 +27,11 @@ from ..routines.revisions import (
     NullRoutineRevisionReader,
     PostgresRoutineRevisionReader,
 )
-from ..routines.subagent import create_routine_subagent, resume_routine_thread
+from ..routines.subagent import (
+    create_routine_subagent,
+    resolve_routine_document,
+    resume_routine_thread,
+)
 from .adapters import (
     create_deepagent_tools,
     create_dynamic_mcp_tools,
@@ -322,11 +326,10 @@ async def create_progenitor_agent(
         PostgresRoutineRevisionReader(database_url) if database_url else NullRoutineRevisionReader()
     )
 
-    # Object agents and routine graphs share one lazy runnable registry. This
-    # lets graph `agent` nodes invoke either kind, while object agents receive
-    # the same set through their own `task` middleware. Every proxy is installed
-    # before any invocation compiles a graph, so declaration order cannot make a
-    # valid forward reference unavailable.
+    # Object agents use a registry because they are conversational subagents.
+    # Routine execution is different: routine documents are authoritative in
+    # Postgres, so deterministic runs resolve and compile a fresh document for
+    # each invocation rather than consulting an in-memory routine registry.
     object_sources = await discover_object_agents(
         state_manager,
         native_root=data_dir / "agents" / "objects",
@@ -367,10 +370,46 @@ async def create_progenitor_agent(
         agent_registry[source.name] = object_spec["runnable"]
         reserved_names.add(source.name)
 
-    # A routine's graph is still revision-pinned. Its in-graph `agent` nodes
-    # resolve against agent_registry (object agents only); `routine` nodes
-    # resolve against routine_registry (other routines) below.
-    routine_registry: dict[str, Any] = {}
+    async def _run_routine(
+        routine_id_or_name: str,
+        state: dict[str, Any],
+        runtime: Any | None = None,
+    ) -> dict[str, Any]:
+        """Resolve, compile, run, and discard one routine invocation.
+
+        This is used by both the heartbeat's deterministic Run action and
+        nested ``routine`` nodes.  The conversational subagent descriptors
+        below are still built at startup for DeepAgent task discovery, but
+        execution never looks up a compiled routine from a process registry.
+        """
+        resolved = await resolve_routine_document(state_manager, routine_id_or_name)
+        if resolved is None:
+            raise KeyError(f"unknown routine '{routine_id_or_name}'")
+        routine_id, graph_doc = resolved
+        description = str(graph_doc.get("description") or "").strip() or (
+            f"Runs the {graph_doc.get('name') or routine_id} routine graph."
+        )
+        routine_spec = create_routine_subagent(
+            routine_id=routine_id,
+            description=description,
+            model=model,
+            state_manager=state_manager,
+            revision_reader=revision_reader,
+            agent_registry=agent_registry,
+            # Kept empty for backwards-compatible factory callers; all
+            # routine-to-routine calls use routine_runner below.
+            routine_registry={},
+            routine_runner=_run_routine,
+            tool_registry=tool_registry,
+            checkpointer=checkpointer,
+        )
+        runnable = routine_spec["runnable"]
+        # The proxy owns the compiled graph invocation and its checkpoint
+        # config.  RunnableLambda does not accept LangGraph's node ``context``
+        # keyword, so keep the nested runtime context at the factory boundary
+        # rather than passing it through the proxy wrapper.
+        return await runnable.ainvoke(state)
+
     routine_subagents: list[CompiledSubAgent] = []
     for graph_doc in await state_manager.list_routine_graphs():
         routine_id = str(graph_doc.get("id") or "").strip()
@@ -395,13 +434,13 @@ async def create_progenitor_agent(
             state_manager=state_manager,
             revision_reader=revision_reader,
             agent_registry=agent_registry,
-            routine_registry=routine_registry,
+            routine_registry={},
+            routine_runner=_run_routine,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
         routine_subagents.append(routine_spec)
         agent_specs_by_name[routine_id] = routine_spec
-        routine_registry[routine_id] = routine_spec["runnable"]
         reserved_names.add(routine_id)
 
     async def _resume_routine(thread_id: str, answer: Any) -> dict[str, Any]:
@@ -412,7 +451,8 @@ async def create_progenitor_agent(
             state_manager=state_manager,
             revision_reader=revision_reader,
             agent_registry=agent_registry,
-            routine_registry=routine_registry,
+            routine_registry={},
+            routine_runner=_run_routine,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
@@ -448,7 +488,9 @@ async def create_progenitor_agent(
         checkpointer=checkpointer,
         state_schema=ProgenitorAgentState,
     )
-    agent.routine_registry = routine_registry  # type: ignore[attr-defined]
+    # The heartbeat uses this callable for deterministic UI-triggered runs.
+    # It is intentionally a resolver/runner, not a routine registry.
+    agent.routine_runner = _run_routine  # type: ignore[attr-defined]
 
     logger.info(
         "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",
