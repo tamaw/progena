@@ -110,7 +110,11 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", _create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", _create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        lambda **_kwargs: object(),
+    )
     proxy = create_object_agent_proxy(
         source,
         state_manager=_StateManager(),
@@ -208,7 +212,7 @@ async def test_self_manifest_backend_edit_round_trips_via_string_replacement(tmp
 
 
 @pytest.mark.asyncio
-async def test_lazy_proxy_mounts_self_manifest_and_documents_it_in_prompt(
+async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(
     monkeypatch, tmp_path: Path
 ):
     agent_dir = tmp_path / "reviewer"
@@ -229,7 +233,11 @@ async def test_lazy_proxy_mounts_self_manifest_and_documents_it_in_prompt(
         calls.append(kwargs)
         return _Compiled()
 
-    monkeypatch.setattr("app.progenitor.agent.object_agents.create_deep_agent", _create)
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", _create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware",
+        lambda **_kwargs: object(),
+    )
     proxy = create_object_agent_proxy(
         source,
         state_manager=_StateManager(),
@@ -242,6 +250,8 @@ async def test_lazy_proxy_mounts_self_manifest_and_documents_it_in_prompt(
     await proxy["runnable"].ainvoke({"messages": []})
 
     create_kwargs = calls[0]
-    assert "/agent/SYSTEM.md" in create_kwargs["system_prompt"]
-    assert set(create_kwargs["backend"].routes) == {"/agent/"}
-    assert isinstance(create_kwargs["backend"].routes["/agent/"], SelfManifestBackend)
+    assert create_kwargs["system_prompt"] == "You are a concise reviewer."
+    assert not any(
+        middleware.__class__.__name__ == "FilesystemMiddleware"
+        for middleware in create_kwargs["middleware"]
+    )

@@ -245,6 +245,7 @@ function makeNode(kind) {
 // template or a file, never both). Kept as data rather than spread through the
 // field renderers so the inspector, the canvas badge and the autosave gate all
 // read one source -- and so it stays diffable against the schema it mirrors.
+// eslint-disable-next-line react-refresh/only-export-components
 export const REQUIRED_CONFIG = {
   prompt: [['prompt_template', 'prompt_file']],
   eval: [['expression', 'expression_file']],
@@ -282,6 +283,7 @@ function requiredFieldsFor(node) {
 // group stays grouped -- "a prompt needs a template or a file" is a single
 // unmet requirement offering two ways to satisfy it, so counting its members
 // would tell the author two fields are missing when either one will do.
+// eslint-disable-next-line react-refresh/only-export-components
 export function missingRequirements(node) {
   const config = node?.config || {};
   return requiredFieldsFor(node)
@@ -291,18 +293,21 @@ export function missingRequirements(node) {
 
 // The same thing flattened to field names, for marking every alternative in
 // the inspector and for deciding whether the graph is safe to PATCH.
+// eslint-disable-next-line react-refresh/only-export-components
 export function missingRequiredConfig(node) {
   return missingRequirements(node).flat();
 }
 
 // One predicate behind the inspector lock, the canvas badge and the autosave
 // gate, so a step can never look complete in one place and not another.
+// eslint-disable-next-line react-refresh/only-export-components
 export function isNodeComplete(node) {
   return missingRequirements(node).length === 0;
 }
 
 // Nodes the backend would reject, in canvas order. Empty means the graph is
 // safe to PATCH as far as per-node completeness goes.
+// eslint-disable-next-line react-refresh/only-export-components
 export function incompleteNodes(nodes) {
   return (nodes || [])
     .map((node) => ({ node, missing: missingRequiredConfig(node) }))
@@ -1724,6 +1729,7 @@ function edgeSourceIds(edge) {
 
 // Flow edges are the ones that shape the chain tree; error edges route
 // retries on exhaustion and must NOT participate in chain layout.
+// eslint-disable-next-line react-refresh/only-export-components
 export function isFlowEdge(edge) {
   return edge?.level !== 'error';
 }
@@ -1787,6 +1793,7 @@ export function buildLoopMembership(edges) {
 // rejoins content already on the chain, or converges with a sibling leaves the
 // fork without two distinct ends. The offer and the action both read this, so
 // a fork that shows a `+` is exactly one `onJoinBranches` can wire up.
+// eslint-disable-next-line react-refresh/only-export-components
 export function joinTerminals(edges, sourceId) {
   const router = edges.find((edge) => edge.from === sourceId && edge.router);
   if (!router) return [];
@@ -2663,6 +2670,7 @@ function serializeGraph(nodes, edges, meta) {
 // both states have to collapse here, or the warning outlives the change that
 // caused it and accuses a graph that is fine.
 const UNSETTLED_SAVE_STATES = new Set(['error', 'incomplete']);
+// eslint-disable-next-line react-refresh/only-export-components
 export function saveStatusWhenInSync(current) {
   return UNSETTLED_SAVE_STATES.has(current) ? 'idle' : current;
 }
@@ -4874,4 +4882,3 @@ function RoutineOutputModal({ outputSchema, runData, onClose }) {
     </div>
   );
 }
-

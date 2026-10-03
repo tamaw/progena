@@ -669,9 +669,10 @@ def create_object_agent_proxy(
     async def run(state: dict[str, Any]) -> dict[str, Any]:
         manifest = await load_manifest()
         selected_tools = _tools_for_manifest(manifest, tools)
-        _validate_permissions_within_mounts(
-            manifest.permissions, manifest.mounts, source=f"object agent {manifest.name!r}"
-        )
+        if manifest.mounts:
+            _validate_permissions_within_mounts(
+                manifest.permissions, manifest.mounts, source=f"object agent {manifest.name!r}"
+            )
         child_model = _model_for_manifest(manifest, model)
         routes = _scoped_routes(manifest, backend)
         if manifest.shell is None:
@@ -689,7 +690,7 @@ def create_object_agent_proxy(
             SummarizationMiddleware(model=child_model),
             AuditLoggingMiddleware(log_sink=log_sink),
         ]
-        if manifest.skills:
+        if manifest.skills and manifest.mounts:
             if not all(_path_is_mounted(skill, manifest.mounts) for skill in manifest.skills):
                 raise ValueError(
                     f"object agent {manifest.name!r}: skills must be covered by declared mounts"
@@ -701,7 +702,7 @@ def create_object_agent_proxy(
                     cast("dict[str, bool | InterruptOnConfig]", manifest.interrupt_on)
                 )
             )
-        if manifest.mounts:
+        if manifest.mounts or workspace is not None:
             middleware.append(
                 FilesystemMiddleware(
                     backend=self_backend,
