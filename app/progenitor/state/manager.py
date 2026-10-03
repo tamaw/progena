@@ -269,6 +269,19 @@ class StateManager:
         self._state_cache["schedule"] = payload
         await self._runtime_store.save_document("schedule", payload)
 
+    async def update_schedule_entry(self, schedule_id: str, updates: dict[str, Any]) -> bool:
+        """Apply partial updates to one schedule entry and persist the document."""
+        schedule = await self.get_schedule()
+        entry = schedule.get(schedule_id)
+        if entry is None:
+            return False
+
+        payload = entry.model_dump(mode="json")
+        payload.update(updates)
+        schedule[schedule_id] = ScheduleEntry.model_validate(payload)
+        await self.save_schedule(schedule)
+        return True
+
     # ==========================================================================
     # Health management (heartbeat-loop system status)
     # ==========================================================================

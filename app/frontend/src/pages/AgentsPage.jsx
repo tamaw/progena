@@ -26,7 +26,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -636,7 +636,7 @@ export function AgentWorkspace({ page }) {
           />
         </PaneListToolbar>
         {visibleAgents.length ? (
-          <PaneListVirtualized
+          <PaneListRows
             groups={sections}
             getGroupItems={(section) => section.agents}
             renderItem={(agent) => (

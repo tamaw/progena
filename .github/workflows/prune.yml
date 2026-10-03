@@ -16,14 +16,23 @@ jobs:
   prune-docker:
     runs-on: [self-hosted, Linux, docker]
     steps:
-      - name: Show Docker disk usage (before)
-        run: docker system df || true
+      - name: Capture Docker disk usage (before)
+        id: before
+        run: |
+          docker system df
+          {
+            echo "df<<EOF"
+            docker system df
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Prune unused Docker artifacts
         shell: bash
         run: |
+          # No label filter: sweeps every unused image regardless of source,
+          # including GitHub Actions runner and ephemeral job images, not just
+          # ones tagged com.progenitor.managed=true.
           docker image prune -af \
-            --filter "label=com.progenitor.managed=true" \
             --filter "until=168h" || true
 
           docker builder prune -af \
@@ -40,5 +49,42 @@ jobs:
           docker network prune -f \
             --filter "until=168h" || true
 
-      - name: Show Docker disk usage (after)
-        run: docker system df || true
+          # Anonymous unused volumes only; named volumes are surfaced in the
+          # summary below (not auto-removed) since a stopped-but-expected
+          # container may still legitimately own one.
+          docker volume prune -f || true
+
+      - name: Report disk usage and reclaimable space
+        if: always()
+        run: |
+          {
+            echo "## Docker prune summary"
+            echo
+            echo "### Before"
+            echo '```'
+            echo "${{ steps.before.outputs.df }}"
+            echo '```'
+            echo
+            echo "### After"
+            echo '```'
+            docker system df
+            echo '```'
+            echo
+            echo "### Unattached named volumes (not auto-pruned)"
+            echo '```'
+            vols=$(docker volume ls -f dangling=true --format '{{.Name}}')
+            if [ -z "$vols" ]; then
+              echo "(none)"
+            else
+              for v in $vols; do
+                size=$(docker run --rm -v "$v":/data:ro alpine du -sh /data 2>/dev/null | cut -f1)
+                echo "$v: ${size:-unknown}"
+              done
+            fi
+            echo '```'
+            echo
+            echo "### Host disk usage"
+            echo '```'
+            df -h / /var 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -91,6 +91,7 @@ import {
   normalizeQuickChatConfig,
 } from './quickChatConfig';
 import { derivePageContext, formatPageContextBlock, stripPageContextBlock } from '../../lib/pageContext';
+import { buildEntityPath } from '../../lib/routes';
 import PopupModal from '../common/PopupModal';
 
 // Grouped by owner/level (see the entity-relationship model):
@@ -500,6 +501,12 @@ function Header({ activePanel, setActivePanel, onSubmitQuickChat, onOpenPanel, o
             </>
           )}
           onClick={toggleTheme}
+        />
+        <ChromeIconButton
+          label="Search"
+          icon={<SearchIcon />}
+          active={activePanel === 'search'}
+          onClick={() => openPanel('search')}
         />
         <ChromeIconButton
           label="Insights"
@@ -1745,61 +1752,79 @@ function SettingsPanel({ onClose, isPinned, onTogglePin, isOpen, onResetLiveUiSt
   );
 }
 
+function normalizeSearchText(value) {
+  return String(value || '')
+    .replace(/[_:/-]+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function widgetSearchTarget(widget, title) {
+  const identity = String(widget.id || '').replace(/^[^:]+:/, '') || widget.name || title;
+  if (widget.type === 'agent') {
+    return buildEntityPath('/agents', identity, 'details');
+  }
+  if (widget.type === 'mcp') {
+    return buildEntityPath('/tools', identity, title);
+  }
+  return '/dashboard';
+}
+
 function SearchPanel({ query, widgets, onClose, isPinned, onTogglePin, isOpen }) {
   const [search, setSearch] = useState(query);
-  const normalizedSearch = search.trim().toLowerCase();
+  const normalizedSearch = normalizeSearchText(search);
   const routeResults = navItems
-    .filter((item) => !normalizedSearch || item.label.toLowerCase().includes(normalizedSearch) || item.to.includes(normalizedSearch))
+    .filter((item) => normalizeSearchText(`${item.label} ${item.to}`).includes(normalizedSearch))
     .map((item) => ({
       id: `route:${item.to}`,
       title: item.label,
       description: item.to === '/chat' ? 'Open chat workspace' : `Open ${item.to}`,
-      meta: 'route',
       to: item.to,
     }));
   const widgetResults = widgets
     .filter((widget) => {
-      const label = widget.title || widget.data?.title || widget.id;
+      const title = widget.title || widget.data?.title || widget.id;
       const description = widget.summary || widget.data?.summaryState || widget.data?.description || '';
-      return !normalizedSearch
-        || label.toLowerCase().includes(normalizedSearch)
-        || description.toLowerCase().includes(normalizedSearch);
+      return normalizeSearchText(`${title} ${description} ${widget.id}`).includes(normalizedSearch);
     })
     .slice(0, 8)
-    .map((widget) => ({
-      id: `widget:${widget.id}`,
-      title: widget.title || widget.data?.title || widget.id,
-      description: widget.summary || widget.data?.summaryState || widget.data?.description || 'Runtime widget',
-      meta: widget.type || 'widget',
-      to: widget.type === 'agent' || widget.type === 'mcp' ? '/agents' : '/dashboard',
-    }));
-  const results = routeResults.concat(widgetResults);
+    .map((widget) => {
+      const title = widget.title || widget.data?.title || widget.id;
+      return {
+        id: `widget:${widget.id}`,
+        title,
+        description: widget.summary || widget.data?.summaryState || widget.data?.description || 'Runtime widget',
+        to: widgetSearchTarget(widget, title),
+      };
+    });
+  const results = normalizedSearch ? routeResults.concat(widgetResults) : [];
 
   return (
-    <TopNavPane title="Search" subtitle="Visual command palette" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
+    <TopNavPane title="Search" className="topnav-pane--search" onClose={onClose} isPinned={isPinned} onTogglePin={onTogglePin} isOpen={isOpen}>
       <div className="chrome-search-panel">
         <div className="chrome-search-panel__input">
-          <span aria-hidden="true">⌕</span>
+          <span aria-hidden="true"><SearchIcon /></span>
           <input
             autoFocus
             value={search}
-            placeholder="Search routes, widgets, agents..."
+            placeholder="Search"
             onChange={(event) => setSearch(event.target.value)}
           />
         </div>
-        <div className="topnav-list chrome-search-results">
-          {results.length === 0 ? <div className="chrome-empty">No visual matches.</div> : null}
-          {results.map((result) => (
-            <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
-              <span className="topnav-list-item__dot" />
-              <span>
-                <strong>{result.title}</strong>
-                <small>{result.description}</small>
-              </span>
-              <time>{result.meta}</time>
-            </NavLink>
-          ))}
-        </div>
+        {normalizedSearch ? (
+          <div className="topnav-list chrome-search-results">
+            {results.length === 0 ? <div className="chrome-empty">No matches.</div> : null}
+            {results.map((result) => (
+              <NavLink key={result.id} to={result.to} className="topnav-list-item chrome-search-result" onClick={onClose}>
+                <span className="topnav-list-item__dot" />
+                <span>
+                  <strong>{result.title}</strong>
+                  <small>{result.description}</small>
+                </span>
+              </NavLink>
+            ))}
+          </div>
+        ) : null}
       </div>
     </TopNavPane>
   );

@@ -14,7 +14,9 @@ from typing import Any
 from ..utils import utcnow_isoformat
 from .sources import (
     MarketplaceCatalog,
+    _parse_github_source,
     compute_digest,
+    fetch_marketplace,
     fetch_plugin_files_with_report,
     resolve_plugin_version,
 )
@@ -30,39 +32,107 @@ def _plugin_segment(key: str) -> str:
 def _build_synthetic_catalog(
     entry: dict, plugin_name: str, marketplace_name: str
 ) -> MarketplaceCatalog:
-    """Create a single-plugin catalog so ``fetch_plugin_files_with_report`` can resolve the entry."""
+    """Create a pinned catalog for an installed plugin's direct HTTP fetch."""
+    source = entry.get("source")
+    source_url = entry.get("marketplace_source")
+    if not isinstance(source_url, str):
+        source_url = source.get("url") or source.get("repo") if isinstance(source, dict) else ""
+    repository: str | None = None
+    if isinstance(source_url, str) and source_url:
+        owner, repo, _ = _parse_github_source(source_url)
+        repository = f"{owner}/{repo}"
+    source_dict = source if isinstance(source, dict) else {}
     return MarketplaceCatalog(
         name=marketplace_name,
         owner={},
         plugins=[
             {
                 "name": plugin_name,
-                "source": entry["source"],
+                "source": source,
                 "version": entry.get("version"),
             }
         ],
+        repository=repository,
+        commit_sha=entry.get("marketplace_commit_sha") or source_dict.get("sha"),
     )
 
 
 async def _fetch_and_digest(
-    entry: dict, plugin_name: str, marketplace_name: str
-) -> tuple[dict[str, str], dict[str, str], str]:
-    """Fetch a plugin's skills and object agents and compute one digest."""
-    catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
+    entry: dict,
+    plugin_name: str,
+    marketplace_name: str,
+    catalog: MarketplaceCatalog | None = None,
+) -> tuple[dict[str, str], dict[str, str], str, list[str]]:
+    """Fetch valid skills/object agents and compute one content digest.
+
+    Invalid object-agent manifests are filtered out instead of failing an
+    otherwise usable plugin. The returned skipped names are surfaced as an
+    installed status warning by the reconciler.
+    """
+    if catalog is None:
+        catalog = _build_synthetic_catalog(entry, plugin_name, marketplace_name)
     files, _skipped = await fetch_plugin_files_with_report(
         catalog,
         plugin_name,
         include_agents=True,
     )
     skills = dict(files)
-    agents = dict(getattr(files, "agents", {}))
+    agent_files = dict(getattr(files, "agents", {}))
+    valid_agents, skipped_agents = _filter_valid_agent_files(agent_files, plugin_name)
+    if not skills and not valid_agents:
+        suffix = f"; skipped invalid object agents: {', '.join(skipped_agents)}" if skipped_agents else ""
+        raise ValueError(f"plugin ships no valid installable skills or object agents{suffix}")
     digest = compute_digest(
         {
             **{f"skills/{path}": content for path, content in skills.items()},
-            **{f"agents/{path}": content for path, content in agents.items()},
+            **{f"agents/{path}": content for path, content in valid_agents.items()},
         }
     )
-    return skills, agents, digest
+    return skills, valid_agents, digest, skipped_agents
+
+
+def _filter_valid_agent_files(
+    files: dict[str, str], plugin_name: str
+) -> tuple[dict[str, str], list[str]]:
+    """Keep complete, valid object-agent directories and skip bad ones."""
+    from ..agent.object_agents import parse_object_agent_manifest
+
+    by_agent: dict[str, dict[str, str]] = {}
+    for path, content in files.items():
+        agent_name, separator, relative = path.partition("/")
+        if not separator or not agent_name or not relative:
+            continue
+        by_agent.setdefault(agent_name, {})[relative] = content
+
+    valid: dict[str, str] = {}
+    skipped: list[str] = []
+    for agent_name, agent_files in sorted(by_agent.items()):
+        system_prompt = agent_files.get("SYSTEM.md")
+        if system_prompt is None:
+            skipped.append(agent_name)
+            logger.warning(
+                "Skipping object agent %r from plugin %r: missing SYSTEM.md",
+                agent_name,
+                plugin_name,
+            )
+            continue
+        try:
+            parse_object_agent_manifest(
+                system_prompt,
+                source=f"plugin:{plugin_name}/agents/objects/{agent_name}/SYSTEM.md",
+            )
+        except ValueError as exc:
+            skipped.append(agent_name)
+            logger.warning(
+                "Skipping invalid object agent %r from plugin %r: %s",
+                agent_name,
+                plugin_name,
+                exc,
+            )
+            continue
+        for relative, content in agent_files.items():
+            valid[f"{agent_name}/{relative}"] = content
+    return valid, skipped
 
 
 async def check_plugin_updates(state_manager) -> dict[str, Any]:
@@ -77,31 +147,61 @@ async def check_plugin_updates(state_manager) -> dict[str, Any]:
     summary: dict[str, list[str]] = {"updated_available": [], "errored": []}
     changed = False
     now = utcnow_isoformat()
+    catalogs: dict[str, MarketplaceCatalog] = {}
 
     for key, entry in list(plugins.items()):
         installed_version = entry.get("installed_version")
         if not installed_version:
             continue
-
         try:
             marketplace_name, plugin_name = key.split("/", 1)
-            _skills, _agents, digest = await _fetch_and_digest(entry, plugin_name, marketplace_name)
-
+            marketplace_source = entry.get("marketplace_source")
             current = dict(entry)
-            if digest != current.get("installed_digest"):
-                current["available_version"] = resolve_plugin_version(current, None)
-                summary["updated_available"].append(key)
-                changed = True
+            if isinstance(marketplace_source, str) and marketplace_source:
+                catalog = catalogs.get(marketplace_source)
+                if catalog is None:
+                    catalog = await fetch_marketplace(
+                        marketplace_source,
+                        resolve_revision=False,
+                    )
+                    catalogs[marketplace_source] = catalog
+                current_entry = next(
+                    (p for p in catalog.plugins if p.get("name") == plugin_name),
+                    None,
+                )
+                if current_entry is None:
+                    current["status"] = "error"
+                    current["status_message"] = "No longer listed in marketplace"
+                    current["last_checked"] = now
+                    plugins[key] = current
+                    summary["errored"].append(key)
+                    changed = True
+                    continue
+                version = resolve_plugin_version(current_entry, None)
+                if version != installed_version:
+                    current["available_version"] = version
+                    summary["updated_available"].append(key)
+                    changed = True
+            else:
+                # No marketplace provenance (installed directly from a
+                # GitHub/git-subdir source, not via a marketplace listing):
+                # fall back to a digest comparison against upstream, same as
+                # reconcile_plugins' frozen-entry check.
+                _skills, _agents, digest, _skipped = await _fetch_and_digest(
+                    current, plugin_name, marketplace_name
+                )
+                if digest != current.get("installed_digest"):
+                    current["available_version"] = resolve_plugin_version(current, None)
+                    summary["updated_available"].append(key)
+                    changed = True
             current["last_checked"] = now
-
+            current["status"] = "installed"
+            current["status_message"] = ""
             if current != entry:
                 plugins[key] = current
         except Exception as exc:
             current = dict(entry)
             message = str(exc)
-            # See reconcile_plugins's matching guard: only persist when the
-            # error itself changed, never merely for a fresh last_checked
-            # timestamp -- that would loop forever via the store listener.
             status_changed = (
                 current.get("status") != "error" or current.get("status_message") != message
             )
@@ -155,8 +255,9 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     changed = False
     now = utcnow_isoformat()
 
-    # Native skills and agents are disk-only. Remove every persisted segment
-    # that no longer belongs to a desired marketplace plugin.
+    # --- 1. Remove content for plugins no longer in desired state ---
+    # Native skills are disk-only. Preserve the user-owned agent segment while
+    # removing every stale marketplace skill/agent segment.
     desired_segments = {_plugin_segment(k) for k in plugins} | {"user"}
     removed_segments: set[str] = set()
     for kind, segments in actual_by_kind_segment.items():
@@ -185,15 +286,12 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
             needs_install = installed_version is None or (
                 desired_version is not None and desired_version != installed_version
             )
-            skills_files, agent_files, digest = await _fetch_and_digest(
-                current,
-                plugin_name,
-                marketplace_name,
-            )
             resolved_version = resolve_plugin_version(current, None)
-
             if needs_install:
-                # Replace this plugin's content as a unit, so removed companion
+                skills_files, agent_files, digest, skipped_agents = await _fetch_and_digest(
+                    current, plugin_name, marketplace_name
+                )
+                # Replace the plugin's content as a unit so removed companion
                 # files cannot survive an upgrade.
                 for kind in ("skill", "agent"):
                     for rel in actual_by_kind_segment[kind].get(seg, []):
@@ -210,19 +308,30 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
                 current["skills"] = skills
                 current["agents"] = agents
                 current["status"] = "installed"
-                current["status_message"] = ""
+                current["status_message"] = (
+                    "Skipped invalid object agents: " + ", ".join(skipped_agents)
+                    if skipped_agents
+                    else ""
+                )
                 current["installed_at"] = current.get("installed_at") or now
                 current["last_checked"] = now
                 current["available_version"] = None
                 summary["installed"].append(key)
                 changed = True
             else:
-                # Frozen or already up-to-date — just check for updates
+                # Frozen entry (no desired ``version`` bump pending): refresh
+                # ``available_version`` via a digest comparison against
+                # upstream, without touching installed_version or skills.
+                _skills, _agents, digest, _skipped = await _fetch_and_digest(
+                    current, plugin_name, marketplace_name
+                )
                 if digest != current.get("installed_digest"):
                     current["available_version"] = resolved_version
                     summary["updated_available"].append(key)
                     changed = True
                 current["last_checked"] = now
+                current["status"] = "installed"
+                current["status_message"] = ""
 
             if current != entry:
                 plugins[key] = current

@@ -6,7 +6,7 @@ import {
   PaneListFilters,
   PaneListToolbar,
   PaneListSearch,
-  PaneListVirtualized,
+  PaneListRows,
   PaneEmptyState,
 } from '../components/layout/PaneList';
 import DetailHeader, {
@@ -290,14 +290,13 @@ export default function RepositoriesPage() {
         ) : filteredRows.length === 0 ? (
           <PaneEmptyState>No repositories match the current filters.</PaneEmptyState>
         ) : (
-          <PaneListVirtualized
+          <PaneListRows
             groups={Array.from(groupedRows.entries()).map(([group, items]) => ({
               key: group,
               title: group,
               items,
             }))}
             getItemKey={(row) => row.id}
-            estimatedItemHeight={92}
             renderItem={(row) => {
               const rowStatus = scanStatus(row.scan);
               return (
