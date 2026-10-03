@@ -42,6 +42,7 @@ COPY data/skills/ ./data/skills/
 # preferences, workflow nodes, MCP entries, ...), unlike prompts/skills --
 # it's read from disk on every load_schema() call, not seeded once.
 COPY data/schemas/ ./data/schemas/
+# Native manifests are a one-time Postgres seed; discovery and edits use PG.
 COPY data/agents/ ./data/agents/
 COPY data/shims/ ./data/shims/
 COPY scripts/ ./scripts/

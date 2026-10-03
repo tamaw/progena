@@ -27,7 +27,7 @@ from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.types import Command
 
 from .factory import compile_routine_graph
-from .graph import validate_routine_graph_payload
+from .graph import RoutineContext, validate_routine_graph_payload
 from .revisions import RoutineRevisionReader
 
 logger = logging.getLogger(__name__)
@@ -68,10 +68,9 @@ async def resolve_routine_document(
     return None
 
 
-def create_routine_subagent(
+def create_routine_executor(
     *,
     routine_id: str,
-    description: str,
     model: BaseChatModel,
     state_manager: Any,
     revision_reader: RoutineRevisionReader,
@@ -80,8 +79,9 @@ def create_routine_subagent(
     routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
     tool_registry: Any = None,
     checkpointer: Any | None = None,
-) -> CompiledSubAgent:
-    """Build a ``CompiledSubAgent``-shaped dict that proxies to routine ``routine_id``."""
+    context: dict[str, Any] | None = None,
+) -> RunnableLambda:
+    """Execute a routine while preserving structured state for nested callers."""
 
     cache: dict[str, Any] = {}
 
@@ -135,13 +135,9 @@ def create_routine_subagent(
                 revision_id = await revision_reader.fetch_revision_id_for_content(
                     routine_id, graph_doc
                 )
-            else:
-                row = await revision_reader.fetch_latest(routine_id)
-                if row is not None:
-                    revision_id, graph_doc = row
 
         if revision_id is None and graph_doc is None:
-            return {"messages": [AIMessage(content=f"Routine '{routine_id}' has no stored graph.")]}
+            raise KeyError(f"Routine '{routine_id}' has no stored graph.")
 
         compiled: Any = None
         run_config: RunnableConfig | None = None
@@ -160,6 +156,7 @@ def create_routine_subagent(
                     tool_registry=tool_registry,
                     base_system_prompt=None,
                     checkpointer=checkpointer,
+                    preserve_data=True,
                 )
                 if revision_id is not None:
                     cache[revision_id] = compiled
@@ -203,7 +200,17 @@ def create_routine_subagent(
                 existing_state = await compiled.aget_state(run_config)
                 resume_existing = bool(existing_state and existing_state.values)
             parameters = state.get("parameters")
-            seed_input: dict[str, Any] = {"messages": state.get("messages") or []}
+            seed_input: dict[str, Any] = {
+                "messages": state.get("messages") or [],
+                "data": dict(state.get("data") or {}),
+            }
+            seed_input.update(
+                {
+                    key: value
+                    for key, value in seed_input["data"].items()
+                    if key not in {"messages", "data", "run_meta"}
+                }
+            )
             if isinstance(parameters, dict):
                 # Top-level keys, not nested under "parameters": the seed
                 # node (factory.py's _seed_node) reads state.get(field) for
@@ -214,6 +221,7 @@ def create_routine_subagent(
             result = await compiled.ainvoke(
                 None if resume_existing else seed_input,
                 config=run_config,
+                context={**(context or {}), "request_id": run_thread_id},
                 interrupt_after=[target_node] if target_node else None,
             )
         except (ValueError, KeyError, NotImplementedError) as exc:
@@ -238,6 +246,47 @@ def create_routine_subagent(
                         failed_node_id,
                         exc_info=True,
                     )
+            raise
+
+        update: dict[str, Any] = dict(result)
+        update["_routine_thread_id"] = run_thread_id
+        if revision_id is not None:
+            update[ROUTINE_REVISIONS_STATE_KEY] = {routine_id: revision_id}
+        return update
+
+    return RunnableLambda(_run)
+
+
+def create_routine_subagent(
+    *,
+    routine_id: str,
+    description: str,
+    model: BaseChatModel,
+    state_manager: Any,
+    revision_reader: RoutineRevisionReader,
+    agent_registry: dict[str, Any],
+    routine_registry: dict[str, Any],
+    routine_runner: Callable[..., Awaitable[dict[str, Any]]] | None = None,
+    tool_registry: Any = None,
+    checkpointer: Any | None = None,
+) -> CompiledSubAgent:
+    """Expose execution as a conversational task without leaking child state."""
+    executor = create_routine_executor(
+        routine_id=routine_id,
+        model=model,
+        state_manager=state_manager,
+        revision_reader=revision_reader,
+        agent_registry=agent_registry,
+        routine_registry=routine_registry,
+        routine_runner=routine_runner,
+        tool_registry=tool_registry,
+        checkpointer=checkpointer,
+    )
+
+    async def _run(state: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = await executor.ainvoke(state)
+        except (ValueError, KeyError, NotImplementedError) as exc:
             return {"messages": [AIMessage(content=f"Routine '{routine_id}' failed: {exc}")]}
 
         interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
@@ -254,15 +303,15 @@ def create_routine_subagent(
                     AIMessage(
                         content=(
                             f"Routine '{routine_id}' is waiting for a human answer: {question}\n"
-                            f"Resume it with resume_routine(thread_id={run_thread_id!r}, answer=<your answer>)."
+                            f"Resume it with resume_routine(thread_id={result['_routine_thread_id']!r}, answer=<your answer>)."
                         )
                     )
                 ]
             }
 
         update: dict[str, Any] = {"messages": result.get("messages") or []}
-        if revision_id is not None:
-            update[ROUTINE_REVISIONS_STATE_KEY] = {routine_id: revision_id}
+        if ROUTINE_REVISIONS_STATE_KEY in result:
+            update[ROUTINE_REVISIONS_STATE_KEY] = result[ROUTINE_REVISIONS_STATE_KEY]
         return update
 
     return {"name": routine_id, "description": description, "runnable": RunnableLambda(_run)}
@@ -323,9 +372,13 @@ async def resume_routine_thread(
         base_system_prompt=None,
         checkpointer=checkpointer,
     )
+    run_config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+    checkpoint = await compiled.aget_state(run_config)
+    saved_context = (checkpoint.values.get("data") or {}).get("context") or {}
     result = await compiled.ainvoke(
         Command(resume=answer),
-        config={"configurable": {"thread_id": thread_id}},
+        config=run_config,
+        context=cast(RoutineContext, {**saved_context, "request_id": thread_id}),
     )
     interrupts = result.get("__interrupt__") if isinstance(result, dict) else None
     if interrupts:

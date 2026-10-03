@@ -28,6 +28,7 @@ from ..routines.revisions import (
     PostgresRoutineRevisionReader,
 )
 from ..routines.subagent import (
+    create_routine_executor,
     create_routine_subagent,
     resolve_routine_document,
     resume_routine_thread,
@@ -37,6 +38,7 @@ from .adapters import (
     create_dynamic_mcp_tools,
     create_langchain_model,
 )
+from .async_subagents import create_progenitor_async_subagents
 from .backends import create_progenitor_backend
 from .middleware import (
     AsyncSubagentTrackingMiddleware,
@@ -46,10 +48,11 @@ from .middleware import (
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
-from .object_agents import create_object_agent_proxy, discover_object_agents
+from .object_agent_manifest import ensure_native_object_agents_seeded
+from .object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
+from .object_agents import create_object_agent_proxy
 from .shell_backend import ShellPaths
 from .state import ProgenitorAgentState
-from .subagents import create_progenitor_async_subagents
 
 logger = logging.getLogger(__name__)
 
@@ -330,33 +333,17 @@ async def create_progenitor_agent(
     # Routine execution is different: routine documents are authoritative in
     # Postgres, so deterministic runs resolve and compile a fresh document for
     # each invocation rather than consulting an in-memory routine registry.
-    object_sources = await discover_object_agents(
-        state_manager,
-        native_root=data_dir / "agents" / "objects",
-    )
-    agent_specs_by_name: dict[str, CompiledSubAgent] = {}
-    agent_registry: dict[str, Any] = {}
+    await ensure_native_object_agents_seeded(state_manager, data_dir / "agents" / "objects")
     reserved_names = {spec["name"] for spec in async_subagents}
 
-    def delegated_agent_specs(caller: str) -> list[CompiledSubAgent]:
-        return [spec for name, spec in agent_specs_by_name.items() if name != caller]
-
-    object_subagents: list[CompiledSubAgent] = []
-    for source in object_sources:
-        if source.name in reserved_names:
-            logger.warning(
-                "Skipping object agent %r: name collides with a native agent",
-                source.name,
-            )
-            continue
-        object_spec = create_object_agent_proxy(
+    def object_proxy(source):
+        return create_object_agent_proxy(
             source,
             state_manager=state_manager,
             model=model,
             tools=tools,
             backend=backend,
             checkpointer=checkpointer,
-            agent_specs=delegated_agent_specs,
             log_sink=log_sink,
             worktree_dir=worktree_dir,
             shell_paths=ShellPaths(
@@ -365,10 +352,13 @@ async def create_progenitor_agent(
                 timeout_seconds=config.runtime.shell_timeout_seconds,
             ),
         )
-        object_subagents.append(object_spec)
-        agent_specs_by_name[source.name] = object_spec
-        agent_registry[source.name] = object_spec["runnable"]
-        reserved_names.add(source.name)
+
+    live_objects = ObjectAgentRegistry(
+        state_manager=state_manager, proxy_factory=object_proxy, reserved_names=reserved_names
+    )
+    await live_objects.refresh()
+    object_agent_registry = live_objects.callables
+    reserved_names.update(object_agent_registry)
 
     async def _run_routine(
         routine_id_or_name: str,
@@ -386,29 +376,21 @@ async def create_progenitor_agent(
         if resolved is None:
             raise KeyError(f"unknown routine '{routine_id_or_name}'")
         routine_id, graph_doc = resolved
-        description = str(graph_doc.get("description") or "").strip() or (
-            f"Runs the {graph_doc.get('name') or routine_id} routine graph."
-        )
-        routine_spec = create_routine_subagent(
+        executor = create_routine_executor(
             routine_id=routine_id,
-            description=description,
             model=model,
             state_manager=state_manager,
             revision_reader=revision_reader,
-            agent_registry=agent_registry,
+            agent_registry=object_agent_registry,
             # Kept empty for backwards-compatible factory callers; all
             # routine-to-routine calls use routine_runner below.
             routine_registry={},
             routine_runner=_run_routine,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
+            context=dict(getattr(runtime, "context", None) or {}),
         )
-        runnable = routine_spec["runnable"]
-        # The proxy owns the compiled graph invocation and its checkpoint
-        # config.  RunnableLambda does not accept LangGraph's node ``context``
-        # keyword, so keep the nested runtime context at the factory boundary
-        # rather than passing it through the proxy wrapper.
-        return await runnable.ainvoke(state)
+        return await executor.ainvoke(state)
 
     routine_subagents: list[CompiledSubAgent] = []
     for graph_doc in await state_manager.list_routine_graphs():
@@ -433,14 +415,13 @@ async def create_progenitor_agent(
             model=model,
             state_manager=state_manager,
             revision_reader=revision_reader,
-            agent_registry=agent_registry,
+            agent_registry=object_agent_registry,
             routine_registry={},
             routine_runner=_run_routine,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
         )
         routine_subagents.append(routine_spec)
-        agent_specs_by_name[routine_id] = routine_spec
         reserved_names.add(routine_id)
 
     async def _resume_routine(thread_id: str, answer: Any) -> dict[str, Any]:
@@ -450,7 +431,7 @@ async def create_progenitor_agent(
             model=model,
             state_manager=state_manager,
             revision_reader=revision_reader,
-            agent_registry=agent_registry,
+            agent_registry=object_agent_registry,
             routine_registry={},
             routine_runner=_run_routine,
             tool_registry=tool_registry,
@@ -461,9 +442,17 @@ async def create_progenitor_agent(
 
     all_subagents: list[AsyncSubAgent | CompiledSubAgent] = [
         *async_subagents,
-        *object_subagents,
+        *live_objects.descriptors,
         *routine_subagents,
     ]
+    custom_middleware.append(
+        LiveSubagentMiddleware(
+            live_objects,
+            static_subagents=routine_subagents,
+            backend=backend,
+            state_schema=ProgenitorAgentState,
+        )
+    )
 
     # Deep Agents' `memory=` parameter injects runtime memory from the
     # Postgres-backed memory documents (see backends.py's /memories/ mount).
@@ -483,7 +472,7 @@ async def create_progenitor_agent(
         store=store,
         skills=skills_dirs,
         memory=memory_paths or None,
-        subagents=all_subagents,
+        subagents=async_subagents,
         middleware=custom_middleware,
         checkpointer=checkpointer,
         state_schema=ProgenitorAgentState,
@@ -491,12 +480,13 @@ async def create_progenitor_agent(
     # The heartbeat uses this callable for deterministic UI-triggered runs.
     # It is intentionally a resolver/runner, not a routine registry.
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
+    agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
 
     logger.info(
         "Created Progenitor DeepAgent: model=%s agents=%s object_agents=%d graph_agents=%d",
         config.llm.model_default,
         [subagent["name"] for subagent in all_subagents],
-        len(object_subagents),
+        len(live_objects.descriptors),
         len(routine_subagents),
     )
     return agent

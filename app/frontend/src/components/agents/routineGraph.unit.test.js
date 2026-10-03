@@ -2,31 +2,39 @@ import { describe, expect, it } from 'vitest';
 
 import {
   addForkLane,
-  buildLoopMembership,
-  buildStatePathSuggestions,
-  deriveActiveNodeIds,
-  filterStatePathSuggestions,
-  forkJoin,
-  forkLaneEdgePosition,
-  getExpressionAutocompleteContext,
-  incompleteLoopEdges,
-  incompleteNodes,
-  isFlowEdge,
-  isNodeComplete,
-  joinTerminals,
-  missingRequirements,
-  missingRequiredConfig,
-  nodeRequiresRunConfirmation,
-  pickEntryForIteration,
-  predecessorsOf,
-  reachableFrom,
   removeForkBranch,
   removeForkDefault,
+} from './graphEdits';
+import {
+  buildLoopMembership,
+  forkJoin,
+  forkLaneEdgePosition,
+  isFlowEdge,
+  joinTerminals,
+  predecessorsOf,
+  reachableFrom,
+} from './graphTopology';
+import {
+  incompleteLoopEdges,
+  incompleteNodes,
+  isNodeComplete,
+  missingRequirements,
+  missingRequiredConfig,
   saveStatusWhenInSync,
+  validateWorkingGraph,
+} from './graphValidation';
+import {
+  deriveActiveNodeIds,
+  nodeRequiresRunConfirmation,
+  pickEntryForIteration,
+} from './graphRunState';
+import {
+  buildStatePathSuggestions,
+  filterStatePathSuggestions,
+  getExpressionAutocompleteContext,
   schemaFieldsToText,
   textToSchemaFields,
-  validateWorkingGraph,
-} from './AgentGraph';
+} from './graphFieldHelpers';
 
 describe('nodeRequiresRunConfirmation', () => {
   it('requires confirmation when a not-yet-run predecessor is a side-effecting kind', () => {
@@ -103,7 +111,7 @@ describe('deriveActiveNodeIds', () => {
 
 // Regression coverage for the router-fork rail bug: the "+ Add branch" slot
 // is always appended after every real lane when the fork is editable (see
-// ForkBlock in AgentGraph.jsx), so the right rail terminator must land on
+// ForkBlock in RoutineChain.jsx), so the right rail terminator must land on
 // that slot, not on the last real branch lane one position early.
 describe('forkLaneEdgePosition', () => {
   it('marks the last real lane as the right rail terminator when read-only (no add-branch slot follows)', () => {

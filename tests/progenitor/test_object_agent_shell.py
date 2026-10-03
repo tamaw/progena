@@ -4,11 +4,11 @@ import pytest
 from deepagents.backends import CompositeBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware, supports_execution
 
-from app.progenitor.agent.object_agents import (
+from app.progenitor.agent.object_agent_manifest import (
     ObjectAgentSource,
-    create_object_agent_proxy,
     parse_object_agent_manifest,
 )
+from app.progenitor.agent.object_agents import create_object_agent_proxy
 from app.progenitor.agent.shell_backend import ShellPaths, build_shell_env
 from app.progenitor.config import RuntimeConfig
 
@@ -27,7 +27,10 @@ Use observed command output.
 
 class _StateManager:
     async def get_content_document(self, _kind, _relative_path):
-        return None
+        return self.content
+
+    def __init__(self, content):
+        self.content = content
 
 
 class _Compiled:
@@ -43,7 +46,7 @@ def _source(tmp_path: Path, content: str) -> ObjectAgentSource:
     return ObjectAgentSource(
         manifest=parse_object_agent_manifest(content, source=str(system_path)),
         source="native",
-        native_path=system_path,
+        relative_path="native/shell-reviewer/SYSTEM.md",
     )
 
 
@@ -61,12 +64,13 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path):
     )
     proxy = create_object_agent_proxy(
         source,
-        state_manager=_StateManager(),
+        state_manager=_StateManager(
+            (tmp_path / "shell-reviewer" / "SYSTEM.md").read_text(encoding="utf-8")
+        ),
         model="model",
         tools=[],
         backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
         checkpointer=object(),
-        agent_specs=lambda _caller: [],
         worktree_dir=tmp_path / "repos",
         shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
     )
@@ -135,18 +139,16 @@ async def test_non_shell_proxy_does_not_expose_execute_capability(monkeypatch, t
     )
     proxy = create_object_agent_proxy(
         source,
-        state_manager=_StateManager(),
+        state_manager=_StateManager(content),
         model="model",
         tools=[],
         backend=CompositeBackend(default=object(), routes={}),
         checkpointer=object(),
-        agent_specs=lambda _caller: [],
     )
     await proxy["runnable"].ainvoke({"messages": []})
 
     assert not any(
-        isinstance(middleware, FilesystemMiddleware)
-        for middleware in calls[0]["middleware"]
+        isinstance(middleware, FilesystemMiddleware) for middleware in calls[0]["middleware"]
     )
 
 

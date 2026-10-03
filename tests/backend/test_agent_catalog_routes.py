@@ -13,7 +13,7 @@ from ack_helpers import assert_acknowledged
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
-from app.backend.agent_profile_routes import (
+from app.backend.agent_catalog_routes import (
     create_agent_profile_router,
     validate_agent_graph,
 )
@@ -85,6 +85,15 @@ class FakeAgentStore:
     def get_object_agent(self, agent_id: str) -> dict[str, Any] | None:
         return None
 
+    def get_routine_document(self, agent_id: str) -> dict[str, Any] | None:
+        return (
+            self._graphs.get(agent_id, dict(_DEFAULT_GRAPH)) if agent_id in self._agents else None
+        )
+
+    def delete_routine_agent(self, agent_id: str) -> bool:
+        self._graphs.pop(agent_id, None)
+        return self._agents.pop(agent_id, None) is not None
+
     def get_agent(self, agent_id: str) -> dict[str, Any] | None:
         agent = self._agents.get(agent_id)
         if agent is None:
@@ -134,7 +143,7 @@ def harness(monkeypatch):
     # The list/detail routes read A2A/ACP agents through from Progenitor's
     # registry; keep tests hermetic by returning no remote agent profiles by
     # default.
-    import app.backend.agent_profile_routes as routes
+    import app.backend.agent_catalog_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
     monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
@@ -305,7 +314,7 @@ def _a2a_profile(agent_id: str = "a2a-observe") -> dict[str, Any]:
 
 def test_list_excludes_protocol_agents_from_internal_catalog(harness, monkeypatch):
     client, events = harness
-    import app.backend.agent_profile_routes as routes
+    import app.backend.agent_catalog_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles")
@@ -322,7 +331,7 @@ def test_list_excludes_protocol_agents_from_internal_catalog(harness, monkeypatc
 
 def test_detail_a2a_reads_through_registry(harness, monkeypatch):
     client, events = harness
-    import app.backend.agent_profile_routes as routes
+    import app.backend.agent_catalog_routes as routes
 
     monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [_a2a_profile()])
     response = client.get("/api/ui/agent-profiles/a2a-observe?request_id=r2")
@@ -563,13 +572,45 @@ def test_run_state_rejects_thread_id_from_a_different_routine(harness):
     assert response.status_code == 400
 
 
-def test_run_state_missing_agent_returns_404(harness):
-    client, _ = harness
+def test_delete_publishes_correlated_deleted_event_after_persistence(harness):
+    client, events = harness
+    response = client.delete(
+        "/api/ui/agent-profiles/alpha", headers={"X-Request-ID": "routine-delete"}
+    )
+    assert_acknowledged(response, ["agent.deleted", "agents.snapshot"])
+    assert events[0] == (
+        "agent.deleted",
+        {"agent_id": "alpha"},
+        {"request_id": "routine-delete"},
+    )
+    assert events[1][0] == "agents.snapshot"
+    assert events[1][2] == {"request_id": "routine-delete"}
+    assert [agent["id"] for agent in events[1][1]["agents"]] == ["beta"]
+    assert client.get("/api/ui/agent-profiles/alpha").status_code == 404
+    assert client.delete("/api/ui/agent-profiles/alpha").status_code == 404
+    assert len(events) == 2
+
+
+def test_failed_delete_does_not_publish_events(harness, monkeypatch):
+    client, events = harness
+
+    def fail_delete(self, agent_id):
+        raise RuntimeError("delete failed")
+
+    monkeypatch.setattr(FakeAgentStore, "delete_routine_agent", fail_delete)
+    with pytest.raises(RuntimeError, match="delete failed"):
+        client.delete("/api/ui/agent-profiles/alpha")
+    assert events == []
+
+
+def test_run_state_remains_readable_without_live_catalog_entry(harness):
+    client, events = harness
     response = client.get(
         "/api/ui/agent-profiles/missing/run-state",
         params={"thread_id": "routine:missing:rev-a:some-session"},
     )
-    assert response.status_code == 404
+    assert_acknowledged(response, ["agent.routine.run_state.loaded"])
+    assert events[-1][1]["found"] is False
 
 
 def test_store_unavailable_returns_503():
@@ -590,7 +631,7 @@ class TestBroadcastAgentProfilesSnapshot:
     """The standalone broadcast fn the registry-document watcher calls directly."""
 
     async def test_publishes_snapshot(self, monkeypatch):
-        import app.backend.agent_profile_routes as routes
+        import app.backend.agent_catalog_routes as routes
 
         monkeypatch.setattr(routes, "a2a_profiles_from_registry", lambda: [])
         monkeypatch.setattr(routes, "acp_profiles_from_registry", lambda: [])
@@ -609,7 +650,7 @@ class TestBroadcastAgentProfilesSnapshot:
         assert events[-1][0] == "agents.snapshot"
 
     async def test_noop_when_store_unavailable(self):
-        import app.backend.agent_profile_routes as routes
+        import app.backend.agent_catalog_routes as routes
 
         events: list[tuple[str, dict[str, Any]]] = []
         response = await routes.broadcast_agent_profiles_snapshot(

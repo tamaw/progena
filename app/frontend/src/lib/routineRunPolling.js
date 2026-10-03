@@ -1,10 +1,10 @@
 // Pure helpers behind the routine canvas's live run feedback (the sub-header
-// under each StepCard once Run is clicked -- see AgentGraph.jsx's
+// under each StepCard once Run is clicked -- see RoutineGraphEditor.jsx's
 // useRoutineRunPolling / StepCard). LangGraph's Postgres checkpointer only
 // ever writes a node's checkpoint AFTER it completes -- there is no "node X
 // started, still running" signal to subscribe to -- so the live view has to
 // poll rather than react to a push event, and has to *infer* which node is
-// currently executing from static graph shape (see AgentGraph.jsx's
+// currently executing from static graph shape (see graphRunState.js's
 // deriveActiveNodeIds) rather than read it off a real backend signal.
 //
 // Discovery is two-phase because the run's exact `thread_id` isn't knowable
@@ -54,7 +54,7 @@ export function parseRunThreadId(threadId) {
 /** Finds the run whose thread_id was minted for `sessionId` among the
  * `/runs` list's entries (each `routine:<id>:<revision>:<run_id>`) --
  * `run_id` is exactly the trailing segment, set to `sessionId` by
- * AgentGraph.jsx's startRun POST body. */
+ * RoutineGraphEditor.jsx's startRun POST body. */
 export function findRunBySessionId(runs, sessionId) {
   if (!sessionId) return null;
   return (runs || []).find((run) => run.run_id === sessionId) || null;

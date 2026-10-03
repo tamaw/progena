@@ -1,6 +1,6 @@
 /**
  * Structural diff between two routine graph documents (same shape as
- * `serializeGraph` in AgentGraph.jsx: `{ entry, nodes, edges, ... }`).
+ * `serializeGraph` in graphEdits.js: `{ entry, nodes, edges, ... }`).
  *
  * Used to invalidate a node's cached run details (timing/tokens/IO) when the
  * graph changes: walk from `entry` in the *current* graph, comparing each

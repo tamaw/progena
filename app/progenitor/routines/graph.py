@@ -1,7 +1,7 @@
 """Shared routine-graph definitions and validation.
 
 Mirrors :mod:`app.progenitor.workflows`'s split: this module owns the schema and
-Pydantic contract; :mod:`app.backend.agent_profile_routes` imports from here rather
+Pydantic contract; :mod:`app.backend.agent_catalog_routes` imports from here rather
 than defining its own node-kind vocabulary.
 """
 

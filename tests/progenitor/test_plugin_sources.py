@@ -3,14 +3,12 @@
 from __future__ import annotations
 
 import json
-from typing import cast
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.progenitor.plugins.sources import (
     _MAX_FILE_BYTES,
-    InstallablePluginFiles,
     MarketplaceCatalog,
     PluginFetchError,
     _extract_skills_from_files,
@@ -18,6 +16,7 @@ from app.progenitor.plugins.sources import (
     _parse_github_source,
     compute_digest,
     fetch_marketplace,
+    fetch_plugin_content_files_with_report,
     fetch_plugin_files_with_report,
     resolve_plugin_version,
 )
@@ -241,12 +240,10 @@ async def test_fetch_plugin_agents_over_http() -> None:
         return system.encode()
 
     with patch("app.progenitor.plugins.sources._fetch_url", side_effect=fetch):
-        files, skipped = await fetch_plugin_files_with_report(
-            catalog, "demo", include_agents=True
-        )
-    assert files == {"review/SKILL.md": system}
-    assert cast(InstallablePluginFiles, files).agents == {"reviewer/SYSTEM.md": system}
-    assert skipped == 0
+        files = await fetch_plugin_content_files_with_report(catalog, "demo")
+    assert files.skills == {"review/SKILL.md": system}
+    assert files.agents == {"reviewer/SYSTEM.md": system}
+    assert files.skipped_count == 0
 
 
 @pytest.mark.asyncio

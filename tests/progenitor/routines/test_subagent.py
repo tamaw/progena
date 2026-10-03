@@ -12,6 +12,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from app.progenitor.agent.state import ProgenitorAgentState
 from app.progenitor.routines.subagent import (
     ROUTINE_REVISIONS_STATE_KEY,
+    create_routine_executor,
     create_routine_subagent,
     resolve_routine_document,
     resume_routine_thread,
@@ -109,7 +110,7 @@ def _spec(reader, state_manager=None, model=None, agent_registry=None):
         routine_id=ROUTINE_ID,
         description="test routine",
         model=model or _EchoModel(),
-        state_manager=state_manager or _FakeStateManager(),
+        state_manager=state_manager or _FakeStateManager(reader._revisions.get(reader._latest)),
         revision_reader=reader,
         agent_registry=agent_registry or {},
         routine_registry={},
@@ -121,17 +122,17 @@ def _ephemeral_runner(state_manager, reader, model):
         resolved = await resolve_routine_document(state_manager, routine_id_or_name)
         assert resolved is not None
         routine_id, graph_doc = resolved
-        spec = create_routine_subagent(
+        executor = create_routine_executor(
             routine_id=routine_id,
-            description=str(graph_doc.get("description") or "test"),
             model=model,
             state_manager=state_manager,
             revision_reader=reader,
             agent_registry={},
             routine_registry={},
             routine_runner=run,
+            context=dict(getattr(runtime, "context", None) or {}),
         )
-        return await spec["runnable"].ainvoke(state)
+        return await executor.ainvoke(state)
 
     return run
 
@@ -304,7 +305,8 @@ async def test_second_invocation_hits_cache():
         {"messages": [HumanMessage("do it again")], ROUTINE_REVISIONS_STATE_KEY: pin}
     )
 
-    assert len(reader.fetch_calls) + len(reader.fetch_latest_calls) == 1
+    assert reader.fetch_revision_id_for_content_calls == [ROUTINE_ID]
+    assert not reader.fetch_calls and not reader.fetch_latest_calls
 
 
 @pytest.mark.asyncio
@@ -406,7 +408,7 @@ async def test_interrupt_surfaces_question_and_thread_id_instead_of_swallowing_i
         routine_id=ROUTINE_ID,
         description="test routine",
         model=_EchoModel(),
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},
@@ -435,7 +437,7 @@ async def test_resume_routine_thread_completes_after_interrupt():
         routine_id=ROUTINE_ID,
         description="test routine",
         model=_EchoModel(),
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},
@@ -450,7 +452,7 @@ async def test_resume_routine_thread_completes_after_interrupt():
         thread_id=thread_id,
         answer="blue",
         model=_EchoModel(),
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},
@@ -520,7 +522,7 @@ async def test_interactive_target_node_runs_through_it():
         routine_id=ROUTINE_ID,
         description="test routine",
         model=model,
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},
@@ -549,7 +551,7 @@ async def test_interactive_session_id_resumes_instead_of_restarting():
         routine_id=ROUTINE_ID,
         description="test routine",
         model=model,
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},
@@ -587,7 +589,7 @@ async def test_interactive_session_id_is_reflected_in_thread_id():
         routine_id=ROUTINE_ID,
         description="test routine",
         model=_EchoModel(),
-        state_manager=_FakeStateManager(),
+        state_manager=_FakeStateManager(reader._revisions["rev-a"]),
         revision_reader=reader,
         agent_registry={},
         routine_registry={},

@@ -129,19 +129,56 @@ def test_ensure_change_trigger_notifies_state_only():
     assert "progenitor.logs" not in emitted
 
 
-def test_routine_graph_v2_migration_distinguishes_router_and_normal_edges():
+def test_document_store_open_preserves_documents_and_installs_revision_history():
     store = PostgresDocumentStore("postgresql://example")
     pool = _HealthyPool(None)
     store._pool = pool
 
-    store._migrate_routine_graphs_to_v2()
+    store.open()
 
-    query, params = pool._cursor.executed[-1]
-    normalized = " ".join(str(query).split())
-    assert "value -> 'payload' ->> 'version' = '1.0.0'" in normalized
-    assert "WHEN edge ? 'router' THEN edge || '{\"level\":\"route\"}'::jsonb" in normalized
-    assert 'ELSE edge || \'{"level":"normal"}\'::jsonb' in normalized
-    assert params == ("progenitor.state", "routine:%")
+    assert pool.opens == 1
+    statements = [" ".join(str(query).split()) for query, _ in pool._cursor.executed]
+    emitted = " ".join(statements)
+    assert "CREATE TABLE IF NOT EXISTS store" in emitted
+    assert "CREATE TABLE IF NOT EXISTS routine_graph_revisions" in emitted
+    assert (
+        "CREATE TRIGGER progenitor_capture_routine_revision AFTER INSERT OR UPDATE ON store"
+        in emitted
+    )
+    assert (
+        "CREATE TRIGGER progenitor_capture_deleted_routine_revision BEFORE DELETE ON store"
+        in emitted
+    )
+    assert "RETURN source_row" in emitted
+    assert "IF TG_OP = 'DELETE' THEN source_row := OLD;" in emitted
+    assert "graph_doc := source_row.value -> 'payload'" in emitted
+    assert (
+        "CREATE TRIGGER progenitor_routine_revisions_immutable BEFORE UPDATE ON routine_graph_revisions"
+        in emitted
+    )
+    # Existing graphs still get immutable snapshots without rewriting the source
+    # documents. Subsequent writes continue to capture revisions via the trigger.
+    backfill = statements[-1]
+    assert backfill.startswith("INSERT INTO routine_graph_revisions")
+    assert "FROM store" in backfill
+    assert "value -> 'payload'" in backfill
+    assert "ON CONFLICT (routine_id, revision_id) DO NOTHING" in backfill
+    assert "RAISE EXCEPTION 'routine_graph_revisions rows are immutable" in emitted
+    # Setup only installs schema/triggers and backfills the history table, whether
+    # the database is fresh or already contains documents/checkpoints.
+    assert all(
+        statement.startswith(
+            (
+                "CREATE TABLE",
+                "CREATE INDEX",
+                "CREATE OR REPLACE FUNCTION",
+                "DROP TRIGGER",
+                "CREATE TRIGGER",
+                "INSERT INTO routine_graph_revisions",
+            )
+        )
+        for statement in statements
+    )
 
 
 class _RowsCursor(_FakeCursor):
@@ -241,10 +278,16 @@ async def test_listener_resyncs_on_connect_then_streams_changes(monkeypatch):
 
     resyncs: list[bool] = []
     changes: list[str] = []
+
+    def resync():
+        # LISTEN must precede the snapshot read to avoid losing concurrent writes.
+        assert any("LISTEN" in str(query) for query in fake.executed)
+        resyncs.append(True)
+
     listener = StoreChangeListener(
         "postgresql://example",
         on_change=changes.append,
-        on_resync=lambda: resyncs.append(True),
+        on_resync=resync,
     )
 
     await listener._listen_once()

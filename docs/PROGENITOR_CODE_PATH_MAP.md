@@ -80,7 +80,7 @@ main.py
           -> agent/langchain_adapter.py::create_langchain_model()
           -> agent/backends.py::create_progenitor_backend()
           -> agent/tools_adapter.py::create_deepagent_tools()
-          -> agent/subagents.py::create_progenitor_async_subagents()
+          -> agent/async_subagents.py::create_progenitor_async_subagents()
           -> agent/middleware.py middleware classes
           -> deepagents.create_deep_agent()
 ```
@@ -204,16 +204,24 @@ Middleware stack created by `create_progenitor_agent()`:
 | `SecretRedactionMiddleware` | Strongly used | Redacts secrets for logging paths while preserving original args for execution. |
 | `AuditLoggingMiddleware` | Strongly used when `log_dir` is provided | Emits tool stream events and writes `tool_calls.jsonl`. |
 
-### `agent/subagents.py`
+### `agent/async_subagents.py`
 
 Status: minimal -- regular (synchronous) subagent delegation is no longer
 code-defined here. `create_progenitor_agent()` (`agent/agent.py`) now builds
-its full subagent menu from `discover_object_agents()` (manifest-backed
-object agents, `agent/object_agents.py`) plus routine-graph subagents, and
-passes `[*async_subagents, *object_subagents, *routine_subagents]` to
-`create_deep_agent(subagents=...)`. The only thing `agent/subagents.py`
+its full subagent menu from persisted object definitions
+(`agent/object_agent_manifest.py`) plus routine-graph subagents. Async descriptors
+go to `create_deep_agent(subagents=...)`; `LiveSubagentMiddleware` supplies
+object/routine task descriptors and refreshes object registration after Postgres
+notifications. The only thing `agent/async_subagents.py`
 still defines is `create_hello_world_async_subagent()`, the deterministic
 `AsyncSubAgent` used for background-delegation smoke tests.
+
+Object definitions are parsed/discovered separately from their runtime in
+`agent/object_agents.py`. Its reusable construction entry point preserves
+scoped tools, mounts and permissions; the awaited proxy reloads the manifest
+from Postgres on each invocation. Native manifests are seeded once from bundled
+files; catalog edits do not rewrite those files. This prepares reuse by a future background adapter, but
+does not yet make object-agent execution selectable as async by a routine.
 
 | Subagent | Current use | Notes |
 | --- | --- | --- |
@@ -662,7 +670,7 @@ Evidence:
 | --- | --- | --- |
 | Scheduler | `runtime/scheduler.py` | Scheduler enabled and due entries exist. |
 | A2A task polling | `runtime/a2a_tasks.py` | Tracked tasks exist. |
-| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Manifest-backed (`data/agents/objects/`) or persisted routine graph exists; actual use depends on model delegation. |
+| Object-agent/routine-graph subagents | `agent/object_agents.py`, `routines/subagent.py` | Postgres agent/routine documents; native agent files are a one-time seed, and object registration refreshes through LISTEN/NOTIFY. |
 | Reasoning config | `agent/langchain_adapter.py`, `streaming_utils.py`, `stream_events.py` | `config.llm.reasoning_enabled`. |
 | Skills | `agent/agent.py` | Postgres `skill:` content documents under `progenitor/` exist. |
 | Runtime memories | `agent/agent.py` | Postgres `memory:` content documents; default `AGENTS.md` is seeded. |

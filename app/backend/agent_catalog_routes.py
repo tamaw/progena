@@ -1,9 +1,8 @@
-"""Agent profile routes for the backend-owned agent catalog.
+"""Routes for the agent catalog consumed by the Agents page.
 
-This is a distinct resource from the runtime A2A registry which describes live
-runtime state; these routes serve the editable agent catalog (definition +
-LangGraph-style graph) stored in the backend database and consumed by the
-Agents page.
+The catalog combines backend-owned routine metadata, routine graph documents
+and revision/checkpoint history in the shared runtime store, manifest-backed
+object agents, and live A2A/ACP profiles from the runtime registry.
 
 Mirrors the chat router pattern: a GET acknowledges the request and publishes the
 data on the shared ``/api/ui/stream`` so the frontend updates through its realtime
@@ -23,7 +22,6 @@ from pydantic import BaseModel, Field
 
 from app.progenitor.routines.graph import (
     ROUTINE_GRAPH_VERSION,
-    VALID_ROUTINE_NODE_KINDS,
     validate_routine_graph,
     validate_routine_graph_payload,
 )
@@ -144,12 +142,6 @@ class RunRoutineRequest(BaseModel):
     parameters: dict[str, Any] | None = None
 
 
-# Allowed node "kind" values for the editable routine graph. These are executable
-# step kinds, compiled into a LangGraph runnable by
-# ``app.progenitor.routines.factory``. Re-exported here for callers that imported
-# the old name (e.g. ``agent_store.reset_legacy_graphs``'s dev migration helper).
-VALID_NODE_KINDS = VALID_ROUTINE_NODE_KINDS
-
 # JSON schema for a full routine graph document (id/name/description/version/entry/
 # nodes/edges). Published so the Agents page can offer schema-aware JSON editing.
 # The PATCH endpoint derives id/name/description/version from the owning agent
@@ -207,7 +199,13 @@ def validate_agent_graph_document(
 
 def build_agent_profiles(store: AgentStore) -> AgentProfilesResponse:
     """Build the internal-agent catalog from backend graph and manifest sources."""
-    records = list(store.list_agents()) + store.list_object_agents()
+    # Metadata can briefly outlive its live graph while DELETE notifications
+    # are reconciled. Reads must hide these rows without recreating documents.
+    records = [
+        record
+        for record in store.list_agents()
+        if record.get("kind") != "routine" or store.get_routine_document(record["id"]) is not None
+    ] + store.list_object_agents()
     agents = [AgentProfile(**record) for record in records]
     return AgentProfilesResponse(agents=agents, total=len(agents))
 
@@ -285,7 +283,10 @@ def create_agent_profile_router(
             return None
         if agent_id.startswith("object-"):
             return store.get_object_agent(agent_id)
-        return store.get_agent(agent_id)
+        profile = store.get_agent(agent_id)
+        if profile and profile.get("kind") == "routine" and profile.get("graph") is None:
+            return None
+        return profile
 
     @router.get("/agent-profiles", status_code=202, response_model=UiRequestAcknowledgement)
     async def list_agent_profiles(
@@ -458,7 +459,7 @@ def create_agent_profile_router(
         if agent_id.startswith("a2a-") or agent_id.startswith("acp-"):
             raise HTTPException(status_code=409, detail="A2A and ACP agents are read-only")
         agent = await asyncio.to_thread(store.get_agent, agent_id)
-        if agent is None:
+        if agent is None or (agent.get("kind") == "routine" and agent.get("graph") is None):
             raise HTTPException(status_code=404, detail="Agent not found")
         try:
             validate_agent_graph_document(
@@ -525,7 +526,7 @@ def create_agent_profile_router(
         request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
         agent = await asyncio.to_thread(store.get_agent, agent_id)
-        if agent is None:
+        if agent is None or (agent.get("kind") == "routine" and agent.get("graph") is None):
             raise HTTPException(status_code=404, detail="Agent not found")
 
         input_schema = (agent.get("graph") or {}).get("input_schema")
@@ -592,10 +593,6 @@ def create_agent_profile_router(
         as of that checkpoint.
         """
         request_id = _request_correlation_id(request, x_request_id)
-        store = _require_store()
-        agent = await asyncio.to_thread(store.get_agent, agent_id)
-        if agent is None:
-            raise HTTPException(status_code=404, detail="Agent not found")
         if not thread_id.startswith(f"routine:{agent_id}:"):
             raise HTTPException(status_code=400, detail="thread_id does not belong to this routine")
 
@@ -735,10 +732,10 @@ def create_agent_profile_router(
     ):
         """Delete a routine or an author-created ("source: user") object agent.
 
-        Native object agents are repo files (edit the repo instead) and
-        marketplace agents are plugin-managed (Plugins > Uninstall) -- neither
-        is deletable here, nor are A2A/ACP agents (external registries, no
-        row to delete).
+        Native object manifests are Postgres documents seeded once from the
+        repo; UI policy protects them from deletion here. Marketplace agents
+        are removed through Plugins > Uninstall. A2A/ACP agents belong to
+        external registries and have no local catalog row to delete.
         """
         request_id = _request_correlation_id(request, x_request_id)
         store = _require_store()
@@ -754,12 +751,13 @@ def create_agent_profile_router(
             if agent is None or agent.get("kind") != "routine":
                 raise HTTPException(status_code=404, detail="Agent not found")
             await asyncio.to_thread(store.delete_routine_agent, agent_id)
+        broadcast_ui_event("agent.deleted", {"agent_id": agent_id}, request_id=request_id)
         response = await asyncio.to_thread(build_agent_profiles, store)
         broadcast_ui_event(
             "agents.snapshot",
             response.model_dump(by_alias=True),
             request_id=request_id,
         )
-        return acknowledgement_response(request_id, ["agents.snapshot"])
+        return acknowledgement_response(request_id, ["agent.deleted", "agents.snapshot"])
 
     return router

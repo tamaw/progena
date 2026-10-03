@@ -25,7 +25,7 @@ class ExprIssue extends Error {
   }
 }
 
-// Exported for reuse by AgentGraph.jsx's Expression-field autocomplete, which
+// Exported for reuse by graphFieldHelpers.js's Expression-field autocomplete, which
 // needs to know exactly what token (if any) precedes the caret -- string/
 // number literals in particular, so it never offers state-path suggestions
 // while the author is typing inside a quoted string.

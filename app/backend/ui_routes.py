@@ -62,7 +62,7 @@ from app.progenitor.workflows import (
     workflow_id_from_path,
 )
 
-from .agent_profile_routes import (
+from .agent_catalog_routes import (
     AgentGraphModel,
     broadcast_agent_profiles_snapshot,
     create_agent_profile_router,
@@ -4356,9 +4356,10 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
     if store is None:
         return
     if changed_key is None:
-        # Full resync (listener reconnect): catch every routine document, not
-        # just the one that triggered this NOTIFY.
-        agent_ids = await asyncio.to_thread(store.list_routine_document_ids)
+        # Include rows whose documents disappeared while disconnected.
+        document_ids = await asyncio.to_thread(store.list_routine_document_ids)
+        catalog_ids = await asyncio.to_thread(store.list_routine_catalog_ids)
+        agent_ids = sorted(set(document_ids) | set(catalog_ids))
     elif changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX):
         agent_ids = [changed_key.removeprefix(ROUTINE_GRAPH_KEY_PREFIX)]
     else:
@@ -4371,13 +4372,17 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
         try:
             graph_document = await asyncio.to_thread(store.get_routine_document, agent_id)
             if graph_document is None:
+                deleted = await asyncio.to_thread(store.delete_routine_catalog_entry, agent_id)
+                if deleted:
+                    roster_changed = True
+                    broadcast_ui_event("agent.deleted", {"agent_id": agent_id})
                 continue
             created = await asyncio.to_thread(store.ensure_routine_agent, agent_id, graph_document)
             agent = await asyncio.to_thread(store.get_agent, agent_id)
         except Exception:
             logger.debug("Failed to reconcile routine agent %r", agent_id, exc_info=True)
             continue
-        if agent is None:
+        if agent is None or not isinstance(agent.get("graph"), dict):
             continue
         roster_changed = roster_changed or created
         # `agent["graph"]` goes through `_graph_payload`, which re-reads the
@@ -4404,7 +4409,7 @@ async def _reconcile_routine_agent(changed_key: str | None) -> None:
         )
         # The `store` trigger that fired this reconcile pass also appended a
         # row to `routine_graph_revisions` (or no-opped on identical content,
-        # e.g. a Restore -- see AgentGraph.jsx's revisions panel). Push the
+        # e.g. restoring a previously captured graph). Push the
         # refreshed list so an already-open Revisions panel picks up a new
         # entry live instead of only on its next manual Refresh.
         try:

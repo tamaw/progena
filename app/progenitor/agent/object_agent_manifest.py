@@ -1,0 +1,372 @@
+"""Parsing and discovery for manifest-backed object-agent definitions."""
+
+from __future__ import annotations
+
+import logging
+import re
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
+from typing import Any, Final
+
+import yaml
+from deepagents.middleware.filesystem import FilesystemPermission
+
+logger = logging.getLogger(__name__)
+
+OBJECT_AGENT_KIND = "object"
+OBJECT_AGENT_SYSTEM_FILE = "SYSTEM.md"
+OBJECT_AGENT_DOCUMENT_KIND = "agent"
+NATIVE_OBJECT_AGENT_SOURCE = "native"
+
+
+DEFAULT_SHELL_MAX_OUTPUT_BYTES: Final = 100_000
+DEFAULT_SHELL_SYSTEM_PATH: Final = "/usr/bin:/bin"
+
+
+@dataclass(frozen=True)
+class ObjectAgentShellConfig:
+    """Runtime shell settings parsed from flat manifest front matter."""
+
+    max_output_bytes: int
+    env_passthrough: tuple[str, ...]
+    system_path: str
+
+
+@dataclass(frozen=True)
+class ObjectAgentMount:
+    """A virtual route exposed to a manifest-backed object agent."""
+
+    path: str
+    access: str
+
+
+_SHELL_ENV_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+
+@dataclass(frozen=True)
+class ObjectAgentManifest:
+    """Runtime-supported object-agent front matter."""
+
+    name: str
+    description: str
+    version: str
+    system_prompt: str
+    model: str | None
+    tools: tuple[str, ...]
+    skills: tuple[str, ...]
+    permissions: tuple[FilesystemPermission, ...]
+    mounts: tuple[ObjectAgentMount, ...]
+    interrupt_on: dict[str, bool | dict[str, Any]]
+    shell: ObjectAgentShellConfig | None = None
+
+
+@dataclass(frozen=True)
+class ObjectAgentSource:
+    """One discovered agent definition and its authoritative source."""
+
+    manifest: ObjectAgentManifest
+    source: str
+    relative_path: str | None = None
+
+    @property
+    def name(self) -> str:
+        return self.manifest.name
+
+
+def _require_string(value: Any, *, field: str, source: str) -> str:
+    if not isinstance(value, str) or not (result := value.strip()):
+        raise ValueError(f"{source}: '{field}' must be a non-empty string")
+    return result
+
+
+def _string_list(value: Any, *, field: str, source: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(
+        isinstance(item, str) and item.strip() for item in value
+    ):
+        raise ValueError(f"{source}: '{field}' must be an array of non-empty strings")
+    return tuple(item.strip() for item in value)
+
+
+def _parse_permissions(value: Any, *, source: str) -> tuple[FilesystemPermission, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{source}: 'permissions' must be an array")
+
+    result: list[FilesystemPermission] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{source}: permissions[{index}] must be an object")
+        operations = entry.get("operations")
+        paths = entry.get("paths")
+        mode = entry.get("mode", "allow")
+        if (
+            not isinstance(operations, list)
+            or not operations
+            or any(operation not in {"read", "write"} for operation in operations)
+        ):
+            raise ValueError(
+                f"{source}: permissions[{index}].operations must contain read and/or write"
+            )
+        if (
+            not isinstance(paths, list)
+            or not paths
+            or not all(isinstance(path, str) and path for path in paths)
+        ):
+            raise ValueError(f"{source}: permissions[{index}].paths must be non-empty strings")
+        if mode not in {"allow", "deny"}:
+            raise ValueError(f"{source}: permissions[{index}].mode must be allow or deny")
+        result.append(
+            FilesystemPermission(
+                operations=list(operations),
+                paths=list(paths),
+                mode=mode,
+            )
+        )
+    return tuple(result)
+
+
+def _canonical_virtual_path(value: Any, *, field: str, source: str) -> str:
+    """Validate a virtual backend path, never a host filesystem path."""
+    if not isinstance(value, str) or not value.startswith("/") or "\\" in value:
+        raise ValueError(f"{source}: '{field}' must be an absolute virtual path")
+    path = PurePosixPath(value)
+    if ".." in path.parts or str(path) != value.rstrip("/") and value != "/":
+        raise ValueError(f"{source}: '{field}' must be a canonical virtual path without traversal")
+    # A mount names a directory route.  Normalise its trailing slash so route
+    # containment is unambiguous, while permissions may name files or dirs.
+    return str(path) + ("/" if field.startswith("mounts") and str(path) != "/" else "")
+
+
+def _parse_mounts(value: Any, *, source: str) -> tuple[ObjectAgentMount, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError(f"{source}: 'mounts' must be an array")
+    mounts: list[ObjectAgentMount] = []
+    for index, entry in enumerate(value):
+        if not isinstance(entry, Mapping):
+            raise ValueError(f"{source}: mounts[{index}] must be an object")
+        path = _canonical_virtual_path(
+            entry.get("path"), field=f"mounts[{index}].path", source=source
+        )
+        access = entry.get("access")
+        if access not in {"read", "read-write"}:
+            raise ValueError(f"{source}: mounts[{index}].access must be read or read-write")
+        mounts.append(ObjectAgentMount(path=path, access=access))
+    if len({mount.path for mount in mounts}) != len(mounts):
+        raise ValueError(f"{source}: mounts must not contain duplicate paths")
+    return tuple(mounts)
+
+
+def _path_is_mounted(path: str, mounts: Iterable[ObjectAgentMount]) -> bool:
+    normalized = _canonical_virtual_path(path, field="permissions.paths", source="manifest")
+    return any(
+        normalized.startswith(mount.path) or normalized == mount.path.rstrip("/")
+        for mount in mounts
+    )
+
+
+def _validate_permissions_within_mounts(
+    permissions: Iterable[FilesystemPermission], mounts: Iterable[ObjectAgentMount], *, source: str
+) -> None:
+    mount_list = tuple(mounts)
+    for rule in permissions:
+        for path in rule.paths:
+            if not _path_is_mounted(path, mount_list):
+                raise ValueError(f"{source}: permissions path {path!r} is outside declared mounts")
+
+
+def _parse_shell(
+    value: Any,
+    *,
+    env_passthrough_value: Any,
+    has_env_passthrough: bool,
+    source: str,
+) -> ObjectAgentShellConfig | None:
+    if value is None:
+        enabled = False
+    elif isinstance(value, bool):
+        enabled = value
+    else:
+        raise ValueError(f"{source}: 'shell' must be a boolean")
+
+    env_passthrough = _string_list(env_passthrough_value, field="env_passthrough", source=source)
+    if any(_SHELL_ENV_NAME.fullmatch(name) is None for name in env_passthrough):
+        raise ValueError(
+            f"{source}: env_passthrough entries must be upper-case environment variable names"
+        )
+    if not enabled:
+        if has_env_passthrough:
+            raise ValueError(f"{source}: env_passthrough requires shell: true")
+        return None
+
+    return ObjectAgentShellConfig(
+        max_output_bytes=DEFAULT_SHELL_MAX_OUTPUT_BYTES,
+        env_passthrough=env_passthrough,
+        system_path=DEFAULT_SHELL_SYSTEM_PATH,
+    )
+
+
+def _parse_interrupt_on(value: Any, *, source: str) -> dict[str, bool | dict[str, Any]]:
+    if value is None:
+        return {}
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{source}: 'interrupt_on' must be an object keyed by tool name")
+
+    result: dict[str, bool | dict[str, Any]] = {}
+    for tool_name, config in value.items():
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise ValueError(f"{source}: interrupt_on keys must be non-empty tool names")
+        if not isinstance(config, (bool, dict)):
+            raise ValueError(f"{source}: interrupt_on.{tool_name} must be a boolean or object")
+        result[tool_name.strip()] = config
+    return result
+
+
+def parse_front_matter(content: str, *, source: str) -> dict[str, Any]:
+    """Parse the raw YAML front matter of a ``SYSTEM.md`` document.
+
+    Returns every key present, including ones the runtime manifest ignores --
+    this is what lets callers (e.g. the Agents page) represent the literal
+    file rather than a fixed, hardcoded field set.
+    """
+    if not content.startswith("---"):
+        raise ValueError(f"{source}: SYSTEM.md must begin with YAML front matter")
+    try:
+        _, front_matter, _ = content.split("---", 2)
+    except ValueError as exc:
+        raise ValueError(f"{source}: SYSTEM.md must close YAML front matter with ---") from exc
+    try:
+        raw = yaml.safe_load(front_matter)
+    except yaml.YAMLError as exc:
+        raise ValueError(f"{source}: invalid YAML front matter: {exc}") from exc
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{source}: YAML front matter must be an object")
+    return dict(raw)
+
+
+def parse_object_agent_manifest(content: str, *, source: str) -> ObjectAgentManifest:
+    """Parse a ``SYSTEM.md`` document without applying JSON Schema validation."""
+    raw = parse_front_matter(content, source=source)
+    system_prompt = content.split("---", 2)[2]
+    name = _require_string(raw.get("name"), field="name", source=source)
+    description = _require_string(raw.get("description"), field="description", source=source)
+    version = _require_string(raw.get("version"), field="version", source=source)
+    if raw.get("kind") != OBJECT_AGENT_KIND:
+        raise ValueError(f"{source}: 'kind' must be '{OBJECT_AGENT_KIND}'")
+    body = system_prompt.strip()
+    if not body:
+        raise ValueError(f"{source}: SYSTEM.md must contain a Markdown system prompt")
+
+    model = raw.get("model")
+    if model is not None:
+        model = _require_string(model, field="model", source=source)
+    skills = _string_list(raw.get("skills"), field="skills", source=source)
+    if any(not skill.startswith("/skills/") or ".." in Path(skill).parts for skill in skills):
+        raise ValueError(f"{source}: skills must be absolute paths below /skills/")
+
+    mounts = _parse_mounts(raw.get("mounts"), source=source)
+    permissions = _parse_permissions(raw.get("permissions"), source=source)
+    # Manifests written before scoped mounts existed remain valid.  They have
+    # no filesystem surface now; once a manifest declares mounts every
+    # operation-level permission must be contained by one of them.
+    if mounts:
+        _validate_permissions_within_mounts(permissions, mounts, source=source)
+
+    return ObjectAgentManifest(
+        name=name,
+        description=description,
+        version=version,
+        system_prompt=body,
+        model=model,
+        tools=_string_list(raw.get("tools"), field="tools", source=source),
+        skills=skills,
+        permissions=permissions,
+        mounts=mounts,
+        interrupt_on=_parse_interrupt_on(raw.get("interrupt_on"), source=source),
+        shell=_parse_shell(  # nosec B604 - `shell` here is the ObjectAgentManifest field name, not subprocess.run's shell= kwarg
+            raw.get("shell"),
+            env_passthrough_value=raw.get("env_passthrough"),
+            has_env_passthrough="env_passthrough" in raw,
+            source=source,
+        ),
+    )
+
+
+NATIVE_OBJECT_AGENT_SEED_MARKER = "native_object_agents_seed_v1"
+
+
+async def ensure_native_object_agents_seeded(state_manager: Any, native_root: Path) -> None:
+    """Import bundled manifests once, independently of user/plugin documents.
+
+    The durable completion marker survives deletion of every native document.
+    Existing native documents are preserved, including when retrying a partial
+    seed after a failed startup. Missing seed assets leave the marker unset.
+    """
+    store = state_manager._runtime_store
+    if await store.peek_document(NATIVE_OBJECT_AGENT_SEED_MARKER) is not None:
+        return
+    root = Path(native_root)
+    if not root.is_dir():
+        logger.warning("Skipping native object agent seed: directory missing: %s", root)
+        return
+    for agent_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+        system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
+        if not system_path.is_file():
+            continue
+        relative_path = f"native/{agent_dir.name}/{OBJECT_AGENT_SYSTEM_FILE}"
+        if (
+            await state_manager.get_content_document(OBJECT_AGENT_DOCUMENT_KIND, relative_path)
+            is not None
+        ):
+            continue
+        content = system_path.read_text(encoding="utf-8")
+        parse_object_agent_manifest(content, source=str(system_path))
+        await state_manager.save_content_document(
+            OBJECT_AGENT_DOCUMENT_KIND, relative_path, content
+        )
+    await store.save_document(NATIVE_OBJECT_AGENT_SEED_MARKER, {"complete": True})
+
+
+async def discover_object_agents(
+    state_manager: Any,
+) -> list[ObjectAgentSource]:
+    """Load persisted manifests with native precedence; never read seed files."""
+    by_name: dict[str, ObjectAgentSource] = {}
+    documents = await state_manager.list_content_documents(OBJECT_AGENT_DOCUMENT_KIND)
+    for relative_path, content in sorted(
+        documents, key=lambda row: (not row[0].startswith("native/"), row[0])
+    ):
+        parts = relative_path.split("/")
+        if len(parts) != 3 or parts[-1] != OBJECT_AGENT_SYSTEM_FILE:
+            continue
+        source_label = (
+            NATIVE_OBJECT_AGENT_SOURCE
+            if parts[0] == "native"
+            else f"marketplace:{parts[0]}"
+            if "__" in parts[0]
+            else "user"
+        )
+        try:
+            manifest = parse_object_agent_manifest(content, source=f"agent:{relative_path}")
+        except ValueError as exc:
+            logger.warning("Skipping invalid object agent document %s: %s", relative_path, exc)
+            continue
+        if manifest.name in by_name:
+            logger.warning(
+                "Skipping object agent %r from %s because %s already defines it",
+                manifest.name,
+                relative_path,
+                by_name[manifest.name].source,
+            )
+            continue
+        by_name[manifest.name] = ObjectAgentSource(
+            manifest=manifest,
+            source=source_label,
+            relative_path=relative_path,
+        )
+    return sorted(by_name.values(), key=lambda item: item.name)
