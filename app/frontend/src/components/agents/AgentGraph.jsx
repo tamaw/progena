@@ -24,7 +24,7 @@ import {
   selectAgentRunState,
 } from '../../store/uiDataSlice';
 import { DeleteActionIcon, DetailHeaderAction, DetailHeaderActions, OpenActionIcon, PlayActionIcon, StopActionIcon } from '../layout/DetailHeader';
-import { PaneListVirtualized } from '../layout/PaneList';
+import { PaneListRows } from '../layout/PaneList';
 import { formatAge } from './agentFormat';
 import { checkExpressionSyntax, tokenize } from '../../lib/restrictedExpression';
 import {
@@ -4628,11 +4628,10 @@ function RoutineRunsPanel({ agentId, onClose, runsList, viewedIndex, onSelectInd
         <p className="agents-graph-runs__empty">No runs recorded yet.</p>
       ) : null}
       {runsList ? (
-        <PaneListVirtualized
+        <PaneListRows
           className="agents-graph-runs__list"
           items={virtualItems}
           getItemKey={(item) => item.thread_id || 'load-more'}
-          estimatedItemHeight={78}
           renderItem={(item, index) => {
             if (item.loadMoreRow) {
               return (
