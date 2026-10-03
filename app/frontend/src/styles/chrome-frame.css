@@ -2453,6 +2453,17 @@ body,
   border: 1px solid var(--color-border);
   border-radius: 12px;
 }
+.chrome-search-panel__input > span {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+}
+
+.chrome-search-panel__input input {
+  padding-left: 2px;
+}
 
 .chrome-search-panel__input:focus-within {
   border-color: var(--color-accent);
@@ -3525,17 +3536,6 @@ body,
   padding: 6px 6px 14px;
 }
 
-.pane-list-virtualized {
-  position: relative;
-  width: 100%;
-}
-
-.pane-list-virtualized__row {
-  position: absolute;
-  right: 0;
-  left: 0;
-  overflow: visible;
-}
 
 .chat-pane-group__head,
 .task-group__head,

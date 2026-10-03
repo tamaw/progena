@@ -32,7 +32,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 import { usePaneCollapse } from '../components/layout/usePaneCollapse';
@@ -582,10 +582,9 @@ export default function KnowledgePage() {
               <PaneEmptyState>{bases.length ? 'No matching knowledge bases.' : 'No knowledge bases.'}</PaneEmptyState>
             ) : null}
             {groups.length ? (
-              <PaneListVirtualized
+              <PaneListRows
                 groups={groups.map((group) => ({ ...group, items: group.bases }))}
                 getItemKey={(base) => base.id}
-                estimatedItemHeight={72}
                 renderItem={(base) => (
                   <KnowledgeCard
                     base={base}

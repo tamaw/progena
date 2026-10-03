@@ -22,7 +22,7 @@ import {
   PaneListFilters,
   PaneListSearch,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 
@@ -304,7 +304,7 @@ export default function PromptsPage() {
     () => buildPromptTree(visiblePrompts).map((group) => ({ ...group, ...sortTreeNode(group) })),
     [visiblePrompts]
   );
-  const virtualPromptGroups = useMemo(
+  const promptGroups = useMemo(
     () => promptTree.map((group) => ({
       key: group.name,
       title: group.name,
@@ -413,12 +413,11 @@ export default function PromptsPage() {
         {!loading && visiblePrompts.length === 0 && prompts.length > 0 && (
           <PaneEmptyState>No prompts match the current filters.</PaneEmptyState>
         )}
-        {!loading && virtualPromptGroups.length ? (
-          <PaneListVirtualized
+        {!loading && promptGroups.length ? (
+          <PaneListRows
             className="prompts-sidebar-body"
-            groups={virtualPromptGroups}
+            groups={promptGroups}
             getItemKey={(row) => row.key}
-            estimatedItemHeight={42}
             renderGroupHeader={(group) => (
               <div className="sess-group__head">
                 {group.title} <span className="muted">· {groupCounts[group.title] || 0}</span>

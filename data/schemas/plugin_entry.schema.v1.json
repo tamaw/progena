@@ -5,7 +5,7 @@
   "type": "object",
   "properties": {
     "source": {
-      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object; see app/progenitor/plugins/sources.py:_resolve_plugin_source for exactly what each source_type consumes.",
+      "description": "Source specification for fetching the plugin. Required. May be a relative path string or a structured object; see app/progenitor/plugins/sources.py:_fetch_plugin_archive for exactly what each source_type consumes.",
       "oneOf": [
         {
           "type": "string",
@@ -38,6 +38,18 @@
           "additionalProperties": false
         }
       ]
+    },
+    "marketplace_source": {
+      "type": ["string", "null"],
+      "description": "Registered marketplace source used to discover this plugin."
+    },
+    "marketplace_plugin_source": {
+      "type": ["string", "object", "null"],
+      "description": "Original plugin source from the marketplace manifest."
+    },
+    "marketplace_commit_sha": {
+      "type": ["string", "null"],
+      "description": "Repository commit used when the plugin was installed."
     },
     "version": {
       "type": "string",

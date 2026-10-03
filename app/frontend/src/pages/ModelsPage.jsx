@@ -6,7 +6,7 @@ import {
   PaneListToolbar,
   PaneListSearch,
   PaneListSortButton,
-  PaneListVirtualized,
+  PaneListRows,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
 import DetailPane from '../components/layout/DetailPane';
@@ -217,7 +217,7 @@ export default function ModelsPage() {
           <PaneListSortButton>Provider</PaneListSortButton>
         </PaneListToolbar>
         {visibleModels.length ? (
-          <PaneListVirtualized
+          <PaneListRows
             groups={providerOrder.map((provider) => ({
               key: provider,
               title: provider,

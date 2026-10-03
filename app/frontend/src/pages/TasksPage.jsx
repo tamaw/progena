@@ -20,7 +20,7 @@ import {
   PaneListSearch,
   PaneListSortButton,
   PaneListToolbar,
-  PaneListVirtualized,
+  PaneListRows,
   PaneSection,
 } from '../components/layout/PaneList';
 import PageShell from '../components/layout/PageShell';
@@ -950,12 +950,11 @@ export default function TasksPage({ context = null }) {
         {error ? <div className="task-alert">{error}</div> : null}
         {!loading && !visibleCards.length ? <PaneEmptyState>No matching tasks.</PaneEmptyState> : null}
         {!loading && groupedColumns.some((column) => column.cards.length) ? (
-          <PaneListVirtualized
+          <PaneListRows
             groups={groupedColumns
               .filter((column) => column.cards.length)
               .map((column) => ({ ...column, items: column.cards }))}
             getItemKey={(card) => card.id}
-            estimatedItemHeight={82}
             renderItem={(card, index) => {
               const column = groupedColumns.find((entry) => entry.cards.some((item) => item.id === card.id));
               return (

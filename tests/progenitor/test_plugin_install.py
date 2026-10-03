@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.progenitor.plugins.install import check_plugin_updates, reconcile_plugins
-from app.progenitor.plugins.sources import PluginFetchError
+from app.progenitor.plugins.sources import InstallablePluginFiles, PluginFetchError
 from tests.progenitor.test_backends import FakeContentStateManager
 
 
@@ -95,12 +95,83 @@ async def test_installs_new_entry(state_manager, fake_files, fake_digest):
 
 
 @pytest.mark.asyncio
+async def test_installs_valid_object_agents_alongside_skills(state_manager, fake_files, fake_digest):
+    state_manager._plugins = {
+        "plugins": {
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin", "ref": "v2.1.0"},
+                "version": "2.1.0",
+            }
+        }
+    }
+    agent_system = (
+        "---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\n"
+        "kind: object\n---\nReview."
+    )
+    files = InstallablePluginFiles(
+        fake_files,
+        agents={"reviewer/SYSTEM.md": agent_system},
+    )
+
+    with (
+        patch(
+            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+            new=AsyncMock(return_value=(files, 0)),
+        ),
+        patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
+    ):
+        summary = await reconcile_plugins(state_manager)
+
+    assert summary["installed"] == ["acme-tools/formatter"]
+    assert (
+        state_manager._docs["agent"]["acme-tools__formatter/reviewer/SYSTEM.md"]
+        == agent_system
+    )
+    assert state_manager._plugins["plugins"]["acme-tools/formatter"]["agents"] == ["reviewer"]
+
+
+@pytest.mark.asyncio
+async def test_skips_invalid_object_agent_but_installs_valid_skills(
+    state_manager, fake_files, fake_digest
+):
+    state_manager._plugins = {
+        "plugins": {
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin", "ref": "v2.1.0"},
+                "version": "2.1.0",
+            }
+        }
+    }
+    files = InstallablePluginFiles(
+        fake_files,
+        agents={"broken/SYSTEM.md": "---\nname: broken\n---\nNo description."},
+    )
+
+    with (
+        patch(
+            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+            new=AsyncMock(return_value=(files, 0)),
+        ),
+        patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
+    ):
+        summary = await reconcile_plugins(state_manager)
+
+    assert summary["installed"] == ["acme-tools/formatter"]
+    config = state_manager._plugins["plugins"]["acme-tools/formatter"]
+    assert config["skills"] == ["quality-review"]
+    assert config["agents"] == []
+    assert config["status_message"] == "Skipped invalid object agents: broken"
+    assert state_manager._docs["agent"] == {}
+
+
+@pytest.mark.asyncio
 async def test_removes_plugin_when_entry_dropped(state_manager, fake_files, fake_digest):
     """Deleting a plugin entry removes its skill docs but leaves built-ins."""
     # Seed a previously-installed plugin
     state_manager._docs["skill"]["acme-tools__formatter/quality-review/SKILL.md"] = fake_files[
         "quality-review/SKILL.md"
     ]
+    state_manager._docs["agent"]["acme-tools__formatter/reviewer/SYSTEM.md"] = "agent"
     state_manager._plugins = {
         "plugins": {
             "acme-tools/formatter": {
@@ -121,7 +192,8 @@ async def test_removes_plugin_when_entry_dropped(state_manager, fake_files, fake
 
     assert summary["removed"] == ["acme-tools__formatter"]
     assert "acme-tools__formatter/quality-review/SKILL.md" not in state_manager._docs["skill"]
-    assert state_manager.delete_content_document_calls == 1
+    assert state_manager.delete_content_document_calls == 2
+    assert "acme-tools__formatter/reviewer/SYSTEM.md" not in state_manager._docs["agent"]
 
 
 @pytest.mark.asyncio
