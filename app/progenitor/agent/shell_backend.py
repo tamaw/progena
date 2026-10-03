@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from deepagents.backends import LocalShellBackend
 
 if TYPE_CHECKING:
-    from .object_agents import ObjectAgentShellConfig
+    from .object_agent_manifest import ObjectAgentShellConfig
 
 
 @dataclass(frozen=True)

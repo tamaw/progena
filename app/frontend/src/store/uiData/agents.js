@@ -14,6 +14,7 @@ export const initialState = {
     loading: false,
     error: null,
     requestId: null,
+    deletedIds: {},
     active: {
       agentId: null,
       detail: null,
@@ -58,11 +59,15 @@ function replaceAgentList(agents, items) {
       continue;
     }
     agents.byId[agentId] = agent;
+    delete agents.deletedIds[agentId];
     agents.order.push(agentId);
   }
   const activeId = agents.active.agentId;
   if (activeId && agents.active.detail && agents.byId[activeId]) {
     agents.active.detail = { ...agents.active.detail, ...agents.byId[activeId] };
+  } else if (activeId && !agents.byId[activeId]) {
+    agents.deletedIds[activeId] = true;
+    agents.active = { agentId: null, detail: null, loading: false, error: null, requestId: null };
   }
 }
 
@@ -71,6 +76,7 @@ function upsertAgent(agents, agent) {
   if (!agentId) {
     return;
   }
+  delete agents.deletedIds[agentId];
   if (!agents.byId[agentId]) {
     agents.order.push(agentId);
   }
@@ -160,6 +166,17 @@ export const eventHandlers = {
   'agent.upserted': (state, payload) => {
     upsertAgent(state.agents, payload.agent);
   },
+  'agent.deleted': (state, payload) => {
+    const agentId = payload.agent_id;
+    if (typeof agentId !== 'string') return;
+    delete state.agents.byId[agentId];
+    state.agents.order = state.agents.order.filter(id => id !== agentId);
+    state.agents.deletedIds[agentId] = true;
+    if (state.agents.active.agentId === agentId) {
+      state.agents.active = { agentId: null, detail: null, loading: false, error: null, requestId: null };
+    }
+    // Runs and immutable revision caches remain available after live deletion.
+  },
   'agent.selected': (state, payload) => {
     // Guard against a superseded *selection*, not a superseded request. More
     // than one request for the same agent is normal -- a stream reconnect
@@ -168,6 +185,7 @@ export const eventHandlers = {
     // reply in turn and leave the detail pane loading forever. What actually
     // must not land is another agent's detail after the selection moved on.
     const incoming = payload.agent?.id || null;
+    if (incoming && state.agents.deletedIds[incoming]) return;
     if (incoming) {
       if (state.agents.active.agentId && incoming !== state.agents.active.agentId) return;
     } else if (state.agents.active.requestId && payload.request_id !== state.agents.active.requestId) {

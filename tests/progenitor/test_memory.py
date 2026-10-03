@@ -6,11 +6,14 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from tests.progenitor.conftest import _FakeRuntimeStore
+
 
 class FakeContentStateManager:
     """Minimal async state_manager stub for get/save/list content documents."""
 
     def __init__(self, *, prompt: str = "GENESIS") -> None:
+        self._runtime_store = _FakeRuntimeStore()
         self._docs: dict[str, dict[str, str]] = {
             "prompt": {"progenitor/genesis.md": prompt},
             "skill": {},

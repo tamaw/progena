@@ -195,8 +195,7 @@ def create_deepagent_tools(
     box agent.py populates *after* this function returns (its "fn" key isn't
     set until the routine/agent registries it closes over exist) -- read here
     at call time, not at wrap time, so the tool sees the real function once
-    construction finishes. Same deferred-lookup pattern agent.py already uses
-    for ``agent_specs_by_name``/``delegated_agent_specs``.
+    construction finishes.
     """
 
     def _wrap(system_tool: Any) -> StructuredTool:

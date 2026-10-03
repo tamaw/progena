@@ -7,8 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.progenitor.plugins.install import check_plugin_updates, reconcile_plugins
-from app.progenitor.plugins.sources import InstallablePluginFiles, PluginFetchError
+from app.progenitor.plugins.install import (
+    _fetch_and_digest,
+    check_plugin_updates,
+    reconcile_plugins,
+)
+from app.progenitor.plugins.sources import PluginContentFiles, PluginFetchError, compute_digest
 from tests.progenitor.test_backends import FakeContentStateManager
 
 
@@ -67,8 +71,10 @@ async def test_installs_new_entry(state_manager, fake_files, fake_digest):
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ) as mock_fetch,
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
@@ -95,7 +101,9 @@ async def test_installs_new_entry(state_manager, fake_files, fake_digest):
 
 
 @pytest.mark.asyncio
-async def test_installs_valid_object_agents_alongside_skills(state_manager, fake_files, fake_digest):
+async def test_installs_valid_object_agents_alongside_skills(
+    state_manager, fake_files, fake_digest
+):
     state_manager._plugins = {
         "plugins": {
             "acme-tools/formatter": {
@@ -105,28 +113,25 @@ async def test_installs_valid_object_agents_alongside_skills(state_manager, fake
         }
     }
     agent_system = (
-        "---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\n"
-        "kind: object\n---\nReview."
+        "---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\nkind: object\n---\nReview."
     )
-    files = InstallablePluginFiles(
-        fake_files,
+    files = PluginContentFiles(
+        skills=fake_files,
+        skipped_count=0,
         agents={"reviewer/SYSTEM.md": agent_system},
     )
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(return_value=files),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
         summary = await reconcile_plugins(state_manager)
 
     assert summary["installed"] == ["acme-tools/formatter"]
-    assert (
-        state_manager._docs["agent"]["acme-tools__formatter/reviewer/SYSTEM.md"]
-        == agent_system
-    )
+    assert state_manager._docs["agent"]["acme-tools__formatter/reviewer/SYSTEM.md"] == agent_system
     assert state_manager._plugins["plugins"]["acme-tools/formatter"]["agents"] == ["reviewer"]
 
 
@@ -142,15 +147,16 @@ async def test_skips_invalid_object_agent_but_installs_valid_skills(
             }
         }
     }
-    files = InstallablePluginFiles(
-        fake_files,
+    files = PluginContentFiles(
+        skills=fake_files,
+        skipped_count=0,
         agents={"broken/SYSTEM.md": "---\nname: broken\n---\nNo description."},
     )
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(return_value=files),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
@@ -162,6 +168,122 @@ async def test_skips_invalid_object_agent_but_installs_valid_skills(
     assert config["agents"] == []
     assert config["status_message"] == "Skipped invalid object agents: broken"
     assert state_manager._docs["agent"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_skills", [False, True])
+async def test_partial_agent_install_digest_and_upgrade_cleanup(
+    state_manager, fake_files, with_skills
+):
+    """Only valid content contributes to the digest and replaces old documents."""
+    system = "---\nname: reviewer\ndescription: Reviews\nversion: 1.0.0\nkind: object\n---\nReview."
+    skills = fake_files if with_skills else {}
+    agents = {"reviewer/SYSTEM.md": system, "reviewer/context.md": "Context"}
+    files = PluginContentFiles(
+        skills=skills,
+        agents={
+            **agents,
+            "broken/SYSTEM.md": "---\nname: broken\n---\nNo description.",
+            "broken/context.md": "Also skipped",
+            "incomplete/context.md": "Missing SYSTEM.md",
+        },
+        skipped_count=2,
+    )
+    state_manager._plugins = {
+        "plugins": {
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin"},
+                "version": "2.0.0",
+                "installed_version": "1.0.0",
+            }
+        }
+    }
+    state_manager._docs["skill"]["acme-tools__formatter/old/SKILL.md"] = "Old skill"
+    state_manager._docs["agent"]["acme-tools__formatter/reviewer/obsolete.md"] = "Old companion"
+    state_manager._docs["agent"]["user/personal/SYSTEM.md"] = "User agent"
+
+    with patch(
+        "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+        new=AsyncMock(return_value=files),
+    ):
+        summary = await reconcile_plugins(state_manager)
+
+    assert summary["installed"] == ["acme-tools/formatter"]
+    assert summary["errored"] == []
+    assert state_manager._docs["skill"] == {
+        f"acme-tools__formatter/{path}": text for path, text in skills.items()
+    }
+    assert state_manager._docs["agent"] == {
+        **{f"acme-tools__formatter/{path}": text for path, text in agents.items()},
+        "user/personal/SYSTEM.md": "User agent",
+    }
+    config = state_manager._plugins["plugins"]["acme-tools/formatter"]
+    assert config["agents"] == ["reviewer"]
+    assert config["status_message"] == "Skipped invalid object agents: broken, incomplete"
+    assert config["installed_digest"] == compute_digest(
+        {
+            **{f"skills/{path}": text for path, text in skills.items()},
+            **{f"agents/{path}": text for path, text in agents.items()},
+        }
+    )
+    # Validation must leave the fetched content intact for other consumers.
+    assert "broken/SYSTEM.md" in files.agents
+
+
+@pytest.mark.asyncio
+async def test_invalid_only_upgrade_preserves_installed_content(state_manager):
+    state_manager._plugins = {
+        "plugins": {
+            "acme-tools/formatter": {
+                "source": {"source": "github", "repo": "acme/formatter-plugin"},
+                "version": "2.0.0",
+                "installed_version": "1.0.0",
+                "installed_digest": "sha256:old",
+            }
+        }
+    }
+    state_manager._docs["agent"]["acme-tools__formatter/reviewer/SYSTEM.md"] = "Installed"
+    with patch(
+        "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+        new=AsyncMock(
+            return_value=PluginContentFiles(
+                skills={}, agents={"broken/SYSTEM.md": "Invalid"}, skipped_count=0
+            )
+        ),
+    ):
+        summary = await reconcile_plugins(state_manager)
+
+    assert summary["errored"] == ["acme-tools/formatter"]
+    assert state_manager.delete_content_document_calls == 0
+    assert state_manager.save_content_document_calls == 0
+    config = state_manager._plugins["plugins"]["acme-tools/formatter"]
+    assert config["installed_version"] == "1.0.0"
+    assert config["installed_digest"] == "sha256:old"
+    assert config["status_message"] == (
+        "plugin ships no valid installable skills or object agents; skipped invalid object agents: broken"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_digest_exposes_named_fields(fake_files):
+    with patch(
+        "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+        new=AsyncMock(
+            return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+        ),
+    ):
+        result = await _fetch_and_digest(
+            {"source": {"source": "github", "repo": "acme/formatter-plugin"}},
+            "formatter",
+            "acme-tools",
+        )
+
+    assert result.skills == fake_files
+    assert result.agents == {}
+    assert result.skipped_agents == []
+    assert result.digest == compute_digest(
+        {f"skills/{path}": text for path, text in fake_files.items()}
+    )
 
 
 @pytest.mark.asyncio
@@ -232,11 +354,11 @@ async def test_fetch_error_sets_error_status(state_manager, fake_files, fake_dig
     async def side_effect(catalog, plugin_name, **_kwargs):
         if plugin_name == "bad-plugin":
             raise PluginFetchError("npm sources are not supported")
-        return (fake_files, 0)
+        return PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
             new=AsyncMock(side_effect=side_effect),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
@@ -278,8 +400,10 @@ async def test_malformed_key_does_not_abort_other_entries(state_manager, fake_fi
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
@@ -314,7 +438,7 @@ async def test_persistent_error_does_not_loop_forever(state_manager, fake_digest
     }
 
     with patch(
-        "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+        "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
         new=AsyncMock(side_effect=PluginFetchError("npm sources are not supported")),
     ):
         first = await reconcile_plugins(state_manager)
@@ -347,7 +471,7 @@ async def test_check_plugin_updates_persistent_error_does_not_loop_forever(state
     }
 
     with patch(
-        "app.progenitor.plugins.install.fetch_plugin_files_with_report",
+        "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
         new=AsyncMock(side_effect=PluginFetchError("network unreachable")),
     ):
         first = await check_plugin_updates(state_manager)
@@ -377,8 +501,10 @@ async def test_idempotent_second_pass(state_manager, fake_files, fake_digest):
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
@@ -410,8 +536,10 @@ async def test_frozen_entry_with_unchanged_digest(state_manager, fake_files, fak
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):
@@ -447,8 +575,10 @@ async def test_frozen_entry_with_changed_digest_sets_available_version(
     new_digest = "sha256:def456"
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=new_digest),
     ):
@@ -479,8 +609,10 @@ async def test_check_plugin_updates_sets_available_version(state_manager, fake_f
     new_digest = "sha256:def456"
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=new_digest),
     ):
@@ -531,8 +663,10 @@ async def test_reconcile_plugins_emits_audit_log(state_manager, fake_files, fake
 
     with (
         patch(
-            "app.progenitor.plugins.install.fetch_plugin_files_with_report",
-            new=AsyncMock(return_value=(fake_files, 0)),
+            "app.progenitor.plugins.install.fetch_plugin_content_files_with_report",
+            new=AsyncMock(
+                return_value=PluginContentFiles(skills=fake_files, agents={}, skipped_count=0)
+            ),
         ),
         patch("app.progenitor.plugins.install.compute_digest", return_value=fake_digest),
     ):

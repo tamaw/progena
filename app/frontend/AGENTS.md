@@ -54,7 +54,8 @@ components/
                         #   NotificationContainer (+ co-located .module.css)
   chat/                 # chat input/messages + pure models (conversationModel, etc.)
   canvas/                # React Flow nodes + panels for the Workflows canvas
-  agents/               # AgentGraph (React Flow), AgentDetailBodies, agentFormat
+  agents/               # RoutineGraphEditor (structured chain), pure graph helpers,
+                        # NodeInspector, RoutineChain, AgentDetailBodies, agentFormat
   dashboard/
 context/                # React context providers
   WorkspaceContext.jsx  #   active multi-backend workspace host + in-place switching

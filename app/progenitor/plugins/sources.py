@@ -447,14 +447,6 @@ class PluginContentFiles:
     skipped_count: int
 
 
-class InstallablePluginFiles(dict[str, str]):
-    """Skill files plus optional object-agent files for plugin installation."""
-
-    def __init__(self, skills: dict[str, str], *, agents: dict[str, str]) -> None:
-        super().__init__(skills)
-        self.agents = agents
-
-
 def _extract_object_agents_from_files(
     files: dict[str, bytes],
 ) -> tuple[dict[str, str], int]:
@@ -621,14 +613,11 @@ def _extract_skills_from_files(
 async def fetch_plugin_files_with_report(
     catalog: MarketplaceCatalog,
     plugin_name: str,
-    *,
-    include_agents: bool = False,
 ) -> tuple[dict[str, str], int]:
-    """Fetch installable plugin files.
+    """Fetch skill files and their skipped count for skill-only callers.
 
-    The default retains the public skill-only contract. Installation passes
-    ``include_agents=True`` and receives an ``InstallablePluginFiles`` mapping
-    whose ``agents`` attribute is keyed as ``<agent-name>/<filename>``.
+    Installation uses :func:`fetch_plugin_content_files_with_report` to
+    receive skills and object agents as explicit fields.
     """
     entry: dict[str, Any] | None = None
     for p in catalog.plugins:
@@ -639,10 +628,7 @@ async def fetch_plugin_files_with_report(
         raise PluginFetchError(f"plugin '{plugin_name}' not found in marketplace catalog")
 
     raw_files = await _fetch_plugin_archive(entry, catalog)
-    if not include_agents:
-        return _extract_skills_from_files(raw_files, plugin_name)
-    content = extract_plugin_content_files(raw_files, plugin_name)
-    return InstallablePluginFiles(content.skills, agents=content.agents), content.skipped_count
+    return _extract_skills_from_files(raw_files, plugin_name)
 
 
 async def fetch_plugin_files(catalog: MarketplaceCatalog, plugin_name: str) -> dict[str, str]:

@@ -471,7 +471,7 @@ async def eval_async_subagent_background_completion(
             expectation,
             f"async subagent live eval failed: {exc}",
             root_cause_area=(
-                "agent/subagents.py, agent/middleware.py, async_subagents/, or heartbeat async-subagent nodes"
+                "agent/async_subagents.py, agent/middleware.py, async_subagents/, or heartbeat async-subagent nodes"
             ),
         )
 

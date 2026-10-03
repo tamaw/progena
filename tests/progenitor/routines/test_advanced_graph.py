@@ -626,3 +626,81 @@ async def test_node_cache_is_enabled_by_graph_config() -> None:
     await compiled.ainvoke({"messages": [HumanMessage("go")]})
     await compiled.ainvoke({"messages": [HumanMessage("go")]})
     assert model.calls == 1
+
+
+@pytest.mark.parametrize("continue_thread", [True, False])
+@pytest.mark.parametrize("context", [{"request_id": "request-42"}, {}])
+async def test_object_delegation_preserves_thread_config(continue_thread, context) -> None:
+    calls = []
+
+    class ObjectAgent:
+        async def ainvoke(self, state, **kwargs):
+            calls.append((state, kwargs))
+            return {"messages": [AIMessage(content="done")]}
+
+    routine = graph(
+        {
+            "id": "delegate",
+            "kind": "agent",
+            "output_key": "delegate",
+            "config": {
+                "agent_name": "worker",
+                "prompt_template": "{request}",
+                "continue_thread": continue_thread,
+            },
+        }
+    )
+    compiled = compile_routine_graph(
+        routine, model=FakeModel(), agent_registry={"worker": ObjectAgent()}
+    )
+    for request in ("first", "second"):
+        result = await compiled.ainvoke({"messages": [HumanMessage(request)]}, context=context)
+        assert result["data"]["delegate"] == "done"
+
+    expected_kwargs = (
+        {
+            "config": {
+                "configurable": {
+                    "thread_id": f"routine-agent:{context.get('request_id', 'routine')}:delegate"
+                }
+            }
+        }
+        if continue_thread
+        else {}
+    )
+    assert [state["messages"][0].content for state, _ in calls] == ["first", "second"]
+    assert [kwargs for _, kwargs in calls] == [expected_kwargs, expected_kwargs]
+
+
+async def test_nested_routine_runner_receives_runtime_and_mapped_state() -> None:
+    calls = []
+
+    async def runner(name, state, runtime):
+        calls.append((name, state, runtime.context))
+        return {"messages": [AIMessage(content="child done")], "data": {"answer": 42}}
+
+    routine = graph(
+        {
+            "id": "child",
+            "kind": "routine",
+            "output_key": "child",
+            "config": {
+                "routine_name": "nested",
+                "input_map": {"question": "request"},
+                "output_map": {"mapped_answer": "answer"},
+            },
+        }
+    )
+    compiled = compile_routine_graph(routine, model=FakeModel(), routine_runner=runner)
+    context = {"request_id": "parent-42"}
+    result = await compiled.ainvoke(
+        {"messages": [HumanMessage("what is the answer?")]}, context=context
+    )
+    assert len(calls) == 1
+    name, child_state, child_context = calls[0]
+    assert name == "nested"
+    assert child_state["data"] == {"question": "what is the answer?"}
+    assert child_state["messages"][0].content == "what is the answer?"
+    assert child_context == context
+    assert result["data"]["mapped_answer"] == 42
+    assert result["data"]["child"] == "child done"

@@ -1905,7 +1905,8 @@ class StateReader:
                     or changed_key.startswith(ROUTINE_GRAPH_KEY_PREFIX)
                 )
             )
-            if not key_bypasses_state_diff:
+            # Reconnect must reach reconciliation even with unchanged state.
+            if changed_key is not None and not key_bypasses_state_diff:
                 return
         self._last_snapshot = snapshot
         for watcher in list(self._watchers):

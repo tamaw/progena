@@ -376,7 +376,6 @@ class PostgresDocumentStore:
         self._ensure_store_table()
         self._ensure_change_trigger()
         self._ensure_routine_revision_history()
-        self._migrate_routine_graphs_to_v2()
 
     def close(self) -> None:
         self._pool.close()
@@ -494,7 +493,9 @@ class PostgresDocumentStore:
         A row trigger on ``store`` inserts into a separate
         ``routine_graph_revisions`` table whenever a routine document is
         written, so a chat thread that pinned a revision keeps resolving the
-        graph it started on even after the routine is edited again.
+        graph it started on even after the routine is edited or deleted.
+        DELETE captures OLD in the same transaction, preserving the final live
+        snapshot even when it predates installation of the capture trigger.
         """
         state_prefix = PROGENITOR_STATE_PREFIX
         key_prefix = ROUTINE_GRAPH_KEY_PREFIX
@@ -521,18 +522,24 @@ class PostgresDocumentStore:
                 RETURNS trigger AS $$
                 DECLARE
                     graph_doc JSONB;
+                    source_row store%ROWTYPE;
                 BEGIN
-                    IF NEW.prefix = '__STATE_PREFIX__'
-                        AND NEW.key LIKE '__KEY_PREFIX__%'
-                        AND length(NEW.key) > length('__KEY_PREFIX__') THEN
-                        graph_doc := NEW.value -> 'payload';
+                    IF TG_OP = 'DELETE' THEN
+                        source_row := OLD;
+                    ELSE
+                        source_row := NEW;
+                    END IF;
+                    IF source_row.prefix = '__STATE_PREFIX__'
+                        AND source_row.key LIKE '__KEY_PREFIX__%'
+                        AND length(source_row.key) > length('__KEY_PREFIX__') THEN
+                        graph_doc := source_row.value -> 'payload';
                         IF graph_doc IS NOT NULL AND jsonb_typeof(graph_doc) = 'object' THEN
                             INSERT INTO routine_graph_revisions (routine_id, graph)
-                            VALUES (substring(NEW.key from length('__KEY_PREFIX__') + 1), graph_doc)
+                            VALUES (substring(source_row.key from length('__KEY_PREFIX__') + 1), graph_doc)
                             ON CONFLICT (routine_id, revision_id) DO NOTHING;
                         END IF;
                     END IF;
-                    RETURN NULL;
+                    RETURN source_row;
                 END;
                 $$ LANGUAGE plpgsql;
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
@@ -542,6 +549,16 @@ class PostgresDocumentStore:
                 """
                 CREATE TRIGGER progenitor_capture_routine_revision
                 AFTER INSERT OR UPDATE ON store
+                FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
+                """
+            )
+            cur.execute(
+                "DROP TRIGGER IF EXISTS progenitor_capture_deleted_routine_revision ON store"
+            )
+            cur.execute(
+                """
+                CREATE TRIGGER progenitor_capture_deleted_routine_revision
+                BEFORE DELETE ON store
                 FOR EACH ROW EXECUTE FUNCTION progenitor_capture_routine_revision()
                 """
             )
@@ -577,51 +594,6 @@ class PostgresDocumentStore:
                 ON CONFLICT (routine_id, revision_id) DO NOTHING
                 """.replace("__STATE_PREFIX__", state_prefix).replace("__KEY_PREFIX__", key_prefix)  # nosec B608
             cur.execute(backfill_sql)
-
-    def _migrate_routine_graphs_to_v2(self) -> None:
-        """Atomically upgrade current routine documents before graph readers run.
-
-        Revision rows are deliberately immutable. Updating the current document
-        after `_ensure_routine_revision_history` therefore creates one new v2
-        revision through the existing capture trigger while retaining historical
-        v1 snapshots as an accurate audit record.
-        """
-        with self._cursor() as cur:
-            cur.execute(
-                """
-                WITH migrated AS (
-                    SELECT
-                        prefix,
-                        key,
-                        jsonb_set(
-                            jsonb_set(value -> 'payload', '{version}', to_jsonb('2.0.0'::text)),
-                            '{edges}',
-                            COALESCE(
-                                (
-                                    SELECT jsonb_agg(
-                                        CASE
-                                            WHEN edge ? 'router' THEN edge || '{"level":"route"}'::jsonb
-                                            ELSE edge || '{"level":"normal"}'::jsonb
-                                        END
-                                    )
-                                    FROM jsonb_array_elements(value -> 'payload' -> 'edges') AS edge
-                                ),
-                                '[]'::jsonb
-                            )
-                        ) AS payload
-                    FROM store
-                    WHERE prefix = %s
-                      AND key LIKE %s
-                      AND value -> 'payload' ->> 'version' = '1.0.0'
-                )
-                UPDATE store AS current
-                SET value = jsonb_set(current.value, '{payload}', migrated.payload),
-                    updated_at = now()
-                FROM migrated
-                WHERE (current.prefix, current.key) = (migrated.prefix, migrated.key)
-                """,
-                (PROGENITOR_STATE_PREFIX, f"{ROUTINE_GRAPH_KEY_PREFIX}%"),
-            )
 
     def get_document(
         self, prefix: str, key: str, default: Any | None = None
@@ -1066,11 +1038,10 @@ class StoreChangeListener:
     async def _listen_once(self) -> None:
         aconn = await psycopg.AsyncConnection.connect(self._database_url, autocommit=True)
         try:
-            # Recover anything that changed while we were disconnected before we
-            # start streaming live notifications.
+            # Subscribe first so changes during resync are queued, not lost.
+            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(STORE_CHANGE_CHANNEL)))
             if self._on_resync is not None:
                 self._on_resync()
-            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(STORE_CHANGE_CHANNEL)))
             logger.info("Listening for store changes on %r", STORE_CHANGE_CHANNEL)
             async for notify in aconn.notifies():
                 self._on_change(notify.payload)

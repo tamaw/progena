@@ -3,9 +3,9 @@
 Agent catalog metadata (name, role, status, etc.) is the backend's own data, so
 it lives in a separate database on the *same* Postgres server as the
 Progenitor runtime (only the database name differs). The store is seeded from
-code-defined DeepAgent subagents (``app/progenitor/agent/subagents.py``) and
-the shared Postgres ``registry`` document; live runtime status is merged in at
-read time by the route layer.
+routine definitions. Manifest-backed object agents and the shared Postgres
+``registry`` document supply the other catalog resources; live runtime status
+is merged in at read time by the route layer.
 
 An agent's *editable routine graph* is not backend-owned data, though: it is
 a document in the Progenitor runtime's own document store (the same Postgres
@@ -33,13 +33,11 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
-from app.progenitor.agent.object_agents import (
-    discover_native_object_agents,
+from app.progenitor.agent.object_agent_manifest import (
     parse_front_matter,
     parse_object_agent_manifest,
 )
 from app.progenitor.content_documents import AGENT_DOCUMENT_KEY_PREFIX, content_document_key
-from app.progenitor.routines.graph import VALID_ROUTINE_NODE_KINDS
 from app.progenitor.routines.store import (
     ROUTINE_GRAPH_KEY_PREFIX,
     default_routine_graph,
@@ -192,53 +190,6 @@ class AgentStore:
                 )
                 """
             )
-            cur.execute(
-                """
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'agent_graph' AND column_name = 'graph'
-                """
-            )
-            if cur.fetchone() is not None:
-                self._migrate_legacy_graph_column(cur)
-
-    def _migrate_legacy_graph_column(self, cur: Any) -> None:
-        """One-time migration: move ``agent_graph.graph`` JSONB rows into the
-        shared document store, then drop the column. ``_ensure_tables`` only
-        calls this when the column still exists, so re-running is a no-op.
-        """
-        cur.execute(
-            """
-            SELECT ag.agent_id, ag.graph, a.name, a.summary
-            FROM agent_graph ag JOIN agent a ON a.id = ag.agent_id
-            """
-        )
-        rows = cast(list[dict[str, Any]], cur.fetchall())
-        for row in rows:
-            graph = row.get("graph")
-            nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-            kinds = {n.get("kind") for n in nodes if isinstance(n, dict)}
-            document = default_routine_graph(
-                row["agent_id"], name=row.get("name"), description=row.get("summary") or ""
-            )
-            if isinstance(graph, dict) and not kinds - VALID_ROUTINE_NODE_KINDS:
-                document["entry"] = graph.get("entry") or document["entry"]
-                document["nodes"] = graph.get("nodes") or document["nodes"]
-                document["edges"] = graph.get("edges", [])
-            self._document_store.save_document(
-                PROGENITOR_STATE_PREFIX, routine_graph_key(row["agent_id"]), document
-            )
-        cur.execute("ALTER TABLE agent_graph DROP COLUMN graph")
-        if rows:
-            logger.info(
-                "Migrated %d legacy agent_graph.graph row(s) into the document store", len(rows)
-            )
-
-    def delete_agents_by_kind(self, kind: str) -> int:
-        """Delete all agent rows of a given kind. Used to purge legacy A2A rows
-        now that A2A agents are read through from Progenitor's registry."""
-        with self._pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("DELETE FROM agent WHERE kind = %s", (kind,))
-            return int(cur.rowcount)
 
     def count_agents(self) -> int:
         with self._pool.connection() as conn, conn.cursor() as cur:
@@ -255,38 +206,37 @@ class AgentStore:
                 """
             )
             rows = cast(list[dict[str, Any]], cur.fetchall())
-        return [_row_to_agent(row) for row in rows]
+        return [
+            _row_to_agent(row)
+            for row in rows
+            if row.get("kind") != "routine" or self.get_routine_document(row["id"]) is not None
+        ]
+
+    def list_routine_catalog_ids(self) -> list[str]:
+        """Return raw routine row IDs, including rows awaiting document cleanup."""
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM agent WHERE kind = 'routine' ORDER BY id")
+            rows = cast(list[dict[str, Any]], cur.fetchall())
+        return [row["id"] for row in rows]
 
     def _iter_object_agent_locations(
         self,
-    ) -> list[tuple[str, str, Path | str, Any, str | None]]:
+    ) -> list[tuple[str, str, str, Any, str | None]]:
         """Yield ``(source, name, location, manifest, raw_content)`` for every
         manifest-backed object agent, native-first so a native manifest always
         wins a name collision (mirrors the old ``list_object_agents`` dedup
-        rule). ``location`` is the native ``SYSTEM.md`` path for
-        ``source="native"``, or the document-store relative path
-        (``<owner>/<slug>/SYSTEM.md``) for ``source in ("user", "marketplace")``.
+        rule). ``location`` is always the Postgres document relative path
+        (``<owner>/<slug>/SYSTEM.md``), including native sources.
         """
-        native_root = Path(__file__).resolve().parents[2] / "data" / "agents" / "objects"
-        entries: list[tuple[str, str, Path | str, Any, str | None]] = []
+        entries: list[tuple[str, str, str, Any, str | None]] = []
         known_names: set[str] = set()
-        for native_source in discover_native_object_agents(native_root):
-            known_names.add(native_source.name)
-            if native_source.native_path is None:
-                continue
-            raw_content = native_source.native_path.read_text(encoding="utf-8")
-            entries.append(
-                (
-                    "native",
-                    native_source.name,
-                    native_source.native_path,
-                    native_source.manifest,
-                    raw_content,
-                )
-            )
-        for key, document in self._document_store.list_documents(
+        documents = self._document_store.list_documents(
             PROGENITOR_STATE_PREFIX,
             AGENT_DOCUMENT_KEY_PREFIX,
+        )
+        for key, document in sorted(
+            documents,
+            key=lambda row: (not row[0].startswith(f"{AGENT_DOCUMENT_KEY_PREFIX}native/"), row[0]),
         ):
             relative_path = key.removeprefix(AGENT_DOCUMENT_KEY_PREFIX)
             parts = relative_path.split("/")
@@ -311,7 +261,9 @@ class AgentStore:
                 )
                 continue
             known_names.add(manifest.name)
-            source = "marketplace" if "__" in parts[0] else "user"
+            source = (
+                "native" if parts[0] == "native" else "marketplace" if "__" in parts[0] else "user"
+            )
             entries.append((source, manifest.name, relative_path, manifest, payload["content"]))
         return entries
 
@@ -348,13 +300,8 @@ class AgentStore:
     def update_object_agent(self, agent_id: str, content: str) -> dict[str, Any]:
         """Update any manifest-backed object agent's literal ``SYSTEM.md`` text.
 
-        All three sources are editable in place: ``native`` manifests are repo
-        files under ``data/agents/objects/<name>/SYSTEM.md`` and are rewritten
-        on disk; ``user`` and ``marketplace`` manifests are document-store
-        entries and are rewritten there. Renaming (which changes the derived
-        ``agent_id``) moves the document so no stale copy is left behind --
-        except for ``native`` agents, where renaming would require renaming
-        their directory on disk, which this method deliberately refuses.
+        All sources are Postgres documents. User and marketplace renames move
+        the document; native source names remain fixed.
         """
         entries = self._iter_object_agent_locations()
         match = next((entry for entry in entries if f"object-{_slug(entry[1])}" == agent_id), None)
@@ -363,35 +310,29 @@ class AgentStore:
         source, _old_name, location, _old_manifest, _old_raw = match
         manifest = parse_object_agent_manifest(content, source="object agent")
         new_id = f"object-{_slug(manifest.name)}"
-        if new_id != agent_id:
-            if source == "native":
-                raise ValueError(
-                    "renaming a native object agent is not supported; "
-                    "edit its name directly in the repo instead"
-                )
-            if any(f"object-{_slug(entry[1])}" == new_id for entry in entries):
-                raise ValueError(f"object agent name {manifest.name!r} is already in use")
-        if source == "native":
-            cast(Path, location).write_text(content, encoding="utf-8")
-        else:
-            old_relative_path = cast(str, location)
-            parts = old_relative_path.split("/")
-            new_relative_path = f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
-            if new_relative_path != old_relative_path:
-                self._document_store.delete_document(
-                    PROGENITOR_STATE_PREFIX, content_document_key("agent", old_relative_path)
-                )
-            self._document_store.save_document(
-                PROGENITOR_STATE_PREFIX,
-                content_document_key("agent", new_relative_path),
-                {"content": content, "updated_at": utcnow_isoformat()},
+        if source == "native" and manifest.name != _old_name:
+            raise ValueError("renaming a native object agent is not supported")
+        if new_id != agent_id and any(f"object-{_slug(entry[1])}" == new_id for entry in entries):
+            raise ValueError(f"object agent name {manifest.name!r} is already in use")
+        parts = location.split("/")
+        new_relative_path = (
+            location if source == "native" else f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
+        )
+        if new_relative_path != location:
+            self._document_store.delete_document(
+                PROGENITOR_STATE_PREFIX, content_document_key("agent", location)
             )
+        self._document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("agent", new_relative_path),
+            {"content": content, "updated_at": utcnow_isoformat()},
+        )
         return _object_agent_profile(manifest, source=source, raw_content=content)
 
     def delete_user_object_agent(self, agent_id: str) -> bool:
         """Delete an author-created (``source == "user"``) object agent's
-        ``SYSTEM.md`` document. Native agents are repo files (edit the repo
-        instead) and marketplace agents are plugin-managed (Plugins >
+        ``SYSTEM.md`` document. Native agents are bundled sources
+        and marketplace agents are plugin-managed (Plugins >
         Uninstall) -- neither is deletable here. Returns False when the
         agent id has no match at all; raises when it matches but is not
         ``user``-sourced, so the route layer can tell "not found" from
@@ -507,6 +448,8 @@ class AgentStore:
             )
             graph_row = cast(dict[str, Any] | None, cur.fetchone())
         agent["graph"] = self._graph_payload(agent_id, graph_row)
+        if agent.get("kind") == "routine" and agent["graph"] is None:
+            return None
         return agent
 
     def upsert_agent(self, record: dict[str, Any]) -> None:
@@ -662,30 +605,15 @@ class AgentStore:
             )
         return deleted
 
-    def reset_legacy_graphs(self, valid_kinds: set[str]) -> int:
-        """Reset routine documents that use node kinds outside ``valid_kinds`` to
-        the current default. Dev convenience so the legacy decorative graphs
-        don't get stuck (``ensure_graph`` only seeds when a document is absent).
-        Returns the count.
+    def delete_routine_catalog_entry(self, agent_id: str) -> bool:
+        """Remove catalog metadata only; graph metadata cascades through its FK.
+
+        The authoritative routine document, history, and checkpoints are
+        managed independently by the runtime deletion workflow.
         """
-        reset = 0
-        for key, document in self._document_store.list_documents(
-            PROGENITOR_STATE_PREFIX, ROUTINE_GRAPH_KEY_PREFIX
-        ):
-            agent_id = key[len(ROUTINE_GRAPH_KEY_PREFIX) :]
-            graph = document.payload if isinstance(document.payload, dict) else {}
-            nodes = graph.get("nodes", []) if isinstance(graph, dict) else []
-            kinds = {n.get("kind") for n in nodes if isinstance(n, dict)}
-            if not kinds - valid_kinds:
-                continue
-            replacement = default_routine_graph(
-                agent_id,
-                name=graph.get("name") if isinstance(graph, dict) else None,
-                description=graph.get("description", "") if isinstance(graph, dict) else "",
-            )
-            self._document_store.save_document(PROGENITOR_STATE_PREFIX, key, replacement)
-            reset += 1
-        return reset
+        with self._pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM agent WHERE id = %s AND kind = 'routine'", (agent_id,))
+            return int(cur.rowcount) > 0
 
     def update_graph(
         self,
@@ -727,14 +655,15 @@ class AgentStore:
         )
         return self._graph_payload(agent_id, graph_row)
 
-    def _graph_payload(self, agent_id: str, graph_row: dict[str, Any] | None) -> dict[str, Any]:
-        default = default_routine_graph(agent_id)
+    def _graph_payload(
+        self, agent_id: str, graph_row: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
         document = self._document_store.get_document(
-            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), default
+            PROGENITOR_STATE_PREFIX, routine_graph_key(agent_id), None
         )
-        graph = document.payload if document is not None else default
+        graph = document.payload if document is not None else None
         if not isinstance(graph, dict):
-            graph = default
+            return None
         status_payload = graph_row or DEFAULT_AGENT_GRAPH_STATUS
         return {
             "status": status_payload.get("status") or "Draft",
@@ -793,9 +722,7 @@ def _object_agent_profile(
             for permission in manifest.permissions
         ],
         "interrupt_on": manifest.interrupt_on,
-        "mounts": [
-            {"path": mount.path, "access": mount.access} for mount in manifest.mounts
-        ],
+        "mounts": [{"path": mount.path, "access": mount.access} for mount in manifest.mounts],
     }
     front_matter: Mapping[str, Any] = {}
     if raw_content is not None:
@@ -1231,27 +1158,6 @@ def configure_agent_store(
 
     store = AgentStore(backend_url, document_store)
     store.open()
-    # A2A, ACP, and legacy subagent/object placeholder rows are all read
-    # through live (A2A/ACP from Progenitor's registry, subagents/object
-    # agents wired in exclusively via manifests and routine graphs). Drop
-    # any rows left in the backend DB from earlier architectures.
-    purged = (
-        store.delete_agents_by_kind("a2a")
-        + store.delete_agents_by_kind("acp")
-        + store.delete_agents_by_kind("subagent")
-        + store.delete_agents_by_kind("object")
-    )
-    if purged:
-        logger.info(
-            "Purged %d legacy A2A/ACP/subagent/object row(s) from the backend database", purged
-        )
-    # Refresh any graphs still using the legacy decorative node kinds so the dev
-    # database reflects the executable workflow schema.
-    from .agent_profile_routes import VALID_NODE_KINDS
-
-    reset = store.reset_legacy_graphs(VALID_NODE_KINDS)
-    if reset:
-        logger.info("Reset %d legacy subagent graph(s) to the default workflow", reset)
     _default_store = store
     logger.info("Backend agent store connected to Postgres database %r", backend_db_name)
     return store

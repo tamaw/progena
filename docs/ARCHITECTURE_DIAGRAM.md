@@ -165,6 +165,24 @@ filesystem (`/config/*.json`, task Markdown files under `/tasks/`, and
 workflow JSON files under `/workflows/`); these are database-backed views, not
 local files. State changes relevant to the browser are represented as typed
 canonical stream events after persistence.
+
+Object-agent definitions use `agent:` content documents in the runtime's
+Postgres state namespace, including bundled `native/<name>/SYSTEM.md` manifests.
+Bundled files are a one-time seed in the runtime image, not a second editable
+catalog. A durable seed marker prevents restart from overwriting edits or
+recreating deleted definitions. The composite agent filesystem exposes these
+documents through `/agents/`; the backend reads the same documents and needs no
+native-manifest disk mount.
+
+Committed document changes flow through the shared store trigger and Postgres
+LISTEN/NOTIFY. The runtime refreshes object-agent callable/task descriptors;
+the backend publishes typed canonical roster/graph events. Routine deletion
+removes the live document and its catalog entry, not immutable revisions or
+checkpoint history. Reconnect reconciliation recovers missed changes.
+
+Routine execution keeps structured child inputs/outputs separate from its
+conversational task adapter. Each run has its own correlation/checkpoint scope;
+delegated conversations continue only within that run, including human resume.
 Streaming chat content is transient transport data unless it is persisted into
 the underlying conversation state and later surfaced again via canonical
 snapshots/detail loads.

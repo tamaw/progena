@@ -37,7 +37,7 @@ import DetailHeader, {
   EditActionIcon,
   SaveActionIcon,
 } from '../components/layout/DetailHeader';
-import { AgentGraphTab } from '../components/agents/AgentGraph';
+import { RoutineGraphEditor } from '../components/agents/RoutineGraphEditor';
 import { A2ADetailBody, ACPDetailBody, ObjectAgentDetailBody } from '../components/agents/AgentDetailBodies';
 import { formatAge } from '../components/agents/agentFormat';
 
@@ -771,7 +771,7 @@ export function AgentWorkspace({ page }) {
                 <PaneEmptyState detail>Loading graph…</PaneEmptyState>
               ) : (
                 <div className={`agents-graph-layout ${graphEditorOpen || routineRunsOpen ? 'is-editing' : ''}`}>
-                  <AgentGraphTab
+                  <RoutineGraphEditor
                     key={selectedAgent.id}
                     agent={selectedAgent}
                     graph={selectedGraph}

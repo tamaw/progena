@@ -33,8 +33,8 @@ skills remain Postgres-backed, since those are fetched at runtime.
 """
 
 import logging
-from collections.abc import Callable
-from pathlib import Path
+from collections.abc import Callable, Iterable
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deepagents.backends import (
@@ -84,6 +84,36 @@ class ReadOnlyBackend:
         return getattr(self._backend, item)
 
 
+def create_object_agent_plugin_skill_routes(
+    state_manager: Any, mount_paths: Iterable[str], skill_paths: Iterable[str] = ()
+) -> dict[str, Any]:
+    """Resolve declared plugin skill mounts without relying on startup routes.
+
+    Each route is rooted at a declared plugin mount or a named plugin skill
+    within a declared mount, rather than exposing the entire skill store.
+    Native skill paths keep their disk route.
+    The fresh child composite owns these routes; the parent is never mutated.
+    """
+    routes: dict[str, Any] = {}
+    mounts = tuple(mount_paths)
+    paths = set(mounts)
+    for skill in skill_paths:
+        path = str(PurePosixPath(skill)) + "/"
+        if any(path.startswith(mount) for mount in mounts):
+            paths.add(path)
+    for path in sorted(paths):
+        if not path.startswith("/skills/"):
+            continue
+        relative_path = path.removeprefix("/skills/").rstrip("/")
+        segment = relative_path.split("/", 1)[0]
+        if "__" not in segment:
+            continue
+        routes[path] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "skill", path_prefix=relative_path)
+        )
+    return routes
+
+
 def create_progenitor_backend(
     project_root: str | Path | None = None,
     *,
@@ -105,6 +135,8 @@ def create_progenitor_backend(
         schemas_dir: JSON Schema directory. Defaults to ``<project_root>/data/schemas``.
         skills_dir: Progenitor's own skill directory. Defaults to
             ``<project_root>/data/skills``. Disk-mounted read-only at ``/skills/``.
+        agents_dir: Legacy argument retained for callers; manifests are always
+            Postgres-backed at /agents/, including the /agents/objects/ alias.
         worktree_dir: Repository/worktree directory. Defaults to ``<project_root>/data/repos``.
         state_manager: Required for prompts/memories/config mounts and for
             installed marketplace-plugin skill mounts (all Postgres-backed);
@@ -123,7 +155,6 @@ def create_progenitor_backend(
     resolved_log_dir = Path(log_dir) if log_dir else root / "logs"
     resolved_schemas_dir = Path(schemas_dir) if schemas_dir else root / "data" / "schemas"
     resolved_skills_dir = Path(skills_dir) if skills_dir else root / "data" / "skills"
-    resolved_agents_dir = Path(agents_dir) if agents_dir else root / "data" / "agents"
     resolved_worktree_dir = Path(worktree_dir) if worktree_dir else root / "data" / "repos"
 
     def _route_backend(
@@ -150,7 +181,6 @@ def create_progenitor_backend(
         ("/logs/", resolved_log_dir, True),
         ("/schemas/", resolved_schemas_dir, True),
         ("/skills/", resolved_skills_dir, True),
-        ("/agents/", resolved_agents_dir, True),
     ]
     for route, mount_path, ro in mounts:
         backend = _route_backend(mount_path, read_only=ro)
@@ -158,6 +188,13 @@ def create_progenitor_backend(
             routes[route] = backend
 
     if state_manager is not None:
+        routes["/agents/"] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "agent")
+        )
+        # Preserve the existing native introspection path as a PG-backed alias.
+        routes["/agents/objects/"] = ReadOnlyBackend(
+            ContentDocumentDirectoryBackend(state_manager, "agent", path_prefix="native")
+        )
         routes["/memories/"] = ContentDocumentDirectoryBackend(state_manager, "memory")
         routes["/prompts/"] = ReadOnlyBackend(
             ContentDocumentDirectoryBackend(state_manager, "prompt")

@@ -1,13 +1,26 @@
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from deepagents.backends import CompositeBackend, FilesystemBackend
+from deepagents.backends.protocol import ReadResult
+from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.skills import SkillsMiddleware
+from langchain.agents.middleware import HumanInTheLoopMiddleware
 
-from app.progenitor.agent.object_agents import (
+from app.progenitor.agent.backends import ReadOnlyBackend
+from app.progenitor.agent.object_agent_manifest import (
     OBJECT_AGENT_SYSTEM_FILE,
-    SelfManifestBackend,
-    create_object_agent_proxy,
     discover_object_agents,
+    ensure_native_object_agents_seeded,
+    parse_front_matter,
     parse_object_agent_manifest,
+)
+from app.progenitor.agent.object_agents import (
+    SelfManifestBackend,
+    build_object_agent,
+    create_object_agent_proxy,
 )
 
 VALID_SYSTEM = """---
@@ -27,11 +40,34 @@ unknown_for_future_schema: preserved_for_authoring
 You are a concise reviewer.
 """
 
+PLUGIN_SYSTEM = """---
+name: plugin-reviewer
+description: Uses installed review skills.
+version: 1.0.0
+kind: object
+skills: [/skills/acme__new/lint/]
+mounts:
+  - path: /skills/acme__new/lint/
+    access: read
+permissions:
+  - operations: [read]
+    paths: [/skills/acme__new/lint/]
+---
+Review with the lint skill.
+"""
+
 
 class _StateManager:
     def __init__(self, documents=None):
         self.documents = documents or {}
         self.touched = []
+        self.markers = {}
+        self._runtime_store = SimpleNamespace(
+            peek_document=AsyncMock(side_effect=lambda key: self.markers.get(key)),
+            save_document=AsyncMock(
+                side_effect=lambda key, value: self.markers.__setitem__(key, value)
+            ),
+        )
 
     async def list_content_documents(self, kind):
         assert kind == "agent"
@@ -49,6 +85,105 @@ class _StateManager:
         self.touched.append(name)
 
 
+@pytest.mark.parametrize("broad_mount", [False, True])
+async def test_plugin_installed_after_startup_reads_skills_and_companions(
+    monkeypatch, tmp_path, broad_mount
+):
+    documents = {"agent": {}, "skill": {}}
+    sm = SimpleNamespace(
+        get_content_document=AsyncMock(side_effect=lambda kind, path: documents[kind].get(path)),
+        list_content_documents=AsyncMock(side_effect=lambda kind: list(documents[kind].items())),
+    )
+    # Parent is built before installation, and has only native skill routing.
+    parent = CompositeBackend(
+        default=object(),
+        routes={
+            "/skills/": ReadOnlyBackend(
+                FilesystemBackend(root_dir=str(tmp_path), virtual_mode=True)
+            )
+        },
+    )
+    original_routes = dict(parent.routes)
+    compiled_backends = []
+
+    def create(**kwargs):
+        filesystem = next(m for m in kwargs["middleware"] if isinstance(m, FilesystemMiddleware))
+        assert any(isinstance(m, SkillsMiddleware) for m in kwargs["middleware"])
+        assert filesystem._permissions == list(source.manifest.permissions)
+        compiled_backends.append(filesystem.backend)
+        return SimpleNamespace(ainvoke=AsyncMock(return_value={"messages": []}))
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.StateBackend",
+        lambda: SimpleNamespace(aread=AsyncMock(return_value=ReadResult(error="File not found"))),
+    )
+    content = PLUGIN_SYSTEM
+    if broad_mount:
+        content = content.replace("  - path: /skills/acme__new/lint/", "  - path: /skills/")
+    documents["agent"]["acme__new/plugin-reviewer/SYSTEM.md"] = content
+    documents["skill"].update(
+        {
+            "acme__new/lint/SKILL.md": "---\nname: lint\ndescription: Lint changes.\n---\nLint skill.",
+            "acme__new/lint/resources/examples.md": "Lint examples.",
+            "acme__new/sibling/SKILL.md": "Private sibling.",
+            "other__plugin/lint/SKILL.md": "Other plugin.",
+        }
+    )
+    source = (await discover_object_agents(sm))[0]
+    proxy = create_object_agent_proxy(
+        source, state_manager=sm, model=object(), tools=[], backend=parent, checkpointer=None
+    )
+    assert (await parent.aread("/skills/acme__new/lint/SKILL.md")).error is not None
+    await proxy["runnable"].ainvoke({"messages": []})
+    child = compiled_backends[-1]
+    assert set(child.routes) == (
+        {"/skills/", "/skills/acme__new/lint/"} if broad_mount else {"/skills/acme__new/lint/"}
+    )
+    assert (
+        (await child.aread("/skills/acme__new/lint/SKILL.md"))
+        .file_data["content"]
+        .endswith("Lint skill.")
+    )
+    assert (await child.aread("/skills/acme__new/lint/resources/examples.md")).file_data[
+        "content"
+    ] == "Lint examples."
+    assert (await child.aread("/skills/acme__new/sibling/SKILL.md")).error is not None
+    assert (await child.aread("/skills/other__plugin/lint/SKILL.md")).error is not None
+    assert parent.routes == original_routes
+    assert (await parent.aread("/skills/acme__new/lint/SKILL.md")).error is not None
+    documents["skill"]["acme__new/lint/resources/examples.md"] = "Updated examples."
+    await proxy["runnable"].ainvoke({"messages": []})
+    assert compiled_backends[-1] is not child
+    assert (
+        await compiled_backends[-1].aread("/skills/acme__new/lint/resources/examples.md")
+    ).file_data["content"] == "Updated examples."
+
+
+def test_plugin_skill_outside_declared_mount_is_rejected(monkeypatch):
+    manifest = parse_object_agent_manifest(
+        PLUGIN_SYSTEM.replace(
+            "skills: [/skills/acme__new/lint/]", "skills: [/skills/other__plugin/lint/]"
+        ),
+        source="test",
+    )
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kw: object()
+    )
+    with pytest.raises(ValueError, match="skills must be covered by declared mounts"):
+        build_object_agent(
+            manifest,
+            model=object(),
+            tools=[],
+            backend=object(),
+            checkpointer=None,
+            state_manager=_StateManager(),
+        )
+
+
 def test_manifest_filters_unknown_keys_and_parses_supported_contract():
     manifest = parse_object_agent_manifest(VALID_SYSTEM, source="test")
 
@@ -58,6 +193,154 @@ def test_manifest_filters_unknown_keys_and_parses_supported_contract():
     assert manifest.permissions[0].operations == ["read"]
     assert manifest.interrupt_on == {"current_time": True}
     assert manifest.system_prompt == "You are a concise reviewer."
+
+
+def test_raw_front_matter_preserves_authoring_fields():
+    raw = parse_front_matter(VALID_SYSTEM, source="test")
+    assert raw["unknown_for_future_schema"] == "preserved_for_authoring"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [True, False])
+async def test_lazy_proxy_reloads_and_builds_every_invocation(monkeypatch, tmp_path, native):
+    relative_path = f"{'native' if native else 'user'}/reviewer/SYSTEM.md"
+    sm = _StateManager({relative_path: VALID_SYSTEM})
+    system_path = tmp_path / "reviewer" / "SYSTEM.md"
+    if native:
+        system_path.parent.mkdir()
+        system_path.write_text(VALID_SYSTEM, encoding="utf-8")
+    source = (await discover_object_agents(sm))[0]
+    builds = []
+    invoked = []
+
+    def create(**kwargs):
+        builds.append(kwargs)
+        agent = SimpleNamespace(ainvoke=AsyncMock(return_value={"messages": []}))
+        invoked.append(agent)
+        return agent
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+    override_model = object()
+    model_configs = []
+
+    def resolve_model(config):
+        model_configs.append(config)
+        return override_model
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_langchain_model", resolve_model)
+    tools = [SimpleNamespace(name="current_time"), SimpleNamespace(name="other")]
+    parent_model, checkpointer = object(), object()
+    proxy = create_object_agent_proxy(
+        source,
+        state_manager=sm,
+        model=parent_model,
+        tools=tools,
+        backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
+        checkpointer=checkpointer,
+    )
+    assert builds == []
+    await proxy["runnable"].ainvoke({"messages": ["first"], "ignored": "value"})
+
+    updated = VALID_SYSTEM.replace("tools: [current_time]", "tools: [other]\nmodel: deployment-two")
+    updated = updated.replace("skills: [/skills/review/]", "skills: []")
+    updated = updated.replace("paths: [/repos/]", "paths: [/repos/project/]")
+    updated = updated.replace(
+        "interrupt_on:\n  current_time: true",
+        "mounts:\n  - path: /repos/project/\n    access: read",
+    ).replace("You are a concise reviewer.", "Updated prompt.")
+    sm.documents[relative_path] = updated
+    await proxy["runnable"].ainvoke({"messages": ["second"]})
+
+    assert len(builds) == 2
+    assert builds[0]["system_prompt"] == "You are a concise reviewer."
+    assert builds[1]["system_prompt"] == "Updated prompt."
+    assert builds[0]["tools"] == [tools[0]]
+    assert builds[1]["tools"] == [tools[1]]
+    assert builds[0]["model"] is parent_model
+    assert builds[1]["model"] is override_model
+    assert model_configs[0].model_default == "deployment-two"
+    assert all(build["checkpointer"] is checkpointer for build in builds)
+    assert any(isinstance(m, HumanInTheLoopMiddleware) for m in builds[0]["middleware"])
+    assert not any(isinstance(m, HumanInTheLoopMiddleware) for m in builds[1]["middleware"])
+    filesystem = next(m for m in builds[1]["middleware"] if isinstance(m, FilesystemMiddleware))
+    assert set(filesystem.backend.routes) == {"/repos/project/"}
+    invoked[0].ainvoke.assert_awaited_once_with({"messages": ["first"]})
+    invoked[1].ainvoke.assert_awaited_once_with({"messages": ["second"]})
+    del sm.documents[relative_path]
+    with pytest.raises(ValueError, match="no longer installed"):
+        await proxy["runnable"].ainvoke({"messages": ["after deletion"]})
+    assert len(builds) == 2
+
+
+@pytest.mark.asyncio
+async def test_builder_preserves_scoped_mounts_and_middleware(monkeypatch):
+    content = VALID_SYSTEM.replace(
+        "paths: [/repos/]",
+        "paths: [/repos/project/]\nmounts:\n  - path: /repos/project/\n    access: read"
+        "\n  - path: /skills/review/\n    access: read",
+    )
+    manifest = parse_object_agent_manifest(content, source="test")
+    repo_backend = SimpleNamespace(aread=AsyncMock(return_value="file"), awrite=AsyncMock())
+    parent = CompositeBackend(
+        default=object(),
+        routes={"/repos/": repo_backend, "/skills/": object(), "/config/": object()},
+    )
+    calls = []
+    compiled = object()
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        return compiled
+
+    monkeypatch.setattr("app.progenitor.agent.object_agents.create_agent", create)
+    monkeypatch.setattr(
+        "app.progenitor.agent.object_agents.SummarizationMiddleware", lambda **_kwargs: object()
+    )
+    tool, model, checkpointer = SimpleNamespace(name="current_time"), object(), object()
+    assert (
+        build_object_agent(
+            manifest, model=model, tools=[tool], backend=parent, checkpointer=checkpointer
+        )
+        is compiled
+    )
+    assert calls[0]["model"] is model
+    assert calls[0]["checkpointer"] is checkpointer
+    filesystem = next(m for m in calls[0]["middleware"] if isinstance(m, FilesystemMiddleware))
+    assert set(filesystem.backend.routes) == {"/repos/project/", "/skills/review/"}
+    route = filesystem.backend.routes["/repos/project/"]
+    assert await route.aread("/README.md") == "file"
+    repo_backend.aread.assert_awaited_once_with("/project/README.md", 0, 2000)
+    assert not await route.can_write_file("/README.md", "changed", {})
+    assert not await route.can_delete_file("/README.md", {})
+    repo_backend.awrite.assert_not_awaited()
+    assert any(isinstance(m, SkillsMiddleware) for m in calls[0]["middleware"])
+    assert any(isinstance(m, HumanInTheLoopMiddleware) for m in calls[0]["middleware"])
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [
+        ({"tools": []}, "unknown tools"),
+        ({"backend": object()}, "not a known parent route"),
+    ],
+)
+def test_builder_rejects_unknown_tools_and_mounts(change, match):
+    content = VALID_SYSTEM.replace(
+        "skills: [/skills/review/]", "skills: []\nmounts:\n  - path: /repos/\n    access: read"
+    )
+    manifest = parse_object_agent_manifest(content, source="test")
+    kwargs = {
+        "model": object(),
+        "tools": [SimpleNamespace(name="current_time")],
+        "backend": CompositeBackend(default=object(), routes={"/repos/": object()}),
+        "checkpointer": None,
+    }
+    kwargs.update(change)
+    with pytest.raises(ValueError, match=match):
+        build_object_agent(manifest, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -80,8 +363,12 @@ async def test_discovery_prefers_native_name_over_installed_document(tmp_path: P
     (native / OBJECT_AGENT_SYSTEM_FILE).write_text(VALID_SYSTEM, encoding="utf-8")
     installed = VALID_SYSTEM.replace("You are a concise reviewer.", "Installed prompt.")
     sources = await discover_object_agents(
-        _StateManager({"marketplace__demo/reviewer/SYSTEM.md": installed}),
-        native_root=tmp_path / "native",
+        _StateManager(
+            {
+                "marketplace__demo/reviewer/SYSTEM.md": installed,
+                "native/reviewer/SYSTEM.md": VALID_SYSTEM,
+            }
+        ),
     )
 
     assert [(source.name, source.source, source.manifest.system_prompt) for source in sources] == [
@@ -89,12 +376,82 @@ async def test_discovery_prefers_native_name_over_installed_document(tmp_path: P
     ]
 
 
+async def test_native_seed_preserves_edits_and_deletions_on_restart(tmp_path, monkeypatch):
+    system_path = tmp_path / "reviewer" / "SYSTEM.md"
+    system_path.parent.mkdir()
+    system_path.write_text(VALID_SYSTEM, encoding="utf-8")
+    sm = _StateManager(
+        {"user/other/SYSTEM.md": VALID_SYSTEM.replace("name: reviewer", "name: other")}
+    )
+    await ensure_native_object_agents_seeded(sm, tmp_path)
+    path = "native/reviewer/SYSTEM.md"
+    assert sm.documents[path] == VALID_SYSTEM
+    sm.documents[path] = VALID_SYSTEM.replace("concise reviewer", "edited reviewer")
+    restarted = _StateManager(sm.documents)
+    restarted.markers.update(sm.markers)
+    monkeypatch.setattr(Path, "iterdir", lambda _path: pytest.fail("restart read seed disk"))
+    await ensure_native_object_agents_seeded(restarted, tmp_path)
+    assert "edited reviewer" in restarted.documents[path]
+    del restarted.documents[path]
+    await ensure_native_object_agents_seeded(restarted, tmp_path)
+    assert path not in restarted.documents
+
+
+async def test_native_seed_preserves_existing_native_document(tmp_path):
+    system_path = tmp_path / "reviewer" / "SYSTEM.md"
+    system_path.parent.mkdir()
+    system_path.write_text(VALID_SYSTEM, encoding="utf-8")
+    edited = VALID_SYSTEM.replace("concise reviewer", "persisted reviewer")
+    sm = _StateManager({"native/reviewer/SYSTEM.md": edited})
+    await ensure_native_object_agents_seeded(sm, tmp_path)
+    assert sm.documents["native/reviewer/SYSTEM.md"] == edited
+
+
+async def test_native_seed_failure_retries_without_overwriting_existing(tmp_path):
+    for slug in ("one", "two"):
+        path = tmp_path / slug / "SYSTEM.md"
+        path.parent.mkdir()
+        path.write_text(VALID_SYSTEM.replace("name: reviewer", f"name: {slug}"))
+    sm = _StateManager()
+    save = sm.save_content_document
+
+    async def fail_second(kind, path, content):
+        if path == "native/two/SYSTEM.md":
+            raise RuntimeError("interrupted seed")
+        await save(kind, path, content)
+
+    sm.save_content_document = fail_second
+    with pytest.raises(RuntimeError, match="interrupted seed"):
+        await ensure_native_object_agents_seeded(sm, tmp_path)
+    assert sm.markers == {}
+    sm.documents["native/one/SYSTEM.md"] = "Keep partially seeded edit"
+    sm.save_content_document = save
+    await ensure_native_object_agents_seeded(sm, tmp_path)
+    assert sm.documents["native/one/SYSTEM.md"] == "Keep partially seeded edit"
+    assert "native/two/SYSTEM.md" in sm.documents
+    assert sm.markers
+
+
+async def test_discovery_never_reads_disk(monkeypatch):
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: pytest.fail("disk authority"))
+    assert await discover_object_agents(_StateManager()) == []
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    assert (await discover_object_agents(sm))[0].source == "native"
+
+
+def test_docker_native_seed_contract():
+    root = Path(__file__).resolve().parents[2]
+    assert "COPY data/agents/ ./data/agents/" in (root / "docker/progenitor/Dockerfile").read_text()
+    assert "COPY data/agents" not in (root / "docker/backend/Dockerfile").read_text()
+
+
 @pytest.mark.asyncio
 async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_path: Path):
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / "SYSTEM.md").write_text(VALID_SYSTEM, encoding="utf-8")
-    source = (await discover_object_agents(_StateManager(), native_root=tmp_path))[0]
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = (await discover_object_agents(sm))[0]
     calls = []
 
     class _Tool:
@@ -117,12 +474,11 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
     )
     proxy = create_object_agent_proxy(
         source,
-        state_manager=_StateManager(),
+        state_manager=sm,
         model="parent-model",
         tools=[_Tool("current_time"), _Tool("unrequested")],
         backend=object(),
         checkpointer=object(),
-        agent_specs=lambda _caller: [],
     )
     await proxy["runnable"].ainvoke({"messages": []})
 
@@ -137,8 +493,8 @@ async def test_self_manifest_backend_reads_and_writes_native_source(tmp_path: Pa
     agent_dir.mkdir()
     system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
-    source = (await discover_object_agents(_StateManager(), native_root=tmp_path))[0]
-    sm = _StateManager()
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = (await discover_object_agents(sm))[0]
     mount = SelfManifestBackend(source, state_manager=sm)
 
     read = await mount.aread("/SYSTEM.md")
@@ -150,25 +506,23 @@ async def test_self_manifest_backend_reads_and_writes_native_source(tmp_path: Pa
     )
     write = await mount.awrite("/SYSTEM.md", updated)
     assert write.error is None
-    assert system_path.read_text(encoding="utf-8") == updated
-    # Native writes never touch the store table on their own -- the
-    # backend's cross-process NOTIFY watcher needs this marker to know
-    # anything changed.
-    assert sm.touched == ["reviewer"]
+    assert sm.documents["native/reviewer/SYSTEM.md"] == updated
+    assert system_path.read_text(encoding="utf-8") == VALID_SYSTEM
+    assert sm.touched == []
 
 
 @pytest.mark.asyncio
 async def test_self_manifest_backend_writes_installed_document_via_state_manager():
     relative_path = "marketplace__demo/reviewer/SYSTEM.md"
     sm = _StateManager({relative_path: VALID_SYSTEM})
-    source = (await discover_object_agents(sm, native_root=Path("/nonexistent-native-root")))[0]
+    source = (await discover_object_agents(sm))[0]
     mount = SelfManifestBackend(source, state_manager=sm)
 
     updated = VALID_SYSTEM.replace("version: 1.0.0", "version: 1.1.0")
     write = await mount.awrite("/SYSTEM.md", updated)
     assert write.error is None
     assert sm.documents[relative_path] == updated
-    assert sm.touched == ["reviewer"]
+    assert sm.touched == []
 
     read = await mount.aread("/SYSTEM.md")
     assert read.file_data["content"] == updated
@@ -179,8 +533,9 @@ async def test_self_manifest_backend_rejects_rename_and_invalid_manifest(tmp_pat
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / OBJECT_AGENT_SYSTEM_FILE).write_text(VALID_SYSTEM, encoding="utf-8")
-    source = (await discover_object_agents(_StateManager(), native_root=tmp_path))[0]
-    mount = SelfManifestBackend(source, state_manager=_StateManager())
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = (await discover_object_agents(sm))[0]
+    mount = SelfManifestBackend(source, state_manager=sm)
 
     renamed = VALID_SYSTEM.replace("name: reviewer", "name: renamed-reviewer")
     write = await mount.awrite("/SYSTEM.md", renamed)
@@ -201,24 +556,25 @@ async def test_self_manifest_backend_edit_round_trips_via_string_replacement(tmp
     agent_dir.mkdir()
     system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
-    source = (await discover_object_agents(_StateManager(), native_root=tmp_path))[0]
-    mount = SelfManifestBackend(source, state_manager=_StateManager())
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = (await discover_object_agents(sm))[0]
+    mount = SelfManifestBackend(source, state_manager=sm)
 
     edit = await mount.aedit(
         "/SYSTEM.md", "You are a concise reviewer.", "You are a concise, thorough reviewer."
     )
     assert edit.error is None
-    assert "thorough" in system_path.read_text(encoding="utf-8")
+    assert "thorough" in sm.documents["native/reviewer/SYSTEM.md"]
+    assert system_path.read_text(encoding="utf-8") == VALID_SYSTEM
 
 
 @pytest.mark.asyncio
-async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(
-    monkeypatch, tmp_path: Path
-):
+async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(monkeypatch, tmp_path: Path):
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / "SYSTEM.md").write_text(VALID_SYSTEM, encoding="utf-8")
-    source = (await discover_object_agents(_StateManager(), native_root=tmp_path))[0]
+    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = (await discover_object_agents(sm))[0]
     calls = []
 
     class _NamedTool:
@@ -240,12 +596,11 @@ async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(
     )
     proxy = create_object_agent_proxy(
         source,
-        state_manager=_StateManager(),
+        state_manager=sm,
         model="parent-model",
         tools=[_NamedTool("current_time")],
         backend=object(),
         checkpointer=object(),
-        agent_specs=lambda _caller: [],
     )
     await proxy["runnable"].ainvoke({"messages": []})
 

@@ -2,8 +2,7 @@
 
 Constructs AgentStore via object.__new__ to skip the Postgres connection
 pool entirely -- list_object_agents/save_user_object_agent/
-update_object_agent only ever touch self._document_store (and, for native
-agents, the filesystem), never self._pool, so a real database connection is
+update_object_agent only ever touch self._document_store, never self._pool, so a real database connection is
 unnecessary here.
 """
 
@@ -13,14 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from app.backend import agent_store as agent_store_module
 from app.backend.agent_store import AgentStore
-from app.backend.document_store import InMemoryDocumentStore
+from app.backend.document_store import PROGENITOR_STATE_PREFIX, InMemoryDocumentStore
+from app.progenitor.content_documents import content_document_key
 
 
 def _make_store(monkeypatch: pytest.MonkeyPatch) -> AgentStore:
-    # Isolate from the real repo's data/agents/objects/ (e.g. repo-manager).
-    monkeypatch.setattr(agent_store_module, "discover_native_object_agents", lambda _root: [])
     store = object.__new__(AgentStore)
     store._document_store = InMemoryDocumentStore()  # noqa: SLF001
     return store
@@ -96,11 +93,10 @@ def test_update_object_agent_rejects_unknown_id(monkeypatch: pytest.MonkeyPatch)
         )
 
 
-def test_update_object_agent_rewrites_native_manifest_on_disk(
+def test_update_object_agent_persists_native_manifest_without_disk_authority(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     store = _make_store(monkeypatch)
-    from app.progenitor.agent.object_agents import ObjectAgentSource
 
     system_path = tmp_path / "native-agent" / "SYSTEM.md"
     system_path.parent.mkdir(parents=True)
@@ -108,15 +104,10 @@ def test_update_object_agent_rewrites_native_manifest_on_disk(
         _manifest_markdown("Native Agent", "Ships with the repo.", "Old prompt."),
         encoding="utf-8",
     )
-    native_manifest = agent_store_module.parse_object_agent_manifest(
-        system_path.read_text(encoding="utf-8"), source="native"
-    )
-    monkeypatch.setattr(
-        agent_store_module,
-        "discover_native_object_agents",
-        lambda _root: [
-            ObjectAgentSource(manifest=native_manifest, source="native", native_path=system_path)
-        ],
+    store._document_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        content_document_key("agent", "native/native-agent/SYSTEM.md"),
+        {"content": system_path.read_text(encoding="utf-8")},
     )
 
     updated = store.update_object_agent(
@@ -125,14 +116,15 @@ def test_update_object_agent_rewrites_native_manifest_on_disk(
     )
 
     assert updated["prompt"] == "New prompt."
-    assert "New prompt." in system_path.read_text(encoding="utf-8")
+    assert "Old prompt." in system_path.read_text(encoding="utf-8")
+    assert store.get_object_agent("object-native-agent")["prompt"] == "New prompt."
+    assert store.get_object_agent("object-native-agent")["card"]["source"] == "native"
 
 
 def test_update_object_agent_rejects_renaming_native_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     store = _make_store(monkeypatch)
-    from app.progenitor.agent.object_agents import ObjectAgentSource
 
     system_path = tmp_path / "native-agent" / "SYSTEM.md"
     system_path.parent.mkdir(parents=True)
@@ -140,15 +132,10 @@ def test_update_object_agent_rejects_renaming_native_manifest(
         _manifest_markdown("Native Agent", "Ships with the repo.", "Prompt."),
         encoding="utf-8",
     )
-    native_manifest = agent_store_module.parse_object_agent_manifest(
-        system_path.read_text(encoding="utf-8"), source="native"
-    )
-    monkeypatch.setattr(
-        agent_store_module,
-        "discover_native_object_agents",
-        lambda _root: [
-            ObjectAgentSource(manifest=native_manifest, source="native", native_path=system_path)
-        ],
+    store._document_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        content_document_key("agent", "native/native-agent/SYSTEM.md"),
+        {"content": system_path.read_text(encoding="utf-8")},
     )
 
     with pytest.raises(ValueError, match="renaming a native object agent"):
@@ -169,4 +156,34 @@ def test_update_object_agent_rejects_rename_colliding_with_existing(
         store.update_object_agent(
             "object-agent-one",
             _manifest_markdown("Agent Two", "First.", "Prompt one."),
+        )
+
+
+def test_native_precedence_comes_from_documents_without_reading_disk(monkeypatch):
+    store = _make_store(monkeypatch)
+    for owner in ("user", "acme__plugin", "native"):
+        store._document_store.save_document(
+            PROGENITOR_STATE_PREFIX,
+            content_document_key("agent", f"{owner}/reviewer/SYSTEM.md"),
+            {"content": _manifest_markdown("Reviewer", "Reviews.", f"{owner} prompt.")},
+        )
+    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: pytest.fail("disk authority"))
+    records = store.list_object_agents()
+    assert len(records) == 1
+    assert records[0]["card"]["source"] == "native"
+    assert records[0]["prompt"] == "native prompt."
+    with pytest.raises(ValueError, match="already owned by native"):
+        store.save_user_object_agent(_manifest_markdown("Reviewer", "Reviews.", "override"))
+
+
+def test_native_rename_with_same_slug_is_rejected(monkeypatch):
+    store = _make_store(monkeypatch)
+    store._document_store.save_document(
+        PROGENITOR_STATE_PREFIX,
+        "agent:native/native-agent/SYSTEM.md",
+        {"content": _manifest_markdown("Native Agent", "Ships.", "Prompt.")},
+    )
+    with pytest.raises(ValueError, match="renaming a native"):
+        store.update_object_agent(
+            "object-native-agent", _manifest_markdown("native agent", "Ships.", "Prompt.")
         )

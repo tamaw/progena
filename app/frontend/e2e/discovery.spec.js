@@ -82,7 +82,7 @@ test.describe('refactored surfaces — prove interactive behaviour', () => {
     expect(errors).toEqual([]);
   });
 
-  test('Routines renders the graph canvas for the selected agent (AgentGraph extraction)', async ({ page }) => {
+  test('Routines renders the graph canvas for the selected agent (RoutineGraphEditor)', async ({ page }) => {
     const errors = trackPageErrors(page);
     await page.goto('/routines');
     // The graph is a CSS step chain, not React Flow -- `@xyflow/react` is still

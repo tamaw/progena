@@ -4,10 +4,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.progenitor.agent.subagents import (
+from app.progenitor.agent.async_subagents import (
     create_hello_world_async_subagent,
     create_progenitor_async_subagents,
 )
+from app.progenitor.agent.object_agent_registry import LiveSubagentMiddleware
+from tests.progenitor.conftest import _FakeRuntimeStore
 
 
 class TestCreateProgenitorAsyncSubagents:
@@ -43,6 +45,7 @@ class TestSubagentWiring:
 
                 class _FakeStateManager:
                     def __init__(self):
+                        self._runtime_store = _FakeRuntimeStore()
                         self._docs = {
                             "prompt": {"progenitor/genesis.md": "Genesis"},
                             "skill": {},
@@ -65,11 +68,16 @@ class TestSubagentWiring:
                     async def list_routine_graphs(self):
                         return []
 
-                await create_progenitor_agent(state_manager=_FakeStateManager())
+                state_manager = _FakeStateManager()
+                await create_progenitor_agent(state_manager=state_manager)
                 call_kwargs = mock_create.call_args.kwargs
                 assert "subagents" in call_kwargs
                 assert [agent["name"] for agent in call_kwargs["subagents"]] == [
                     "researcher",
-                    "repo-manager",
                 ]
+                live = next(
+                    m for m in call_kwargs["middleware"] if isinstance(m, LiveSubagentMiddleware)
+                )
+                assert [spec["name"] for spec in live._registry.descriptors] == ["repo-manager"]
+                assert "native/repo-manager/SYSTEM.md" in state_manager._docs["agent"]
                 mock_subagents.assert_called_once()

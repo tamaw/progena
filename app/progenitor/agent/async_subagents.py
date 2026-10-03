@@ -1,5 +1,5 @@
 """
-Async subagent definitions for the Progenitor DeepAgent.
+Async subagent descriptors for the Progenitor DeepAgent.
 
 Wraps the deterministic background-delegation smoke test as a DeepAgent
 async subagent. Regular (synchronous) subagents are no longer code-defined

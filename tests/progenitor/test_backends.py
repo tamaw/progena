@@ -5,7 +5,11 @@ Tests for Phase 3: Backend configuration and Postgres-backed content routing.
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from app.progenitor.agent.backends import ReadOnlyBackend, create_progenitor_backend
+from app.progenitor.agent.backends import (
+    ReadOnlyBackend,
+    create_object_agent_plugin_skill_routes,
+    create_progenitor_backend,
+)
 
 
 class FakeContentStateManager(MagicMock):
@@ -69,6 +73,7 @@ class TestBackendFactory:
         # without a state_manager -- as long as data/skills/ exists on disk,
         # which it does for this real project_root=".".
         assert "/skills/" in backend.routes
+        assert "/agents/" not in backend.routes
 
     def test_factory_uses_project_root(self, monkeypatch):
         """project_root is accepted for scoped filesystem mounts."""
@@ -200,3 +205,58 @@ class TestBackendFactory:
         # Scoped to its own segment: the other plugin's file isn't visible here.
         cross_read = await backend.aread("/skills/acme__formatter/quality/SKILL.md")
         assert cross_read.error is not None
+
+    async def test_agent_introspection_uses_pg_including_native_alias(self, monkeypatch, tmp_path):
+        self._patch_runtime_free_state_backend(monkeypatch)
+        disk_path = tmp_path / "data/agents/objects/reviewer/SYSTEM.md"
+        disk_path.parent.mkdir(parents=True)
+        disk_path.write_text("Stale disk manifest")
+        state_manager = FakeContentStateManager()
+        state_manager._docs["agent"]["native/reviewer/SYSTEM.md"] = "Persisted native manifest"
+        state_manager._docs["agent"]["user/custom/SYSTEM.md"] = "Persisted user manifest"
+        backend = create_progenitor_backend(project_root=tmp_path, state_manager=state_manager)
+        for path in ("/agents/native/reviewer/SYSTEM.md", "/agents/objects/reviewer/SYSTEM.md"):
+            read = await backend.aread(path)
+            assert read.error is None
+            assert read.file_data["content"] == "Persisted native manifest"
+        assert (await backend.aread("/agents/user/custom/SYSTEM.md")).error is None
+        assert (await backend.aread("/agents/objects/custom/SYSTEM.md")).error is not None
+        assert isinstance(backend.routes["/agents/"], ReadOnlyBackend)
+        del state_manager._docs["agent"]["native/reviewer/SYSTEM.md"]
+        assert (await backend.aread("/agents/objects/reviewer/SYSTEM.md")).error is not None
+
+
+async def test_dynamic_plugin_skill_routes_are_exact_and_read_only():
+    sm = FakeContentStateManager()
+    sm._docs["skill"]["acme__new/lint/SKILL.md"] = "Lint skill"
+    sm._docs["skill"]["acme__new/lint/resources/examples.md"] = "Companion examples"
+    sm._docs["skill"]["acme__new/other/SKILL.md"] = "Sibling skill"
+    routes = create_object_agent_plugin_skill_routes(
+        sm, ["/skills/acme__new/lint/", "/skills/native/", "/repos/"]
+    )
+    assert set(routes) == {"/skills/acme__new/lint/"}
+    route = routes["/skills/acme__new/lint/"]
+    assert (await route.aread("/SYSTEM.md")).error is not None
+    assert (await route.aread("/SKILL.md")).file_data["content"] == "Lint skill"
+    assert (await route.aread("/resources/examples.md")).file_data[
+        "content"
+    ] == "Companion examples"
+    assert (await route.aread("/other/SKILL.md")).error is not None
+    assert not await route.can_write_file("/SKILL.md", "change", {})
+    assert not await route.can_delete_file("/SKILL.md", {})
+
+
+def test_dynamic_plugin_skill_inference_stays_inside_declared_mounts():
+    sm = FakeContentStateManager()
+    routes = create_object_agent_plugin_skill_routes(
+        sm,
+        ["/skills/"],
+        ["/skills/acme__new/review/", "/skills/native/"],
+    )
+    assert set(routes) == {"/skills/acme__new/review/"}
+    narrower = create_object_agent_plugin_skill_routes(
+        sm,
+        ["/skills/acme__new/review/"],
+        ["/skills/other__plugin/review/", "/skills/acme__new/reviewer/"],
+    )
+    assert set(narrower) == {"/skills/acme__new/review/"}
