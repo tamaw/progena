@@ -266,13 +266,13 @@ async def reconcile_plugins(state_manager, *, log_sink=None) -> dict[str, Any]:
     now = utcnow_isoformat()
 
     # --- 1. Remove content for plugins no longer in desired state ---
-    # Native skills are disk-only. Preserve the user-owned agent segment while
-    # removing every stale marketplace skill/agent segment.
+    # Only marketplace namespaces are plugin-owned. Bundled/user definitions
+    # must never be removed by plugin reconciliation.
     desired_segments = {_plugin_segment(k) for k in plugins} | {"user"}
     removed_segments: set[str] = set()
     for kind, segments in actual_by_kind_segment.items():
         for seg, rels in list(segments.items()):
-            if seg in desired_segments:
+            if "__" not in seg or seg in desired_segments:
                 continue
             for rel in rels:
                 await state_manager.delete_content_document(kind, rel)

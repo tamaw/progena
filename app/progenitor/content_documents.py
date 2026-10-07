@@ -16,9 +16,8 @@ used to populate Postgres on first boot, when no prompt documents exist yet.
 After that, the database is authoritative and the container never reads that
 directory again.
 
-Native agent manifests are also seeded from ``data/agents/objects/`` by
-``agent/object_agent_manifest.py``. A durable completion marker prevents
-reseeding after edits or deletes; runtime and backend reads use documents only.
+Native agent manifests remain read-only files in ``data/agents/objects/``.
+They are not imported into Postgres; user and plugin agents use documents.
 
 Progenitor's own skills (``data/skills/``) are never seeded here -- they're a
 plain read-only disk mount (see ``agent/backends.py``), the same pattern as

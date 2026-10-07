@@ -1,99 +1,68 @@
 ---
 name: managing-agents
-description: Register, edit, enable/disable, or remove A2A agents by editing the /config/agents.json config file. Use when a user asks to add, update, drop, or toggle a remote agent, or to review what's registered.
-allowed-tools: read_file write_file edit_file structured_output list_agents
+description: Create, inspect, and update local object agents by writing their SYSTEM.md manifests under /agents/user/. Use when asked to create an agent for chat or a routine, or change an existing user agent's instructions, tools, skills, model, or filesystem access. Remote A2A registrations use managing-a2a instead.
+allowed-tools: read_file write_file edit_file ls structured_output json_to_yaml
 ---
 
 # Managing Agents
 
-Registered agents live in a single virtual file: `/config/agents.json` — shaped
-`{ "agents": [...], "tools": [...] }`. It is backed by the runtime `registry` state
-document (Postgres is the source of truth), so editing it is the supported way to
-manage agents — there is no separate "add agent" tool. Every successful write is
-validated, and the Agents page updates live.
+User agents are virtual files: `/agents/user/<name>/SYSTEM.md`. Each file has
+YAML front matter and a Markdown system prompt after the closing `---`.
+Writes persist an `agent:user/<name>/SYSTEM.md` document in Postgres, notify
+the backend, and update the Agents page. A successful write is sufficient;
+do not save again or restart the service to register the agent.
 
-## Always Read Before You Edit
-Read it first so your `edit_file` `old_string` matches exactly:
+`SYSTEM.md` is the actual filename in this application, including when a user
+calls it an agent.md. Native agents under `/agents/native/` (also exposed at
+`/agents/objects/`) and installed plugin agents are read-only here.
+Remote A2A registrations belong to `/config/agents.json`; use `managing-a2a`.
+Routine graphs belong to `/routines/`; use `managing-routines`.
 
-1. `read_file /config/agents.json`
-2. Make the change with `edit_file` (preferred — preserves the rest of the file) or
-   `write_file` (only when rewriting the whole document).
+## Create an agent
 
-## File Schema
-```json
-{
-  "agents": [
-    {
-      "name": "my-agent",
-      "kind": "a2a_agent",
-      "transport": "http",
-      "url": "https://host/a2a",
-      "description": "What this agent does.",
-      "enabled": true
-    }
-  ],
-  "tools": [ ... ]
-}
-```
+1. Inspect `/agents/` and `/agents/user/` for existing names. When creating a
+   NEW agent, use a new name; page selection is context, not an instruction to
+   overwrite the selected agent or its routine.
+2. Read `/schemas/agent-manifest.schema.v1.json`. This schema describes the
+   YAML front matter. Required fields are `name`, `description`, `version`,
+   and `kind: object`. Prefer a lowercase kebab-case name so its directory
+   matches exactly. Otherwise use the name lowercased with runs of non-alphanumeric
+   characters replaced by a hyphen and trim leading/trailing hyphens.
+3. Call `structured_output schema_file=agent-manifest.schema.v1.json` with
+   an instruction to build the front matter for the requested agent. Include
+   `tools: []` and `skills: []` when no tools or skills are needed. Choose only
+   existing tool names and skill paths; inspect them before assigning them.
+4. Add a `system_prompt` string containing the requested Markdown instructions
+   to that returned JSON object. Keep `description` as front matter; it is not
+   the system prompt. Do not include `system_prompt` in the YAML front matter.
+5. Call `json_to_yaml data=<object including system_prompt> body_field=system_prompt`.
+   This existing tool produces correctly quoted YAML and the Markdown body.
+6. Write the returned `content` to `/agents/user/<name>/SYSTEM.md`.
+7. Read the saved manifest back and confirm its name and instructions. Report
+   success only after the write succeeds. A tool or validation error is not
+   successful creation; correct the manifest and retry.
 
-Rules enforced on every write (a violating edit is rejected and nothing changes):
-- Top level must be a JSON object with only `agents` and `tools` keys.
-- `agents` must be an array; every entry must be an object with a non-empty `name`.
-- `tools` must be an array — it is runtime-managed (MCP-derived); **never edit it**,
-  always preserve it verbatim.
+## Edit an agent
 
-Each agent is keyed by its unique `name` (no generated id needed). Common fields:
-`name`, `kind` (e.g. `a2a_agent`), `description`, `transport` (`http`), `url`,
-`agent_card_url` (defaults to `<url>/.well-known/agent-card.json`), `enabled`,
-`capabilities`. Runtime-owned (never invent, always preserve): `status`,
-`status_message`, `last_heartbeat`, `last_error`, `pid`, `created_at`, `updated_at`.
+Read its existing `SYSTEM.md` first. Use `edit_file` for a focused change;
+all writes and edits validate the front matter and runtime manifest before
+persisting. Preserve unrelated fields and the directory/name relationship.
+Do not rename an agent in place, since routines may reference its name.
 
-## Golden rules
-1. **Read before you write.** `read_file /config/agents.json` first.
-2. **Preserve everything you're not changing** — all other agents verbatim, the entire
-   `tools` array verbatim, and runtime status fields on the edited agent.
-3. **Agents are keyed by `name`** — adding an agent with an existing name updates it.
-4. **Scope is A2A agents.** Local ACP/CLI agents involve process setup; use the dedicated
-   `register_acp_agent` tool for those, not this skill.
-5. **Never regenerate the whole file.** `tools` is runtime-managed and must stay
-   byte-for-byte what it was — build only the one agent object with
-   `structured_output` and splice it into `agents` with `edit_file`. Don't ask
-   `structured_output` to reproduce the whole `{agents, tools}` document.
+For a larger rewrite, generate schema-conformant front matter with
+`structured_output`, preserve existing optional fields, add the updated
+`system_prompt`, render with `json_to_yaml`, and write to the same path.
 
-## Common Operations
+## Tools, skills, and filesystem access
 
-### Register / add an A2A agent
-1. `read_file /config/agents.json`
-2. `read_file /schemas/agent_entry.schema.v1.json`
-3. `structured_output json_schema=<content from step 2> instruction="Build an agent entry named '<name>' of kind 'a2a_agent' at url '<url>', enabled true, with a short description."`
-4. `edit_file /config/agents.json` to insert the object from step 3 into `agents`
-   (or `write_file` only if the array is currently empty). Keep every existing agent
-   and the entire `tools` array untouched.
+`tools` names the tools exposed to this agent. `skills` contains existing
+absolute `/skills/<skill-name>` paths. Agents have no filesystem mounts unless
+explicitly declared. Declare required paths in `mounts` with `access: read`
+or `read-write`; extra `permissions` must stay within those mounts.
+Adding a skill does not grant access to the documents that skill manages.
+For example, an agent using `managing-routines` needs a read mount for that
+skill and a read-write mount for `/routines/`. Use the same pattern for
+`managing-agents` and `/agents/user/` when agent creation is part of its job.
 
-For a one- or two-field registration, hand-authoring the object directly with
-`edit_file` is fine — reach for `structured_output` when several fields are involved.
-
-### Edit an agent (e.g. change URL or description)
-Change the relevant field on that agent in place with `edit_file`.
-
-### Enable / disable
-Flip the `enabled` boolean for that agent.
-
-### Remove an agent
-Delete its entire object from `agents`.
-
-## After the Change
-For live status (is it actually running?), use `list_agents` — registration only
-records the agent in the file; starting/monitoring is a separate runtime concern this
-file doesn't track.
-
-## Confirmation Pattern
-After a successful edit, reply with one short sentence confirming what changed
-(added/updated/enabled/removed) and the agent's name. Only ask a follow-up question if
-a required detail (the URL) is missing; otherwise make the change.
-
-## Troubleshooting
-- Write rejected as invalid: re-read the file and check the schema rules above (most
-  often a missing `name`, or an extra/renamed top-level key).
-- `edit_file` old_string not found: re-read the file — match the on-disk formatting
-  exactly.
+Confirm the saved name and the change briefly. Creating an agent does not
+execute it or modify any routine that references it.

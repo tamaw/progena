@@ -114,7 +114,8 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
     edit any key in its own YAML front matter, or the system-prompt body,
     and have the change take effect on its next invocation. Writes go
     through the same Postgres documents the backend UI edits. Each document
-    write fires the shared store's NOTIFY trigger, including native sources.
+    write fires the shared store's NOTIFY trigger. Bundled native manifests
+    are file-backed and read-only, including through this mount.
 
     Renaming through this mount is refused. User and marketplace names can
     be changed through the Agents page; native source names remain fixed.
@@ -131,6 +132,8 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
         return file_path.lstrip("/") == self._FILE
 
     async def _read_raw(self) -> str:
+        if self._source.file_path is not None:
+            return self._source.file_path.read_text(encoding="utf-8")
         assert self._source.relative_path is not None
         content = await self._sm.get_content_document(
             OBJECT_AGENT_DOCUMENT_KIND, self._source.relative_path
@@ -140,6 +143,8 @@ class SelfManifestBackend(_AsyncOnlyFileBackendMixin):  # pragma: no cover
         return content
 
     async def _write_raw(self, content: str) -> None:
+        if self._source.source == "native":
+            raise ValueError("native object agent manifests are read-only")
         manifest = parse_object_agent_manifest(content, source="self-edit")
         if manifest.name != self._source.name:
             raise ValueError(
@@ -380,6 +385,9 @@ def create_object_agent_proxy(
     """Return a lazy proxy that compiles the manifest only when invoked."""
 
     async def load_manifest() -> ObjectAgentManifest:
+        if source.source == "native":
+            # Bundled definitions are a startup snapshot; restart after dev edits.
+            return source.manifest
         assert source.relative_path is not None
         content = await state_manager.get_content_document(
             OBJECT_AGENT_DOCUMENT_KIND, source.relative_path

@@ -18,6 +18,9 @@ from app.progenitor.content_documents import content_document_key
 
 
 def _make_store(monkeypatch: pytest.MonkeyPatch) -> AgentStore:
+    monkeypatch.setattr(
+        "app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", Path("/missing-test-agents")
+    )
     store = object.__new__(AgentStore)
     store._document_store = InMemoryDocumentStore()  # noqa: SLF001
     return store
@@ -93,7 +96,7 @@ def test_update_object_agent_rejects_unknown_id(monkeypatch: pytest.MonkeyPatch)
         )
 
 
-def test_update_object_agent_persists_native_manifest_without_disk_authority(
+def test_native_manifest_cannot_be_updated_or_deleted(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     store = _make_store(monkeypatch)
@@ -104,20 +107,22 @@ def test_update_object_agent_persists_native_manifest_without_disk_authority(
         _manifest_markdown("Native Agent", "Ships with the repo.", "Old prompt."),
         encoding="utf-8",
     )
+    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
     store._document_store.save_document(
         PROGENITOR_STATE_PREFIX,
         content_document_key("agent", "native/native-agent/SYSTEM.md"),
         {"content": system_path.read_text(encoding="utf-8")},
     )
 
-    updated = store.update_object_agent(
-        "object-native-agent",
-        _manifest_markdown("Native Agent", "Ships with the repo.", "New prompt."),
-    )
-
-    assert updated["prompt"] == "New prompt."
+    with pytest.raises(ValueError, match="read-only"):
+        store.update_object_agent(
+            "object-native-agent",
+            _manifest_markdown("Native Agent", "Ships with the repo.", "New prompt."),
+        )
+    with pytest.raises(ValueError):
+        store.delete_user_object_agent("object-native-agent")
     assert "Old prompt." in system_path.read_text(encoding="utf-8")
-    assert store.get_object_agent("object-native-agent")["prompt"] == "New prompt."
+    assert store.get_object_agent("object-native-agent")["prompt"] == "Old prompt."
     assert store.get_object_agent("object-native-agent")["card"]["source"] == "native"
 
 
@@ -125,6 +130,7 @@ def test_update_object_agent_rejects_renaming_native_manifest(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     store = _make_store(monkeypatch)
+    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
 
     system_path = tmp_path / "native-agent" / "SYSTEM.md"
     system_path.parent.mkdir(parents=True)
@@ -138,7 +144,7 @@ def test_update_object_agent_rejects_renaming_native_manifest(
         {"content": system_path.read_text(encoding="utf-8")},
     )
 
-    with pytest.raises(ValueError, match="renaming a native object agent"):
+    with pytest.raises(ValueError, match="read-only"):
         store.update_object_agent(
             "object-native-agent",
             _manifest_markdown("Renamed Agent", "Ships with the repo.", "Prompt."),
@@ -159,15 +165,18 @@ def test_update_object_agent_rejects_rename_colliding_with_existing(
         )
 
 
-def test_native_precedence_comes_from_documents_without_reading_disk(monkeypatch):
+def test_native_disk_precedence_over_documents(monkeypatch, tmp_path):
     store = _make_store(monkeypatch)
+    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    system_path = tmp_path / "reviewer" / "SYSTEM.md"
+    system_path.parent.mkdir()
+    system_path.write_text(_manifest_markdown("Reviewer", "Reviews.", "native prompt."))
     for owner in ("user", "acme__plugin", "native"):
         store._document_store.save_document(
             PROGENITOR_STATE_PREFIX,
             content_document_key("agent", f"{owner}/reviewer/SYSTEM.md"),
             {"content": _manifest_markdown("Reviewer", "Reviews.", f"{owner} prompt.")},
         )
-    monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: pytest.fail("disk authority"))
     records = store.list_object_agents()
     assert len(records) == 1
     assert records[0]["card"]["source"] == "native"
@@ -176,14 +185,18 @@ def test_native_precedence_comes_from_documents_without_reading_disk(monkeypatch
         store.save_user_object_agent(_manifest_markdown("Reviewer", "Reviews.", "override"))
 
 
-def test_native_rename_with_same_slug_is_rejected(monkeypatch):
+def test_native_rename_with_same_slug_is_rejected(monkeypatch, tmp_path):
     store = _make_store(monkeypatch)
+    monkeypatch.setattr("app.backend.agent_store._NATIVE_OBJECT_AGENTS_ROOT", tmp_path)
+    system_path = tmp_path / "native-agent" / "SYSTEM.md"
+    system_path.parent.mkdir()
+    system_path.write_text(_manifest_markdown("Native Agent", "Ships.", "Prompt."))
     store._document_store.save_document(
         PROGENITOR_STATE_PREFIX,
         "agent:native/native-agent/SYSTEM.md",
         {"content": _manifest_markdown("Native Agent", "Ships.", "Prompt.")},
     )
-    with pytest.raises(ValueError, match="renaming a native"):
+    with pytest.raises(ValueError, match="read-only"):
         store.update_object_agent(
             "object-native-agent", _manifest_markdown("native agent", "Ships.", "Prompt.")
         )

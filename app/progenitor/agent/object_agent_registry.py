@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable
+from pathlib import Path
 from typing import Any
 
 from deepagents.middleware.subagents import CompiledSubAgent, SubAgentMiddleware
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 class ObjectAgentRegistry:
     """Publish a complete discovered generation into the shared routine map.
 
-    Discovery is Postgres-authoritative (native files are a one-time seed).
+    Bundled agents are read-only files; other definitions are Postgres-backed.
     Publication has no await points; callers already holding a runnable retain
     it, while subsequent delegation sees creates, deletes, and renames.
     """
@@ -31,8 +32,10 @@ class ObjectAgentRegistry:
         state_manager: Any,
         proxy_factory: Callable[[ObjectAgentSource], CompiledSubAgent],
         reserved_names: Iterable[str] = (),
+        native_root: Path | None = None,
     ) -> None:
         self._state_manager = state_manager
+        self._native_root = native_root
         self._proxy_factory = proxy_factory
         self._reserved_names = frozenset({"general-purpose", *reserved_names})
         self._lock = asyncio.Lock()
@@ -41,7 +44,7 @@ class ObjectAgentRegistry:
 
     async def refresh(self) -> None:
         async with self._lock:
-            sources = await discover_object_agents(self._state_manager)
+            sources = await discover_object_agents(self._state_manager, self._native_root)
             specs: list[CompiledSubAgent] = []
             for source in sources:
                 if source.name in self._reserved_names:
