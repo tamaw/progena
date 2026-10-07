@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from app.progenitor.agent.object_agent_manifest import discover_object_agents
 from app.progenitor.plugins.install import (
     _fetch_and_digest,
     check_plugin_updates,
@@ -318,21 +319,38 @@ async def test_removes_plugin_when_entry_dropped(state_manager, fake_files, fake
     assert "acme-tools__formatter/reviewer/SYSTEM.md" not in state_manager._docs["agent"]
 
 
+async def test_reconciliation_does_not_remove_bundled_agent_files(state_manager, tmp_path):
+    manifest_path = tmp_path / "repo-manager" / "SYSTEM.md"
+    manifest_path.parent.mkdir()
+    content = "---\nname: repo-manager\ndescription: Manages repos.\nkind: object\nversion: 1.0.0\n---\nHelp.\n"
+    manifest_path.write_text(content)
+    state_manager._docs["agent"]["acme__removed/reviewer/SYSTEM.md"] = "stale plugin"
+    for _ in range(2):
+        await reconcile_plugins(state_manager)
+        sources = await discover_object_agents(state_manager, tmp_path)
+        assert [source.name for source in sources] == ["repo-manager"]
+        assert manifest_path.read_text() == content
+        assert state_manager._docs["agent"] == {}
+
+
 @pytest.mark.asyncio
-async def test_removes_stale_unsegmented_skill_rows(state_manager, fake_files, fake_digest):
-    """Native skills are disk-only now (never seeded into Postgres), so any
-    leftover unsegmented ("no __") row is stale and gets cleaned up too."""
+async def test_preserves_non_plugin_namespaces(state_manager, fake_files, fake_digest):
+    """Reconciliation owns marketplace namespaces, not built-in/user content."""
     state_manager._docs["skill"]["progenitor/managing-mcp/SKILL.md"] = (
         "---\nname: managing-mcp\n---\n"
     )
     state_manager._docs["skill"]["builder_agent/build/SKILL.md"] = "---\nname: build\n---\n"
+    state_manager._docs["agent"]["native/repo-manager/SYSTEM.md"] = "native"
+    state_manager._docs["agent"]["user/reviewer/SYSTEM.md"] = "user"
     state_manager._plugins = {"plugins": {}}
 
     summary = await reconcile_plugins(state_manager)
 
-    assert set(summary["removed"]) == {"progenitor", "builder_agent"}
-    assert "progenitor/managing-mcp/SKILL.md" not in state_manager._docs["skill"]
-    assert "builder_agent/build/SKILL.md" not in state_manager._docs["skill"]
+    assert summary["removed"] == []
+    assert "progenitor/managing-mcp/SKILL.md" in state_manager._docs["skill"]
+    assert "builder_agent/build/SKILL.md" in state_manager._docs["skill"]
+    assert "native/repo-manager/SYSTEM.md" in state_manager._docs["agent"]
+    assert "user/reviewer/SYSTEM.md" in state_manager._docs["agent"]
 
 
 @pytest.mark.asyncio

@@ -96,6 +96,7 @@ from .preferences_service import load_preferences
 from .prompt_service import PromptService
 from .repo_service import merged_repo_detail, merged_repo_rows, workspace_signal
 from .request_utils import request_correlation_id as _request_correlation_id
+from .routine_events import routine_events
 from .state_reader import StateReader, get_state_reader
 from .threads import complete_thread, fail_thread, upsert_thread
 from .workflow_service import (
@@ -3963,6 +3964,7 @@ _SSE_HEARTBEAT_INTERVAL: float = _parse_heartbeat_interval(
 # typically because it is blocked writing to a dead/half-open socket; leaving
 # it open makes the client's EventSource permanently deaf with no reconnect).
 _ui_stream_subscribers: dict[asyncio.Queue, asyncio.Task | None] = {}
+_ui_stream_clients: dict[asyncio.Queue, str] = {}
 _ui_event_seq = 0
 _ui_event_replay: list[UiEventEnvelope] = []
 _UI_EVENT_REPLAY_LIMIT = 200
@@ -4454,6 +4456,8 @@ async def start_state_status_watcher(reconnect_delay: float = 2.0) -> None:
     if _document_change_watch_callback is None:
         _document_change_watch_callback = _queue_document_change_dispatch
         state_reader.add_raw_watcher(_document_change_watch_callback)
+        state_reader.add_raw_watcher(routine_events.document_changed)
+    await routine_events.start()
     await state_reader.start_watching(reconnect_delay)
 
 
@@ -4477,6 +4481,8 @@ async def stop_state_status_watcher() -> None:
     if _document_change_watch_callback is not None:
         state_reader.remove_raw_watcher(_document_change_watch_callback)
         _document_change_watch_callback = None
+        state_reader.remove_raw_watcher(routine_events.document_changed)
+    await routine_events.stop()
     await state_reader.stop_watching()
 
 
@@ -4591,11 +4597,15 @@ def _next_ui_envelope(
 
 async def _generate_ui_stream(
     last_event_id: str | None = None,
+    client_id: str | None = None,
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Generate the canonical typed UI event stream."""
     queue: asyncio.Queue = asyncio.Queue(maxsize=100)
     current_task = asyncio.current_task()
     _ui_stream_subscribers[queue] = current_task
+    client_id = client_id or uuid.uuid4().hex
+    _ui_stream_clients[queue] = client_id
+    routine_events.connections.add(client_id)
     if current_task:
         _active_ui_stream_tasks.add(current_task)
 
@@ -4622,6 +4632,7 @@ async def _generate_ui_stream(
             {"stream": "ui", "status": initial_status, "alerts": _alerts_payload()},
         )
         yield ServerSentEvent(event="ui.event", data=connected.model_dump(), id=connected.id)
+        await routine_events.lifecycle_snapshot(client_id)
 
         while True:
             if shutdown_event.is_set():
@@ -4644,12 +4655,18 @@ async def _generate_ui_stream(
                     )
                     break
                 envelope = event["envelope"]
+                if "interest" in event and event["interest"] is not routine_events.interests.get(client_id):
+                    continue
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
             except TimeoutError:
                 envelope = _next_ui_envelope("connection.heartbeat", {"timestamp": time.time()})
                 yield ServerSentEvent(event="ui.event", data=envelope.model_dump(), id=envelope.id)
     finally:
         _ui_stream_subscribers.pop(queue, None)
+        _ui_stream_clients.pop(queue, None)
+        # A reconnect may already have replaced this socket.
+        if client_id not in _ui_stream_clients.values():
+            routine_events.disconnected(client_id)
         if current_task:
             _active_ui_stream_tasks.discard(current_task)
         if not _ui_stream_subscribers:
@@ -4660,12 +4677,13 @@ async def _generate_ui_stream(
 async def ui_stream(
     response: Response,
     last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+    client_id: str | None = Query(default=None, max_length=64),
 ) -> AsyncGenerator[ServerSentEvent, None]:
     """Canonical typed SSE stream for all frontend UI updates."""
     response.headers["X-Accel-Buffering"] = "no"
     response.headers["Cache-Control"] = "no-cache"
     response.headers["Connection"] = "keep-alive"
-    async for event in _generate_ui_stream(last_event_id):
+    async for event in _generate_ui_stream(last_event_id, client_id):
         yield event
 
 
@@ -4681,6 +4699,7 @@ def broadcast_ui_event(
     scope: Literal["global", "session", "chat"] = "global",
     session_id: str | None = None,
     request_id: str | None = None,
+    client_id: str | None = None,
 ) -> UiEventEnvelope:
     """Broadcast one typed event envelope to canonical /api/ui/stream subscribers.
 
@@ -4690,12 +4709,19 @@ def broadcast_ui_event(
     if request_id is not None:
         payload = {**payload, "request_id": request_id}
     envelope = _next_ui_envelope(event_type, payload, scope=scope, session_id=session_id)
-    _ui_event_replay.append(envelope)
-    del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
+    # Targeted detail is recovered by a subscription snapshot, never replayed
+    # to other connections or to a page that has stopped watching.
+    if client_id is None:
+        _ui_event_replay.append(envelope)
+        del _ui_event_replay[:-_UI_EVENT_REPLAY_LIMIT]
 
     event = {"type": "ui.event", "envelope": envelope}
+    if client_id and event_type in {"agent.routine.runs.loaded", "agent.routine.run_state.loaded"}:
+        event["interest"] = routine_events.interests.get(client_id)
     dead: list[asyncio.Queue] = []
     for queue in _ui_stream_subscribers:
+        if client_id and _ui_stream_clients.get(queue) != client_id:
+            continue
         try:
             queue.put_nowait(event)
         except asyncio.QueueFull:

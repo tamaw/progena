@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas/agent-manifest.schema.json",
   "title": "ObjectAgentManifest",
-  "description": "YAML front matter for a kind:\"object\" agent shipped as agents/objects/<name>/SYSTEM.md. The markdown body below the closing --- is the system prompt. Graph agents use graph.schema.json instead (single graph.json per directory). The runtime loader filters to known keys and does not validate against this schema; it exists for authoring, CI, and editor tooling.",
+  "description": "YAML front matter for a kind: object agent in /agents/user/<name>/SYSTEM.md or a bundled native agent. The Markdown body below the closing --- is the system prompt. User virtual-file writes enforce this schema and the runtime manifest parser.",
   "type": "object",
   "required": ["name", "description", "version", "kind"],
   "additionalProperties": true,

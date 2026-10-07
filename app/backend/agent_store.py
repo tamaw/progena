@@ -22,6 +22,7 @@ bookkeeping that isn't part of the routine schema itself (``status``,
 from __future__ import annotations
 
 import logging
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -34,6 +35,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from app.progenitor.agent.object_agent_manifest import (
+    discover_native_object_agents,
     parse_front_matter,
     parse_object_agent_manifest,
 )
@@ -80,6 +82,11 @@ DEFAULT_AGENT_GRAPH_STATUS: dict[str, Any] = {
 # Progenitor's own skills live on disk at ``data/skills/<name>/SKILL.md``,
 # read-only and baked into the image (see ``app.progenitor.content_documents``).
 _NATIVE_SKILLS_ROOT = Path(__file__).resolve().parents[2] / "data" / "skills"
+_NATIVE_OBJECT_AGENTS_ROOT = (
+    Path(os.getenv("PROGENITOR_DATA_DIR", str(Path(__file__).resolve().parents[2] / "data")))
+    / "agents"
+    / "objects"
+)
 
 
 def _slug(value: str) -> str:
@@ -225,11 +232,25 @@ class AgentStore:
         """Yield ``(source, name, location, manifest, raw_content)`` for every
         manifest-backed object agent, native-first so a native manifest always
         wins a name collision (mirrors the old ``list_object_agents`` dedup
-        rule). ``location`` is always the Postgres document relative path
-        (``<owner>/<slug>/SYSTEM.md``), including native sources.
+        rule). Native locations are read-only files; other locations are
+        Postgres document relative paths (``<owner>/<slug>/SYSTEM.md``).
         """
         entries: list[tuple[str, str, str, Any, str | None]] = []
         known_names: set[str] = set()
+        for source in discover_native_object_agents(_NATIVE_OBJECT_AGENTS_ROOT):
+            if source.name in known_names:
+                continue
+            assert source.file_path is not None
+            known_names.add(source.name)
+            entries.append(
+                (
+                    "native",
+                    source.name,
+                    str(source.file_path),
+                    source.manifest,
+                    source.file_path.read_text(encoding="utf-8"),
+                )
+            )
         documents = self._document_store.list_documents(
             PROGENITOR_STATE_PREFIX,
             AGENT_DOCUMENT_KEY_PREFIX,
@@ -240,7 +261,7 @@ class AgentStore:
         ):
             relative_path = key.removeprefix(AGENT_DOCUMENT_KEY_PREFIX)
             parts = relative_path.split("/")
-            if len(parts) != 3 or parts[-1] != "SYSTEM.md":
+            if len(parts) != 3 or parts[-1] != "SYSTEM.md" or parts[0] == "native":
                 continue
             payload = document.payload
             if not isinstance(payload, dict) or not isinstance(payload.get("content"), str):
@@ -261,9 +282,7 @@ class AgentStore:
                 )
                 continue
             known_names.add(manifest.name)
-            source = (
-                "native" if parts[0] == "native" else "marketplace" if "__" in parts[0] else "user"
-            )
+            source = "marketplace" if "__" in parts[0] else "user"
             entries.append((source, manifest.name, relative_path, manifest, payload["content"]))
         return entries
 
@@ -300,24 +319,22 @@ class AgentStore:
     def update_object_agent(self, agent_id: str, content: str) -> dict[str, Any]:
         """Update any manifest-backed object agent's literal ``SYSTEM.md`` text.
 
-        All sources are Postgres documents. User and marketplace renames move
-        the document; native source names remain fixed.
+        User and marketplace renames move the Postgres document. Bundled
+        native definitions cannot be edited through the API.
         """
         entries = self._iter_object_agent_locations()
         match = next((entry for entry in entries if f"object-{_slug(entry[1])}" == agent_id), None)
         if match is None:
             raise LookupError(f"object agent {agent_id!r} not found")
         source, _old_name, location, _old_manifest, _old_raw = match
+        if source == "native":
+            raise ValueError("native object agent manifests are read-only")
         manifest = parse_object_agent_manifest(content, source="object agent")
         new_id = f"object-{_slug(manifest.name)}"
-        if source == "native" and manifest.name != _old_name:
-            raise ValueError("renaming a native object agent is not supported")
         if new_id != agent_id and any(f"object-{_slug(entry[1])}" == new_id for entry in entries):
             raise ValueError(f"object agent name {manifest.name!r} is already in use")
         parts = location.split("/")
-        new_relative_path = (
-            location if source == "native" else f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
-        )
+        new_relative_path = f"{parts[0]}/{_slug(manifest.name)}/SYSTEM.md"
         if new_relative_path != location:
             self._document_store.delete_document(
                 PROGENITOR_STATE_PREFIX, content_document_key("agent", location)

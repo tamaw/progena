@@ -998,11 +998,13 @@ class StoreChangeListener:
         on_change: Callable[[str], None],
         on_resync: Callable[[], None] | None = None,
         reconnect_delay: float = 2.0,
+        channel: str = STORE_CHANGE_CHANNEL,
     ) -> None:
         self._database_url = database_url
         self._on_change = on_change
         self._on_resync = on_resync
         self._reconnect_delay = reconnect_delay
+        self._channel = channel
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
@@ -1039,10 +1041,10 @@ class StoreChangeListener:
         aconn = await psycopg.AsyncConnection.connect(self._database_url, autocommit=True)
         try:
             # Subscribe first so changes during resync are queued, not lost.
-            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(STORE_CHANGE_CHANNEL)))
+            await aconn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(self._channel)))
             if self._on_resync is not None:
                 self._on_resync()
-            logger.info("Listening for store changes on %r", STORE_CHANGE_CHANNEL)
+            logger.info("Listening for store changes on %r", self._channel)
             async for notify in aconn.notifies():
                 self._on_change(notify.payload)
         finally:

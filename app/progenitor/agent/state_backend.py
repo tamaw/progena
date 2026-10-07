@@ -15,8 +15,10 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -1455,3 +1457,43 @@ class ContentDocumentDirectoryBackend(_AsyncOnlyFileBackendMixin):
         self, pattern: str, path: str | None = None, glob: str | None = None
     ) -> GrepResult:
         return GrepResult(matches=[])
+
+
+class UserAgentDirectoryBackend(ContentDocumentDirectoryBackend):
+    """Validated read/write user manifests mounted at ``/agents/user/``.
+
+    Save through StateManager so agent discovery and the existing store
+    LISTEN/NOTIFY pipeline observe the same document as the Agents page.
+    """
+
+    def __init__(self, state_manager: Any, *, native_root: Path) -> None:
+        super().__init__(state_manager, "agent", path_prefix="user")
+        self._native_root = native_root
+
+    async def awrite(self, file_path: str, content: str) -> WriteResult:
+        from .object_agent_manifest import (
+            discover_object_agents,
+            parse_front_matter,
+            parse_object_agent_manifest,
+        )
+
+        relative = file_path.lstrip("/")
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*/SYSTEM\.md", relative):
+            return WriteResult(error="Expected /agents/user/<kebab-case-name>/SYSTEM.md")
+        try:
+            raw = parse_front_matter(content, source=file_path)
+            check_entry_schema("Agent front matter", raw, "agent-manifest.schema.v1.json")
+            manifest = parse_object_agent_manifest(content, source=file_path)
+            slug = re.sub(r"[^a-z0-9]+", "-", manifest.name.strip().lower()).strip("-")
+            if relative != f"{slug or 'agent'}/SYSTEM.md":
+                raise ValueError(
+                    "Agent name must match its directory; renaming requires a new path"
+                )
+            for source in await discover_object_agents(self._sm, self._native_root):
+                if source.name == manifest.name and source.relative_path != self._name(file_path):
+                    raise ValueError(
+                        f"Agent name {manifest.name!r} is already owned by {source.source}"
+                    )
+        except ValueError as exc:
+            return WriteResult(error=f"Invalid agent manifest: {exc}")
+        return await super().awrite(file_path, content)

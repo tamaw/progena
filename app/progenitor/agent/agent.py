@@ -48,7 +48,6 @@ from .middleware import (
     SchemaCompactionMiddleware,
     SecretRedactionMiddleware,
 )
-from .object_agent_manifest import ensure_native_object_agents_seeded
 from .object_agent_registry import LiveSubagentMiddleware, ObjectAgentRegistry
 from .object_agents import create_object_agent_proxy
 from .shell_backend import ShellPaths
@@ -249,7 +248,7 @@ async def create_progenitor_agent(
     backend = create_progenitor_backend(
         project_root=project_root,
         skills_dir=skills_dir,
-        agents_dir=data_dir / "agents",
+        agents_dir=data_dir / "agents" / "objects",
         worktree_dir=worktree_dir,
         state_manager=state_manager,
         database_url=database_url,
@@ -333,7 +332,6 @@ async def create_progenitor_agent(
     # Routine execution is different: routine documents are authoritative in
     # Postgres, so deterministic runs resolve and compile a fresh document for
     # each invocation rather than consulting an in-memory routine registry.
-    await ensure_native_object_agents_seeded(state_manager, data_dir / "agents" / "objects")
     reserved_names = {spec["name"] for spec in async_subagents}
 
     def object_proxy(source):
@@ -354,7 +352,10 @@ async def create_progenitor_agent(
         )
 
     live_objects = ObjectAgentRegistry(
-        state_manager=state_manager, proxy_factory=object_proxy, reserved_names=reserved_names
+        state_manager=state_manager,
+        proxy_factory=object_proxy,
+        reserved_names=reserved_names,
+        native_root=data_dir / "agents" / "objects",
     )
     await live_objects.refresh()
     object_agent_registry = live_objects.callables
@@ -424,10 +425,11 @@ async def create_progenitor_agent(
         routine_subagents.append(routine_spec)
         reserved_names.add(routine_id)
 
-    async def _resume_routine(thread_id: str, answer: Any) -> dict[str, Any]:
+    async def _resume_routine(thread_id: str, answer: Any, **kwargs: Any) -> dict[str, Any]:
         return await resume_routine_thread(
             thread_id=thread_id,
             answer=answer,
+            database_url=database_url,
             model=model,
             state_manager=state_manager,
             revision_reader=revision_reader,
@@ -436,6 +438,7 @@ async def create_progenitor_agent(
             routine_runner=_run_routine,
             tool_registry=tool_registry,
             checkpointer=checkpointer,
+            **kwargs,
         )
 
     resume_routine_holder["fn"] = _resume_routine
@@ -480,6 +483,7 @@ async def create_progenitor_agent(
     # The heartbeat uses this callable for deterministic UI-triggered runs.
     # It is intentionally a resolver/runner, not a routine registry.
     agent.routine_runner = _run_routine  # type: ignore[attr-defined]
+    agent.routine_resumer = _resume_routine  # type: ignore[attr-defined]
     agent.object_agent_registry = live_objects  # type: ignore[attr-defined]
 
     logger.info(

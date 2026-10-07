@@ -32,13 +32,22 @@ def test_resolve_skill_reads_native_skill_from_disk() -> None:
     assert skill["source"] == "native"
     assert skill["editable"] is True
     assert skill["front_matter"]["name"] == "managing-agents"
-    assert "Register, edit, enable/disable" in skill["front_matter"]["description"]
+    assert "Create, inspect, and update local object agents" in skill["front_matter"]["description"]
 
 
 def test_resolve_skill_returns_none_for_missing_native_skill() -> None:
     store = _make_store()
 
     assert store.resolve_skill("/skills/does-not-exist") is None
+
+
+def test_remote_agent_management_has_its_own_skill() -> None:
+    store = _make_store()
+    skill = store.resolve_skill("/skills/managing-a2a")
+    assert skill is not None
+    assert skill["name"] == "managing-a2a"
+    assert "Register, edit, enable/disable" in skill["front_matter"]["description"]
+    assert "/config/agents.json" in skill["raw_content"]
 
 
 def test_resolve_skill_reads_marketplace_skill_from_document_store() -> None:

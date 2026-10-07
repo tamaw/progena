@@ -68,6 +68,7 @@ class ObjectAgentSource:
     manifest: ObjectAgentManifest
     source: str
     relative_path: str | None = None
+    file_path: Path | None = None
 
     @property
     def name(self) -> str:
@@ -297,60 +298,46 @@ def parse_object_agent_manifest(content: str, *, source: str) -> ObjectAgentMani
     )
 
 
-NATIVE_OBJECT_AGENT_SEED_MARKER = "native_object_agents_seed_v1"
-
-
-async def ensure_native_object_agents_seeded(state_manager: Any, native_root: Path) -> None:
-    """Import bundled manifests once, independently of user/plugin documents.
-
-    The durable completion marker survives deletion of every native document.
-    Existing native documents are preserved, including when retrying a partial
-    seed after a failed startup. Missing seed assets leave the marker unset.
-    """
-    store = state_manager._runtime_store
-    if await store.peek_document(NATIVE_OBJECT_AGENT_SEED_MARKER) is not None:
-        return
+def discover_native_object_agents(native_root: Path) -> list[ObjectAgentSource]:
+    """Read bundled definitions directly; never copy or mutate them."""
     root = Path(native_root)
     if not root.is_dir():
-        logger.warning("Skipping native object agent seed: directory missing: %s", root)
-        return
+        return []
+    sources = []
     for agent_dir in sorted(path for path in root.iterdir() if path.is_dir()):
         system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
         if not system_path.is_file():
             continue
-        relative_path = f"native/{agent_dir.name}/{OBJECT_AGENT_SYSTEM_FILE}"
-        if (
-            await state_manager.get_content_document(OBJECT_AGENT_DOCUMENT_KIND, relative_path)
-            is not None
-        ):
+        try:
+            content = system_path.read_text(encoding="utf-8")
+            manifest = parse_object_agent_manifest(content, source=str(system_path))
+        except (OSError, ValueError) as exc:
+            logger.warning("Skipping invalid native agent %s: %s", system_path, exc)
             continue
-        content = system_path.read_text(encoding="utf-8")
-        parse_object_agent_manifest(content, source=str(system_path))
-        await state_manager.save_content_document(
-            OBJECT_AGENT_DOCUMENT_KIND, relative_path, content
+        sources.append(
+            ObjectAgentSource(
+                manifest=manifest, source=NATIVE_OBJECT_AGENT_SOURCE, file_path=system_path
+            )
         )
-    await store.save_document(NATIVE_OBJECT_AGENT_SEED_MARKER, {"complete": True})
+    return sources
 
 
 async def discover_object_agents(
     state_manager: Any,
+    native_root: Path | None = None,
 ) -> list[ObjectAgentSource]:
-    """Load persisted manifests with native precedence; never read seed files."""
+    """Combine read-only bundled definitions with live Postgres definitions."""
     by_name: dict[str, ObjectAgentSource] = {}
+    for source in discover_native_object_agents(native_root) if native_root is not None else []:
+        by_name.setdefault(source.name, source)
     documents = await state_manager.list_content_documents(OBJECT_AGENT_DOCUMENT_KIND)
     for relative_path, content in sorted(
         documents, key=lambda row: (not row[0].startswith("native/"), row[0])
     ):
         parts = relative_path.split("/")
-        if len(parts) != 3 or parts[-1] != OBJECT_AGENT_SYSTEM_FILE:
+        if len(parts) != 3 or parts[-1] != OBJECT_AGENT_SYSTEM_FILE or parts[0] == "native":
             continue
-        source_label = (
-            NATIVE_OBJECT_AGENT_SOURCE
-            if parts[0] == "native"
-            else f"marketplace:{parts[0]}"
-            if "__" in parts[0]
-            else "user"
-        )
+        source_label = f"marketplace:{parts[0]}" if "__" in parts[0] else "user"
         try:
             manifest = parse_object_agent_manifest(content, source=f"agent:{relative_path}")
         except ValueError as exc:

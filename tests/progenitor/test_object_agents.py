@@ -12,8 +12,8 @@ from langchain.agents.middleware import HumanInTheLoopMiddleware
 from app.progenitor.agent.backends import ReadOnlyBackend
 from app.progenitor.agent.object_agent_manifest import (
     OBJECT_AGENT_SYSTEM_FILE,
+    discover_native_object_agents,
     discover_object_agents,
-    ensure_native_object_agents_seeded,
     parse_front_matter,
     parse_object_agent_manifest,
 )
@@ -201,14 +201,9 @@ def test_raw_front_matter_preserves_authoring_fields():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("native", [True, False])
-async def test_lazy_proxy_reloads_and_builds_every_invocation(monkeypatch, tmp_path, native):
-    relative_path = f"{'native' if native else 'user'}/reviewer/SYSTEM.md"
+async def test_lazy_proxy_reloads_and_builds_every_invocation(monkeypatch, tmp_path):
+    relative_path = "user/reviewer/SYSTEM.md"
     sm = _StateManager({relative_path: VALID_SYSTEM})
-    system_path = tmp_path / "reviewer" / "SYSTEM.md"
-    if native:
-        system_path.parent.mkdir()
-        system_path.write_text(VALID_SYSTEM, encoding="utf-8")
     source = (await discover_object_agents(sm))[0]
     builds = []
     invoked = []
@@ -366,9 +361,10 @@ async def test_discovery_prefers_native_name_over_installed_document(tmp_path: P
         _StateManager(
             {
                 "marketplace__demo/reviewer/SYSTEM.md": installed,
-                "native/reviewer/SYSTEM.md": VALID_SYSTEM,
+                "native/reviewer/SYSTEM.md": "Ignored old seed",
             }
         ),
+        tmp_path / "native",
     )
 
     assert [(source.name, source.source, source.manifest.system_prompt) for source in sources] == [
@@ -376,73 +372,53 @@ async def test_discovery_prefers_native_name_over_installed_document(tmp_path: P
     ]
 
 
-async def test_native_seed_preserves_edits_and_deletions_on_restart(tmp_path, monkeypatch):
+async def test_native_files_are_not_imported_and_ignore_old_seed_marker(tmp_path):
     system_path = tmp_path / "reviewer" / "SYSTEM.md"
     system_path.parent.mkdir()
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
     sm = _StateManager(
         {"user/other/SYSTEM.md": VALID_SYSTEM.replace("name: reviewer", "name: other")}
     )
-    await ensure_native_object_agents_seeded(sm, tmp_path)
-    path = "native/reviewer/SYSTEM.md"
-    assert sm.documents[path] == VALID_SYSTEM
-    sm.documents[path] = VALID_SYSTEM.replace("concise reviewer", "edited reviewer")
-    restarted = _StateManager(sm.documents)
-    restarted.markers.update(sm.markers)
-    monkeypatch.setattr(Path, "iterdir", lambda _path: pytest.fail("restart read seed disk"))
-    await ensure_native_object_agents_seeded(restarted, tmp_path)
-    assert "edited reviewer" in restarted.documents[path]
-    del restarted.documents[path]
-    await ensure_native_object_agents_seeded(restarted, tmp_path)
-    assert path not in restarted.documents
+    sm.markers["native_object_agents_seed_v1"] = {"complete": True}
+    before = dict(sm.documents)
+    sources = await discover_object_agents(sm, tmp_path)
+    assert [source.name for source in sources] == ["other", "reviewer"]
+    assert sm.documents == before
+    assert sm._runtime_store.save_document.await_count == 0
 
 
-async def test_native_seed_preserves_existing_native_document(tmp_path):
+async def test_native_disk_wins_over_stale_pg_copy(tmp_path):
     system_path = tmp_path / "reviewer" / "SYSTEM.md"
     system_path.parent.mkdir()
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
     edited = VALID_SYSTEM.replace("concise reviewer", "persisted reviewer")
     sm = _StateManager({"native/reviewer/SYSTEM.md": edited})
-    await ensure_native_object_agents_seeded(sm, tmp_path)
-    assert sm.documents["native/reviewer/SYSTEM.md"] == edited
+    sources = await discover_object_agents(sm, tmp_path)
+    assert sources[0].manifest.system_prompt == "You are a concise reviewer."
+    assert sources[0].file_path == system_path
 
 
-async def test_native_seed_failure_retries_without_overwriting_existing(tmp_path):
-    for slug in ("one", "two"):
-        path = tmp_path / slug / "SYSTEM.md"
-        path.parent.mkdir()
-        path.write_text(VALID_SYSTEM.replace("name: reviewer", f"name: {slug}"))
-    sm = _StateManager()
-    save = sm.save_content_document
-
-    async def fail_second(kind, path, content):
-        if path == "native/two/SYSTEM.md":
-            raise RuntimeError("interrupted seed")
-        await save(kind, path, content)
-
-    sm.save_content_document = fail_second
-    with pytest.raises(RuntimeError, match="interrupted seed"):
-        await ensure_native_object_agents_seeded(sm, tmp_path)
-    assert sm.markers == {}
-    sm.documents["native/one/SYSTEM.md"] = "Keep partially seeded edit"
-    sm.save_content_document = save
-    await ensure_native_object_agents_seeded(sm, tmp_path)
-    assert sm.documents["native/one/SYSTEM.md"] == "Keep partially seeded edit"
-    assert "native/two/SYSTEM.md" in sm.documents
-    assert sm.markers
+async def test_native_discovery_skips_invalid_files(tmp_path):
+    path = tmp_path / "broken" / "SYSTEM.md"
+    path.parent.mkdir()
+    path.write_text("invalid")
+    assert discover_native_object_agents(tmp_path) == []
 
 
 async def test_discovery_never_reads_disk(monkeypatch):
     monkeypatch.setattr(Path, "read_text", lambda *args, **kwargs: pytest.fail("disk authority"))
     assert await discover_object_agents(_StateManager()) == []
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
-    assert (await discover_object_agents(sm))[0].source == "native"
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
+    assert (await discover_object_agents(sm))[0].source == "user"
 
 
-def test_docker_native_seed_contract():
+def test_docker_native_file_contract():
     root = Path(__file__).resolve().parents[2]
     assert "COPY data/agents/ ./data/agents/" in (root / "docker/progenitor/Dockerfile").read_text()
-    assert "COPY data/agents" not in (root / "docker/backend/Dockerfile").read_text()
+    assert (
+        "COPY data/agents/objects/ ./data/agents/objects/"
+        in (root / "docker/backend/Dockerfile").read_text()
+    )
 
 
 @pytest.mark.asyncio
@@ -450,7 +426,7 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / "SYSTEM.md").write_text(VALID_SYSTEM, encoding="utf-8")
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
     source = (await discover_object_agents(sm))[0]
     calls = []
 
@@ -488,13 +464,13 @@ async def test_lazy_proxy_resolves_only_declared_parent_tools(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
-async def test_self_manifest_backend_reads_and_writes_native_source(tmp_path: Path):
+async def test_self_manifest_backend_native_source_is_read_only(tmp_path: Path):
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
-    source = (await discover_object_agents(sm))[0]
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
+    source = discover_native_object_agents(tmp_path)[0]
     mount = SelfManifestBackend(source, state_manager=sm)
 
     read = await mount.aread("/SYSTEM.md")
@@ -505,8 +481,10 @@ async def test_self_manifest_backend_reads_and_writes_native_source(tmp_path: Pa
         "description: Reviews requested work.", "description: Reviews requested work, twice."
     )
     write = await mount.awrite("/SYSTEM.md", updated)
-    assert write.error is None
-    assert sm.documents["native/reviewer/SYSTEM.md"] == updated
+    assert write.error is not None
+    assert "read-only" in write.error
+    assert (await mount.adelete("/SYSTEM.md")).error is not None
+    assert (await mount.aedit("/SYSTEM.md", "concise", "edited")).error is not None
     assert system_path.read_text(encoding="utf-8") == VALID_SYSTEM
     assert sm.touched == []
 
@@ -533,7 +511,7 @@ async def test_self_manifest_backend_rejects_rename_and_invalid_manifest(tmp_pat
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / OBJECT_AGENT_SYSTEM_FILE).write_text(VALID_SYSTEM, encoding="utf-8")
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
     source = (await discover_object_agents(sm))[0]
     mount = SelfManifestBackend(source, state_manager=sm)
 
@@ -556,7 +534,7 @@ async def test_self_manifest_backend_edit_round_trips_via_string_replacement(tmp
     agent_dir.mkdir()
     system_path = agent_dir / OBJECT_AGENT_SYSTEM_FILE
     system_path.write_text(VALID_SYSTEM, encoding="utf-8")
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
     source = (await discover_object_agents(sm))[0]
     mount = SelfManifestBackend(source, state_manager=sm)
 
@@ -564,7 +542,7 @@ async def test_self_manifest_backend_edit_round_trips_via_string_replacement(tmp
         "/SYSTEM.md", "You are a concise reviewer.", "You are a concise, thorough reviewer."
     )
     assert edit.error is None
-    assert "thorough" in sm.documents["native/reviewer/SYSTEM.md"]
+    assert "thorough" in sm.documents["user/reviewer/SYSTEM.md"]
     assert system_path.read_text(encoding="utf-8") == VALID_SYSTEM
 
 
@@ -573,7 +551,7 @@ async def test_lazy_proxy_uses_only_declared_mounts_and_prompt(monkeypatch, tmp_
     agent_dir = tmp_path / "reviewer"
     agent_dir.mkdir()
     (agent_dir / "SYSTEM.md").write_text(VALID_SYSTEM, encoding="utf-8")
-    sm = _StateManager({"native/reviewer/SYSTEM.md": VALID_SYSTEM})
+    sm = _StateManager({"user/reviewer/SYSTEM.md": VALID_SYSTEM})
     source = (await discover_object_agents(sm))[0]
     calls = []
 
