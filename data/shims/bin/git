@@ -31,7 +31,18 @@ sub=${args[index]}
 remaining=("${args[@]:index + 1}")
 
 case "$sub" in
-  status|log|show|diff|rev-parse|rev-list|ls-files|ls-tree|describe|blame|shortlog|cat-file|symbolic-ref|for-each-ref|count-objects|name-rev|merge-base|grep|whatchanged)
+  status|log|show|diff|rev-parse|rev-list|ls-files|ls-tree|describe|blame|shortlog|cat-file|for-each-ref|count-objects|name-rev|merge-base|grep|whatchanged)
+    ;;
+  symbolic-ref)
+    ref_count=0
+    for arg in "${remaining[@]}"; do
+      case "$arg" in
+        -q|--quiet|--short|--recurse|--no-recurse) ;;
+        -*) deny "symbolic-ref option: $arg" ;;
+        *) ((ref_count += 1)) ;;
+      esac
+    done
+    (( ref_count == 1 )) || deny "symbolic-ref requires exactly one reference"
     ;;
   branch)
     for arg in "${remaining[@]}"; do
