@@ -349,6 +349,7 @@ async def create_progenitor_agent(
                 shim_bin=Path(config.storage.shim_bin_dir),
                 agent_home=Path(config.storage.shell_home_dir),
                 timeout_seconds=config.runtime.shell_timeout_seconds,
+                workspace_root=Path(config.storage.shell_workspace_dir),
             ),
         )
 

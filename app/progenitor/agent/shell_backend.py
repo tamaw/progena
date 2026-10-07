@@ -28,6 +28,7 @@ class ShellPaths:
     shim_bin: Path
     agent_home: Path
     timeout_seconds: int
+    workspace_root: Path | None = None
 
 
 def agent_home_slug(name: str) -> str:
