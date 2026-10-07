@@ -66,6 +66,7 @@ services:
       PROGENITOR_HTTP_HOST: 0.0.0.0
       GH_TOKEN: ${GH_TOKEN:-}
       PROGENITOR_SHELL_HOME: /app/agent-home
+      PROGENITOR_SHELL_WORKSPACE_DIR: /app/shell-workspaces
       PROGENITOR_SHELL_SHIM_BIN: /app/data/shims/bin
       PROGENITOR_SHELL_TIMEOUT_SECONDS: ${PROGENITOR_SHELL_TIMEOUT_SECONDS:-120}
       # State is transient in the hardened read-only runtime image.
@@ -74,6 +75,8 @@ services:
       - ${PROGENITOR_HOST_SCHEMAS_DIR:-../data/schemas}:/app/data/schemas:ro
       - ${PROGENITOR_HOST_LOGS_DIR:-../logs}:/app/logs
       - ${PROGENITOR_HOST_REPOS_DIR:-../repos}:/app/repos
+      # A fresh named volume inherits UID 10001 ownership from the image directory.
+      - progenitor-shell-workspaces:/app/shell-workspaces
     tmpfs:
       - /app/tmp:rw,noexec,nosuid,size=1g
       - /app/agent-home:rw,nosuid,size=64m
@@ -186,6 +189,7 @@ networks:
     external: true
 
 volumes:
+  progenitor-shell-workspaces:
   progenitor-postgres-data:
     name: progenitor-postgres-data
     external: true

@@ -51,8 +51,8 @@ RUN pip install --no-cache-dir . \
     && chmod 0755 /app/data/shims/bin/* \
     && chmod -R a-w /app/data/shims \
     && chmod -R a-w /app/data/agents \
-    && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp \
-    && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp
+    && mkdir -p /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces \
+    && chown -R agent:agent /app/agent-home /app/repos /app/logs /app/tmp /app/shell-workspaces
 
 # Set environment variables
 ENV PYTHONPATH=/app
@@ -62,6 +62,7 @@ ENV PROGENITOR_DATA_DIR=/app/data
 ENV PROGENITOR_LOG_DIR=/app/logs
 
 ENV PROGENITOR_SHELL_HOME=/app/agent-home
+ENV PROGENITOR_SHELL_WORKSPACE_DIR=/app/shell-workspaces
 ENV PROGENITOR_SHELL_SHIM_BIN=/app/data/shims/bin
 ENV PYTHONDONTWRITEBYTECODE=1
 # Expose chat server port

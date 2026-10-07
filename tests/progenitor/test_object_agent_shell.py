@@ -10,7 +10,7 @@ from app.progenitor.agent.object_agent_manifest import (
 )
 from app.progenitor.agent.object_agents import create_object_agent_proxy
 from app.progenitor.agent.shell_backend import ShellPaths, build_shell_env
-from app.progenitor.config import RuntimeConfig
+from app.progenitor.config import RuntimeConfig, StorageConfig
 
 SHELL_SYSTEM = """---
 name: shell-reviewer
@@ -50,7 +50,7 @@ def _source(tmp_path: Path, content: str) -> ObjectAgentSource:
     )
 
 
-async def _compiled_backend(monkeypatch, source, tmp_path: Path):
+async def _compiled_backend(monkeypatch, source, tmp_path: Path, *, workspace_root=None):
     calls = []
 
     def create(**kwargs):
@@ -72,7 +72,7 @@ async def _compiled_backend(monkeypatch, source, tmp_path: Path):
         backend=CompositeBackend(default=object(), routes={"/repos/": object()}),
         checkpointer=object(),
         worktree_dir=tmp_path / "repos",
-        shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120),
+        shell_paths=ShellPaths(tmp_path / "shims", tmp_path / "homes", 120, workspace_root),
     )
     await proxy["runnable"].ainvoke({"messages": []})
     filesystem = next(
@@ -117,9 +117,28 @@ async def test_shell_proxy_exposes_execute_capability(monkeypatch, tmp_path: Pat
 
     assert supports_execution(backend)
     assert backend.default.cwd == (
-        tmp_path / "repos" / ".object-agent-workspaces" / "shell-reviewer"
+        tmp_path / "shell-workspaces" / "shell-reviewer"
     )
     assert backend.default._default_timeout == 120
+
+
+@pytest.mark.asyncio
+async def test_shell_workspace_is_independent_of_repository_mount(monkeypatch, tmp_path: Path):
+    repos = tmp_path / "repos"
+    repos.mkdir()
+    # The legacy location cannot contain a workspace; repos must remain untouched.
+    (repos / ".object-agent-workspaces").write_text("unavailable", encoding="utf-8")
+    workspace_root = tmp_path / "runtime-volume"
+    backend = await _compiled_backend(
+        monkeypatch, _source(tmp_path, SHELL_SYSTEM), tmp_path, workspace_root=workspace_root
+    )
+
+    assert backend.default.cwd == workspace_root / "shell-reviewer"
+    result = backend.execute("printf workspace-ok > probe.txt; cat probe.txt")
+    assert result.exit_code == 0
+    assert "workspace-ok" in result.output
+    assert (workspace_root / "shell-reviewer" / "probe.txt").read_text() == "workspace-ok"
+    assert list(repos.iterdir()) == [repos / ".object-agent-workspaces"]
 
 
 @pytest.mark.asyncio
@@ -191,3 +210,11 @@ def test_shell_timeout_comes_from_environment(monkeypatch):
 
     monkeypatch.setenv("PROGENITOR_SHELL_TIMEOUT_SECONDS", "90")
     assert RuntimeConfig.from_env().shell_timeout_seconds == 90
+
+
+def test_shell_workspace_configuration(monkeypatch, tmp_path: Path):
+    monkeypatch.setenv("PROGENITOR_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("PROGENITOR_SHELL_WORKSPACE_DIR", raising=False)
+    assert StorageConfig.from_env().shell_workspace_dir == tmp_path / "data" / "shell-workspaces"
+    monkeypatch.setenv("PROGENITOR_SHELL_WORKSPACE_DIR", str(tmp_path / "volume"))
+    assert StorageConfig.from_env().shell_workspace_dir == tmp_path / "volume"

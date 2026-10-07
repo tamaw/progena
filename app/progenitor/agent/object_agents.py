@@ -244,7 +244,8 @@ def _build_shell_backend(
             f"object agent {manifest.name!r} enables shell but the runtime has no "
             "PROGENITOR_WORKTREE_DIR configured"
         )
-    workspace = worktree_dir / ".object-agent-workspaces" / agent_home_slug(manifest.name)
+    workspace_root = shell_paths.workspace_root or shell_paths.agent_home.parent / "shell-workspaces"
+    workspace = workspace_root / agent_home_slug(manifest.name)
 
     return (
         CompositeBackend(

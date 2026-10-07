@@ -75,6 +75,11 @@ def _default_shell_home_dir(project_root: Path | None = None) -> Path:
     return _default_data_dir(project_root) / "shell-home"
 
 
+def _default_shell_workspace_dir(project_root: Path | None = None) -> Path:
+    """Return writable shell scratch storage independent of repository mounts."""
+    return _default_data_dir(project_root) / "shell-workspaces"
+
+
 def default_mcp_config_payload() -> dict[str, Any]:
     """Return the default MCP server configuration stored in the shared state document."""
     return {"mcpServers": {}}
@@ -203,6 +208,7 @@ class StorageConfig:
     prompts_dir: Path = field(default_factory=_default_prompts_dir)
     shim_bin_dir: Path = field(default_factory=_default_shim_bin_dir)
     shell_home_dir: Path = field(default_factory=_default_shell_home_dir)
+    shell_workspace_dir: Path = field(default_factory=_default_shell_workspace_dir)
 
     @classmethod
     def from_env(cls, project_root: Path | None = None) -> "StorageConfig":
@@ -229,6 +235,9 @@ class StorageConfig:
             prompts_dir=Path(os.getenv("PROGENITOR_PROMPTS_DIR", str(default_prompts))),
             shim_bin_dir=Path(os.getenv("PROGENITOR_SHELL_SHIM_BIN", str(default_shim_bin))),
             shell_home_dir=Path(os.getenv("PROGENITOR_SHELL_HOME", str(default_shell_home))),
+            shell_workspace_dir=Path(
+                os.getenv("PROGENITOR_SHELL_WORKSPACE_DIR", str(default_data / "shell-workspaces"))
+            ),
         )
 
 

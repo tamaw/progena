@@ -11,6 +11,13 @@ The key dependency is Postgres. When `PROGENITOR_DATABASE_URL` points at a dead 
 backend can appear to be up while startup requests hang, and Vite proxy requests will hang
 behind it.
 
+Shell-enabled object agents use `PROGENITOR_SHELL_WORKSPACE_DIR` for per-agent scratch
+directories, independently of `PROGENITOR_WORKTREE_DIR` and repository permissions.
+Locally this defaults to `data/shell-workspaces`. Docker Compose mounts the persistent
+`progenitor-shell-workspaces` named volume at `/app/shell-workspaces`; Docker initializes
+a fresh volume from the image directory owned by runtime UID/GID `10001:10001`.
+Scratch files survive container restarts. Repository paths continue to come from `/repos/`.
+
 ## Recommended `.env` improvements
 
 To make local startup more predictable:
